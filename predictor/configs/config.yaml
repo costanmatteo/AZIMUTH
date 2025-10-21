@@ -1,0 +1,72 @@
+# Configurazione del modello di predizione macchinario
+
+# Dati
+data:
+  # Path al file CSV con i dati
+  csv_path: "data/raw/machinery_data.csv"
+
+  # Nomi delle colonne di input (parametri operativi)
+  input_columns:
+    - "parametro_1"
+    - "parametro_2"
+    - "parametro_3"
+    # Aggiungi tutti i parametri di input necessari
+
+  # Nomi delle colonne di output (valori misurati)
+  output_columns:
+    - "pressione"
+    - "temperatura"
+    - "velocita"
+    # Aggiungi tutti gli output da predire
+
+  # Split dei dati
+  train_size: 0.7
+  val_size: 0.15
+  test_size: 0.15
+  random_state: 42
+
+  # Preprocessing
+  scaling_method: "standard"  # 'standard' o 'minmax'
+
+# Architettura del modello
+model:
+  # Dimensioni dei layer nascosti
+  hidden_sizes: [128, 64, 32]
+
+  # Dropout rate per regolarizzazione
+  dropout_rate: 0.2
+
+  # Tipo di modello ('small', 'medium', 'large', o 'custom')
+  # Se 'custom', usa hidden_sizes sopra
+  model_type: "custom"
+
+# Training
+training:
+  # Numero massimo di epoche
+  epochs: 200
+
+  # Batch size
+  batch_size: 32
+
+  # Learning rate
+  learning_rate: 0.001
+
+  # Loss function ('mse', 'mae', 'huber')
+  loss_function: "mse"
+
+  # Early stopping patience
+  patience: 20
+
+  # Device ('cuda', 'cpu', o 'auto')
+  device: "auto"
+
+  # Directory per salvare checkpoints
+  checkpoint_dir: "checkpoints"
+
+# Altro
+misc:
+  # Seed per riproducibilità
+  random_seed: 42
+
+  # Numero di worker per DataLoader
+  num_workers: 4
