@@ -3,6 +3,6 @@ Moduli per gestione e preprocessing dei dati
 """
 
 from .dataset import MachineryDataset
-from .preprocessing import DataPreprocessor
+from .preprocessing import DataPreprocessor, load_csv_data
 
-__all__ = ['MachineryDataset', 'DataPreprocessor']
+__all__ = ['MachineryDataset', 'DataPreprocessor', 'load_csv_data']

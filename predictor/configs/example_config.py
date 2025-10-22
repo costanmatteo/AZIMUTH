@@ -5,20 +5,15 @@ Esempio di configurazione in Python (alternativa a YAML)
 CONFIG = {
     # Configurazione dati
     'data': {
-        'csv_path': 'data/raw/machinery_data.csv',
+        'csv_path': 'C:/COMPASS/COMPASS/predictor/src/data/raw/Dati_prova - Foglio3.csv',
         'input_columns': [
-            'temperatura_input',
-            'pressione_input',
-            'velocita_motore',
-            'portata',
-            'umidita',
+            'x',
+            'y',
+            'z',
             # Aggiungi altri parametri
         ],
         'output_columns': [
-            'pressione_output',
-            'temperatura_output',
-            'potenza',
-            'efficienza',
+            'res',
             # Aggiungi altri output
         ],
         'train_size': 0.7,
