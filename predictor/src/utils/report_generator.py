@@ -158,37 +158,40 @@ class TrainingReportGenerator:
         self.story.append(Spacer(1, 0.4*cm))
 
     def add_metrics_table(self, metrics):
-        """Add metrics table"""
+        """Add metrics table with all metrics"""
         self.add_section_title("Test Metrics")
 
-        # Build table data
-        headers = ['Output', 'MAE', 'RMSE', 'R²']
+        # Build table data with all metrics
+        headers = ['Output', 'MSE', 'RMSE', 'MAE', 'R²', 'MAPE']
         data = [headers]
 
         for output_name, output_metrics in metrics.items():
+            mape_str = f"{output_metrics['MAPE']:.2f}%" if output_metrics['MAPE'] != float('inf') else 'N/A'
             row = [
                 output_name,
-                f"{output_metrics['MAE']:.4f}",
+                f"{output_metrics['MSE']:.4f}",
                 f"{output_metrics['RMSE']:.4f}",
-                f"{output_metrics['R2']:.4f}"
+                f"{output_metrics['MAE']:.4f}",
+                f"{output_metrics['R2']:.4f}",
+                mape_str
             ]
             data.append(row)
 
-        # Create table
-        table = Table(data, colWidths=[4*cm, 3*cm, 3*cm, 3*cm])
+        # Create table with adjusted column widths
+        table = Table(data, colWidths=[3*cm, 2.5*cm, 2.5*cm, 2.5*cm, 2.5*cm, 2.5*cm])
         table.setStyle(TableStyle([
             # Header row
             ('BACKGROUND', (0, 0), (-1, 0), colors.white),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
             ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('FONTSIZE', (0, 0), (-1, 0), 9),
             ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
             ('TOPPADDING', (0, 0), (-1, 0), 8),
 
             # Data rows
             ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-            ('FONTSIZE', (0, 1), (-1, -1), 10),
+            ('FONTSIZE', (0, 1), (-1, -1), 9),
             ('TOPPADDING', (0, 1), (-1, -1), 6),
             ('BOTTOMPADDING', (0, 1), (-1, -1), 6),
 
@@ -201,72 +204,79 @@ class TrainingReportGenerator:
         self.story.append(table)
         self.story.append(Spacer(1, 0.4*cm))
 
-    def add_plots_side_by_side(self, checkpoint_dir):
-        """Add two plots side by side"""
+    def add_plots_stacked(self, checkpoint_dir):
+        """Add two plots stacked vertically (one below the other)"""
         self.add_section_title("Training Visualization")
 
         checkpoint_dir = Path(checkpoint_dir)
 
-        # Prepare images
+        # Training history plot
         history_plot = checkpoint_dir / 'training_history.png'
-        predictions_plot = checkpoint_dir / 'predictions.png'
-
-        images = []
-
         if history_plot.exists():
             img1 = Image(str(history_plot))
             img_width, img_height = img1.imageWidth, img1.imageHeight
             aspect_ratio = img_height / img_width
 
-            new_width = 8.5*cm
+            # Larger width for stacked layout
+            new_width = 16*cm
             new_height = new_width * aspect_ratio
 
-            if new_height > 6*cm:
-                new_height = 6*cm
+            # Max height constraint
+            if new_height > 10*cm:
+                new_height = 10*cm
                 new_width = new_height / aspect_ratio
 
             img1.drawWidth = new_width
             img1.drawHeight = new_height
 
-            caption1 = Paragraph("<i>Training and Validation Loss</i>", self.styles['Normal'])
-            images.append([img1, caption1])
+            # Center the image
+            img_table = Table([[img1]], colWidths=[18*cm])
+            img_table.setStyle(TableStyle([
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ]))
+            self.story.append(img_table)
 
+            caption1 = Paragraph("<i>Training and Validation Loss</i>", self.styles['Normal'])
+            caption_table = Table([[caption1]], colWidths=[18*cm])
+            caption_table.setStyle(TableStyle([
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ]))
+            self.story.append(caption_table)
+            self.story.append(Spacer(1, 0.3*cm))
+
+        # Predictions plot
+        predictions_plot = checkpoint_dir / 'predictions.png'
         if predictions_plot.exists():
             img2 = Image(str(predictions_plot))
             img_width, img_height = img2.imageWidth, img2.imageHeight
             aspect_ratio = img_height / img_width
 
-            new_width = 8.5*cm
+            # Larger width for stacked layout
+            new_width = 16*cm
             new_height = new_width * aspect_ratio
 
-            if new_height > 6*cm:
-                new_height = 6*cm
+            # Max height constraint
+            if new_height > 10*cm:
+                new_height = 10*cm
                 new_width = new_height / aspect_ratio
 
             img2.drawWidth = new_width
             img2.drawHeight = new_height
 
-            caption2 = Paragraph("<i>Predictions vs True Values</i>", self.styles['Normal'])
-            images.append([img2, caption2])
-
-        # Create side-by-side layout
-        if len(images) == 2:
-            img_table_data = [[images[0][0], images[1][0]]]
-            caption_table_data = [[images[0][1], images[1][1]]]
-
-            img_table = Table(img_table_data, colWidths=[9*cm, 9*cm])
+            # Center the image
+            img_table = Table([[img2]], colWidths=[18*cm])
             img_table.setStyle(TableStyle([
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
                 ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
             ]))
+            self.story.append(img_table)
 
-            caption_table = Table(caption_table_data, colWidths=[9*cm, 9*cm])
+            caption2 = Paragraph("<i>Predictions vs True Values</i>", self.styles['Normal'])
+            caption_table = Table([[caption2]], colWidths=[18*cm])
             caption_table.setStyle(TableStyle([
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
             ]))
-
-            self.story.append(img_table)
             self.story.append(caption_table)
 
     def generate(self, config, history, metrics, input_dim, output_dim,
@@ -278,7 +288,7 @@ class TrainingReportGenerator:
         self.create_two_column_section(config, history, metrics, input_dim, output_dim,
                                        total_params, n_train, n_val, n_test)
         self.add_metrics_table(metrics)
-        self.add_plots_side_by_side(Path(config['training']['checkpoint_dir']))
+        self.add_plots_stacked(Path(config['training']['checkpoint_dir']))
 
         # Build PDF
         doc = SimpleDocTemplate(
