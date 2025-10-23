@@ -24,44 +24,48 @@ class TrainingReportGenerator:
         self.story = []
 
         # Title style
-        self.styles.add(ParagraphStyle(
-            name='ReportTitle',
-            parent=self.styles['Heading1'],
-            fontSize=18,
-            leading=22,
-            alignment=TA_CENTER,
-            spaceAfter=4
-        ))
+        if 'ReportTitle' not in self.styles:
+            self.styles.add(ParagraphStyle(
+                name='ReportTitle',
+                parent=self.styles['Heading1'],
+                fontSize=18,
+                leading=22,
+                alignment=TA_CENTER,
+                spaceAfter=4
+            ))
 
         # Subtitle style
-        self.styles.add(ParagraphStyle(
-            name='ReportSubtitle',
-            parent=self.styles['Normal'],
-            fontSize=13,
-            leading=16,
-            alignment=TA_CENTER,
-            spaceAfter=8
-        ))
+        if 'ReportSubtitle' not in self.styles:
+            self.styles.add(ParagraphStyle(
+                name='ReportSubtitle',
+                parent=self.styles['Normal'],
+                fontSize=13,
+                leading=16,
+                alignment=TA_CENTER,
+                spaceAfter=8
+            ))
 
         # Section title style
-        self.styles.add(ParagraphStyle(
-            name='SectionTitle',
-            parent=self.styles['Heading2'],
-            fontSize=12,
-            leading=14,
-            fontName='Helvetica-Bold',
-            spaceAfter=2,
-            spaceBefore=6
-        ))
+        if 'SectionTitle' not in self.styles:
+            self.styles.add(ParagraphStyle(
+                name='SectionTitle',
+                parent=self.styles['Heading2'],
+                fontSize=12,
+                leading=14,
+                fontName='Helvetica-Bold',
+                spaceAfter=2,
+                spaceBefore=6
+            ))
 
         # Body text style
-        self.styles.add(ParagraphStyle(
-            name='BodyText',
-            parent=self.styles['Normal'],
-            fontSize=10,
-            leading=13,
-            leftIndent=10
-        ))
+        if 'BodyText' not in self.styles:
+            self.styles.add(ParagraphStyle(
+                name='BodyText',
+                parent=self.styles['Normal'],
+                fontSize=10,
+                leading=13,
+                leftIndent=10
+            ))
 
     def add_title(self, timestamp):
         """Add centered title and date"""
