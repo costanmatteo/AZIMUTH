@@ -9,6 +9,7 @@ import sys
 import torch
 from torch.utils.data import DataLoader
 from pathlib import Path
+from datetime import datetime
 
 # Aggiungi src al path
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
@@ -16,15 +17,20 @@ sys.path.insert(0, str(Path(__file__).parent / 'src'))
 from data import load_csv_data, DataPreprocessor, MachineryDataset
 from models import MachineryPredictor, create_small_model, create_medium_model, create_large_model
 from training import ModelTrainer
-from utils import plot_training_history, plot_predictions, calculate_metrics, print_metrics
+from utils import plot_training_history, plot_predictions, calculate_metrics, print_metrics, generate_training_report
 
 # Importa configurazione
 from configs.example_config import CONFIG
 
 
 def main():
+    # Cattura timestamp inizio training
+    training_start_time = datetime.now()
+
     print("="*70)
     print("TRAINING RETE NEURALE PER PREDIZIONE MACCHINARIO")
+    print("="*70)
+    print(f"Inizio training: {training_start_time.strftime('%d/%m/%Y %H:%M:%S')}")
     print("="*70)
 
     # 1. CARICA DATI
@@ -168,6 +174,28 @@ def main():
         save_path=Path(CONFIG['training']['checkpoint_dir']) / 'predictions.png'
     )
 
+    # 8. GENERA REPORT PDF
+    print("\nGenerazione report PDF...")
+    try:
+        total_params = sum(p.numel() for p in model.parameters())
+        report_path = generate_training_report(
+            config=CONFIG,
+            history=history,
+            metrics=metrics,
+            input_dim=input_dim,
+            output_dim=output_dim,
+            total_params=total_params,
+            n_train=len(X_train),
+            n_val=len(X_val),
+            n_test=len(X_test),
+            checkpoint_dir=CONFIG['training']['checkpoint_dir'],
+            timestamp=training_start_time
+        )
+        print(f"Report PDF salvato: {report_path}")
+    except Exception as e:
+        print(f"Errore nella generazione del PDF: {e}")
+        print("Il training è comunque completato con successo.")
+
     print("\n" + "="*70)
     print("TRAINING COMPLETATO CON SUCCESSO!")
     print("="*70)
@@ -177,6 +205,7 @@ def main():
     print("  - training_history.json   : Storia del training")
     print("  - training_history.png    : Grafico loss")
     print("  - predictions.png         : Grafico predizioni vs reali")
+    print("  - training_report.pdf     : Report completo training")
 
 
 if __name__ == "__main__":
