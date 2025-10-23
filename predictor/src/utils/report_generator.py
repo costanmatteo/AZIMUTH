@@ -227,14 +227,32 @@ class TrainingReportGenerator:
             self.story.append(table)
             self.story.append(Spacer(1, 0.1*inch))
 
-    def add_image(self, image_path, width=6*inch, title=None):
-        """Aggiunge un'immagine al report"""
+    def add_image(self, image_path, max_width=6*inch, max_height=4*inch, title=None):
+        """Aggiunge un'immagine al report con dimensioni controllate"""
         if title:
             self.story.append(Paragraph(title, self.styles['Normal']))
             self.story.append(Spacer(1, 0.1*inch))
 
         if Path(image_path).exists():
-            img = Image(str(image_path), width=width)
+            # Crea l'immagine con larghezza massima
+            img = Image(str(image_path))
+
+            # Calcola il rapporto per mantenere le proporzioni
+            img_width, img_height = img.imageWidth, img.imageHeight
+            aspect_ratio = img_height / img_width
+
+            # Imposta larghezza e calcola altezza
+            new_width = max_width
+            new_height = new_width * aspect_ratio
+
+            # Se l'altezza è troppo grande, ridimensiona in base all'altezza
+            if new_height > max_height:
+                new_height = max_height
+                new_width = new_height / aspect_ratio
+
+            img.drawWidth = new_width
+            img.drawHeight = new_height
+
             self.story.append(img)
             self.story.append(Spacer(1, 0.2*inch))
         else:
@@ -244,17 +262,20 @@ class TrainingReportGenerator:
 
     def add_plots_section(self, checkpoint_dir):
         """Aggiunge la sezione con i grafici"""
+        # Aggiungi page break per i grafici
+        self.story.append(PageBreak())
+
         self.add_section_title("5. Grafici")
 
         checkpoint_dir = Path(checkpoint_dir)
 
         # Training history plot
         history_plot = checkpoint_dir / 'training_history.png'
-        self.add_image(history_plot, title="<b>Training History (Loss)</b>")
+        self.add_image(history_plot, max_width=5.5*inch, max_height=3.5*inch, title="<b>Training History (Loss)</b>")
 
         # Predictions plot
         predictions_plot = checkpoint_dir / 'predictions.png'
-        self.add_image(predictions_plot, title="<b>Predizioni vs Valori Reali (Test Set)</b>")
+        self.add_image(predictions_plot, max_width=5.5*inch, max_height=3.5*inch, title="<b>Predizioni vs Valori Reali (Test Set)</b>")
 
     def add_footer_section(self, checkpoint_dir):
         """Aggiunge sezione finale con info file salvati"""
