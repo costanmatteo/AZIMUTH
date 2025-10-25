@@ -1,5 +1,5 @@
 """
-Metriche per valutare le predizioni
+Metrics for evaluating predictions
 """
 
 import numpy as np
@@ -8,15 +8,15 @@ from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 
 def calculate_metrics(y_true, y_pred, output_names=None):
     """
-    Calcola metriche per valutare le predizioni.
+    Calculate metrics to evaluate predictions.
 
     Args:
-        y_true (np.ndarray): Valori reali
-        y_pred (np.ndarray): Valori predetti
-        output_names (list, optional): Nomi degli output
+        y_true (np.ndarray): True values
+        y_pred (np.ndarray): Predicted values
+        output_names (list, optional): Names of outputs
 
     Returns:
-        dict: Dizionario con le metriche
+        dict: Dictionary with metrics
     """
     n_outputs = y_true.shape[1] if len(y_true.shape) > 1 else 1
 
@@ -29,14 +29,14 @@ def calculate_metrics(y_true, y_pred, output_names=None):
     for i in range(n_outputs):
         name = output_names[i] if output_names else f'output_{i+1}'
 
-        # Calcola le metriche
+        # Calculate metrics
         mse = mean_squared_error(y_true[:, i], y_pred[:, i])
         rmse = np.sqrt(mse)
         mae = mean_absolute_error(y_true[:, i], y_pred[:, i])
         r2 = r2_score(y_true[:, i], y_pred[:, i])
 
         # MAPE (Mean Absolute Percentage Error)
-        # Evita divisione per zero
+        # Avoid division by zero
         mask = y_true[:, i] != 0
         if mask.any():
             mape = np.mean(np.abs((y_true[:, i][mask] - y_pred[:, i][mask]) / y_true[:, i][mask])) * 100
@@ -56,13 +56,13 @@ def calculate_metrics(y_true, y_pred, output_names=None):
 
 def print_metrics(metrics):
     """
-    Stampa le metriche in formato leggibile.
+    Print metrics in a readable format.
 
     Args:
-        metrics (dict): Dizionario delle metriche da print_metrics
+        metrics (dict): Dictionary of metrics from print_metrics
     """
     print("\n" + "="*70)
-    print("METRICHE DI VALUTAZIONE")
+    print("EVALUATION METRICS")
     print("="*70)
 
     for output_name, metric_dict in metrics.items():
@@ -79,14 +79,14 @@ def print_metrics(metrics):
 
 def calculate_overall_metrics(y_true, y_pred):
     """
-    Calcola metriche globali su tutti gli output.
+    Calculate global metrics across all outputs.
 
     Args:
-        y_true (np.ndarray): Valori reali
-        y_pred (np.ndarray): Valori predetti
+        y_true (np.ndarray): True values
+        y_pred (np.ndarray): Predicted values
 
     Returns:
-        dict: Metriche globali
+        dict: Global metrics
     """
     return {
         'overall_MSE': mean_squared_error(y_true, y_pred),

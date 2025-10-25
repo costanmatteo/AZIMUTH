@@ -1,8 +1,8 @@
 """
-Script principale per il training del modello
+Main script for model training
 
-Questo script carica i dati, preprocessa, crea il modello e lo traína.
-Personalizza le configurazioni nel file configs/example_config.py
+This script loads data, preprocesses, creates the model and trains it.
+Customize configurations in the configs/example_config.py file
 """
 
 import sys
@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
 from pathlib import Path
 from datetime import datetime
 
-# Aggiungi src al path
+# Add src to path
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
 
 from data import load_csv_data, DataPreprocessor, MachineryDataset
@@ -19,22 +19,22 @@ from models import MachineryPredictor, create_small_model, create_medium_model, 
 from training import ModelTrainer
 from utils import plot_training_history, plot_predictions, calculate_metrics, print_metrics, generate_training_report
 
-# Importa configurazione
+# Import configuration
 from configs.example_config import CONFIG
 
 
 def main():
-    # Cattura timestamp inizio training
+    # Capture training start timestamp
     training_start_time = datetime.now()
 
     print("="*70)
-    print("TRAINING RETE NEURALE PER PREDIZIONE MACCHINARIO")
+    print("NEURAL NETWORK TRAINING FOR MACHINERY PREDICTION")
     print("="*70)
-    print(f"Inizio training: {training_start_time.strftime('%d/%m/%Y %H:%M:%S')}")
+    print(f"Training start: {training_start_time.strftime('%d/%m/%Y %H:%M:%S')}")
     print("="*70)
 
-    # 1. CARICA DATI
-    print("\n[1/6] Caricamento dati...")
+    # 1. LOAD DATA
+    print("\n[1/6] Loading data...")
     try:
         X, y = load_csv_data(
             CONFIG['data']['csv_path'],
@@ -42,15 +42,15 @@ def main():
             CONFIG['data']['output_columns']
         )
     except FileNotFoundError:
-        print(f"\nERRORE: File non trovato: {CONFIG['data']['csv_path']}")
-        print("\nPer testare il sistema, crea un file CSV di esempio con:")
-        print("  - Colonne di input: " + ", ".join(CONFIG['data']['input_columns']))
-        print("  - Colonne di output: " + ", ".join(CONFIG['data']['output_columns']))
-        print("\nOppure modifica configs/example_config.py con i tuoi dati.")
+        print(f"\nERROR: File not found: {CONFIG['data']['csv_path']}")
+        print("\nTo test the system, create a sample CSV file with:")
+        print("  - Input columns: " + ", ".join(CONFIG['data']['input_columns']))
+        print("  - Output columns: " + ", ".join(CONFIG['data']['output_columns']))
+        print("\nOr modify configs/example_config.py with your data.")
         return
 
     # 2. PREPROCESSING
-    print("\n[2/6] Preprocessing dei dati...")
+    print("\n[2/6] Preprocessing data...")
     preprocessor = DataPreprocessor(scaling_method=CONFIG['data']['scaling_method'])
 
     X_train, X_val, X_test, y_train, y_val, y_test = preprocessor.split_data(
@@ -61,17 +61,17 @@ def main():
         random_state=CONFIG['data']['random_state']
     )
 
-    print(f"  Train set: {len(X_train)} campioni")
-    print(f"  Validation set: {len(X_val)} campioni")
-    print(f"  Test set: {len(X_test)} campioni")
+    print(f"  Train set: {len(X_train)} samples")
+    print(f"  Validation set: {len(X_val)} samples")
+    print(f"  Test set: {len(X_test)} samples")
 
-    # Fit e trasformazione
+    # Fit and transform
     X_train_scaled, y_train_scaled = preprocessor.fit_transform(X_train, y_train)
     X_val_scaled, y_val_scaled = preprocessor.transform(X_val, y_val)
     X_test_scaled, y_test_scaled = preprocessor.transform(X_test, y_test)
 
-    # 3. CREA DATASET E DATALOADER
-    print("\n[3/6] Creazione dataset PyTorch...")
+    # 3. CREATE DATASET AND DATALOADER
+    print("\n[3/6] Creating PyTorch dataset...")
     train_dataset = MachineryDataset(X_train_scaled, y_train_scaled)
     val_dataset = MachineryDataset(X_val_scaled, y_val_scaled)
     test_dataset = MachineryDataset(X_test_scaled, y_test_scaled)
@@ -80,7 +80,7 @@ def main():
         train_dataset,
         batch_size=CONFIG['training']['batch_size'],
         shuffle=True,
-        num_workers=0  # Usa 0 per evitare problemi su alcuni sistemi
+        num_workers=0  # Use 0 to avoid issues on some systems
     )
     val_loader = DataLoader(
         val_dataset,
@@ -94,8 +94,8 @@ def main():
     print(f"  Input dimension: {input_dim}")
     print(f"  Output dimension: {output_dim}")
 
-    # 4. CREA MODELLO
-    print("\n[4/6] Creazione del modello...")
+    # 4. CREATE MODEL
+    print("\n[4/6] Creating model...")
     model_type = CONFIG['model']['model_type']
 
     if model_type == 'small':
@@ -112,11 +112,11 @@ def main():
             dropout_rate=CONFIG['model']['dropout_rate']
         )
 
-    print(f"  Tipo modello: {model_type}")
-    print(f"  Parametri totali: {sum(p.numel() for p in model.parameters())}")
+    print(f"  Model type: {model_type}")
+    print(f"  Total parameters: {sum(p.numel() for p in model.parameters())}")
 
     # 5. TRAINING
-    print("\n[5/6] Inizio training...")
+    print("\n[5/6] Starting training...")
 
     # Setup device
     device = CONFIG['training']['device']
@@ -138,13 +138,13 @@ def main():
         save_dir=CONFIG['training']['checkpoint_dir']
     )
 
-    # 6. VALUTAZIONE
-    print("\n[6/6] Valutazione sul test set...")
+    # 6. EVALUATION
+    print("\n[6/6] Evaluation on test set...")
 
     y_pred_scaled = trainer.predict(X_test_scaled)
     y_pred = preprocessor.inverse_transform_output(y_pred_scaled)
 
-    # Calcola metriche
+    # Calculate metrics
     metrics = calculate_metrics(
         y_test,
         y_pred,
@@ -152,12 +152,12 @@ def main():
     )
     print_metrics(metrics)
 
-    # Salva scaler per uso futuro
+    # Save scaler for future use
     scaler_path = Path(CONFIG['training']['checkpoint_dir']) / 'scalers.pkl'
     preprocessor.save_scalers(scaler_path)
 
-    # 7. VISUALIZZAZIONI
-    print("\nGenerazione visualizzazioni...")
+    # 7. VISUALIZATIONS
+    print("\nGenerating visualizations...")
 
     # Plot training history
     plot_training_history(
@@ -166,7 +166,7 @@ def main():
         save_path=Path(CONFIG['training']['checkpoint_dir']) / 'training_history.png'
     )
 
-    # Plot predizioni
+    # Plot predictions
     plot_predictions(
         y_test,
         y_pred,
@@ -174,8 +174,8 @@ def main():
         save_path=Path(CONFIG['training']['checkpoint_dir']) / 'predictions.png'
     )
 
-    # 8. GENERA REPORT PDF
-    print("\nGenerazione report PDF...")
+    # 8. GENERATE PDF REPORT
+    print("\nGenerating PDF report...")
     try:
         total_params = sum(p.numel() for p in model.parameters())
         report_path = generate_training_report(
@@ -191,25 +191,25 @@ def main():
             checkpoint_dir=CONFIG['training']['checkpoint_dir'],
             timestamp=training_start_time
         )
-        print(f"Report PDF salvato: {report_path}")
+        print(f"PDF report saved: {report_path}")
     except Exception as e:
-        print(f"Errore nella generazione del PDF: {e}")
-        print("Il training è comunque completato con successo.")
+        print(f"Error generating PDF: {e}")
+        print("Training completed successfully anyway.")
 
     print("\n" + "="*70)
-    print("TRAINING COMPLETATO CON SUCCESSO!")
+    print("TRAINING COMPLETED SUCCESSFULLY!")
     print("="*70)
-    print(f"\nFile salvati in: {CONFIG['training']['checkpoint_dir']}/")
-    print("  - best_model.pth          : Miglior modello")
-    print("  - scalers.pkl             : Scaler per preprocessing")
-    print("  - training_history.json   : Storia del training")
-    print("  - training_history.png    : Grafico loss")
-    print("  - predictions.png         : Grafico predizioni vs reali")
-    print("  - training_report.pdf     : Report completo training")
+    print(f"\nFiles saved in: {CONFIG['training']['checkpoint_dir']}/")
+    print("  - best_model.pth          : Best model")
+    print("  - scalers.pkl             : Scaler for preprocessing")
+    print("  - training_history.json   : Training history")
+    print("  - training_history.png    : Loss plot")
+    print("  - predictions.png         : Predictions vs actual plot")
+    print("  - training_report.pdf     : Complete training report")
 
 
 if __name__ == "__main__":
-    # Setup seed per riproducibilità
+    # Setup seed for reproducibility
     torch.manual_seed(CONFIG['misc']['random_seed'])
     import numpy as np
     np.random.seed(CONFIG['misc']['random_seed'])

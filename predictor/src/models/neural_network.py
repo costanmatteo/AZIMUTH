@@ -1,9 +1,9 @@
 """
-Rete Neurale per Predizione Output Macchinario
+Neural Network for Machinery Output Prediction
 
-Questo modulo contiene la definizione della rete neurale che predice i valori
-di output del macchinario (es. pressione, temperatura) basandosi sui parametri
-di input scelti per operare la macchina.
+This module contains the definition of the neural network that predicts
+machinery output values (e.g. pressure, temperature) based on the input
+parameters chosen to operate the machine.
 """
 
 import torch
@@ -12,26 +12,26 @@ import torch.nn as nn
 
 class MachineryPredictor(nn.Module):
     """
-    Rete Neurale Feedforward per predire output del macchinario.
+    Feedforward Neural Network for predicting machinery output.
 
-    Architettura:
-    - Input Layer: parametri operativi (da configurare)
-    - Hidden Layers: strati nascosti completamente connessi
-    - Output Layer: valori predetti (pressione, temperatura, etc.)
+    Architecture:
+    - Input Layer: operational parameters (to be configured)
+    - Hidden Layers: fully connected hidden layers
+    - Output Layer: predicted values (pressure, temperature, etc.)
 
     Args:
-        input_size (int): Numero di parametri di input
-        hidden_sizes (list): Lista con dimensioni dei layer nascosti
-        output_size (int): Numero di valori di output da predire
-        dropout_rate (float): Tasso di dropout per regolarizzazione (default: 0.2)
+        input_size (int): Number of input parameters
+        hidden_sizes (list): List with dimensions of hidden layers
+        output_size (int): Number of output values to predict
+        dropout_rate (float): Dropout rate for regularization (default: 0.2)
 
-    Esempio:
+    Example:
         >>> model = MachineryPredictor(
-        ...     input_size=10,      # 10 parametri operativi
-        ...     hidden_sizes=[64, 32, 16],  # 3 layer nascosti
-        ...     output_size=5       # 5 valori di output
+        ...     input_size=10,      # 10 operational parameters
+        ...     hidden_sizes=[64, 32, 16],  # 3 hidden layers
+        ...     output_size=5       # 5 output values
         ... )
-        >>> x = torch.randn(32, 10)  # batch di 32 esempi
+        >>> x = torch.randn(32, 10)  # batch of 32 examples
         >>> output = model(x)
         >>> print(output.shape)  # torch.Size([32, 5])
     """
@@ -39,39 +39,39 @@ class MachineryPredictor(nn.Module):
     def __init__(self, input_size, hidden_sizes, output_size, dropout_rate=0.2):
         super(MachineryPredictor, self).__init__()
 
-        # Costruzione dei layer
+        # Build layers
         layers = []
         prev_size = input_size
 
         # Hidden layers
         for hidden_size in hidden_sizes:
             layers.append(nn.Linear(prev_size, hidden_size))
-            layers.append(nn.ReLU())  # Funzione di attivazione
-            layers.append(nn.Dropout(dropout_rate))  # Regolarizzazione
+            layers.append(nn.ReLU())  # Activation function
+            layers.append(nn.Dropout(dropout_rate))  # Regularization
             prev_size = hidden_size
 
-        # Output layer (nessuna attivazione, regressione lineare)
+        # Output layer (no activation, linear regression)
         layers.append(nn.Linear(prev_size, output_size))
 
-        # Combina tutti i layer in un modulo sequenziale
+        # Combine all layers into a sequential module
         self.network = nn.Sequential(*layers)
 
     def forward(self, x):
         """
-        Forward pass della rete neurale.
+        Forward pass of the neural network.
 
         Args:
-            x (torch.Tensor): Input tensor di shape (batch_size, input_size)
+            x (torch.Tensor): Input tensor of shape (batch_size, input_size)
 
         Returns:
-            torch.Tensor: Output predictions di shape (batch_size, output_size)
+            torch.Tensor: Output predictions of shape (batch_size, output_size)
         """
         return self.network(x)
 
 
-# Esempio di configurazioni comuni
+# Example common configurations
 def create_small_model(input_size, output_size):
-    """Modello piccolo per dataset limitati"""
+    """Small model for limited datasets"""
     return MachineryPredictor(
         input_size=input_size,
         hidden_sizes=[32, 16],
@@ -81,7 +81,7 @@ def create_small_model(input_size, output_size):
 
 
 def create_medium_model(input_size, output_size):
-    """Modello medio per dataset di medie dimensioni"""
+    """Medium model for medium-sized datasets"""
     return MachineryPredictor(
         input_size=input_size,
         hidden_sizes=[128, 64, 32],
@@ -91,7 +91,7 @@ def create_medium_model(input_size, output_size):
 
 
 def create_large_model(input_size, output_size):
-    """Modello grande per dataset ampi"""
+    """Large model for large datasets"""
     return MachineryPredictor(
         input_size=input_size,
         hidden_sizes=[256, 128, 64, 32],
