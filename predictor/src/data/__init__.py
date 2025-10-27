@@ -1,5 +1,5 @@
 """
-Moduli per gestione e preprocessing dei dati
+Data management and preprocessing modules
 """
 
 from .dataset import MachineryDataset

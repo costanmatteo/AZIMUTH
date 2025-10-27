@@ -1,5 +1,5 @@
 """
-Utilities per il preprocessing dei dati del macchinario
+Utilities for machinery data preprocessing
 """
 
 import numpy as np
@@ -11,16 +11,16 @@ import pickle
 
 class DataPreprocessor:
     """
-    Classe per preprocessare i dati del macchinario.
+    Class for preprocessing machinery data.
 
-    Funzionalità:
-    - Normalizzazione/Standardizzazione
-    - Gestione valori mancanti
-    - Split train/validation/test
-    - Salvataggio/Caricamento scaler per inferenza
+    Features:
+    - Normalization/Standardization
+    - Missing values handling
+    - Train/validation/test split
+    - Scaler saving/loading for inference
 
     Args:
-        scaling_method (str): 'standard' o 'minmax' (default: 'standard')
+        scaling_method (str): 'standard' or 'minmax' (default: 'standard')
     """
 
     def __init__(self, scaling_method='standard'):
@@ -35,15 +35,15 @@ class DataPreprocessor:
             self.input_scaler = MinMaxScaler()
             self.output_scaler = MinMaxScaler()
         else:
-            raise ValueError("scaling_method deve essere 'standard' o 'minmax'")
+            raise ValueError("scaling_method must be 'standard' or 'minmax'")
 
     def fit_transform(self, X, y):
         """
-        Fit degli scaler sui dati e trasformazione.
+        Fit scalers on data and transform.
 
         Args:
-            X (np.ndarray o pd.DataFrame): Features di input
-            y (np.ndarray o pd.DataFrame): Target di output
+            X (np.ndarray or pd.DataFrame): Input features
+            y (np.ndarray or pd.DataFrame): Target outputs
 
         Returns:
             tuple: (X_scaled, y_scaled)
@@ -51,11 +51,11 @@ class DataPreprocessor:
         X = self._to_numpy(X)
         y = self._to_numpy(y)
 
-        # Gestione valori mancanti
+        # Handle missing values
         X = self._handle_missing_values(X)
         y = self._handle_missing_values(y)
 
-        # Fit e trasformazione
+        # Fit and transform
         X_scaled = self.input_scaler.fit_transform(X)
         y_scaled = self.output_scaler.fit_transform(y)
 
@@ -63,17 +63,17 @@ class DataPreprocessor:
 
     def transform(self, X, y=None):
         """
-        Trasforma i dati usando scaler già fittati.
+        Transform data using fitted scalers.
 
         Args:
-            X (np.ndarray o pd.DataFrame): Features di input
-            y (np.ndarray o pd.DataFrame, optional): Target di output
+            X (np.ndarray or pd.DataFrame): Input features
+            y (np.ndarray or pd.DataFrame, optional): Target outputs
 
         Returns:
-            np.ndarray o tuple: X_scaled o (X_scaled, y_scaled)
+            np.ndarray or tuple: X_scaled or (X_scaled, y_scaled)
         """
         if self.input_scaler is None:
-            raise ValueError("Scaler non ancora fittato. Usa fit_transform prima.")
+            raise ValueError("Scaler not yet fitted. Use fit_transform first.")
 
         X = self._to_numpy(X)
         X = self._handle_missing_values(X)
@@ -89,43 +89,43 @@ class DataPreprocessor:
 
     def inverse_transform_output(self, y_scaled):
         """
-        Riporta gli output predetti alla scala originale.
+        Convert predicted outputs back to original scale.
 
         Args:
-            y_scaled (np.ndarray): Output scalati
+            y_scaled (np.ndarray): Scaled outputs
 
         Returns:
-            np.ndarray: Output nella scala originale
+            np.ndarray: Outputs in original scale
         """
         if self.output_scaler is None:
-            raise ValueError("Output scaler non fittato.")
+            raise ValueError("Output scaler not fitted.")
 
         return self.output_scaler.inverse_transform(y_scaled)
 
     def split_data(self, X, y, train_size=0.7, val_size=0.15, test_size=0.15, random_state=42):
         """
-        Split dei dati in train, validation e test set.
+        Split data into train, validation and test sets.
 
         Args:
             X (np.ndarray): Features
             y (np.ndarray): Targets
-            train_size (float): Proporzione training set
-            val_size (float): Proporzione validation set
-            test_size (float): Proporzione test set
-            random_state (int): Seed per riproducibilità
+            train_size (float): Training set proportion
+            val_size (float): Validation set proportion
+            test_size (float): Test set proportion
+            random_state (int): Seed for reproducibility
 
         Returns:
             tuple: (X_train, X_val, X_test, y_train, y_val, y_test)
         """
         assert abs(train_size + val_size + test_size - 1.0) < 1e-6, \
-            "Le proporzioni devono sommare a 1.0"
+            "Proportions must sum to 1.0"
 
-        # Prima split: train vs (val+test)
+        # First split: train vs (val+test)
         X_train, X_temp, y_train, y_temp = train_test_split(
             X, y, test_size=(1 - train_size), random_state=random_state
         )
 
-        # Seconda split: val vs test
+        # Second split: val vs test
         val_ratio = val_size / (val_size + test_size)
         X_val, X_test, y_val, y_test = train_test_split(
             X_temp, y_temp, test_size=(1 - val_ratio), random_state=random_state
@@ -134,36 +134,36 @@ class DataPreprocessor:
         return X_train, X_val, X_test, y_train, y_val, y_test
 
     def save_scalers(self, filepath):
-        """Salva gli scaler per uso futuro"""
+        """Save scalers for future use"""
         with open(filepath, 'wb') as f:
             pickle.dump({
                 'input_scaler': self.input_scaler,
                 'output_scaler': self.output_scaler,
                 'scaling_method': self.scaling_method
             }, f)
-        print(f"Scalers salvati in: {filepath}")
+        print(f"Scalers saved to: {filepath}")
 
     def load_scalers(self, filepath):
-        """Carica scaler precedentemente salvati"""
+        """Load previously saved scalers"""
         with open(filepath, 'rb') as f:
             data = pickle.load(f)
             self.input_scaler = data['input_scaler']
             self.output_scaler = data['output_scaler']
             self.scaling_method = data['scaling_method']
-        print(f"Scalers caricati da: {filepath}")
+        print(f"Scalers loaded from: {filepath}")
 
     @staticmethod
     def _to_numpy(data):
-        """Converte DataFrame o liste in numpy array"""
+        """Convert DataFrame or lists to numpy array"""
         if isinstance(data, pd.DataFrame) or isinstance(data, pd.Series):
             return data.values
         return np.array(data)
 
     @staticmethod
     def _handle_missing_values(data):
-        """Gestisce valori mancanti sostituendoli con la media"""
+        """Handle missing values by replacing with mean"""
         if np.any(np.isnan(data)):
-            print("Warning: Valori mancanti trovati. Sostituiti con la media.")
+            print("Warning: Missing values found. Replaced with mean.")
             col_mean = np.nanmean(data, axis=0)
             inds = np.where(np.isnan(data))
             data[inds] = np.take(col_mean, inds[1])
@@ -172,22 +172,22 @@ class DataPreprocessor:
 
 def load_csv_data(filepath, input_columns, output_columns):
     """
-    Carica dati da file CSV.
+    Load data from CSV file.
 
     Args:
-        filepath (str): Path al file CSV
-        input_columns (list): Nomi delle colonne di input
-        output_columns (list): Nomi delle colonne di output
+        filepath (str): Path to CSV file
+        input_columns (list): Names of input columns
+        output_columns (list): Names of output columns
 
     Returns:
-        tuple: (X, y) come numpy arrays
+        tuple: (X, y) as numpy arrays
     """
     df = pd.read_csv(filepath)
 
     X = df[input_columns].values
     y = df[output_columns].values
 
-    print(f"Dati caricati: {X.shape[0]} campioni")
+    print(f"Data loaded: {X.shape[0]} samples")
     print(f"Input features: {X.shape[1]}")
     print(f"Output features: {y.shape[1]}")
 

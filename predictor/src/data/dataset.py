@@ -1,5 +1,5 @@
 """
-Dataset PyTorch per i dati del macchinario
+PyTorch Dataset for machinery data
 """
 
 import torch
@@ -9,17 +9,17 @@ import numpy as np
 
 class MachineryDataset(Dataset):
     """
-    Dataset PyTorch per dati del macchinario.
+    PyTorch Dataset for machinery data.
 
-    Questo dataset gestisce i dati di input (parametri operativi) e output
-    (valori misurati) del macchinario per l'uso con PyTorch DataLoader.
+    This dataset handles input data (operational parameters) and output
+    (measured values) of machinery for use with PyTorch DataLoader.
 
     Args:
-        X (np.ndarray): Features di input, shape (n_samples, n_features)
-        y (np.ndarray): Target di output, shape (n_samples, n_outputs)
-        transform (callable, optional): Trasformazioni opzionali da applicare
+        X (np.ndarray): Input features, shape (n_samples, n_features)
+        y (np.ndarray): Target outputs, shape (n_samples, n_outputs)
+        transform (callable, optional): Optional transformations to apply
 
-    Esempio:
+    Example:
         >>> X = np.random.randn(1000, 10)
         >>> y = np.random.randn(1000, 5)
         >>> dataset = MachineryDataset(X, y)
@@ -30,32 +30,32 @@ class MachineryDataset(Dataset):
 
     def __init__(self, X, y, transform=None):
         """
-        Inizializza il dataset.
+        Initialize the dataset.
 
         Args:
             X: Input features (numpy array)
             y: Target outputs (numpy array)
-            transform: Trasformazioni opzionali
+            transform: Optional transformations
         """
-        # Converti in tensori PyTorch
+        # Convert to PyTorch tensors
         self.X = torch.FloatTensor(X)
         self.y = torch.FloatTensor(y)
         self.transform = transform
 
-        # Verifica che le dimensioni siano coerenti
+        # Verify dimensions are consistent
         assert len(self.X) == len(self.y), \
             f"Mismatch: {len(self.X)} input samples vs {len(self.y)} output samples"
 
     def __len__(self):
-        """Restituisce il numero di campioni nel dataset"""
+        """Return the number of samples in the dataset"""
         return len(self.X)
 
     def __getitem__(self, idx):
         """
-        Restituisce un campione dal dataset.
+        Return a sample from the dataset.
 
         Args:
-            idx (int): Indice del campione
+            idx (int): Sample index
 
         Returns:
             tuple: (input_tensor, output_tensor)
@@ -69,19 +69,19 @@ class MachineryDataset(Dataset):
         return x_sample, y_sample
 
     def get_input_dim(self):
-        """Restituisce la dimensione dell'input"""
+        """Return the input dimension"""
         return self.X.shape[1]
 
     def get_output_dim(self):
-        """Restituisce la dimensione dell'output"""
+        """Return the output dimension"""
         return self.y.shape[1] if len(self.y.shape) > 1 else 1
 
     def get_statistics(self):
         """
-        Restituisce statistiche sui dati.
+        Return statistics about the data.
 
         Returns:
-            dict: Dizionario con statistiche di input e output
+            dict: Dictionary with input and output statistics
         """
         return {
             'n_samples': len(self),
