@@ -1,7 +1,7 @@
 """
-Script per fare predizioni con un modello già trainato
+Script to make predictions with an already trained model
 
-Uso:
+Usage:
     python predict.py --input "1.2,3.4,5.6,7.8"
 """
 
@@ -11,7 +11,7 @@ import torch
 import numpy as np
 from pathlib import Path
 
-# Aggiungi src al path
+# Add src to path
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
 
 from data import DataPreprocessor
@@ -20,7 +20,7 @@ from configs.example_config import CONFIG
 
 
 def load_trained_model(checkpoint_path, input_size, output_size, hidden_sizes, dropout_rate):
-    """Carica un modello trainato da checkpoint"""
+    """Load a trained model from checkpoint"""
     model = MachineryPredictor(
         input_size=input_size,
         hidden_sizes=hidden_sizes,
@@ -37,49 +37,49 @@ def load_trained_model(checkpoint_path, input_size, output_size, hidden_sizes, d
 
 def predict(model, preprocessor, input_data):
     """
-    Fa una predizione.
+    Make a prediction.
 
     Args:
-        model: Modello trainato
-        preprocessor: Preprocessor con scaler fittati
-        input_data: Array numpy con i parametri di input
+        model: Trained model
+        preprocessor: Preprocessor with fitted scalers
+        input_data: Numpy array with input parameters
 
     Returns:
-        np.ndarray: Predizioni nella scala originale
+        np.ndarray: Predictions in original scale
     """
-    # Preprocessa input
+    # Preprocess input
     input_scaled = preprocessor.transform(input_data)
 
-    # Predici
+    # Predict
     with torch.no_grad():
         input_tensor = torch.FloatTensor(input_scaled)
         output_scaled = model(input_tensor)
 
-    # Riporta alla scala originale
+    # Return to original scale
     output = preprocessor.inverse_transform_output(output_scaled.numpy())
 
     return output
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Predici output del macchinario')
+    parser = argparse.ArgumentParser(description='Predict machinery output')
     parser.add_argument(
         '--input',
         type=str,
         required=True,
-        help='Parametri di input separati da virgola (es: "1.2,3.4,5.6")'
+        help='Input parameters separated by commas (e.g., "1.2,3.4,5.6")'
     )
     parser.add_argument(
         '--checkpoint',
         type=str,
         default='checkpoints/best_model.pth',
-        help='Path al checkpoint del modello'
+        help='Path to model checkpoint'
     )
     parser.add_argument(
         '--scaler',
         type=str,
         default='checkpoints/scalers.pkl',
-        help='Path agli scaler'
+        help='Path to scalers'
     )
 
     args = parser.parse_args()
@@ -89,29 +89,29 @@ def main():
         input_values = [float(x.strip()) for x in args.input.split(',')]
         input_array = np.array([input_values])
     except ValueError:
-        print("Errore: Input deve essere una lista di numeri separati da virgola")
+        print("Error: Input must be a list of numbers separated by commas")
         return
 
-    # Verifica dimensione input
+    # Verify input dimension
     expected_input_size = len(CONFIG['data']['input_columns'])
     if len(input_values) != expected_input_size:
-        print(f"Errore: Attesi {expected_input_size} parametri di input, "
-              f"ricevuti {len(input_values)}")
-        print(f"Parametri attesi: {CONFIG['data']['input_columns']}")
+        print(f"Error: Expected {expected_input_size} input parameters, "
+              f"received {len(input_values)}")
+        print(f"Expected parameters: {CONFIG['data']['input_columns']}")
         return
 
-    # Carica scaler
-    print("Caricamento scaler...")
+    # Load scaler
+    print("Loading scaler...")
     preprocessor = DataPreprocessor()
     try:
         preprocessor.load_scalers(args.scaler)
     except FileNotFoundError:
-        print(f"Errore: Scaler non trovato in {args.scaler}")
-        print("Esegui prima il training con train.py")
+        print(f"Error: Scaler not found at {args.scaler}")
+        print("Run training first with train.py")
         return
 
-    # Carica modello
-    print("Caricamento modello...")
+    # Load model
+    print("Loading model...")
     input_size = len(CONFIG['data']['input_columns'])
     output_size = len(CONFIG['data']['output_columns'])
 
@@ -124,23 +124,23 @@ def main():
             dropout_rate=CONFIG['model']['dropout_rate']
         )
     except FileNotFoundError:
-        print(f"Errore: Checkpoint non trovato in {args.checkpoint}")
-        print("Esegui prima il training con train.py")
+        print(f"Error: Checkpoint not found at {args.checkpoint}")
+        print("Run training first with train.py")
         return
 
-    # Predici
-    print("\nPredizione in corso...")
+    # Predict
+    print("\nPredicting...")
     predictions = predict(model, preprocessor, input_array)
 
-    # Stampa risultati
+    # Print results
     print("\n" + "="*60)
-    print("RISULTATI PREDIZIONE")
+    print("PREDICTION RESULTS")
     print("="*60)
     print("\nInput:")
     for name, value in zip(CONFIG['data']['input_columns'], input_values):
         print(f"  {name}: {value:.4f}")
 
-    print("\nOutput predetti:")
+    print("\nPredicted output:")
     for name, value in zip(CONFIG['data']['output_columns'], predictions[0]):
         print(f"  {name}: {value:.4f}")
     print("="*60)

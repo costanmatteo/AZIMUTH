@@ -1,5 +1,5 @@
 """
-Trainer per il modello di predizione del macchinario
+Trainer for machinery prediction model
 """
 
 import torch
@@ -14,20 +14,20 @@ from datetime import datetime
 
 class ModelTrainer:
     """
-    Classe per gestire il training del modello.
+    Class to manage model training.
 
-    Funzionalità:
-    - Training loop con validation
+    Features:
+    - Training loop with validation
     - Early stopping
-    - Salvataggio checkpoints
-    - Logging delle metriche
-    - Supporto per diverse loss functions
+    - Checkpoint saving
+    - Metrics logging
+    - Support for multiple loss functions
 
     Args:
-        model (nn.Module): Il modello da trainare
-        device (str): 'cuda' o 'cpu' (default: auto-detect)
+        model (nn.Module): Model to train
+        device (str): 'cuda' or 'cpu' (default: auto-detect)
         learning_rate (float): Learning rate (default: 0.001)
-        loss_fn (str): Funzione di loss ('mse', 'mae', 'huber') (default: 'mse')
+        loss_fn (str): Loss function ('mse', 'mae', 'huber') (default: 'mse')
     """
 
     def __init__(self, model, device=None, learning_rate=0.001, loss_fn='mse'):
@@ -51,32 +51,32 @@ class ModelTrainer:
         elif loss_fn == 'huber':
             self.criterion = nn.SmoothL1Loss()
         else:
-            raise ValueError(f"Loss function non supportata: {loss_fn}")
+            raise ValueError(f"Loss function not supported: {loss_fn}")
 
         # Tracking
         self.train_losses = []
         self.val_losses = []
         self.best_val_loss = float('inf')
 
-        print(f"Trainer inizializzato su device: {self.device}")
+        print(f"Trainer initialized on device: {self.device}")
         print(f"Optimizer: Adam (lr={learning_rate})")
         print(f"Loss function: {loss_fn}")
 
     def train_epoch(self, train_loader):
         """
-        Training per una singola epoch.
+        Training for a single epoch.
 
         Args:
-            train_loader (DataLoader): DataLoader per training set
+            train_loader (DataLoader): DataLoader for training set
 
         Returns:
-            float: Loss media dell'epoca
+            float: Average loss of the epoch
         """
         self.model.train()
         epoch_loss = 0.0
 
         for batch_X, batch_y in train_loader:
-            # Sposta i dati sul device
+            # Move data to device
             batch_X = batch_X.to(self.device)
             batch_y = batch_y.to(self.device)
 
@@ -84,7 +84,7 @@ class ModelTrainer:
             predictions = self.model(batch_X)
             loss = self.criterion(predictions, batch_y)
 
-            # Backward pass e ottimizzazione
+            # Backward pass and optimization
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step()
@@ -96,13 +96,13 @@ class ModelTrainer:
 
     def validate(self, val_loader):
         """
-        Validazione del modello.
+        Model validation.
 
         Args:
-            val_loader (DataLoader): DataLoader per validation set
+            val_loader (DataLoader): DataLoader for validation set
 
         Returns:
-            float: Loss media sulla validation
+            float: Average validation loss
         """
         self.model.eval()
         val_loss = 0.0
@@ -121,25 +121,25 @@ class ModelTrainer:
 
     def train(self, train_loader, val_loader, epochs=100, patience=10, save_dir='checkpoints'):
         """
-        Training completo con early stopping.
+        Complete training with early stopping.
 
         Args:
-            train_loader (DataLoader): DataLoader per training
-            val_loader (DataLoader): DataLoader per validation
-            epochs (int): Numero massimo di epoche
-            patience (int): Epoche da aspettare prima di early stopping
-            save_dir (str): Directory per salvare i checkpoints
+            train_loader (DataLoader): DataLoader for training
+            val_loader (DataLoader): DataLoader for validation
+            epochs (int): Maximum number of epochs
+            patience (int): Epochs to wait before early stopping
+            save_dir (str): Directory to save checkpoints
 
         Returns:
-            dict: Dizionario con la storia del training
+            dict: Dictionary with training history
         """
         save_path = Path(save_dir)
         save_path.mkdir(parents=True, exist_ok=True)
 
         print(f"\n{'='*60}")
-        print(f"INIZIO TRAINING")
+        print(f"START TRAINING")
         print(f"{'='*60}")
-        print(f"Epoche: {epochs}")
+        print(f"Epochs: {epochs}")
         print(f"Early stopping patience: {patience}")
         print(f"Checkpoint directory: {save_path}")
         print(f"{'='*60}\n")
@@ -160,27 +160,27 @@ class ModelTrainer:
                   f"Train Loss: {train_loss:.6f} - "
                   f"Val Loss: {val_loss:.6f}")
 
-            # Salvataggio best model
+            # Save best model
             if val_loss < self.best_val_loss:
                 self.best_val_loss = val_loss
                 self.save_checkpoint(save_path / 'best_model.pth', epoch, val_loss)
-                print(f"  → Nuovo miglior modello salvato! (Val Loss: {val_loss:.6f})")
+                print(f"  → New best model saved! (Val Loss: {val_loss:.6f})")
                 epochs_without_improvement = 0
             else:
                 epochs_without_improvement += 1
 
             # Early stopping
             if epochs_without_improvement >= patience:
-                print(f"\nEarly stopping attivato dopo {epoch+1} epoche")
-                print(f"Miglior Val Loss: {self.best_val_loss:.6f}")
+                print(f"\nEarly stopping triggered after {epoch+1} epochs")
+                print(f"Best Val Loss: {self.best_val_loss:.6f}")
                 break
 
-        # Salva il training history
+        # Save training history
         self.save_training_history(save_path / 'training_history.json')
 
         print(f"\n{'='*60}")
-        print(f"TRAINING COMPLETATO")
-        print(f"Miglior Val Loss: {self.best_val_loss:.6f}")
+        print(f"TRAINING COMPLETED")
+        print(f"Best Val Loss: {self.best_val_loss:.6f}")
         print(f"{'='*60}\n")
 
         return {
@@ -191,7 +191,7 @@ class ModelTrainer:
         }
 
     def save_checkpoint(self, filepath, epoch, val_loss):
-        """Salva un checkpoint del modello"""
+        """Save a model checkpoint"""
         torch.save({
             'epoch': epoch,
             'model_state_dict': self.model.state_dict(),
@@ -202,17 +202,17 @@ class ModelTrainer:
         }, filepath)
 
     def load_checkpoint(self, filepath):
-        """Carica un checkpoint del modello"""
+        """Load a model checkpoint"""
         checkpoint = torch.load(filepath, map_location=self.device)
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         self.train_losses = checkpoint.get('train_losses', [])
         self.val_losses = checkpoint.get('val_losses', [])
-        print(f"Checkpoint caricato da: {filepath}")
+        print(f"Checkpoint loaded from: {filepath}")
         return checkpoint
 
     def save_training_history(self, filepath):
-        """Salva la storia del training in JSON"""
+        """Save training history to JSON"""
         history = {
             'train_losses': self.train_losses,
             'val_losses': self.val_losses,
@@ -224,17 +224,17 @@ class ModelTrainer:
 
     def predict(self, X):
         """
-        Fa predizioni su nuovi dati.
+        Make predictions on new data.
 
         Args:
-            X (np.ndarray o torch.Tensor): Input data
+            X (np.ndarray or torch.Tensor): Input data
 
         Returns:
-            np.ndarray: Predizioni
+            np.ndarray: Predictions
         """
         self.model.eval()
 
-        # Converti in tensor se necessario
+        # Convert to tensor if necessary
         if isinstance(X, np.ndarray):
             X = torch.FloatTensor(X)
 

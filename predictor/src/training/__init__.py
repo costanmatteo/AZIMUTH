@@ -1,5 +1,5 @@
 """
-Moduli per il training dei modelli
+Model training modules
 """
 
 from .trainer import ModelTrainer

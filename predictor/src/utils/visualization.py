@@ -1,5 +1,5 @@
 """
-Utilities per visualizzazione dei risultati
+Utilities for results visualization
 """
 
 import matplotlib.pyplot as plt
@@ -8,12 +8,12 @@ import numpy as np
 
 def plot_training_history(train_losses, val_losses, save_path=None):
     """
-    Plotta la storia del training.
+    Plot the training history.
 
     Args:
-        train_losses (list): Lista delle loss del training
-        val_losses (list): Lista delle loss della validation
-        save_path (str, optional): Path per salvare il grafico
+        train_losses (list): List of training losses
+        val_losses (list): List of validation losses
+        save_path (str, optional): Path to save the plot
     """
     plt.figure(figsize=(10, 6))
     epochs = range(1, len(train_losses) + 1)
@@ -21,7 +21,7 @@ def plot_training_history(train_losses, val_losses, save_path=None):
     plt.plot(epochs, train_losses, 'b-', label='Training Loss', linewidth=2)
     plt.plot(epochs, val_losses, 'r-', label='Validation Loss', linewidth=2)
 
-    plt.title('Training e Validation Loss', fontsize=14, fontweight='bold')
+    plt.title('Training and Validation Loss', fontsize=14, fontweight='bold')
     plt.xlabel('Epoch', fontsize=12)
     plt.ylabel('Loss', fontsize=12)
     plt.legend(fontsize=10)
@@ -29,20 +29,20 @@ def plot_training_history(train_losses, val_losses, save_path=None):
 
     if save_path:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"Grafico salvato in: {save_path}")
+        print(f"Plot saved to: {save_path}")
 
     plt.show()
 
 
 def plot_predictions(y_true, y_pred, output_names=None, save_path=None):
     """
-    Plotta predizioni vs valori reali.
+    Plot predictions vs actual values.
 
     Args:
-        y_true (np.ndarray): Valori reali
-        y_pred (np.ndarray): Valori predetti
-        output_names (list, optional): Nomi degli output
-        save_path (str, optional): Path per salvare il grafico
+        y_true (np.ndarray): Actual values
+        y_pred (np.ndarray): Predicted values
+        output_names (list, optional): Output names
+        save_path (str, optional): Path to save the plot
     """
     n_outputs = y_true.shape[1] if len(y_true.shape) > 1 else 1
 
@@ -50,7 +50,7 @@ def plot_predictions(y_true, y_pred, output_names=None, save_path=None):
         y_true = y_true.reshape(-1, 1)
         y_pred = y_pred.reshape(-1, 1)
 
-    # Determina il layout dei subplot
+    # Determine subplot layout
     n_cols = min(3, n_outputs)
     n_rows = (n_outputs + n_cols - 1) // n_cols
 
@@ -65,20 +65,20 @@ def plot_predictions(y_true, y_pred, output_names=None, save_path=None):
         # Scatter plot
         ax.scatter(y_true[:, i], y_pred[:, i], alpha=0.5, s=20)
 
-        # Linea perfetta (predizioni = realtà)
+        # Perfect prediction line
         min_val = min(y_true[:, i].min(), y_pred[:, i].min())
         max_val = max(y_true[:, i].max(), y_pred[:, i].max())
-        ax.plot([min_val, max_val], [min_val, max_val], 'r--', linewidth=2, label='Perfetto')
+        ax.plot([min_val, max_val], [min_val, max_val], 'r--', linewidth=2, label='Perfect')
 
         # Labels
         title = output_names[i] if output_names else f'Output {i+1}'
         ax.set_title(title, fontsize=12, fontweight='bold')
-        ax.set_xlabel('Valore Reale', fontsize=10)
-        ax.set_ylabel('Valore Predetto', fontsize=10)
+        ax.set_xlabel('Actual Value', fontsize=10)
+        ax.set_ylabel('Predicted Value', fontsize=10)
         ax.legend()
         ax.grid(True, alpha=0.3)
 
-    # Rimuovi subplot vuoti
+    # Remove empty subplots
     for i in range(n_outputs, len(axes)):
         fig.delaxes(axes[i])
 
@@ -86,20 +86,20 @@ def plot_predictions(y_true, y_pred, output_names=None, save_path=None):
 
     if save_path:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"Grafico salvato in: {save_path}")
+        print(f"Plot saved to: {save_path}")
 
     plt.show()
 
 
 def plot_error_distribution(y_true, y_pred, output_names=None, save_path=None):
     """
-    Plotta la distribuzione degli errori.
+    Plot error distribution.
 
     Args:
-        y_true (np.ndarray): Valori reali
-        y_pred (np.ndarray): Valori predetti
-        output_names (list, optional): Nomi degli output
-        save_path (str, optional): Path per salvare il grafico
+        y_true (np.ndarray): Actual values
+        y_pred (np.ndarray): Predicted values
+        output_names (list, optional): Output names
+        save_path (str, optional): Path to save the plot
     """
     errors = y_pred - y_true
     n_outputs = errors.shape[1] if len(errors.shape) > 1 else 1
@@ -118,20 +118,20 @@ def plot_error_distribution(y_true, y_pred, output_names=None, save_path=None):
     for i in range(n_outputs):
         ax = axes[i]
 
-        # Istogramma degli errori
+        # Error histogram
         ax.hist(errors[:, i], bins=50, alpha=0.7, edgecolor='black')
 
-        # Linea verticale a zero
+        # Vertical line at zero
         ax.axvline(x=0, color='r', linestyle='--', linewidth=2)
 
         # Labels
         title = output_names[i] if output_names else f'Output {i+1}'
-        ax.set_title(f'Errori - {title}', fontsize=12, fontweight='bold')
-        ax.set_xlabel('Errore (Predetto - Reale)', fontsize=10)
-        ax.set_ylabel('Frequenza', fontsize=10)
+        ax.set_title(f'Errors - {title}', fontsize=12, fontweight='bold')
+        ax.set_xlabel('Error (Predicted - Actual)', fontsize=10)
+        ax.set_ylabel('Frequency', fontsize=10)
         ax.grid(True, alpha=0.3, axis='y')
 
-    # Rimuovi subplot vuoti
+    # Remove empty subplots
     for i in range(n_outputs, len(axes)):
         fig.delaxes(axes[i])
 
@@ -139,6 +139,6 @@ def plot_error_distribution(y_true, y_pred, output_names=None, save_path=None):
 
     if save_path:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"Grafico salvato in: {save_path}")
+        print(f"Plot saved to: {save_path}")
 
     plt.show()
