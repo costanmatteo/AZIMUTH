@@ -1,0 +1,1372 @@
+\documentclass[11pt,a4paper]{article}
+
+% Packages
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{graphicx}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{tocloft}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+
+% Setup code listings
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{backcolour}{rgb}{0.95,0.95,0.92}
+
+\lstdefinestyle{pythonstyle}{
+    backgroundcolor=\color{backcolour},
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{magenta},
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\small,
+    breakatwhitespace=false,
+    breaklines=true,
+    captionpos=b,
+    keepspaces=true,
+    numbers=left,
+    numbersep=5pt,
+    showspaces=false,
+    showstringspaces=false,
+    showtabs=false,
+    tabsize=2,
+    language=Python
+}
+
+\lstset{style=pythonstyle}
+
+% Setup hyperlinks
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    filecolor=magenta,
+    urlcolor=cyan,
+    pdftitle={Neural Network Predictor Documentation},
+    pdfpagemode=FullScreen,
+}
+
+% Header and footer
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{Neural Network Predictor}
+\lhead{Technical Documentation}
+\rfoot{Page \thepage}
+
+\title{\textbf{Neural Network Predictor} \\ Complete Technical Documentation}
+\author{COMPASS Project}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This document provides comprehensive technical documentation for the Neural Network Predictor system. The system is designed to predict machinery output values based on operational input parameters using deep learning techniques. This documentation covers the architecture, implementation details, and usage of all major components, with detailed explanations of each source file.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+% ============================================================================
+\section{Introduction}
+
+The Neural Network Predictor is a PyTorch-based system for predicting machinery output parameters (e.g., pressure, temperature, power) based on operational input settings. The system provides:
+
+\begin{itemize}
+    \item Flexible neural network architectures (small, medium, large, or custom)
+    \item Data preprocessing with multiple scaling methods
+    \item Training with early stopping and checkpointing
+    \item Comprehensive evaluation metrics (MSE, RMSE, MAE, R², MAPE)
+    \item Automatic PDF report generation
+    \item Visualization of training history and predictions
+\end{itemize}
+
+\subsection{Project Structure}
+
+\begin{verbatim}
+predictor/
+├── train.py                    # Main training script
+├── predict.py                  # Inference script
+├── configs/
+│   └── example_config.py       # Configuration file
+└── src/
+    ├── data/
+    │   ├── __init__.py
+    │   ├── dataset.py          # PyTorch dataset
+    │   └── preprocessing.py    # Data preprocessing
+    ├── models/
+    │   ├── __init__.py
+    │   └── neural_network.py   # Neural network models
+    ├── training/
+    │   ├── __init__.py
+    │   └── trainer.py          # Training logic
+    └── utils/
+        ├── __init__.py
+        ├── metrics.py          # Evaluation metrics
+        ├── visualization.py    # Plotting functions
+        └── report_generator.py # PDF report generation
+\end{verbatim}
+
+% ============================================================================
+\newpage
+\section{Main Training Script}
+
+\subsection{File: \texttt{train.py}}
+
+\textbf{Location:} \texttt{predictor/train.py}
+
+\textbf{Purpose:} Main entry point for training the neural network model. This script orchestrates the entire training pipeline from data loading to final report generation.
+
+\subsubsection{Imports and Dependencies}
+
+The script imports the following modules:
+\begin{itemize}
+    \item \texttt{torch}: PyTorch library for neural networks
+    \item \texttt{DataLoader}: PyTorch data loading utility
+    \item \texttt{pathlib.Path}: For file path management
+    \item \texttt{datetime}: For timestamping
+    \item Custom modules from \texttt{src/} directory
+\end{itemize}
+
+\subsubsection{Main Function Workflow}
+
+The \texttt{main()} function executes the following steps:
+
+\paragraph{1. Data Loading}
+\begin{lstlisting}
+X, y = load_csv_data(
+    CONFIG['data']['csv_path'],
+    CONFIG['data']['input_columns'],
+    CONFIG['data']['output_columns']
+)
+\end{lstlisting}
+
+Loads CSV data with specified input and output columns. Handles \texttt{FileNotFoundError} with helpful error messages.
+
+\paragraph{2. Data Preprocessing}
+\begin{lstlisting}
+preprocessor = DataPreprocessor(
+    scaling_method=CONFIG['data']['scaling_method']
+)
+
+X_train, X_val, X_test, y_train, y_val, y_test = preprocessor.split_data(
+    X, y,
+    train_size=CONFIG['data']['train_size'],
+    val_size=CONFIG['data']['val_size'],
+    test_size=CONFIG['data']['test_size'],
+    random_state=CONFIG['data']['random_state']
+)
+\end{lstlisting}
+
+Splits data into train/validation/test sets and applies scaling transformations.
+
+\paragraph{3. Dataset Creation}
+\begin{lstlisting}
+train_dataset = MachineryDataset(X_train_scaled, y_train_scaled)
+train_loader = DataLoader(
+    train_dataset,
+    batch_size=CONFIG['training']['batch_size'],
+    shuffle=True
+)
+\end{lstlisting}
+
+Creates PyTorch datasets and dataloaders for batch processing.
+
+\paragraph{4. Model Instantiation}
+\begin{lstlisting}
+if model_type == 'small':
+    model = create_small_model(input_dim, output_dim)
+elif model_type == 'medium':
+    model = create_medium_model(input_dim, output_dim)
+# ... etc
+\end{lstlisting}
+
+Creates the appropriate neural network architecture based on configuration.
+
+\paragraph{5. Training}
+\begin{lstlisting}
+trainer = ModelTrainer(
+    model,
+    device=device,
+    learning_rate=CONFIG['training']['learning_rate'],
+    loss_fn=CONFIG['training']['loss_function']
+)
+
+history = trainer.train(
+    train_loader,
+    val_loader,
+    epochs=CONFIG['training']['epochs'],
+    patience=CONFIG['training']['patience']
+)
+\end{lstlisting}
+
+Trains the model with early stopping mechanism.
+
+\paragraph{6. Evaluation}
+\begin{lstlisting}
+metrics = calculate_metrics(
+    y_test,
+    y_pred,
+    output_names=CONFIG['data']['output_columns']
+)
+print_metrics(metrics)
+\end{lstlisting}
+
+Computes comprehensive evaluation metrics on the test set.
+
+\paragraph{7. Visualization}
+\begin{lstlisting}
+plot_training_history(history['train_losses'],
+                     history['val_losses'])
+plot_predictions(y_test, y_pred)
+\end{lstlisting}
+
+Generates training history and prediction plots.
+
+\paragraph{8. PDF Report Generation}
+\begin{lstlisting}
+report_path = generate_training_report(
+    config=CONFIG,
+    history=history,
+    metrics=metrics,
+    ...
+)
+\end{lstlisting}
+
+Creates a comprehensive PDF report with all training information.
+
+\subsubsection{Key Features}
+
+\begin{itemize}
+    \item \textbf{Error Handling:} Comprehensive error handling for file not found and PDF generation failures
+    \item \textbf{Logging:} Progress logging at each major step
+    \item \textbf{Reproducibility:} Sets random seeds for reproducible results
+    \item \textbf{Device Selection:} Automatic CUDA/CPU detection
+    \item \textbf{File Organization:} All outputs saved to \texttt{checkpoint\_dir}
+\end{itemize}
+
+\subsubsection{Usage}
+
+\begin{lstlisting}[language=bash]
+python train.py
+\end{lstlisting}
+
+All parameters are configured via \texttt{configs/example\_config.py}.
+
+% ============================================================================
+\newpage
+\section{Configuration Module}
+
+\subsection{File: \texttt{configs/example\_config.py}}
+
+\textbf{Location:} \texttt{predictor/configs/example\_config.py}
+
+\textbf{Purpose:} Central configuration file for all training parameters. Uses Python dictionary format for easy access and modification.
+
+\subsubsection{Configuration Structure}
+
+The \texttt{CONFIG} dictionary contains four main sections:
+
+\paragraph{Data Configuration (\texttt{data})}
+
+\begin{lstlisting}
+'data': {
+    'csv_path': 'path/to/data.csv',
+    'input_columns': ['x', 'y', 'z'],
+    'output_columns': ['res'],
+    'train_size': 0.7,
+    'val_size': 0.15,
+    'test_size': 0.15,
+    'random_state': 42,
+    'scaling_method': 'standard'
+}
+\end{lstlisting}
+
+\begin{itemize}
+    \item \texttt{csv\_path}: Absolute or relative path to training data CSV
+    \item \texttt{input\_columns}: List of column names for input features
+    \item \texttt{output\_columns}: List of column names for target outputs
+    \item \texttt{train\_size}: Proportion of data for training (0.0-1.0)
+    \item \texttt{val\_size}: Proportion for validation
+    \item \texttt{test\_size}: Proportion for testing (must sum to 1.0)
+    \item \texttt{random\_state}: Seed for reproducible splits
+    \item \texttt{scaling\_method}: 'standard' for StandardScaler, 'minmax' for MinMaxScaler
+\end{itemize}
+
+\paragraph{Model Configuration (\texttt{model})}
+
+\begin{lstlisting}
+'model': {
+    'hidden_sizes': [128, 64, 32],
+    'dropout_rate': 0.2,
+    'model_type': 'custom'
+}
+\end{lstlisting}
+
+\begin{itemize}
+    \item \texttt{hidden\_sizes}: List of neurons per hidden layer (for custom models)
+    \item \texttt{dropout\_rate}: Probability of dropout (0.0-1.0)
+    \item \texttt{model\_type}: 'small', 'medium', 'large', or 'custom'
+\end{itemize}
+
+\paragraph{Training Configuration (\texttt{training})}
+
+\begin{lstlisting}
+'training': {
+    'epochs': 200,
+    'batch_size': 32,
+    'learning_rate': 0.001,
+    'loss_function': 'mse',
+    'patience': 20,
+    'device': 'auto',
+    'checkpoint_dir': 'checkpoints'
+}
+\end{lstlisting}
+
+\begin{itemize}
+    \item \texttt{epochs}: Maximum number of training epochs
+    \item \texttt{batch\_size}: Mini-batch size for gradient descent
+    \item \texttt{learning\_rate}: Adam optimizer learning rate
+    \item \texttt{loss\_function}: 'mse', 'mae', or 'huber'
+    \item \texttt{patience}: Early stopping patience (number of epochs)
+    \item \texttt{device}: 'cuda', 'cpu', or 'auto'
+    \item \texttt{checkpoint\_dir}: Directory for saving all outputs
+\end{itemize}
+
+\paragraph{Miscellaneous (\texttt{misc})}
+
+\begin{lstlisting}
+'misc': {
+    'random_seed': 42,
+    'num_workers': 4
+}
+\end{lstlisting}
+
+\subsubsection{Predefined Configurations}
+
+Two additional configurations are provided:
+
+\begin{itemize}
+    \item \texttt{SMALL\_DATASET\_CONFIG}: Optimized for datasets < 1000 samples
+    \begin{itemize}
+        \item Model type: 'small'
+        \item Batch size: 16
+        \item Epochs: 100
+    \end{itemize}
+
+    \item \texttt{LARGE\_DATASET\_CONFIG}: Optimized for datasets > 10000 samples
+    \begin{itemize}
+        \item Model type: 'large'
+        \item Batch size: 64
+        \item Epochs: 300
+    \end{itemize}
+\end{itemize}
+
+% ============================================================================
+\newpage
+\section{Data Module}
+
+\subsection{File: \texttt{src/data/preprocessing.py}}
+
+\textbf{Location:} \texttt{predictor/src/data/preprocessing.py}
+
+\textbf{Purpose:} Handles all data loading, splitting, and scaling operations.
+
+\subsubsection{Function: \texttt{load\_csv\_data()}}
+
+\begin{lstlisting}
+def load_csv_data(csv_path, input_columns, output_columns):
+    """
+    Load data from CSV file.
+
+    Args:
+        csv_path: Path to CSV file
+        input_columns: List of input column names
+        output_columns: List of output column names
+
+    Returns:
+        X: Input features (numpy array)
+        y: Target outputs (numpy array)
+    """
+\end{lstlisting}
+
+\textbf{Implementation:}
+\begin{itemize}
+    \item Uses pandas to read CSV
+    \item Extracts specified columns
+    \item Converts to numpy arrays
+    \item Validates column existence
+\end{itemize}
+
+\subsubsection{Class: \texttt{DataPreprocessor}}
+
+Main class for data preprocessing operations.
+
+\paragraph{Constructor}
+\begin{lstlisting}
+def __init__(self, scaling_method='standard'):
+    """
+    Initialize preprocessor.
+
+    Args:
+        scaling_method: 'standard' or 'minmax'
+    """
+\end{lstlisting}
+
+Creates appropriate scalers based on method:
+\begin{itemize}
+    \item \textbf{Standard Scaling:} $(x - \mu) / \sigma$
+    \item \textbf{MinMax Scaling:} $(x - x_{min}) / (x_{max} - x_{min})$
+\end{itemize}
+
+\paragraph{Method: \texttt{split\_data()}}
+\begin{lstlisting}
+def split_data(self, X, y, train_size=0.7,
+               val_size=0.15, test_size=0.15,
+               random_state=42):
+    """
+    Split data into train/validation/test sets.
+
+    Returns:
+        X_train, X_val, X_test, y_train, y_val, y_test
+    """
+\end{lstlisting}
+
+Uses sklearn's \texttt{train\_test\_split} twice:
+\begin{enumerate}
+    \item Split into train and temp (val+test)
+    \item Split temp into validation and test
+\end{enumerate}
+
+\paragraph{Method: \texttt{fit\_transform()}}
+\begin{lstlisting}
+def fit_transform(self, X_train, y_train):
+    """
+    Fit scalers on training data and transform.
+
+    Returns:
+        X_train_scaled, y_train_scaled
+    """
+\end{lstlisting}
+
+\textbf{Important:} Only fits on training data to prevent data leakage.
+
+\paragraph{Method: \texttt{transform()}}
+\begin{lstlisting}
+def transform(self, X, y):
+    """
+    Transform data using fitted scalers.
+
+    Used for validation and test sets.
+    """
+\end{lstlisting}
+
+\paragraph{Method: \texttt{inverse\_transform\_output()}}
+\begin{lstlisting}
+def inverse_transform_output(self, y_scaled):
+    """
+    Convert scaled predictions back to original scale.
+    """
+\end{lstlisting}
+
+Essential for interpreting model predictions.
+
+\paragraph{Method: \texttt{save\_scalers()}}
+\begin{lstlisting}
+def save_scalers(self, path):
+    """
+    Save fitted scalers to disk using pickle.
+    """
+\end{lstlisting}
+
+Saves both input and output scalers for inference.
+
+\paragraph{Method: \texttt{load\_scalers()}}
+\begin{lstlisting}
+def load_scalers(self, path):
+    """
+    Load saved scalers from disk.
+    """
+\end{lstlisting}
+
+\subsection{File: \texttt{src/data/dataset.py}}
+
+\textbf{Location:} \texttt{predictor/src/data/dataset.py}
+
+\textbf{Purpose:} PyTorch dataset wrapper for machinery data.
+
+\subsubsection{Class: \texttt{MachineryDataset}}
+
+\begin{lstlisting}
+class MachineryDataset(torch.utils.data.Dataset):
+    """
+    PyTorch Dataset for machinery data.
+
+    Converts numpy arrays to PyTorch tensors.
+    """
+\end{lstlisting}
+
+\paragraph{Required Methods (PyTorch Interface)}
+
+\begin{lstlisting}
+def __init__(self, X, y):
+    """Convert numpy arrays to tensors."""
+    self.X = torch.FloatTensor(X)
+    self.y = torch.FloatTensor(y)
+
+def __len__(self):
+    """Return number of samples."""
+    return len(self.X)
+
+def __getitem__(self, idx):
+    """Return sample at index."""
+    return self.X[idx], self.y[idx]
+\end{lstlisting}
+
+\paragraph{Helper Methods}
+
+\begin{lstlisting}
+def get_input_dim(self):
+    """Return input feature dimension."""
+    return self.X.shape[1]
+
+def get_output_dim(self):
+    """Return output dimension."""
+    return self.y.shape[1] if len(self.y.shape) > 1 else 1
+\end{lstlisting}
+
+\subsection{File: \texttt{src/data/\_\_init\_\_.py}}
+
+\textbf{Purpose:} Package initialization, exports main functions and classes.
+
+\begin{lstlisting}
+from .preprocessing import load_csv_data, DataPreprocessor
+from .dataset import MachineryDataset
+
+__all__ = ['load_csv_data', 'DataPreprocessor',
+           'MachineryDataset']
+\end{lstlisting}
+
+% ============================================================================
+\newpage
+\section{Model Architecture Module}
+
+\subsection{File: \texttt{src/models/neural\_network.py}}
+
+\textbf{Location:} \texttt{predictor/src/models/neural\_network.py}
+
+\textbf{Purpose:} Defines neural network architectures for regression tasks.
+
+\subsubsection{Class: \texttt{MachineryPredictor}}
+
+\begin{lstlisting}
+class MachineryPredictor(nn.Module):
+    """
+    Feedforward Neural Network for regression.
+
+    Architecture:
+    - Input Layer
+    - Multiple Hidden Layers (ReLU activation)
+    - Dropout after each hidden layer
+    - Output Layer (no activation)
+    """
+\end{lstlisting}
+
+\paragraph{Constructor}
+\begin{lstlisting}
+def __init__(self, input_size, hidden_sizes,
+             output_size, dropout_rate=0.2):
+    """
+    Args:
+        input_size: Number of input features
+        hidden_sizes: List of hidden layer sizes
+        output_size: Number of outputs
+        dropout_rate: Dropout probability
+    """
+\end{lstlisting}
+
+\textbf{Implementation Details:}
+\begin{itemize}
+    \item Uses \texttt{nn.Sequential} for layer composition
+    \item \texttt{nn.Linear}: Fully connected layers
+    \item \texttt{nn.ReLU}: Non-linear activation
+    \item \texttt{nn.Dropout}: Regularization
+\end{itemize}
+
+\paragraph{Forward Method}
+\begin{lstlisting}
+def forward(self, x):
+    """
+    Forward pass.
+
+    Args:
+        x: Input tensor (batch_size, input_size)
+
+    Returns:
+        Output tensor (batch_size, output_size)
+    """
+    return self.network(x)
+\end{lstlisting}
+
+\subsubsection{Predefined Model Factories}
+
+\paragraph{\texttt{create\_small\_model()}}
+\begin{lstlisting}
+def create_small_model(input_size, output_size):
+    """
+    Small model for limited datasets.
+
+    Architecture: [32, 16]
+    Dropout: 0.1
+    Best for: < 1000 samples
+    """
+    return MachineryPredictor(
+        input_size=input_size,
+        hidden_sizes=[32, 16],
+        output_size=output_size,
+        dropout_rate=0.1
+    )
+\end{lstlisting}
+
+\paragraph{\texttt{create\_medium\_model()}}
+\begin{lstlisting}
+def create_medium_model(input_size, output_size):
+    """
+    Medium model for medium datasets.
+
+    Architecture: [128, 64, 32]
+    Dropout: 0.2
+    Best for: 1000-10000 samples
+    """
+    return MachineryPredictor(
+        input_size=input_size,
+        hidden_sizes=[128, 64, 32],
+        output_size=output_size,
+        dropout_rate=0.2
+    )
+\end{lstlisting}
+
+\paragraph{\texttt{create\_large\_model()}}
+\begin{lstlisting}
+def create_large_model(input_size, output_size):
+    """
+    Large model for large datasets.
+
+    Architecture: [256, 128, 64, 32]
+    Dropout: 0.3
+    Best for: > 10000 samples
+    """
+    return MachineryPredictor(
+        input_size=input_size,
+        hidden_sizes=[256, 128, 64, 32],
+        output_size=output_size,
+        dropout_rate=0.3
+    )
+\end{lstlisting}
+
+\subsubsection{Architecture Visualization}
+
+For a medium model with 3 inputs and 1 output:
+
+\begin{verbatim}
+Input Layer (3)
+    |
+  Linear(3 -> 128)
+    |
+  ReLU
+    |
+  Dropout(0.2)
+    |
+  Linear(128 -> 64)
+    |
+  ReLU
+    |
+  Dropout(0.2)
+    |
+  Linear(64 -> 32)
+    |
+  ReLU
+    |
+  Dropout(0.2)
+    |
+  Linear(32 -> 1)
+    |
+Output Layer (1)
+\end{verbatim}
+
+\subsection{File: \texttt{src/models/\_\_init\_\_.py}}
+
+\textbf{Purpose:} Package initialization.
+
+\begin{lstlisting}
+from .neural_network import (
+    MachineryPredictor,
+    create_small_model,
+    create_medium_model,
+    create_large_model
+)
+
+__all__ = ['MachineryPredictor', 'create_small_model',
+           'create_medium_model', 'create_large_model']
+\end{lstlisting}
+
+% ============================================================================
+\newpage
+\section{Training Module}
+
+\subsection{File: \texttt{src/training/trainer.py}}
+
+\textbf{Location:} \texttt{predictor/src/training/trainer.py}
+
+\textbf{Purpose:} Manages training loop, optimization, and model checkpointing.
+
+\subsubsection{Class: \texttt{ModelTrainer}}
+
+\begin{lstlisting}
+class ModelTrainer:
+    """
+    Handles model training with early stopping.
+
+    Features:
+    - Progress tracking with tqdm
+    - Learning rate scheduling
+    - Early stopping
+    - Model checkpointing
+    - Training history logging
+    """
+\end{lstlisting}
+
+\paragraph{Constructor}
+\begin{lstlisting}
+def __init__(self, model, device='cpu',
+             learning_rate=0.001, loss_fn='mse'):
+    """
+    Args:
+        model: PyTorch model to train
+        device: 'cuda' or 'cpu'
+        learning_rate: Optimizer learning rate
+        loss_fn: 'mse', 'mae', or 'huber'
+    """
+\end{lstlisting}
+
+\textbf{Initialization:}
+\begin{itemize}
+    \item Moves model to specified device
+    \item Creates Adam optimizer
+    \item Sets up loss function
+    \item Configures ReduceLROnPlateau scheduler
+\end{itemize}
+
+\paragraph{Method: \texttt{train()}}
+\begin{lstlisting}
+def train(self, train_loader, val_loader,
+          epochs=100, patience=10, save_dir='checkpoints'):
+    """
+    Train the model with early stopping.
+
+    Args:
+        train_loader: Training data loader
+        val_loader: Validation data loader
+        epochs: Maximum epochs
+        patience: Early stopping patience
+        save_dir: Directory for checkpoints
+
+    Returns:
+        history: Dict with training history
+    """
+\end{lstlisting}
+
+\textbf{Training Loop:}
+\begin{enumerate}
+    \item For each epoch:
+    \begin{enumerate}
+        \item Training phase:
+        \begin{itemize}
+            \item Set model to train mode
+            \item Iterate over training batches
+            \item Forward pass
+            \item Compute loss
+            \item Backward pass
+            \item Update weights
+        \end{itemize}
+        \item Validation phase:
+        \begin{itemize}
+            \item Set model to eval mode
+            \item Compute validation loss
+            \item No gradient computation
+        \end{itemize}
+        \item Update learning rate scheduler
+        \item Check early stopping criterion
+        \item Save checkpoint if best model
+        \item Log progress
+    \end{enumerate}
+\end{enumerate}
+
+\paragraph{Early Stopping Logic}
+\begin{lstlisting}
+if val_loss < best_val_loss:
+    best_val_loss = val_loss
+    epochs_without_improvement = 0
+    # Save best model
+else:
+    epochs_without_improvement += 1
+    if epochs_without_improvement >= patience:
+        print(f"Early stopping at epoch {epoch}")
+        break
+\end{lstlisting}
+
+\paragraph{Method: \texttt{predict()}}
+\begin{lstlisting}
+def predict(self, X):
+    """
+    Generate predictions for input data.
+
+    Args:
+        X: Input features (numpy or torch tensor)
+
+    Returns:
+        Predictions as numpy array
+    """
+    self.model.eval()
+    with torch.no_grad():
+        if isinstance(X, np.ndarray):
+            X = torch.FloatTensor(X)
+        X = X.to(self.device)
+        predictions = self.model(X)
+        return predictions.cpu().numpy()
+\end{lstlisting}
+
+\paragraph{Method: \texttt{save\_checkpoint()}}
+\begin{lstlisting}
+def save_checkpoint(self, path):
+    """Save model state dict."""
+    torch.save(self.model.state_dict(), path)
+\end{lstlisting}
+
+\paragraph{Method: \texttt{load\_checkpoint()}}
+\begin{lstlisting}
+def load_checkpoint(self, path):
+    """Load model state dict."""
+    self.model.load_state_dict(
+        torch.load(path, map_location=self.device)
+    )
+\end{lstlisting}
+
+\subsubsection{Optimizer and Scheduler Configuration}
+
+\paragraph{Adam Optimizer}
+\begin{itemize}
+    \item Default learning rate: 0.001
+    \item Adaptive learning rates per parameter
+    \item Momentum with bias correction
+\end{itemize}
+
+\paragraph{ReduceLROnPlateau Scheduler}
+\begin{lstlisting}
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+    optimizer,
+    mode='min',
+    factor=0.5,      # Reduce LR by half
+    patience=5,      # Wait 5 epochs
+    verbose=True
+)
+\end{lstlisting}
+
+\subsection{File: \texttt{src/training/\_\_init\_\_.py}}
+
+\begin{lstlisting}
+from .trainer import ModelTrainer
+
+__all__ = ['ModelTrainer']
+\end{lstlisting}
+
+% ============================================================================
+\newpage
+\section{Utilities Module}
+
+\subsection{File: \texttt{src/utils/metrics.py}}
+
+\textbf{Location:} \texttt{predictor/src/utils/metrics.py}
+
+\textbf{Purpose:} Compute and display evaluation metrics.
+
+\subsubsection{Function: \texttt{calculate\_metrics()}}
+
+\begin{lstlisting}
+def calculate_metrics(y_true, y_pred, output_names=None):
+    """
+    Calculate regression metrics.
+
+    Args:
+        y_true: True values
+        y_pred: Predicted values
+        output_names: Names of outputs (optional)
+
+    Returns:
+        Dict with metrics for each output
+    """
+\end{lstlisting}
+
+\paragraph{Metrics Computed}
+
+\textbf{1. Mean Squared Error (MSE)}
+\begin{equation}
+MSE = \frac{1}{n}\sum_{i=1}^{n}(y_i - \hat{y}_i)^2
+\end{equation}
+
+\textbf{2. Root Mean Squared Error (RMSE)}
+\begin{equation}
+RMSE = \sqrt{MSE}
+\end{equation}
+
+\textbf{3. Mean Absolute Error (MAE)}
+\begin{equation}
+MAE = \frac{1}{n}\sum_{i=1}^{n}|y_i - \hat{y}_i|
+\end{equation}
+
+\textbf{4. Coefficient of Determination (R²)}
+\begin{equation}
+R^2 = 1 - \frac{SS_{res}}{SS_{tot}} = 1 - \frac{\sum(y_i - \hat{y}_i)^2}{\sum(y_i - \bar{y})^2}
+\end{equation}
+
+\textbf{5. Mean Absolute Percentage Error (MAPE)}
+\begin{equation}
+MAPE = \frac{100}{n}\sum_{i=1}^{n}\left|\frac{y_i - \hat{y}_i}{y_i}\right|
+\end{equation}
+
+\textbf{Note:} MAPE avoids division by zero by excluding samples where $y_i = 0$.
+
+\subsubsection{Function: \texttt{print\_metrics()}}
+
+\begin{lstlisting}
+def print_metrics(metrics):
+    """
+    Print metrics in formatted table.
+
+    Args:
+        metrics: Dict from calculate_metrics()
+    """
+\end{lstlisting}
+
+\textbf{Output Format:}
+\begin{verbatim}
+======================================================================
+EVALUATION METRICS
+======================================================================
+
+output_name:
+  MSE  (Mean Squared Error):          0.001234
+  RMSE (Root Mean Squared Error):     0.035128
+  MAE  (Mean Absolute Error):         0.028456
+  R²   (Coefficient of Determination): 0.997645
+  MAPE (Mean Absolute % Error):       3.09%
+\end{verbatim}
+
+\subsubsection{Function: \texttt{calculate\_overall\_metrics()}}
+
+\begin{lstlisting}
+def calculate_overall_metrics(y_true, y_pred):
+    """
+    Calculate global metrics across all outputs.
+
+    Returns:
+        Dict with overall_MSE, overall_RMSE,
+        overall_MAE, overall_R2
+    """
+\end{lstlisting}
+
+Useful for multi-output models to get aggregate performance.
+
+\subsection{File: \texttt{src/utils/visualization.py}}
+
+\textbf{Location:} \texttt{predictor/src/utils/visualization.py}
+
+\textbf{Purpose:} Create visualization plots for analysis.
+
+\subsubsection{Function: \texttt{plot\_training\_history()}}
+
+\begin{lstlisting}
+def plot_training_history(train_losses, val_losses,
+                          save_path=None):
+    """
+    Plot training and validation loss curves.
+
+    Args:
+        train_losses: List of training losses per epoch
+        val_losses: List of validation losses per epoch
+        save_path: Path to save plot (optional)
+    """
+\end{lstlisting}
+
+\textbf{Plot Features:}
+\begin{itemize}
+    \item Dual y-axis for train and validation
+    \item Logarithmic scale for loss values
+    \item Grid for readability
+    \item Best epoch marker
+    \item Legend with final values
+\end{itemize}
+
+\subsubsection{Function: \texttt{plot\_predictions()}}
+
+\begin{lstlisting}
+def plot_predictions(y_true, y_pred,
+                     output_names=None, save_path=None):
+    """
+    Create scatter plots of predictions vs actual.
+
+    Args:
+        y_true: True values
+        y_pred: Predicted values
+        output_names: Names of outputs (optional)
+        save_path: Path to save plot (optional)
+    """
+\end{lstlisting}
+
+\textbf{Plot Features:}
+\begin{itemize}
+    \item Subplot for each output variable
+    \item Scatter plot of predictions vs. actual
+    \item Perfect prediction line (y=x)
+    \item R² score annotation
+    \item Color-coded by output
+    \item Automatic layout adjustment
+\end{itemize}
+
+\subsection{File: \texttt{src/utils/report\_generator.py}}
+
+\textbf{Location:} \texttt{predictor/src/utils/report\_generator.py}
+
+\textbf{Purpose:} Generate comprehensive PDF training reports.
+
+\subsubsection{Class: \texttt{TrainingReportGenerator}}
+
+\begin{lstlisting}
+class TrainingReportGenerator:
+    """
+    Creates professional PDF reports using ReportLab.
+
+    Report includes:
+    - Title and timestamp
+    - Model configuration
+    - Dataset information
+    - Training parameters
+    - Evaluation metrics
+    - Visualization plots
+    """
+\end{lstlisting}
+
+\paragraph{Constructor}
+\begin{lstlisting}
+def __init__(self, output_path):
+    """
+    Initialize report generator.
+
+    Sets up:
+    - Page layout (A4, 1.5cm margins)
+    - Text styles (font sizes, colors)
+    - Section formatting
+    """
+\end{lstlisting}
+
+\paragraph{Method: \texttt{add\_title()}}
+Adds centered title with date/time.
+
+\paragraph{Method: \texttt{create\_two\_column\_section()}}
+Creates two-column layout for compact information display.
+
+\paragraph{Method: \texttt{add\_metrics\_table()}}
+Generates professional metrics table with all 5 metrics.
+
+\paragraph{Method: \texttt{add\_plots\_stacked()}}
+Adds visualization plots stacked vertically (16cm width).
+
+\paragraph{Method: \texttt{generate()}}
+\begin{lstlisting}
+def generate(self, config, history, metrics, ...):
+    """
+    Generate complete PDF report.
+
+    Combines all sections into final document.
+    """
+\end{lstlisting}
+
+\subsubsection{Function: \texttt{generate\_training\_report()}}
+
+\begin{lstlisting}
+def generate_training_report(
+    config, history, metrics, input_dim, output_dim,
+    total_params, n_train, n_val, n_test,
+    checkpoint_dir, timestamp=None
+):
+    """
+    High-level function to generate report.
+
+    Returns:
+        Path to generated PDF file
+    """
+\end{lstlisting}
+
+\textbf{Report Sections:}
+\begin{enumerate}
+    \item Title page with timestamp
+    \item Two-column information:
+    \begin{itemize}
+        \item Model Configuration
+        \item Dataset Information
+        \item Training Parameters
+        \item Training Results
+    \end{itemize}
+    \item Metrics table (all 5 metrics)
+    \item Training Visualization
+    \begin{itemize}
+        \item Training history plot
+        \item Predictions vs. actual plot
+    \end{itemize}
+\end{enumerate}
+
+\subsection{File: \texttt{src/utils/\_\_init\_\_.py}}
+
+\begin{lstlisting}
+from .visualization import (
+    plot_training_history,
+    plot_predictions
+)
+from .metrics import calculate_metrics, print_metrics
+from .report_generator import generate_training_report
+
+__all__ = [
+    'plot_training_history',
+    'plot_predictions',
+    'calculate_metrics',
+    'print_metrics',
+    'generate_training_report'
+]
+\end{lstlisting}
+
+% ============================================================================
+\newpage
+\section{Inference Script}
+
+\subsection{File: \texttt{predict.py}}
+
+\textbf{Location:} \texttt{predictor/predict.py}
+
+\textbf{Purpose:} Make predictions using trained models.
+
+\subsubsection{Inference Workflow}
+
+\begin{enumerate}
+    \item \textbf{Load Model}
+    \begin{lstlisting}
+model = MachineryPredictor(...)
+model.load_state_dict(
+    torch.load('checkpoints/best_model.pth')
+)
+model.eval()
+    \end{lstlisting}
+
+    \item \textbf{Load Scalers}
+    \begin{lstlisting}
+preprocessor = DataPreprocessor()
+preprocessor.load_scalers('checkpoints/scalers.pkl')
+    \end{lstlisting}
+
+    \item \textbf{Prepare Input}
+    \begin{lstlisting}
+# New input data
+X_new = np.array([[x_val, y_val, z_val]])
+
+# Scale inputs
+X_scaled = preprocessor.input_scaler.transform(X_new)
+    \end{lstlisting}
+
+    \item \textbf{Generate Prediction}
+    \begin{lstlisting}
+with torch.no_grad():
+    X_tensor = torch.FloatTensor(X_scaled)
+    y_pred_scaled = model(X_tensor)
+    y_pred = preprocessor.inverse_transform_output(
+        y_pred_scaled.numpy()
+    )
+    \end{lstlisting}
+\end{enumerate}
+
+\subsubsection{Example Usage}
+
+\begin{lstlisting}
+# Example: Predict for new inputs
+new_inputs = {
+    'x': 10.5,
+    'y': 20.3,
+    'z': 15.7
+}
+
+# Convert to array and predict
+X_new = np.array([[
+    new_inputs['x'],
+    new_inputs['y'],
+    new_inputs['z']
+]])
+
+prediction = make_prediction(X_new)
+print(f"Predicted output: {prediction[0]}")
+\end{lstlisting}
+
+% ============================================================================
+\newpage
+\section{Complete Workflow}
+
+\subsection{Training Pipeline}
+
+\begin{enumerate}
+    \item \textbf{Prepare Data}
+    \begin{itemize}
+        \item Create CSV with input and output columns
+        \item Ensure data quality (no missing values)
+        \item Place in accessible location
+    \end{itemize}
+
+    \item \textbf{Configure Training}
+    \begin{itemize}
+        \item Edit \texttt{configs/example\_config.py}
+        \item Set data path and column names
+        \item Choose model architecture
+        \item Set training parameters
+    \end{itemize}
+
+    \item \textbf{Execute Training}
+    \begin{lstlisting}[language=bash]
+python train.py
+    \end{lstlisting}
+
+    \item \textbf{Monitor Progress}
+    \begin{itemize}
+        \item Watch training/validation loss
+        \item Check for early stopping
+        \item Review epoch-by-epoch progress
+    \end{itemize}
+
+    \item \textbf{Review Results}
+    \begin{itemize}
+        \item Examine printed metrics
+        \item View training history plot
+        \item View predictions plot
+        \item Read PDF report
+    \end{itemize}
+\end{enumerate}
+
+\subsection{Output Files}
+
+All outputs saved to \texttt{checkpoint\_dir}:
+
+\begin{itemize}
+    \item \texttt{best\_model.pth}: Best model weights (state dict)
+    \item \texttt{scalers.pkl}: Fitted input/output scalers
+    \item \texttt{training\_history.json}: Complete training log
+    \item \texttt{training\_history.png}: Loss curve plot
+    \item \texttt{predictions.png}: Predictions vs. actual plot
+    \item \texttt{training\_report.pdf}: Comprehensive PDF report
+\end{itemize}
+
+\subsection{Inference Pipeline}
+
+\begin{enumerate}
+    \item Load trained model (\texttt{best\_model.pth})
+    \item Load scalers (\texttt{scalers.pkl})
+    \item Prepare new input data
+    \item Scale inputs
+    \item Generate predictions
+    \item Inverse transform outputs
+    \item Use predictions
+\end{enumerate}
+
+% ============================================================================
+\newpage
+\section{Best Practices and Tips}
+
+\subsection{Data Preparation}
+
+\begin{itemize}
+    \item \textbf{Clean Data:} Remove outliers and handle missing values
+    \item \textbf{Feature Selection:} Include relevant input features only
+    \item \textbf{Sufficient Samples:} More data generally improves performance
+    \item \textbf{Representative Split:} Ensure test set represents real usage
+\end{itemize}
+
+\subsection{Model Selection}
+
+\begin{itemize}
+    \item \textbf{Start Small:} Begin with small model, increase if needed
+    \item \textbf{Monitor Overfitting:} Watch train vs. validation loss
+    \item \textbf{Consider Data Size:} Match model complexity to dataset size
+    \item \textbf{Cross-Validation:} For small datasets, use k-fold CV
+\end{itemize}
+
+\subsection{Hyperparameter Tuning}
+
+\begin{itemize}
+    \item \textbf{Learning Rate:} Start with 0.001, adjust if loss unstable
+    \item \textbf{Batch Size:} 32 is good default, increase for large datasets
+    \item \textbf{Dropout:} Increase if overfitting, decrease if underfitting
+    \item \textbf{Early Stopping:} Patience of 20 is reasonable
+\end{itemize}
+
+\subsection{Troubleshooting}
+
+\paragraph{Overfitting (train loss << val loss)}
+\begin{itemize}
+    \item Increase dropout rate
+    \item Use smaller model
+    \item Get more training data
+    \item Add regularization
+\end{itemize}
+
+\paragraph{Underfitting (both losses high)}
+\begin{itemize}
+    \item Use larger model
+    \item Train for more epochs
+    \item Decrease dropout
+    \item Check data quality
+\end{itemize}
+
+\paragraph{Unstable Training}
+\begin{itemize}
+    \item Reduce learning rate
+    \item Increase batch size
+    \item Check for data outliers
+    \item Try different loss function
+\end{itemize}
+
+% ============================================================================
+\section{Conclusion}
+
+This documentation provides complete technical details for the Neural Network Predictor system. Each module is designed to be modular, maintainable, and extensible. The system provides production-ready capabilities for machinery output prediction with comprehensive evaluation and reporting.
+
+\subsection{Key Strengths}
+
+\begin{itemize}
+    \item \textbf{Modularity:} Clean separation of concerns
+    \item \textbf{Configurability:} Easy parameter adjustment
+    \item \textbf{Robustness:} Error handling and validation
+    \item \textbf{Reproducibility:} Random seed control
+    \item \textbf{Monitoring:} Comprehensive logging and visualization
+    \item \textbf{Reporting:} Professional PDF report generation
+\end{itemize}
+
+\subsection{Future Enhancements}
+
+Potential improvements:
+\begin{itemize}
+    \item Automated hyperparameter optimization (Optuna, Ray Tune)
+    \item Ensemble methods (bagging, boosting)
+    \item Web API for real-time inference
+    \item Model interpretability tools (SHAP, LIME)
+    \item Time-series forecasting capabilities
+    \item Distributed training support
+\end{itemize}
+
+\end{document}
