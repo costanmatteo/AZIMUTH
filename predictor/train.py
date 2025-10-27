@@ -109,7 +109,8 @@ def main():
             input_size=input_dim,
             hidden_sizes=CONFIG['model']['hidden_sizes'],
             output_size=output_dim,
-            dropout_rate=CONFIG['model']['dropout_rate']
+            dropout_rate=CONFIG['model']['dropout_rate'],
+            use_batchnorm=CONFIG['model']['use_batchnorm']
         )
 
     print(f"  Model type: {model_type}")

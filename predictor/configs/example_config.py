@@ -5,7 +5,7 @@ Example configuration in Python (alternative to YAML)
 CONFIG = {
     # Data configuration
     'data': {
-        'csv_path': 'C:/COMPASS/COMPASS/predictor/src/data/raw/Dati_prova - Foglio3.csv',
+        'csv_path': 'C:/COMPASS/COMPASS/predictor/src/data/raw/dataset_sintetico_xyz.csv',
         'input_columns': [
             'x',
             'y',
@@ -25,9 +25,10 @@ CONFIG = {
 
     # Model configuration
     'model': {
-        'hidden_sizes': [128, 64, 32],
+        'hidden_sizes': [512, 256, 64],
         'dropout_rate': 0.2,
-        'model_type': 'custom',  # 'small', 'medium', 'large', or 'custom'
+        'model_type': 'custom',  # 'small', 'medium', 'large', o 'custom'
+        'use_batchnorm': True,
     },
 
     # Training configuration

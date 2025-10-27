@@ -36,7 +36,7 @@ class MachineryPredictor(nn.Module):
         >>> print(output.shape)  # torch.Size([32, 5])
     """
 
-    def __init__(self, input_size, hidden_sizes, output_size, dropout_rate=0.2):
+    def __init__(self, input_size, hidden_sizes, output_size, dropout_rate=0.2, use_batchnorm=False):
         super(MachineryPredictor, self).__init__()
 
         # Build layers
@@ -46,8 +46,10 @@ class MachineryPredictor(nn.Module):
         # Hidden layers
         for hidden_size in hidden_sizes:
             layers.append(nn.Linear(prev_size, hidden_size))
-            layers.append(nn.ReLU())  # Activation function
-            layers.append(nn.Dropout(dropout_rate))  # Regularization
+            if use_batchnorm:
+                layers.append(nn.BatchNorm1d(hidden_size))  # normalize activations per batch
+            layers.append(nn.ReLU())  # Funzione di attivazione
+            layers.append(nn.Dropout(dropout_rate))  # Regolarizzazione
             prev_size = hidden_size
 
         # Output layer (no activation, linear regression)
