@@ -7,10 +7,10 @@ Customize the parameters below for your specific use case.
 CONFIG = {
     # Data configuration
     'data': {
-        'csv_path': 'src/data/raw/Dati_prova - Sheet19.csv',  # Path to your CSV file
+        'csv_path': 'src/data/raw/Dati_prova - Sheet21.csv',  # Path to your CSV file
         'input_columns': ['x', 'y', 'z'],  # Input features
-        'output_columns': ['res_1', 'res_2'],  # Target outputs
-        'scaling_method': 'standard',  # 'standard', 'minmax', or 'robust'
+        'output_columns': ['res_1'],  # Target outputs
+        'scaling_method': 'standard',  # 'standard', 'minmax'
         'train_size': 0.7,  # 70% for training
         'val_size': 0.15,   # 15% for validation
         'test_size': 0.15,  # 15% for testing
@@ -21,26 +21,26 @@ CONFIG = {
     'model': {
         'model_type': 'custom',  # 'small', 'medium', 'large', or 'custom'
         # If 'custom', specify architecture below:
-        'hidden_sizes': [32, 16],  # Used only if model_type='custom'
+        'hidden_sizes': [128, 64, 32],  # Used only if model_type='custom'
         'dropout_rate': 0.2,
-        'use_batchnorm': False,
+        'use_batchnorm': True,
         'min_variance': 1e-6  # Minimum variance for numerical stability
     },
 
     # Training configuration
     'training': {
-        'batch_size': 32,
-        'epochs': 200,
+        'batch_size': 16,
+        'epochs': 400,
         'learning_rate': 0.001,
-        'weight_decay': 1e-5,  # L2 regularization
-        'patience': 20,  # Early stopping patience
+        'weight_decay': 0.001,  # L2 regularization
+        'patience': 30,  # Early stopping patience
         'device': 'auto',  # 'auto', 'cuda', or 'cpu'
         'checkpoint_dir': 'checkpoints_uncertainty'
     },
 
     # Uncertainty configuration
     'uncertainty': {
-        'confidence_level': 0.95,  # For prediction intervals (95%)
+        'confidence_level': 0.95,  # For prediction intervals (0.95, 0.99, etc.)
     },
 
     # Miscellaneous
