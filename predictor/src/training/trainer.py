@@ -41,7 +41,7 @@ class ModelTrainer:
         self.learning_rate = learning_rate
 
         # Setup optimizer
-        self.optimizer = optim.Adam(self.model.parameters(), lr=learning_rate)
+        self.optimizer = optim.Adam(self.model.parameters(), lr=learning_rate, weight_decay=0.1)
 
         # Setup loss function
         if loss_fn == 'mse':

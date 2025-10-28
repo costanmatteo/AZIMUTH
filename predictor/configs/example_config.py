@@ -5,7 +5,7 @@ Example configuration in Python (alternative to YAML)
 CONFIG = {
     # Data configuration
     'data': {
-        'csv_path': 'C:/COMPASS/COMPASS/predictor/src/data/raw/dataset_sintetico_xyz.csv',
+        'csv_path': 'C:\\AZIMUTH\\AZIMUTH\\predictor\\src\\data\\raw\\Dati_prova - Sheet8.csv',
         'input_columns': [
             'x',
             'y',
@@ -20,13 +20,13 @@ CONFIG = {
         'val_size': 0.15,
         'test_size': 0.15,
         'random_state': 42,
-        'scaling_method': 'standard',  # or 'minmax'
+        'scaling_method': 'minmax',  #'standard' or 'minmax'
     },
 
     # Model configuration
     'model': {
-        'hidden_sizes': [512, 256, 64],
-        'dropout_rate': 0.2,
+        'hidden_sizes': [64, 32, 16],
+        'dropout_rate': 0.1,
         'model_type': 'custom',  # 'small', 'medium', 'large', o 'custom'
         'use_batchnorm': True,
     },
@@ -36,8 +36,8 @@ CONFIG = {
         'epochs': 200,
         'batch_size': 32,
         'learning_rate': 0.001,
-        'loss_function': 'mse',  # 'mse', 'mae', or 'huber'
-        'patience': 20,
+        'loss_function': 'mae',  # 'mse', 'mae', or 'huber'
+        'patience': 15,
         'device': 'auto',  # 'cuda', 'cpu', or 'auto'
         'checkpoint_dir': 'checkpoints',
     },
