@@ -27,8 +27,8 @@ class ModelTrainer:
         model (nn.Module): Model to train
         device (str): 'cuda' or 'cpu' (default: auto-detect)
         learning_rate (float): Learning rate (default: 0.001)
-        weight_decay (float): L2 weight decay (default: 0.0)
-        loss_fn (str): Funzione di loss ('mse', 'mae', 'huber') (default: 'mse')
+        weight_decay (float): L2 regularization strength (default: 0.0)
+        loss_fn (str): Loss function ('mse', 'mae', 'huber') (default: 'mse')
     """
 
     def __init__(self, model, device=None, learning_rate=0.001, weight_decay=0.0, loss_fn='mse'):
@@ -42,8 +42,12 @@ class ModelTrainer:
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
 
-        # Setup optimizer
-        self.optimizer = optim.Adam(self.model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+        # Setup optimizer with weight decay (L2 regularization)
+        self.optimizer = optim.Adam(
+            self.model.parameters(),
+            lr=learning_rate,
+            weight_decay=weight_decay
+        )
 
         # Setup loss function
         if loss_fn == 'mse':
