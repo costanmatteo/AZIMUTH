@@ -143,9 +143,12 @@ def main():
 
     # 5. CREATE LOSS FUNCTION
     print("\n[5/7] Setting up Gaussian NLL Loss...")
-    criterion = GaussianNLLLoss(reduction='mean')
-    print("  Loss: L = 0.5 * (log(σ²) + (y - μ)² / σ²)")
+    alpha = CONFIG['training'].get('variance_penalty_alpha', 1.0)
+    criterion = GaussianNLLLoss(alpha=alpha, reduction='mean')
+    print(f"  Loss: L = 0.5 * ((y - μ)² / σ² + α * log(σ²)) with α={alpha:.3f}")
     print("  This penalizes large errors but accounts for predicted uncertainty")
+    if alpha < 1.0:
+        print(f"  Note: α={alpha:.3f} < 1 allows model to be more honest about uncertainty")
 
     # 6. TRAINING
     print("\n[6/7] Starting training...")

@@ -35,7 +35,12 @@ CONFIG = {
         'weight_decay': 0.001,  # L2 regularization
         'patience': 30,  # Early stopping patience
         'device': 'auto',  # 'auto', 'cuda', or 'cpu'
-        'checkpoint_dir': 'checkpoints_uncertainty'
+        'checkpoint_dir': 'checkpoints_uncertainty',
+        # Variance penalty weight in loss function: L = (y-μ)²/σ² + α*log(σ²)
+        # α = 1.0: Standard Gaussian NLL
+        # α < 1.0: Reduces penalty for large variances (recommended for over-confident models)
+        # α > 1.0: Increases penalty for large variances
+        'variance_penalty_alpha': 0.3  # Try values like 0.1-0.5 for over-confident models
     },
 
     # Uncertainty configuration
