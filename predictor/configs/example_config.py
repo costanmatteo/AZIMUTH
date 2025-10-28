@@ -37,6 +37,7 @@ CONFIG = {
         'epochs': 300,                  # More epochs with smaller LR
         'batch_size': 16,               # Smaller batches for small dataset
         'learning_rate': 0.0005,        # Lower LR for more stable convergence
+        'weight_decay': 0.0001,         # L2 regularization (0.0 = no regularization)
         'loss_function': 'mse',         # MSE works well for regression
         'patience': 30,                 # More patience with lower LR
         'device': 'auto',
@@ -69,6 +70,7 @@ MINIMAL_CONFIG = {
         'epochs': 200,
         'batch_size': 16,
         'learning_rate': 0.001,
+        'weight_decay': 0.0,            # No L2 regularization for minimal model
         'patience': 25,
     }
 }
@@ -87,6 +89,7 @@ DEEPER_CONFIG = {
         'epochs': 400,
         'batch_size': 16,
         'learning_rate': 0.0003,        # Even lower LR
+        'weight_decay': 0.0005,         # More regularization for deeper model
         'patience': 40,
     }
 }
@@ -98,6 +101,7 @@ MAE_CONFIG = {
         **CONFIG['training'],
         'loss_function': 'mae',         # More robust to outliers
         'learning_rate': 0.001,
+        'weight_decay': 0.0001,
     }
 }
 
@@ -114,5 +118,6 @@ REGULARIZED_CONFIG = {
         **CONFIG['training'],
         'batch_size': 8,                # Even smaller batches
         'learning_rate': 0.0003,
+        'weight_decay': 0.001,          # Strong L2 regularization
     }
 }
