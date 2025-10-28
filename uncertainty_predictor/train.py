@@ -202,7 +202,7 @@ def main():
     # Evaluate prediction intervals
     print("\n" + "="*70)
     print("PREDICTION INTERVAL COVERAGE")
-    print("="*70)
+
     coverage_results = evaluate_prediction_intervals(
         y_test_orig,
         y_pred_mean_orig,
@@ -270,13 +270,7 @@ def main():
     print("  - scatter_with_uncertainty.png      : Scatter plot colored by uncertainty")
     print("  - uncertainty_distribution.png      : Distribution of uncertainties")
     print("\n" + "="*70)
-    print("KEY TAKEAWAYS")
-    print("="*70)
-    print("✓ The model predicts BOTH mean (μ) and variance (σ²)")
-    print("✓ High variance indicates uncertain/noisy regions")
-    print("✓ Low variance indicates confident predictions")
-    print("✓ Use the uncertainty to identify where more data is needed")
-    print("="*70 + "\n")
+
 
 
 if __name__ == "__main__":

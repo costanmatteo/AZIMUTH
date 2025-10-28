@@ -100,7 +100,6 @@ def print_metrics(metrics):
     """
     print("\n" + "="*70)
     print("EVALUATION METRICS")
-    print("="*70)
 
     for name, values in metrics.items():
         print(f"\n{name}:")
@@ -114,7 +113,6 @@ def print_metrics(metrics):
             else:
                 print(f"  {metric_name:20s}: {value}")
 
-    print("="*70)
 
 
 def compute_prediction_intervals(y_pred_mean, y_pred_variance, confidence=0.95):

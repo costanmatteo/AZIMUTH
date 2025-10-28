@@ -7,9 +7,9 @@ Customize the parameters below for your specific use case.
 CONFIG = {
     # Data configuration
     'data': {
-        'csv_path': 'data/machinery_data.csv',  # Path to your CSV file
-        'input_columns': ['param1', 'param2', 'param3', 'param4', 'param5'],  # Input features
-        'output_columns': ['pressure', 'temperature', 'flow_rate'],  # Target outputs
+        'csv_path': 'src/data/raw/Dati_prova - Sheet19.csv',  # Path to your CSV file
+        'input_columns': ['x', 'y', 'z'],  # Input features
+        'output_columns': ['res_1', 'res_2'],  # Target outputs
         'scaling_method': 'standard',  # 'standard', 'minmax', or 'robust'
         'train_size': 0.7,  # 70% for training
         'val_size': 0.15,   # 15% for validation
@@ -19,9 +19,9 @@ CONFIG = {
 
     # Model configuration
     'model': {
-        'model_type': 'medium',  # 'small', 'medium', 'large', or 'custom'
+        'model_type': 'custom',  # 'small', 'medium', 'large', or 'custom'
         # If 'custom', specify architecture below:
-        'hidden_sizes': [128, 64, 32, 16],  # Used only if model_type='custom'
+        'hidden_sizes': [32, 16],  # Used only if model_type='custom'
         'dropout_rate': 0.2,
         'use_batchnorm': False,
         'min_variance': 1e-6  # Minimum variance for numerical stability
