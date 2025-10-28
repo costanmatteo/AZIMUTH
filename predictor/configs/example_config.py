@@ -7,7 +7,7 @@ OPTIMIZED FOR: 736 samples, 3 inputs (x,y,z) -> 1 output (res)
 CONFIG = {
     # Data configuration
     'data': {
-        'csv_path': 'src/data/raw/Dati_prova - Foglio2.csv',
+        'csv_path': 'src/data/raw/Dati_prova - Sheet13.csv',
         'input_columns': [
             'x',
             'y',
@@ -16,18 +16,18 @@ CONFIG = {
         'output_columns': [
             'res',
         ],
-        'train_size': 0.7,      # 515 samples for training
-        'val_size': 0.15,       # 110 samples for validation
-        'test_size': 0.15,      # 111 samples for test
+        'train_size': 0.7,      #  samples for training
+        'val_size': 0.15,       #  samples for validation
+        'test_size': 0.15,      #  samples for test
         'random_state': 42,
-        'scaling_method': 'minmax',  # Better for inputs with different ranges
+        'scaling_method': 'minmax',  # 'standard' o 'minmax'
     },
 
     # Model configuration
     # OPTIMIZED: Small network for 3 inputs prevents overfitting
     'model': {
-        'hidden_sizes': [32, 16],  # Much smaller! Was [512, 256, 64, 32]
-        'dropout_rate': 0.2,           # Reduced dropout for small dataset
+        'hidden_sizes': [32, 16],  
+        'dropout_rate': 0.1,           # Reduced dropout for small dataset
         'model_type': 'custom',
         'use_batchnorm': False,         # Not needed for small network
     },
@@ -36,9 +36,9 @@ CONFIG = {
     'training': {
         'epochs': 200,                  # More epochs with smaller LR
         'batch_size': 16,               # Smaller batches for small dataset
-        'learning_rate': 0.001,        # Lower LR for more stable convergence
-        'weight_decay': 0.001,         # L2 regularization (0.0 = no regularization)
-        'loss_function': 'mse',         # mse, mae, huber
+        'learning_rate': 0.01,        # Lower LR for more stable convergence
+        'weight_decay': 0.0001,         # L2 regularization (0.0 = no regularization)
+        'loss_function': 'mae',         # mse, mae, huber
         'patience': 10,                 # More patience with lower LR
         'device': 'auto',
         'checkpoint_dir': 'checkpoints',
