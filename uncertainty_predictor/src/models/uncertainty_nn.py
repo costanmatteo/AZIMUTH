@@ -160,31 +160,53 @@ class GaussianNLLLoss(nn.Module):
     3. Overestimation of uncertainty (too large variance)
 
     The loss is computed as:
-        L = 0.5 * (log(σ²) + (y - μ)² / σ²)
+        L = 0.5 * ((y - μ)² / σ² + α * log(σ²))
 
     Where:
     - μ: predicted mean
     - σ²: predicted variance
     - y: true target value
+    - α: variance penalty weight (default: 1.0)
+
+    The α parameter controls the trade-off between prediction accuracy and
+    uncertainty calibration:
+    - α = 1.0: Standard Gaussian NLL (default)
+    - α < 1.0: Reduces penalty for large variances, allowing the model to be
+               more honest about its uncertainty (recommended for over-confident models)
+    - α > 1.0: Increases penalty for large variances, pushing for more confident
+               predictions
 
     This encourages the model to:
     - Predict accurate means where possible
     - Increase variance in uncertain regions
-    - Not use high variance everywhere (penalized by log(σ²) term)
+    - Balance confidence with calibration based on α
 
     Args:
+        alpha (float): Weight for variance penalty term (default: 1.0)
         reduction (str): Reduction method ('mean', 'sum', 'none')
         epsilon (float): Small value for numerical stability
     """
 
-    def __init__(self, reduction='mean', epsilon=1e-6):
+    def __init__(self, alpha=1.0, reduction='mean', epsilon=1e-6):
         super(GaussianNLLLoss, self).__init__()
+        self.alpha = alpha
         self.reduction = reduction
         self.epsilon = epsilon
 
+        if alpha <= 0:
+            raise ValueError(f"alpha must be positive, got {alpha}")
+
+        print(f"GaussianNLLLoss initialized with alpha={alpha:.3f}")
+        if alpha < 1.0:
+            print("  → Reduced penalty for large variances (encourages honest uncertainty)")
+        elif alpha > 1.0:
+            print("  → Increased penalty for large variances (encourages confidence)")
+        else:
+            print("  → Standard Gaussian NLL (balanced)")
+
     def forward(self, mean, variance, target):
         """
-        Compute Gaussian NLL loss.
+        Compute Gaussian NLL loss with weighted variance penalty.
 
         Args:
             mean (torch.Tensor): Predicted mean, shape (batch_size, output_size)
@@ -193,12 +215,20 @@ class GaussianNLLLoss(nn.Module):
 
         Returns:
             torch.Tensor: Loss value
+
+        Formula:
+            L = 0.5 * ((y - μ)² / σ² + α * log(σ²))
+
+        When α < 1, the model can more easily increase variance without
+        being heavily penalized, leading to better calibrated uncertainty.
         """
         # Ensure variance is positive
         variance = variance + self.epsilon
 
-        # Gaussian NLL: 0.5 * (log(var) + (target - mean)^2 / var)
-        loss = 0.5 * (torch.log(variance) + (target - mean) ** 2 / variance)
+        # Weighted Gaussian NLL: 0.5 * ((target - mean)^2 / var + alpha * log(var))
+        squared_error_term = (target - mean) ** 2 / variance
+        log_variance_term = self.alpha * torch.log(variance)
+        loss = 0.5 * (squared_error_term + log_variance_term)
 
         if self.reduction == 'mean':
             return loss.mean()
