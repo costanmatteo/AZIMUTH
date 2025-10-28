@@ -26,20 +26,20 @@ CONFIG = {
     # Model configuration
     # OPTIMIZED: Small network for 3 inputs prevents overfitting
     'model': {
-        'hidden_sizes': [64, 32, 16],  # Much smaller! Was [512, 256, 64, 32]
-        'dropout_rate': 0.15,           # Reduced dropout for small dataset
+        'hidden_sizes': [32, 16],  # Much smaller! Was [512, 256, 64, 32]
+        'dropout_rate': 0.2,           # Reduced dropout for small dataset
         'model_type': 'custom',
         'use_batchnorm': False,         # Not needed for small network
     },
 
     # Training configuration
     'training': {
-        'epochs': 300,                  # More epochs with smaller LR
+        'epochs': 200,                  # More epochs with smaller LR
         'batch_size': 16,               # Smaller batches for small dataset
-        'learning_rate': 0.0005,        # Lower LR for more stable convergence
-        'weight_decay': 0.0001,         # L2 regularization (0.0 = no regularization)
-        'loss_function': 'mse',         # MSE works well for regression
-        'patience': 30,                 # More patience with lower LR
+        'learning_rate': 0.001,        # Lower LR for more stable convergence
+        'weight_decay': 0.001,         # L2 regularization (0.0 = no regularization)
+        'loss_function': 'mse',         # mse, mae, huber
+        'patience': 10,                 # More patience with lower LR
         'device': 'auto',
         'checkpoint_dir': 'checkpoints',
     },
@@ -56,7 +56,8 @@ CONFIG = {
 # ALTERNATIVE CONFIGURATIONS TO TRY
 # =============================================================================
 
-# Option 1: MINIMAL MODEL (fastest, might be good enough)
+# Option 1: MINIMAL MODEL (fa
+# stest, might be good enough)
 MINIMAL_CONFIG = {
     **CONFIG,
     'model': {
