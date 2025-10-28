@@ -122,6 +122,7 @@ def main():
         model,
         device=device,
         learning_rate=CONFIG['training']['learning_rate'],
+        weight_decay=CONFIG['training']['weight_decay'],
         loss_fn=CONFIG['training']['loss_function']
     )
 
