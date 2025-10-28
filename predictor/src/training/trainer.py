@@ -27,10 +27,11 @@ class ModelTrainer:
         model (nn.Module): Model to train
         device (str): 'cuda' or 'cpu' (default: auto-detect)
         learning_rate (float): Learning rate (default: 0.001)
-        loss_fn (str): Loss function ('mse', 'mae', 'huber') (default: 'mse')
+        weight_decay (float): L2 weight decay (default: 0.0)
+        loss_fn (str): Funzione di loss ('mse', 'mae', 'huber') (default: 'mse')
     """
 
-    def __init__(self, model, device=None, learning_rate=0.001, loss_fn='mse'):
+    def __init__(self, model, device=None, learning_rate=0.001, weight_decay=0.0, loss_fn='mse'):
         # Setup device
         if device is None:
             self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -39,9 +40,10 @@ class ModelTrainer:
 
         self.model = model.to(self.device)
         self.learning_rate = learning_rate
+        self.weight_decay = weight_decay
 
         # Setup optimizer
-        self.optimizer = optim.Adam(self.model.parameters(), lr=learning_rate, weight_decay=0.1)
+        self.optimizer = optim.Adam(self.model.parameters(), lr=learning_rate, weight_decay=weight_decay)
 
         # Setup loss function
         if loss_fn == 'mse':
@@ -58,8 +60,8 @@ class ModelTrainer:
         self.val_losses = []
         self.best_val_loss = float('inf')
 
-        print(f"Trainer initialized on device: {self.device}")
-        print(f"Optimizer: Adam (lr={learning_rate})")
+        print(f"Trainer inizializzato su device: {self.device}")
+        print(f"Optimizer: Adam (lr={learning_rate}, weight_decay={weight_decay})")
         print(f"Loss function: {loss_fn}")
 
     def train_epoch(self, train_loader):
