@@ -30,7 +30,8 @@ from utils import (
     plot_predictions_with_uncertainty,
     plot_scatter_with_uncertainty,
     plot_uncertainty_distribution,
-    evaluate_prediction_intervals
+    evaluate_prediction_intervals,
+    generate_uncertainty_training_report
 )
 
 # Import configuration
@@ -258,6 +259,28 @@ def main():
         save_path=checkpoint_dir / 'uncertainty_distribution.png'
     )
 
+    # 9. GENERATE PDF REPORT
+    print("\nGenerating PDF report...")
+    try:
+        total_params = sum(p.numel() for p in model.parameters())
+        report_path = generate_uncertainty_training_report(
+            config=CONFIG,
+            history=history,
+            metrics=metrics,
+            input_dim=input_dim,
+            output_dim=output_dim,
+            total_params=total_params,
+            n_train=len(X_train),
+            n_val=len(X_val),
+            n_test=len(X_test),
+            checkpoint_dir=CONFIG['training']['checkpoint_dir'],
+            timestamp=training_start_time
+        )
+        print(f"PDF report saved: {report_path}")
+    except Exception as e:
+        print(f"Error generating PDF: {e}")
+        print("Training completed successfully anyway.")
+
     print("\n" + "="*70)
     print("TRAINING COMPLETED SUCCESSFULLY!")
     print("="*70)
@@ -269,6 +292,7 @@ def main():
     print("  - predictions_with_uncertainty.png  : Predictions with bounds")
     print("  - scatter_with_uncertainty.png      : Scatter plot colored by uncertainty")
     print("  - uncertainty_distribution.png      : Distribution of uncertainties")
+    print("  - training_report.pdf               : Comprehensive PDF report")
     print("\n" + "="*70)
 
 
