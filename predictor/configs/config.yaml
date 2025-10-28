@@ -51,6 +51,9 @@ training:
   # Learning rate
   learning_rate: 0.001
 
+  # L2 weight decay for regularization
+  weight_decay: 0.0001
+
   # Loss function ('mse', 'mae', 'huber')
   loss_function: "mse"
 

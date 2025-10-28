@@ -36,6 +36,7 @@ CONFIG = {
         'epochs': 200,
         'batch_size': 32,
         'learning_rate': 0.001,
+        'weight_decay': 0.0001,  # L2 regularization
         'loss_function': 'mse',  # 'mse', 'mae', o 'huber'
         'patience': 20,
         'device': 'auto',  # 'cuda', 'cpu', o 'auto'
