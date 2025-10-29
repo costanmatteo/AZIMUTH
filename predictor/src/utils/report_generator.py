@@ -98,6 +98,7 @@ class TrainingReportGenerator:
         model_text = f"""• <b>Type:</b> {config['model']['model_type']}<br/>
 • <b>Hidden Layers:</b> {config['model']['hidden_sizes']}<br/>
 • <b>Dropout Rate:</b> {config['model']['dropout_rate']}<br/>
+• <b>Batch Normalization:</b> {config['model'].get('use_batchnorm', False)}<br/>
 • <b>Input Dimension:</b> {input_dim}<br/>
 • <b>Output Dimension:</b> {output_dim}<br/>
 • <b>Total Parameters:</b> {total_params:,}"""
@@ -108,11 +109,16 @@ class TrainingReportGenerator:
         left_col.append(Paragraph("<b>Dataset</b>", self.styles['SectionTitle']))
         left_col.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=4))
 
+        input_cols = ', '.join(config['data']['input_columns'])
+        output_cols = ', '.join(config['data']['output_columns'])
         dataset_text = f"""• <b>File:</b> {config['data']['csv_path']}<br/>
-• <b>Train Samples:</b> {n_train:,}<br/>
-• <b>Validation Samples:</b> {n_val:,}<br/>
-• <b>Test Samples:</b> {n_test:,}<br/>
-• <b>Scaling Method:</b> {config['data']['scaling_method']}"""
+• <b>Input Columns:</b> {input_cols}<br/>
+• <b>Output Columns:</b> {output_cols}<br/>
+• <b>Train Samples:</b> {n_train:,} ({config['data']['train_size']*100:.0f}%)<br/>
+• <b>Validation Samples:</b> {n_val:,} ({config['data']['val_size']*100:.0f}%)<br/>
+• <b>Test Samples:</b> {n_test:,} ({config['data']['test_size']*100:.0f}%)<br/>
+• <b>Scaling Method:</b> {config['data']['scaling_method']}<br/>
+• <b>Random State:</b> {config['data']['random_state']}"""
         left_col.append(Paragraph(dataset_text, self.styles['BodyText']))
 
         # Right column data
@@ -127,8 +133,11 @@ class TrainingReportGenerator:
         training_text = f"""• <b>Epochs:</b> {epochs_run}/{epochs_total}<br/>
 • <b>Batch Size:</b> {config['training']['batch_size']}<br/>
 • <b>Learning Rate:</b> {config['training']['learning_rate']}<br/>
+• <b>Weight Decay:</b> {config['training']['weight_decay']}<br/>
 • <b>Loss Function:</b> {config['training']['loss_function'].upper()}<br/>
-• <b>Device:</b> {config['training']['device']}"""
+• <b>Patience:</b> {config['training']['patience']}<br/>
+• <b>Device:</b> {config['training']['device']}<br/>
+• <b>Checkpoint Dir:</b> {config['training']['checkpoint_dir']}"""
         right_col.append(Paragraph(training_text, self.styles['BodyText']))
         right_col.append(Spacer(1, 0.3*cm))
 
@@ -144,6 +153,15 @@ class TrainingReportGenerator:
 • <b>Final Val Loss:</b> {final_val_loss:.6f}<br/>
 • <b>Best Val Loss:</b> {best_val_loss:.6f}"""
         right_col.append(Paragraph(results_text, self.styles['BodyText']))
+        right_col.append(Spacer(1, 0.3*cm))
+
+        # Miscellaneous Parameters
+        right_col.append(Paragraph("<b>Miscellaneous</b>", self.styles['SectionTitle']))
+        right_col.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=4))
+
+        misc_text = f"""• <b>Random Seed:</b> {config['misc']['random_seed']}<br/>
+• <b>Num Workers:</b> {config['misc']['num_workers']}"""
+        right_col.append(Paragraph(misc_text, self.styles['BodyText']))
 
         # Create two-column table
         data = [[left_col, right_col]]

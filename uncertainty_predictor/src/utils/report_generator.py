@@ -110,11 +110,16 @@ class UncertaintyReportGenerator:
         left_col.append(Paragraph("<b>Dataset</b>", self.styles['SectionTitle']))
         left_col.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=4))
 
+        input_cols = ', '.join(config['data']['input_columns'])
+        output_cols = ', '.join(config['data']['output_columns'])
         dataset_text = f"""• <b>File:</b> {config['data']['csv_path']}<br/>
-• <b>Train Samples:</b> {n_train:,}<br/>
-• <b>Validation Samples:</b> {n_val:,}<br/>
-• <b>Test Samples:</b> {n_test:,}<br/>
-• <b>Scaling Method:</b> {config['data']['scaling_method']}"""
+• <b>Input Columns:</b> {input_cols}<br/>
+• <b>Output Columns:</b> {output_cols}<br/>
+• <b>Train Samples:</b> {n_train:,} ({config['data']['train_size']*100:.0f}%)<br/>
+• <b>Validation Samples:</b> {n_val:,} ({config['data']['val_size']*100:.0f}%)<br/>
+• <b>Test Samples:</b> {n_test:,} ({config['data']['test_size']*100:.0f}%)<br/>
+• <b>Scaling Method:</b> {config['data']['scaling_method']}<br/>
+• <b>Random State:</b> {config['data']['random_state']}"""
         left_col.append(Paragraph(dataset_text, self.styles['BodyText']))
 
         # Right column data
@@ -131,7 +136,10 @@ class UncertaintyReportGenerator:
 • <b>Learning Rate:</b> {config['training']['learning_rate']}<br/>
 • <b>Weight Decay:</b> {config['training']['weight_decay']}<br/>
 • <b>Loss Function:</b> Gaussian NLL<br/>
-• <b>Device:</b> {config['training']['device']}"""
+• <b>Variance Penalty (α):</b> {config['training']['variance_penalty_alpha']}<br/>
+• <b>Patience:</b> {config['training']['patience']}<br/>
+• <b>Device:</b> {config['training']['device']}<br/>
+• <b>Checkpoint Dir:</b> {config['training']['checkpoint_dir']}"""
         right_col.append(Paragraph(training_text, self.styles['BodyText']))
         right_col.append(Spacer(1, 0.3*cm))
 
@@ -152,6 +160,24 @@ class UncertaintyReportGenerator:
 • <b>Final Train MSE:</b> {final_train_mse:.6f}<br/>
 • <b>Final Val MSE:</b> {final_val_mse:.6f}"""
         right_col.append(Paragraph(results_text, self.styles['BodyText']))
+        right_col.append(Spacer(1, 0.3*cm))
+
+        # Uncertainty Parameters
+        right_col.append(Paragraph("<b>Uncertainty Parameters</b>", self.styles['SectionTitle']))
+        right_col.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=4))
+
+        uncertainty_text = f"""• <b>Confidence Level:</b> {config['uncertainty']['confidence_level']*100:.0f}%"""
+        right_col.append(Paragraph(uncertainty_text, self.styles['BodyText']))
+        right_col.append(Spacer(1, 0.3*cm))
+
+        # Miscellaneous Parameters
+        right_col.append(Paragraph("<b>Miscellaneous</b>", self.styles['SectionTitle']))
+        right_col.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=4))
+
+        misc_text = f"""• <b>Random Seed:</b> {config['misc']['random_seed']}"""
+        if 'verbose' in config['misc']:
+            misc_text += f"<br/>• <b>Verbose:</b> {config['misc']['verbose']}"
+        right_col.append(Paragraph(misc_text, self.styles['BodyText']))
 
         # Create two-column table
         data = [[left_col, right_col]]
