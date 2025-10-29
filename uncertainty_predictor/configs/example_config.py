@@ -35,7 +35,8 @@ CONFIG = {
         'patience': 20,  # Early stopping: epochs to wait without improvement
         'device': 'auto',  # Computing device: 'auto' (GPU if available), 'cuda', or 'cpu'
         'checkpoint_dir': 'checkpoints_uncertainty',  # Directory to save model checkpoints
-        'variance_penalty_alpha': 1  # Weight for variance term in loss function (1.0 = standard Gaussian NLL)
+        'variance_penalty_alpha': 1,  # Weight for variance term in loss function (1.0 = standard Gaussian NLL)
+        'calibration_lambda': 0.0  # Weight for local calibration term (0.0 = no calibration, >0 = force variance to match squared errors)
     },
 
     # Uncertainty configuration

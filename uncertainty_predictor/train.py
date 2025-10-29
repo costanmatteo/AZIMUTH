@@ -144,9 +144,17 @@ def main():
     # 5. CREATE LOSS FUNCTION
     print("\n[5/7] Setting up Gaussian NLL Loss...")
     alpha = CONFIG['training'].get('variance_penalty_alpha', 1.0)
-    criterion = GaussianNLLLoss(alpha=alpha, reduction='mean')
-    print(f"  Loss: L = 0.5 * ((y - μ)² / σ² + α * log(σ²)) with α={alpha:.3f}")
-    print("  This penalizes large errors but accounts for predicted uncertainty")
+    calibration_lambda = CONFIG['training'].get('calibration_lambda', 0.0)
+    criterion = GaussianNLLLoss(alpha=alpha, calibration_lambda=calibration_lambda, reduction='mean')
+
+    if calibration_lambda > 0:
+        print(f"  Loss: L = 0.5 * ((y - μ)² / σ² + α * log(σ²)) + λ * |σ² - (y - μ)²|")
+        print(f"  with α={alpha:.3f}, λ={calibration_lambda:.4f}")
+        print("  The local calibration term forces variance to match actual errors")
+    else:
+        print(f"  Loss: L = 0.5 * ((y - μ)² / σ² + α * log(σ²)) with α={alpha:.3f}")
+        print("  This penalizes large errors but accounts for predicted uncertainty")
+
     if alpha < 1.0:
         print(f"  Note: α={alpha:.3f} < 1 allows model to be more honest about uncertainty")
 

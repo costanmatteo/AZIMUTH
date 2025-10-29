@@ -151,22 +151,24 @@ class UncertaintyPredictor(nn.Module):
 
 class GaussianNLLLoss(nn.Module):
     """
-    Gaussian Negative Log-Likelihood Loss for Uncertainty Quantification.
+    Gaussian Negative Log-Likelihood Loss for Uncertainty Quantification with Local Calibration.
 
     This loss function trains the network to predict both mean and variance.
     It penalizes:
     1. Large errors in the mean prediction
     2. Underestimation of uncertainty (too small variance)
     3. Overestimation of uncertainty (too large variance)
+    4. Miscalibration between predicted variance and actual squared error
 
     The loss is computed as:
-        L = 0.5 * ((y - μ)² / σ² + α * log(σ²))
+        L = 0.5 * ((y - μ)² / σ² + α * log(σ²)) + λ * |σ² - (y - μ)²|
 
     Where:
     - μ: predicted mean
     - σ²: predicted variance
     - y: true target value
     - α: variance penalty weight (default: 1.0)
+    - λ: local calibration weight (default: 0.0)
 
     The α parameter controls the trade-off between prediction accuracy and
     uncertainty calibration:
@@ -176,27 +178,38 @@ class GaussianNLLLoss(nn.Module):
     - α > 1.0: Increases penalty for large variances, pushing for more confident
                predictions
 
+    The λ parameter controls local calibration:
+    - λ = 0.0: No local calibration (standard loss)
+    - λ > 0.0: Forces predicted variance to align with actual squared errors
+               The term |σ² - (y - μ)²| penalizes when the predicted variance
+               differs from the observed squared error
+
     This encourages the model to:
     - Predict accurate means where possible
     - Increase variance in uncertain regions
     - Balance confidence with calibration based on α
+    - Align predicted uncertainty with actual errors based on λ
 
     Args:
         alpha (float): Weight for variance penalty term (default: 1.0)
+        calibration_lambda (float): Weight for local calibration term (default: 0.0)
         reduction (str): Reduction method ('mean', 'sum', 'none')
         epsilon (float): Small value for numerical stability
     """
 
-    def __init__(self, alpha=1.0, reduction='mean', epsilon=1e-6):
+    def __init__(self, alpha=1.0, calibration_lambda=0.0, reduction='mean', epsilon=1e-6):
         super(GaussianNLLLoss, self).__init__()
         self.alpha = alpha
+        self.calibration_lambda = calibration_lambda
         self.reduction = reduction
         self.epsilon = epsilon
 
         if alpha <= 0:
             raise ValueError(f"alpha must be positive, got {alpha}")
+        if calibration_lambda < 0:
+            raise ValueError(f"calibration_lambda must be non-negative, got {calibration_lambda}")
 
-        print(f"GaussianNLLLoss initialized with alpha={alpha:.3f}")
+        print(f"GaussianNLLLoss initialized with alpha={alpha:.3f}, calibration_lambda={calibration_lambda:.4f}")
         if alpha < 1.0:
             print("  → Reduced penalty for large variances (encourages honest uncertainty)")
         elif alpha > 1.0:
@@ -204,9 +217,15 @@ class GaussianNLLLoss(nn.Module):
         else:
             print("  → Standard Gaussian NLL (balanced)")
 
+        if calibration_lambda > 0:
+            print(f"  → Local calibration enabled with λ={calibration_lambda:.4f}")
+            print("    (forces predicted variance to align with actual squared errors)")
+        else:
+            print("  → No local calibration (λ=0)")
+
     def forward(self, mean, variance, target):
         """
-        Compute Gaussian NLL loss with weighted variance penalty.
+        Compute Gaussian NLL loss with weighted variance penalty and local calibration.
 
         Args:
             mean (torch.Tensor): Predicted mean, shape (batch_size, output_size)
@@ -217,18 +236,31 @@ class GaussianNLLLoss(nn.Module):
             torch.Tensor: Loss value
 
         Formula:
-            L = 0.5 * ((y - μ)² / σ² + α * log(σ²))
+            L = 0.5 * ((y - μ)² / σ² + α * log(σ²)) + λ * |σ² - (y - μ)²|
 
         When α < 1, the model can more easily increase variance without
         being heavily penalized, leading to better calibrated uncertainty.
+
+        When λ > 0, the local calibration term forces the predicted variance
+        to align with the actual squared errors, improving calibration.
         """
         # Ensure variance is positive
         variance = variance + self.epsilon
 
+        # Compute squared error
+        squared_error = (target - mean) ** 2
+
         # Weighted Gaussian NLL: 0.5 * ((target - mean)^2 / var + alpha * log(var))
-        squared_error_term = (target - mean) ** 2 / variance
+        squared_error_term = squared_error / variance
         log_variance_term = self.alpha * torch.log(variance)
-        loss = 0.5 * (squared_error_term + log_variance_term)
+        nll_loss = 0.5 * (squared_error_term + log_variance_term)
+
+        # Add local calibration term: λ * |σ² - (y - μ)²|
+        if self.calibration_lambda > 0:
+            calibration_term = self.calibration_lambda * torch.abs(variance - squared_error)
+            loss = nll_loss + calibration_term
+        else:
+            loss = nll_loss
 
         if self.reduction == 'mean':
             return loss.mean()

@@ -131,12 +131,14 @@ class UncertaintyReportGenerator:
 
         epochs_run = len(history['train_losses'])
         epochs_total = config['training']['epochs']
+        calibration_lambda = config['training'].get('calibration_lambda', 0.0)
         training_text = f"""• <b>Epochs:</b> {epochs_run}/{epochs_total}<br/>
 • <b>Batch Size:</b> {config['training']['batch_size']}<br/>
 • <b>Learning Rate:</b> {config['training']['learning_rate']}<br/>
 • <b>Weight Decay:</b> {config['training']['weight_decay']}<br/>
-• <b>Loss Function:</b> Gaussian NLL<br/>
+• <b>Loss Function:</b> Gaussian NLL with Local Calibration<br/>
 • <b>Variance Penalty (α):</b> {config['training']['variance_penalty_alpha']}<br/>
+• <b>Calibration Lambda (λ):</b> {calibration_lambda}<br/>
 • <b>Patience:</b> {config['training']['patience']}<br/>
 • <b>Device:</b> {config['training']['device']}<br/>
 • <b>Checkpoint Dir:</b> {config['training']['checkpoint_dir']}"""
