@@ -1,0 +1,841 @@
+\documentclass[11pt,a4paper]{article}
+
+% Packages
+\usepackage[utf8]{inputenc}
+\usepackage[english]{babel}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{geometry}
+\usepackage{fancyhdr}
+\usepackage{cite}
+
+% Page geometry
+\geometry{
+    a4paper,
+    left=25mm,
+    right=25mm,
+    top=30mm,
+    bottom=30mm,
+}
+
+% Headers and footers
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{AZIMUTH Uncertainty Predictor}
+\lhead{Documentation}
+\cfoot{\thepage}
+
+% Code listing style
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    commentstyle=\color{gray},
+    stringstyle=\color{red},
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    stepnumber=1,
+    numbersep=5pt,
+    backgroundcolor=\color{white},
+    showspaces=false,
+    showstringspaces=false,
+    showtabs=false,
+    frame=single,
+    tabsize=2,
+    captionpos=b,
+    breaklines=true,
+    breakatwhitespace=false,
+    escapeinside={(*@}{@*)},
+}
+
+% Theorem environments
+\newtheorem{definition}{Definition}
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}{Lemma}
+
+\title{\textbf{Uncertainty Predictor}\\
+\large Neural Network with Uncertainty Quantification\\
+AZIMUTH Project}
+\author{Documentation}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This document provides comprehensive documentation for the Uncertainty Predictor module in the AZIMUTH project. The Uncertainty Predictor is a neural network architecture designed to predict not only point estimates but also quantify the uncertainty associated with each prediction. This is achieved through a dual-head architecture that outputs both the mean ($\mu$) and variance ($\sigma^2$) of predictions, trained using Gaussian Negative Log-Likelihood loss. The system enables risk-aware decision making by providing confidence intervals and identifying regions where predictions are uncertain or unreliable.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\section{Introduction}
+
+Traditional neural networks for regression tasks output a single point estimate $\hat{y}$ for each input $\mathbf{x}$. However, this approach provides no information about the \emph{confidence} or \emph{reliability} of the prediction. In real-world applications, particularly in industrial settings, machinery diagnostics, and safety-critical systems, knowing \emph{when the model doesn't know} is as important as the prediction itself.
+
+The Uncertainty Predictor addresses this limitation by learning to predict both:
+\begin{itemize}
+    \item $\mu(\mathbf{x})$: The expected output value (mean prediction)
+    \item $\sigma^2(\mathbf{x})$: The uncertainty of the prediction (variance)
+\end{itemize}
+
+This dual output enables:
+\begin{enumerate}
+    \item \textbf{Confidence intervals}: Quantitative bounds on predictions
+    \item \textbf{Uncertainty-aware decision making}: Different actions based on confidence level
+    \item \textbf{Data quality assessment}: Identification of noisy or uncertain regions
+    \item \textbf{Active learning}: Strategic selection of data points for labeling
+    \item \textbf{Anomaly detection}: High uncertainty may indicate out-of-distribution samples
+\end{enumerate}
+
+\section{Conceptual Background}
+
+\subsection{Aleatoric vs. Epistemic Uncertainty}
+
+In machine learning, uncertainty can be categorized into two types:
+
+\begin{definition}[Aleatoric Uncertainty]
+Aleatoric uncertainty (also called data uncertainty) represents the inherent randomness in the data that cannot be reduced even with infinite training data. This includes measurement noise, sensor imprecision, or inherently stochastic processes.
+\end{definition}
+
+\begin{definition}[Epistemic Uncertainty]
+Epistemic uncertainty (also called model uncertainty) represents uncertainty in the model parameters due to limited training data. This type of uncertainty can be reduced by collecting more data or using larger models.
+\end{definition}
+
+The Uncertainty Predictor primarily captures \textbf{aleatoric uncertainty} by learning a heteroscedastic noise model, where the noise level varies across the input space. The model learns to predict higher variance in regions where the data is inherently noisy or uncertain, and lower variance where predictions are more reliable.
+
+\subsection{Heteroscedastic Regression}
+
+Standard regression assumes homoscedastic noise, where the variance is constant:
+\begin{equation}
+y = f(\mathbf{x}) + \epsilon, \quad \epsilon \sim \mathcal{N}(0, \sigma^2)
+\end{equation}
+
+However, real-world data often exhibits heteroscedastic noise, where variance depends on the input:
+\begin{equation}
+y = f(\mathbf{x}) + \epsilon(\mathbf{x}), \quad \epsilon(\mathbf{x}) \sim \mathcal{N}(0, \sigma^2(\mathbf{x}))
+\end{equation}
+
+The Uncertainty Predictor learns both $f(\mathbf{x}) \approx \mu(\mathbf{x})$ and $\sigma^2(\mathbf{x})$ simultaneously, enabling input-dependent uncertainty quantification.
+
+\subsection{Probabilistic Interpretation}
+
+From a probabilistic perspective, we model the target variable $y$ as a random variable conditioned on input $\mathbf{x}$:
+\begin{equation}
+p(y|\mathbf{x}, \boldsymbol{\theta}) = \mathcal{N}(y; \mu(\mathbf{x}; \boldsymbol{\theta}), \sigma^2(\mathbf{x}; \boldsymbol{\theta}))
+\end{equation}
+
+where $\boldsymbol{\theta}$ represents the neural network parameters. The network parameterizes both the mean and variance of a Gaussian distribution, allowing it to express uncertainty about its predictions.
+
+\section{Mathematical Foundations}
+
+\subsection{Gaussian Negative Log-Likelihood}
+
+The training objective is to maximize the likelihood of the observed data under the predicted Gaussian distributions. Given a dataset $\mathcal{D} = \{(\mathbf{x}_i, y_i)\}_{i=1}^N$, the likelihood is:
+\begin{equation}
+\mathcal{L}(\boldsymbol{\theta}) = \prod_{i=1}^N p(y_i|\mathbf{x}_i, \boldsymbol{\theta}) = \prod_{i=1}^N \mathcal{N}(y_i; \mu(\mathbf{x}_i), \sigma^2(\mathbf{x}_i))
+\end{equation}
+
+Taking the negative log-likelihood yields the loss function to minimize:
+\begin{equation}
+\mathcal{L}_{\text{NLL}}(\boldsymbol{\theta}) = -\log \mathcal{L}(\boldsymbol{\theta}) = \sum_{i=1}^N \left[ \frac{1}{2}\log(2\pi\sigma^2(\mathbf{x}_i)) + \frac{(y_i - \mu(\mathbf{x}_i))^2}{2\sigma^2(\mathbf{x}_i)} \right]
+\end{equation}
+
+Dropping the constant term $\frac{1}{2}\log(2\pi)$ and simplifying:
+\begin{equation}
+\boxed{\mathcal{L}_{\text{NLL}} = \frac{1}{2}\sum_{i=1}^N \left[ \log(\sigma^2(\mathbf{x}_i)) + \frac{(y_i - \mu(\mathbf{x}_i))^2}{\sigma^2(\mathbf{x}_i)} \right]}
+\end{equation}
+
+This loss function has two important terms:
+\begin{enumerate}
+    \item \textbf{Normalized squared error}: $(y_i - \mu(\mathbf{x}_i))^2 / \sigma^2(\mathbf{x}_i)$ penalizes prediction errors, weighted by the inverse variance
+    \item \textbf{Variance penalty}: $\log(\sigma^2(\mathbf{x}_i))$ prevents the model from predicting arbitrarily large variances
+\end{enumerate}
+
+\subsection{Weighted Variance Penalty}
+
+The standard Gaussian NLL can be extended with a weighting factor $\alpha$ on the variance penalty:
+\begin{equation}
+\boxed{\mathcal{L}_{\text{NLL}}^{\alpha} = \frac{1}{2}\sum_{i=1}^N \left[ \alpha\log(\sigma^2(\mathbf{x}_i)) + \frac{(y_i - \mu(\mathbf{x}_i))^2}{\sigma^2(\mathbf{x}_i)} \right]}
+\end{equation}
+
+The parameter $\alpha$ controls the trade-off between prediction accuracy and uncertainty calibration:
+\begin{itemize}
+    \item $\alpha = 1.0$: Standard Gaussian NLL (balanced)
+    \item $\alpha < 1.0$: Reduces penalty for large variances, encouraging honest uncertainty estimates
+    \item $\alpha > 1.0$: Increases penalty for large variances, pushing for more confident predictions
+\end{itemize}
+
+This formulation is particularly useful when models tend to be overconfident (underestimate uncertainty).
+
+\subsection{Optimization Dynamics}
+
+The loss function naturally balances two competing objectives:
+
+\begin{theorem}[Automatic Uncertainty Calibration]
+The Gaussian NLL loss encourages the model to:
+\begin{enumerate}
+    \item Predict accurate means $\mu(\mathbf{x})$ to minimize squared error
+    \item Predict large variances $\sigma^2(\mathbf{x})$ in noisy regions to reduce the normalized error term
+    \item Prevent unbounded variance growth through the logarithmic penalty
+\end{enumerate}
+\end{theorem}
+
+\begin{proof}[Intuition]
+Consider a region with high noise. If the model predicts small $\sigma^2(\mathbf{x})$, the term $(y - \mu(\mathbf{x}))^2/\sigma^2(\mathbf{x})$ will be large due to inevitable prediction errors. By increasing $\sigma^2(\mathbf{x})$, the model reduces this term. However, the $\log(\sigma^2(\mathbf{x}))$ term grows logarithmically, preventing unbounded variance. The optimization finds an equilibrium where $\sigma^2(\mathbf{x})$ reflects the actual noise level.
+\end{proof}
+
+\section{Network Architecture}
+
+\subsection{Overall Structure}
+
+The Uncertainty Predictor consists of three main components:
+
+\begin{enumerate}
+    \item \textbf{Shared Feature Extractor}: Multiple hidden layers process the input
+    \item \textbf{Mean Head}: Linear layer outputs $\mu(\mathbf{x})$
+    \item \textbf{Variance Head}: Linear layer outputs $\log(\sigma^2(\mathbf{x}))$
+\end{enumerate}
+
+\begin{figure}[h]
+\centering
+\begin{verbatim}
+Input x
+   |
+   v
+[Hidden Layer 1] -> ReLU -> Dropout
+   |
+   v
+[Hidden Layer 2] -> ReLU -> Dropout
+   |
+   v
+[Hidden Layer 3] -> ReLU -> Dropout
+   |
+   +----------+----------+
+   |                     |
+   v                     v
+[Mean Head]         [Log-Variance Head]
+   |                     |
+   v                     v
+ μ(x)                log(σ²(x))
+                         |
+                         v
+                     exp(·) + ε
+                         |
+                         v
+                       σ²(x)
+\end{verbatim}
+\caption{Architecture of the Uncertainty Predictor}
+\end{figure}
+
+\subsection{Shared Feature Layers}
+
+The shared layers extract features common to both mean and variance prediction. Each hidden layer follows the pattern:
+\begin{equation}
+\mathbf{h}_{l+1} = \text{Dropout}(\text{ReLU}(\text{BatchNorm}(\mathbf{W}_l \mathbf{h}_l + \mathbf{b}_l)))
+\end{equation}
+
+Key architectural choices:
+\begin{itemize}
+    \item \textbf{Activation}: ReLU for non-linearity
+    \item \textbf{Regularization}: Dropout (typically 0.1-0.3) to prevent overfitting
+    \item \textbf{Normalization}: Optional batch normalization for training stability
+\end{itemize}
+
+\subsection{Mean Head}
+
+The mean head is a simple linear transformation:
+\begin{equation}
+\mu(\mathbf{x}) = \mathbf{W}_\mu \mathbf{h}_L + \mathbf{b}_\mu
+\end{equation}
+
+where $\mathbf{h}_L$ is the output of the last shared layer. No activation function is applied, allowing the mean to take any real value.
+
+\subsection{Variance Head}
+
+The variance head must ensure positive outputs. This is achieved through log-space parameterization:
+\begin{equation}
+\log(\sigma^2(\mathbf{x})) = \mathbf{W}_\sigma \mathbf{h}_L + \mathbf{b}_\sigma
+\end{equation}
+\begin{equation}
+\sigma^2(\mathbf{x}) = \exp(\log(\sigma^2(\mathbf{x}))) + \epsilon_{\min}
+\end{equation}
+
+where $\epsilon_{\min}$ (typically $10^{-6}$) is a small constant for numerical stability. The exponential ensures positivity, while log-space parameterization provides:
+\begin{itemize}
+    \item \textbf{Numerical stability}: Avoids extremely small or large variance values
+    \item \textbf{Unbounded representation}: Can represent any positive variance
+    \item \textbf{Gradient properties}: Better gradient flow during training
+\end{itemize}
+
+\subsection{Pre-configured Architectures}
+
+The implementation provides three standard configurations:
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lll}
+\toprule
+\textbf{Model} & \textbf{Hidden Layers} & \textbf{Use Case} \\
+\midrule
+Small & [32, 16] & Limited datasets ($<$1000 samples) \\
+Medium & [128, 64, 32] & Medium datasets (1000-10000 samples) \\
+Large & [256, 128, 64, 32] & Large datasets ($>$10000 samples) \\
+\bottomrule
+\end{tabular}
+\caption{Pre-configured model architectures}
+\end{table}
+
+\section{Training Procedure}
+
+\subsection{Training Algorithm}
+
+\begin{algorithm}[H]
+\caption{Uncertainty Quantification Training}
+\begin{algorithmic}[1]
+\STATE Initialize model parameters $\boldsymbol{\theta}$
+\STATE Initialize optimizer (Adam with learning rate $\eta$)
+\STATE Set best validation loss $\mathcal{L}_{\text{best}} = \infty$
+\STATE Set patience counter $p = 0$
+\FOR{epoch = 1 to $N_{\text{epochs}}$}
+    \STATE \textbf{Training Phase:}
+    \FOR{each mini-batch $(\mathbf{X}_b, \mathbf{y}_b)$}
+        \STATE Forward pass: $\mu, \sigma^2 = f(\mathbf{X}_b; \boldsymbol{\theta})$
+        \STATE Compute loss: $\mathcal{L} = \frac{1}{2}[\alpha\log(\sigma^2) + (\mathbf{y}_b - \mu)^2/\sigma^2]$
+        \STATE Backward pass: Compute $\nabla_{\boldsymbol{\theta}} \mathcal{L}$
+        \STATE Update parameters: $\boldsymbol{\theta} \leftarrow \boldsymbol{\theta} - \eta \nabla_{\boldsymbol{\theta}} \mathcal{L}$
+    \ENDFOR
+    \STATE \textbf{Validation Phase:}
+    \STATE Compute validation loss $\mathcal{L}_{\text{val}}$ on validation set
+    \IF{$\mathcal{L}_{\text{val}} < \mathcal{L}_{\text{best}}$}
+        \STATE Save model checkpoint
+        \STATE $\mathcal{L}_{\text{best}} = \mathcal{L}_{\text{val}}$
+        \STATE $p = 0$
+    \ELSE
+        \STATE $p = p + 1$
+        \IF{$p \geq P_{\text{max}}$}
+            \STATE \textbf{Early stopping triggered}
+            \STATE \textbf{break}
+        \ENDIF
+    \ENDIF
+\ENDFOR
+\STATE Load best model checkpoint
+\RETURN trained model
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Hyperparameters}
+
+Key hyperparameters and typical values:
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lll}
+\toprule
+\textbf{Parameter} & \textbf{Typical Value} & \textbf{Description} \\
+\midrule
+Learning rate & $10^{-3}$ to $10^{-4}$ & Adam optimizer step size \\
+Batch size & 32 to 128 & Samples per gradient update \\
+Weight decay & 0 to $10^{-4}$ & L2 regularization strength \\
+Dropout rate & 0.1 to 0.3 & Dropout probability \\
+Alpha ($\alpha$) & 0.5 to 1.0 & Variance penalty weight \\
+Min variance ($\epsilon_{\min}$) & $10^{-6}$ & Minimum allowed variance \\
+Patience & 10 to 20 & Early stopping patience \\
+\bottomrule
+\end{tabular}
+\caption{Training hyperparameters}
+\end{table}
+
+\subsection{Data Preprocessing}
+
+Input features and target outputs are standardized independently:
+\begin{equation}
+\mathbf{x}_{\text{norm}} = \frac{\mathbf{x} - \boldsymbol{\mu}_x}{\boldsymbol{\sigma}_x}, \quad
+\mathbf{y}_{\text{norm}} = \frac{\mathbf{y} - \boldsymbol{\mu}_y}{\boldsymbol{\sigma}_y}
+\end{equation}
+
+Supported scaling methods:
+\begin{itemize}
+    \item \textbf{Standard scaling}: Zero mean, unit variance (default)
+    \item \textbf{MinMax scaling}: Scale to [0, 1] range
+    \item \textbf{Robust scaling}: Median and IQR-based scaling (robust to outliers)
+\end{itemize}
+
+\section{Model Evaluation}
+
+\subsection{Performance Metrics}
+
+The model is evaluated using both standard regression metrics and uncertainty-specific metrics:
+
+\subsubsection{Standard Regression Metrics}
+
+For the mean predictions $\mu(\mathbf{x})$:
+
+\begin{enumerate}
+    \item \textbf{Mean Squared Error (MSE)}:
+    \begin{equation}
+    \text{MSE} = \frac{1}{N}\sum_{i=1}^N (y_i - \mu(\mathbf{x}_i))^2
+    \end{equation}
+
+    \item \textbf{Root Mean Squared Error (RMSE)}:
+    \begin{equation}
+    \text{RMSE} = \sqrt{\text{MSE}}
+    \end{equation}
+
+    \item \textbf{Mean Absolute Error (MAE)}:
+    \begin{equation}
+    \text{MAE} = \frac{1}{N}\sum_{i=1}^N |y_i - \mu(\mathbf{x}_i)|
+    \end{equation}
+
+    \item \textbf{R-squared ($R^2$)}:
+    \begin{equation}
+    R^2 = 1 - \frac{\sum_{i=1}^N (y_i - \mu(\mathbf{x}_i))^2}{\sum_{i=1}^N (y_i - \bar{y})^2}
+    \end{equation}
+\end{enumerate}
+
+\subsubsection{Uncertainty Calibration Metrics}
+
+To assess the quality of uncertainty estimates:
+
+\begin{definition}[Calibration Ratio]
+The calibration ratio measures whether predicted uncertainties match observed errors:
+\begin{equation}
+\text{Calibration Ratio} = \frac{\text{MSE}}{\text{Mean Predicted Variance}} = \frac{\frac{1}{N}\sum_{i=1}^N (y_i - \mu(\mathbf{x}_i))^2}{\frac{1}{N}\sum_{i=1}^N \sigma^2(\mathbf{x}_i)}
+\end{equation}
+\end{definition}
+
+Interpretation:
+\begin{itemize}
+    \item Calibration Ratio $\approx 1.0$: \textbf{Well calibrated} - uncertainties match errors
+    \item Calibration Ratio $< 0.8$: \textbf{Under-confident} - predicts too much uncertainty
+    \item Calibration Ratio $> 1.2$: \textbf{Over-confident} - predicts too little uncertainty
+\end{itemize}
+
+\begin{definition}[Coverage]
+The coverage metric measures what fraction of true values fall within predicted confidence intervals:
+\begin{equation}
+\text{Coverage}_{1-\alpha} = \frac{1}{N}\sum_{i=1}^N \mathbb{1}[y_i \in [\mu(\mathbf{x}_i) - z_{\alpha/2}\sigma(\mathbf{x}_i), \mu(\mathbf{x}_i) + z_{\alpha/2}\sigma(\mathbf{x}_i)]]
+\end{equation}
+
+where $z_{\alpha/2}$ is the $(1-\alpha/2)$ quantile of the standard normal distribution. For a 95\% confidence interval, ideally Coverage$_{0.95} \approx 0.95$.
+\end{definition}
+
+\subsection{Visualization Tools}
+
+The implementation provides several visualization methods:
+
+\begin{enumerate}
+    \item \textbf{Training History}: Plots of NLL loss and MSE over epochs
+    \item \textbf{Predictions with Uncertainty Bands}: Time series with shaded confidence intervals
+    \item \textbf{Scatter Plots}: True vs. predicted values, colored by uncertainty magnitude
+    \item \textbf{Uncertainty Distribution}: Histogram of predicted variances
+    \item \textbf{Calibration Plots}: Empirical coverage vs. theoretical confidence levels
+\end{enumerate}
+
+\section{Implementation Details}
+
+\subsection{UncertaintyPredictor Class}
+
+\begin{lstlisting}[language=Python, caption=Core model implementation]
+import torch
+import torch.nn as nn
+
+class UncertaintyPredictor(nn.Module):
+    def __init__(self, input_size, hidden_sizes, output_size,
+                 dropout_rate=0.2, use_batchnorm=False,
+                 min_variance=1e-6):
+        super(UncertaintyPredictor, self).__init__()
+
+        self.output_size = output_size
+        self.min_variance = min_variance
+
+        # Build shared hidden layers
+        shared_layers = []
+        prev_size = input_size
+
+        for hidden_size in hidden_sizes:
+            shared_layers.append(nn.Linear(prev_size, hidden_size))
+            if use_batchnorm:
+                shared_layers.append(nn.BatchNorm1d(hidden_size))
+            shared_layers.append(nn.ReLU())
+            shared_layers.append(nn.Dropout(dropout_rate))
+            prev_size = hidden_size
+
+        self.shared_network = nn.Sequential(*shared_layers)
+
+        # Output heads
+        self.mean_head = nn.Linear(prev_size, output_size)
+        self.log_variance_head = nn.Linear(prev_size, output_size)
+
+    def forward(self, x):
+        # Shared feature extraction
+        features = self.shared_network(x)
+
+        # Predict mean
+        mean = self.mean_head(features)
+
+        # Predict variance (log-space for stability)
+        log_variance = self.log_variance_head(features)
+        variance = torch.exp(log_variance) + self.min_variance
+
+        return mean, variance
+\end{lstlisting}
+
+\subsection{GaussianNLLLoss Class}
+
+\begin{lstlisting}[language=Python, caption=Loss function implementation]
+class GaussianNLLLoss(nn.Module):
+    def __init__(self, alpha=1.0, reduction='mean', epsilon=1e-6):
+        super(GaussianNLLLoss, self).__init__()
+        self.alpha = alpha
+        self.reduction = reduction
+        self.epsilon = epsilon
+
+    def forward(self, mean, variance, target):
+        # Ensure variance is positive
+        variance = variance + self.epsilon
+
+        # Gaussian NLL: 0.5 * ((y-mu)^2/var + alpha*log(var))
+        squared_error_term = (target - mean) ** 2 / variance
+        log_variance_term = self.alpha * torch.log(variance)
+        loss = 0.5 * (squared_error_term + log_variance_term)
+
+        if self.reduction == 'mean':
+            return loss.mean()
+        elif self.reduction == 'sum':
+            return loss.sum()
+        else:
+            return loss
+\end{lstlisting}
+
+\subsection{Usage Example}
+
+\begin{lstlisting}[language=Python, caption=Training example]
+from models import UncertaintyPredictor, GaussianNLLLoss
+from training import UncertaintyTrainer
+from torch.utils.data import DataLoader
+
+# Create model
+model = UncertaintyPredictor(
+    input_size=10,
+    hidden_sizes=[128, 64, 32],
+    output_size=5,
+    dropout_rate=0.2
+)
+
+# Create loss function with weighted variance penalty
+criterion = GaussianNLLLoss(alpha=0.8)
+
+# Create trainer
+trainer = UncertaintyTrainer(
+    model=model,
+    criterion=criterion,
+    learning_rate=0.001,
+    weight_decay=1e-5
+)
+
+# Train model
+history = trainer.train(
+    train_loader=train_loader,
+    val_loader=val_loader,
+    epochs=200,
+    patience=20,
+    save_dir='checkpoints'
+)
+
+# Make predictions with uncertainty
+mean, variance = trainer.predict(X_test, return_uncertainty=True)
+
+# Compute confidence intervals
+std = np.sqrt(variance)
+lower_bound = mean - 1.96 * std  # 95% CI
+upper_bound = mean + 1.96 * std
+\end{lstlisting}
+
+\section{Advanced Topics}
+
+\subsection{Prediction Intervals}
+
+For a Gaussian predictive distribution, the $(1-\alpha)$ prediction interval is:
+\begin{equation}
+[\mu(\mathbf{x}) - z_{\alpha/2}\sigma(\mathbf{x}), \mu(\mathbf{x}) + z_{\alpha/2}\sigma(\mathbf{x})]
+\end{equation}
+
+Common confidence levels:
+\begin{itemize}
+    \item 90\% CI: $z_{0.05} = 1.645$
+    \item 95\% CI: $z_{0.025} = 1.960$
+    \item 99\% CI: $z_{0.005} = 2.576$
+\end{itemize}
+
+\subsection{Ensemble Uncertainty}
+
+The predicted uncertainty $\sigma^2(\mathbf{x})$ can be combined with ensemble methods for epistemic uncertainty. For an ensemble of $M$ models:
+\begin{equation}
+\text{Total Variance} = \underbrace{\frac{1}{M}\sum_{m=1}^M \sigma_m^2(\mathbf{x})}_{\text{Aleatoric}} + \underbrace{\text{Var}[\mu_m(\mathbf{x})]}_{\text{Epistemic}}
+\end{equation}
+
+\subsection{Active Learning}
+
+High uncertainty predictions can guide data collection. Common acquisition functions:
+\begin{enumerate}
+    \item \textbf{Maximum Variance}: Select $\mathbf{x}^* = \arg\max_{\mathbf{x}} \sigma^2(\mathbf{x})$
+    \item \textbf{Thompson Sampling}: Sample from predictive distribution
+    \item \textbf{Upper Confidence Bound}: $\mathbf{x}^* = \arg\max_{\mathbf{x}} [\mu(\mathbf{x}) + \beta\sigma(\mathbf{x})]$
+\end{enumerate}
+
+\subsection{Calibration Refinement}
+
+If the model is poorly calibrated, post-hoc calibration can be applied:
+\begin{equation}
+\sigma^2_{\text{calibrated}}(\mathbf{x}) = \gamma \cdot \sigma^2(\mathbf{x})
+\end{equation}
+
+where $\gamma$ is chosen to match the calibration ratio to 1.0 on a validation set.
+
+\section{Comparison with Alternative Methods}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lccc}
+\toprule
+\textbf{Method} & \textbf{Forward Passes} & \textbf{Training Cost} & \textbf{UQ Type} \\
+\midrule
+Standard NN & 1 & 1$\times$ & None \\
+Uncertainty Predictor & 1 & 1.5$\times$ & Aleatoric \\
+Monte Carlo Dropout & 50-100 & 1$\times$ & Epistemic \\
+Deep Ensembles & 5-10 & 5-10$\times$ & Both \\
+Bayesian NN (VI) & 1 & 2-3$\times$ & Epistemic \\
+\bottomrule
+\end{tabular}
+\caption{Comparison of uncertainty quantification methods}
+\end{table}
+
+\textbf{Advantages of the Uncertainty Predictor:}
+\begin{itemize}
+    \item Single forward pass at inference (efficient)
+    \item Captures input-dependent aleatoric uncertainty
+    \item Straightforward training procedure
+    \item Well-suited for heteroscedastic data
+\end{itemize}
+
+\textbf{Limitations:}
+\begin{itemize}
+    \item Does not capture epistemic (model) uncertainty
+    \item Assumes Gaussian predictive distributions
+    \item Requires careful hyperparameter tuning ($\alpha$, dropout rate)
+\end{itemize}
+
+\section{Best Practices}
+
+\subsection{When to Use Uncertainty Quantification}
+
+Uncertainty quantification is particularly valuable when:
+\begin{enumerate}
+    \item \textbf{Safety-critical applications}: Medical diagnosis, autonomous systems
+    \item \textbf{Decision making under risk}: Financial predictions, resource allocation
+    \item \textbf{Data with heterogeneous noise}: Sensor data with varying quality
+    \item \textbf{Active learning scenarios}: Strategic data collection
+    \item \textbf{Anomaly detection}: Out-of-distribution detection via uncertainty
+\end{enumerate}
+
+\subsection{Hyperparameter Selection}
+
+\begin{itemize}
+    \item \textbf{Architecture size}: Match to dataset size (see Table 2)
+    \item \textbf{Dropout rate}: 0.2 is a good default; increase for small datasets
+    \item \textbf{Alpha ($\alpha$)}: Start with 1.0; decrease (0.5-0.8) if overconfident
+    \item \textbf{Learning rate}: Use learning rate scheduling for better convergence
+    \item \textbf{Early stopping patience}: 15-20 epochs for stable convergence
+\end{itemize}
+
+\subsection{Diagnosing Poor Calibration}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{ll}
+\toprule
+\textbf{Symptom} & \textbf{Solution} \\
+\midrule
+Calibration ratio $\gg 1$ & Decrease $\alpha$ (0.5-0.8) \\
+Calibration ratio $\ll 1$ & Increase $\alpha$ (1.2-1.5) \\
+High MSE and high variance & Increase model capacity \\
+Low MSE but high variance & Reduce dropout, train longer \\
+Unstable training & Decrease learning rate, add batch norm \\
+\bottomrule
+\end{tabular}
+\caption{Troubleshooting calibration issues}
+\end{table}
+
+\subsection{Interpreting Results}
+
+When presenting results to stakeholders:
+\begin{enumerate}
+    \item Report both mean predictions and confidence intervals
+    \item Visualize uncertainty with shaded regions or error bars
+    \item Highlight high-uncertainty predictions for manual review
+    \item Use coverage metrics to validate reliability
+    \item Compare uncertainty across different input regions
+\end{enumerate}
+
+\section{Conclusion}
+
+The Uncertainty Predictor provides a principled and efficient approach to uncertainty quantification in neural networks. By learning to predict both mean and variance, it enables:
+
+\begin{itemize}
+    \item \textbf{Risk-aware predictions}: Know when to trust the model
+    \item \textbf{Adaptive decision making}: Take different actions based on confidence
+    \item \textbf{Data efficiency}: Focus labeling efforts on high-uncertainty regions
+    \item \textbf{Model diagnostics}: Identify where the model is uncertain or unreliable
+\end{itemize}
+
+The implementation is straightforward, computationally efficient (single forward pass), and well-suited for real-world regression problems with heteroscedastic noise. While it primarily captures aleatoric uncertainty, it can be combined with ensemble methods or Bayesian techniques for comprehensive uncertainty quantification.
+
+\section{References}
+
+\begin{thebibliography}{9}
+
+\bibitem{nix1994}
+Nix, D. A., \& Weigend, A. S. (1994).
+\textit{Estimating the mean and variance of the target probability distribution}.
+Proceedings of 1994 IEEE International Conference on Neural Networks (ICNN'94), 1, 55-60.
+
+\bibitem{kendall2017}
+Kendall, A., \& Gal, Y. (2017).
+\textit{What uncertainties do we need in Bayesian deep learning for computer vision?}
+Advances in Neural Information Processing Systems, 30.
+
+\bibitem{lakshminarayanan2017}
+Lakshminarayanan, B., Pritzel, A., \& Blundell, C. (2017).
+\textit{Simple and scalable predictive uncertainty estimation using deep ensembles}.
+Advances in Neural Information Processing Systems, 30.
+
+\bibitem{gal2016}
+Gal, Y., \& Ghahramani, Z. (2016).
+\textit{Dropout as a Bayesian approximation: Representing model uncertainty in deep learning}.
+International Conference on Machine Learning, 1050-1059.
+
+\bibitem{der2009}
+Der Kiureghian, A., \& Ditlevsen, O. (2009).
+\textit{Aleatory or epistemic? Does it matter?}
+Structural Safety, 31(2), 105-112.
+
+\bibitem{kuleshov2018}
+Kuleshov, V., Fenner, N., \& Ermon, S. (2018).
+\textit{Accurate uncertainties for deep learning using calibrated regression}.
+International Conference on Machine Learning, 2796-2804.
+
+\end{thebibliography}
+
+\appendix
+
+\section{Installation and Setup}
+
+\subsection{Requirements}
+
+\begin{lstlisting}[language=bash]
+pip install torch torchvision numpy pandas scikit-learn
+pip install matplotlib seaborn reportlab
+\end{lstlisting}
+
+\subsection{Configuration File}
+
+Create a configuration file \texttt{config.py}:
+
+\begin{lstlisting}[language=Python]
+CONFIG = {
+    'data': {
+        'csv_path': 'data/dataset.csv',
+        'input_columns': ['feature1', 'feature2', ...],
+        'output_columns': ['target1', 'target2', ...],
+        'scaling_method': 'standard',
+        'train_ratio': 0.7,
+        'val_ratio': 0.15,
+        'test_ratio': 0.15,
+    },
+    'model': {
+        'model_type': 'medium',  # small, medium, large
+        'hidden_sizes': [128, 64, 32],  # or custom
+        'dropout_rate': 0.2,
+        'use_batchnorm': False,
+        'min_variance': 1e-6,
+    },
+    'training': {
+        'batch_size': 32,
+        'epochs': 200,
+        'learning_rate': 0.001,
+        'weight_decay': 1e-5,
+        'patience': 20,
+        'device': 'cuda',
+        'checkpoint_dir': 'checkpoints_uncertainty',
+    },
+    'loss': {
+        'alpha': 0.8,  # variance penalty weight
+    },
+    'uncertainty': {
+        'confidence_level': 0.95,
+    }
+}
+\end{lstlisting}
+
+\subsection{Training Script}
+
+\begin{lstlisting}[language=bash]
+python train.py
+\end{lstlisting}
+
+\subsection{Prediction Script}
+
+\begin{lstlisting}[language=bash]
+# From CSV
+python predict.py --checkpoint_dir checkpoints_uncertainty \
+                  --input data/test.csv
+
+# From command line
+python predict.py --checkpoint_dir checkpoints_uncertainty \
+                  --input "1.2,3.4,5.6" --confidence 0.95
+\end{lstlisting}
+
+\section{Output Interpretation Guide}
+
+\subsection{Training Output}
+
+During training, monitor:
+\begin{itemize}
+    \item \textbf{NLL Loss}: Should decrease steadily
+    \item \textbf{MSE}: Mean prediction error
+    \item \textbf{Average Variance}: Should stabilize (not grow unboundedly)
+    \item \textbf{Calibration Ratio}: Should approach 1.0
+\end{itemize}
+
+\subsection{Prediction Output}
+
+For each prediction, the model outputs:
+\begin{verbatim}
+Sample 1:
+  Output 1:
+    Mean (μ):           145.23
+    Std Dev (σ):          2.45
+    95% CI:          [140.42, 150.05]
+
+  Output 2:
+    Mean (μ):            78.91
+    Std Dev (σ):          1.23
+    95% CI:           [76.49, 81.33]
+\end{verbatim}
+
+Interpretation:
+\begin{itemize}
+    \item \textbf{Mean}: Point estimate
+    \item \textbf{Std Dev}: Uncertainty magnitude (higher = less confident)
+    \item \textbf{95\% CI}: Range containing true value with 95\% probability (under model assumptions)
+\end{itemize}
+
+\end{document}
