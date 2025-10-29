@@ -277,7 +277,8 @@ def main():
             n_val=len(X_val),
             n_test=len(X_test),
             checkpoint_dir=CONFIG['training']['checkpoint_dir'],
-            timestamp=training_start_time
+            timestamp=training_start_time,
+            coverage_results=coverage_results
         )
         print(f"PDF report saved: {report_path}")
     except Exception as e:

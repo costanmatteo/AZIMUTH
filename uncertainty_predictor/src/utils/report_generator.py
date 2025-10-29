@@ -28,10 +28,10 @@ class UncertaintyReportGenerator:
             self.styles.add(ParagraphStyle(
                 name='ReportTitle',
                 parent=self.styles['Heading1'],
-                fontSize=18,
-                leading=22,
+                fontSize=16,
+                leading=19,
                 alignment=TA_CENTER,
-                spaceAfter=4
+                spaceAfter=3
             ))
 
         # Subtitle style
@@ -39,10 +39,10 @@ class UncertaintyReportGenerator:
             self.styles.add(ParagraphStyle(
                 name='ReportSubtitle',
                 parent=self.styles['Normal'],
-                fontSize=13,
-                leading=16,
+                fontSize=10,
+                leading=12,
                 alignment=TA_CENTER,
-                spaceAfter=8
+                spaceAfter=6
             ))
 
         # Section title style
@@ -50,11 +50,11 @@ class UncertaintyReportGenerator:
             self.styles.add(ParagraphStyle(
                 name='SectionTitle',
                 parent=self.styles['Heading2'],
-                fontSize=12,
-                leading=14,
+                fontSize=10,
+                leading=12,
                 fontName='Helvetica-Bold',
-                spaceAfter=2,
-                spaceBefore=6
+                spaceAfter=1,
+                spaceBefore=4
             ))
 
         # Body text style
@@ -62,8 +62,8 @@ class UncertaintyReportGenerator:
             self.styles.add(ParagraphStyle(
                 name='BodyText',
                 parent=self.styles['Normal'],
-                fontSize=10,
-                leading=13,
+                fontSize=8,
+                leading=10,
                 leftIndent=10
             ))
 
@@ -75,7 +75,7 @@ class UncertaintyReportGenerator:
 
         self.story.append(title)
         self.story.append(subtitle)
-        self.story.append(Spacer(1, 0.2*cm))
+        self.story.append(Spacer(1, 0.1*cm))
 
     def add_section_title(self, title):
         """Add section title with horizontal line"""
@@ -85,7 +85,7 @@ class UncertaintyReportGenerator:
         self.story.append(line)
 
     def create_two_column_section(self, config, history, metrics, input_dim, output_dim,
-                                  total_params, n_train, n_val, n_test):
+                                  total_params, n_train, n_val, n_test, coverage_results=None):
         """Create two-column layout for compact info"""
 
         # Left column data
@@ -104,7 +104,7 @@ class UncertaintyReportGenerator:
 • <b>Output Dimension:</b> {output_dim}<br/>
 • <b>Total Parameters:</b> {total_params:,}"""
         left_col.append(Paragraph(model_text, self.styles['BodyText']))
-        left_col.append(Spacer(1, 0.3*cm))
+        left_col.append(Spacer(1, 0.15*cm))
 
         # Dataset
         left_col.append(Paragraph("<b>Dataset</b>", self.styles['SectionTitle']))
@@ -141,7 +141,7 @@ class UncertaintyReportGenerator:
 • <b>Device:</b> {config['training']['device']}<br/>
 • <b>Checkpoint Dir:</b> {config['training']['checkpoint_dir']}"""
         right_col.append(Paragraph(training_text, self.styles['BodyText']))
-        right_col.append(Spacer(1, 0.3*cm))
+        right_col.append(Spacer(1, 0.15*cm))
 
         # Training Results
         right_col.append(Paragraph("<b>Training Results</b>", self.styles['SectionTitle']))
@@ -159,8 +159,16 @@ class UncertaintyReportGenerator:
 • <b>Best Val NLL:</b> {best_val_loss:.6f}<br/>
 • <b>Final Train MSE:</b> {final_train_mse:.6f}<br/>
 • <b>Final Val MSE:</b> {final_val_mse:.6f}"""
+
+        # Add coverage information if available
+        if coverage_results is not None:
+            results_text += f"""<br/>• <b>Expected Coverage:</b> {coverage_results['expected_coverage']:.1f}%<br/>
+• <b>Actual Coverage:</b> {coverage_results['actual_coverage']:.1f}%<br/>
+• <b>Coverage Error:</b> {coverage_results['coverage_error']:.1f}%<br/>
+• <b>Well Calibrated:</b> {'Yes' if coverage_results['well_calibrated'] else 'No'}"""
+
         right_col.append(Paragraph(results_text, self.styles['BodyText']))
-        right_col.append(Spacer(1, 0.3*cm))
+        right_col.append(Spacer(1, 0.15*cm))
 
         # Uncertainty Parameters
         right_col.append(Paragraph("<b>Uncertainty Parameters</b>", self.styles['SectionTitle']))
@@ -168,7 +176,7 @@ class UncertaintyReportGenerator:
 
         uncertainty_text = f"""• <b>Confidence Level:</b> {config['uncertainty']['confidence_level']*100:.0f}%"""
         right_col.append(Paragraph(uncertainty_text, self.styles['BodyText']))
-        right_col.append(Spacer(1, 0.3*cm))
+        right_col.append(Spacer(1, 0.15*cm))
 
         # Miscellaneous Parameters
         right_col.append(Paragraph("<b>Miscellaneous</b>", self.styles['SectionTitle']))
@@ -189,7 +197,7 @@ class UncertaintyReportGenerator:
         ]))
 
         self.story.append(col_table)
-        self.story.append(Spacer(1, 0.4*cm))
+        self.story.append(Spacer(1, 0.2*cm))
 
     def add_metrics_table(self, metrics):
         """Add metrics table with uncertainty-specific metrics"""
@@ -248,14 +256,14 @@ class UncertaintyReportGenerator:
         ]))
 
         self.story.append(table)
-        self.story.append(Spacer(1, 0.2*cm))
+        self.story.append(Spacer(1, 0.1*cm))
 
         # Add calibration status notes
         calibration_note = """<b>Calibration Ratio:</b> Ratio of mean squared error to mean predicted variance.
 Ideally should be close to 1.0. Values < 0.8 indicate under-confidence, values > 1.2 indicate over-confidence."""
         para = Paragraph(calibration_note, self.styles['BodyText'])
         self.story.append(para)
-        self.story.append(Spacer(1, 0.4*cm))
+        self.story.append(Spacer(1, 0.2*cm))
 
     def add_plots_stacked(self, checkpoint_dir):
         """Add uncertainty-specific plots stacked vertically"""
@@ -296,7 +304,7 @@ Ideally should be close to 1.0. Values < 0.8 indicate under-confidence, values >
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
             ]))
             self.story.append(caption_table)
-            self.story.append(Spacer(1, 0.3*cm))
+            self.story.append(Spacer(1, 0.15*cm))
 
         # Predictions with uncertainty plot
         predictions_plot = checkpoint_dir / 'predictions_with_uncertainty.png'
@@ -331,7 +339,7 @@ Ideally should be close to 1.0. Values < 0.8 indicate under-confidence, values >
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
             ]))
             self.story.append(caption_table)
-            self.story.append(Spacer(1, 0.3*cm))
+            self.story.append(Spacer(1, 0.15*cm))
 
         # Scatter plot with uncertainty coloring
         scatter_plot = checkpoint_dir / 'scatter_with_uncertainty.png'
@@ -366,7 +374,7 @@ Ideally should be close to 1.0. Values < 0.8 indicate under-confidence, values >
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
             ]))
             self.story.append(caption_table)
-            self.story.append(Spacer(1, 0.3*cm))
+            self.story.append(Spacer(1, 0.15*cm))
 
         # Uncertainty distribution plot
         dist_plot = checkpoint_dir / 'uncertainty_distribution.png'
@@ -403,13 +411,13 @@ Ideally should be close to 1.0. Values < 0.8 indicate under-confidence, values >
             self.story.append(caption_table)
 
     def generate(self, config, history, metrics, input_dim, output_dim,
-                total_params, n_train, n_val, n_test, timestamp):
+                total_params, n_train, n_val, n_test, timestamp, coverage_results=None):
         """Generate the complete PDF"""
 
         # Add all sections
         self.add_title(timestamp)
         self.create_two_column_section(config, history, metrics, input_dim, output_dim,
-                                       total_params, n_train, n_val, n_test)
+                                       total_params, n_train, n_val, n_test, coverage_results)
         self.add_metrics_table(metrics)
         self.add_plots_stacked(Path(config['training']['checkpoint_dir']))
 
@@ -438,7 +446,8 @@ def generate_uncertainty_training_report(
     n_val,
     n_test,
     checkpoint_dir,
-    timestamp=None
+    timestamp=None,
+    coverage_results=None
 ):
     """
     Generate a LaTeX-style uncertainty quantification training report
@@ -455,6 +464,7 @@ def generate_uncertainty_training_report(
         n_test: Number of test samples
         checkpoint_dir: Directory to save the report
         timestamp: Training timestamp (optional)
+        coverage_results: Prediction interval coverage results (optional)
     """
     if timestamp is None:
         timestamp = datetime.now()
@@ -464,6 +474,6 @@ def generate_uncertainty_training_report(
 
     generator = UncertaintyReportGenerator(report_path)
     generator.generate(config, history, metrics, input_dim, output_dim,
-                      total_params, n_train, n_val, n_test, timestamp)
+                      total_params, n_train, n_val, n_test, timestamp, coverage_results)
 
     return report_path
