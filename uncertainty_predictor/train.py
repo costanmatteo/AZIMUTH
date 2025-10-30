@@ -103,7 +103,8 @@ def main():
         train_dataset,
         batch_size=CONFIG['training']['batch_size'],
         shuffle=True,
-        num_workers=0
+        num_workers=0,
+        drop_last=True  # Drop last incomplete batch to avoid BatchNorm error
     )
     val_loader = DataLoader(
         val_dataset,
