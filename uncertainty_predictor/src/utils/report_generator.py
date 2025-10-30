@@ -258,12 +258,8 @@ class UncertaintyReportGenerator:
         self.story.append(table)
         self.story.append(Spacer(1, 0.1*cm))
 
-        # Add calibration status notes
-        calibration_note = """<b>Calibration Ratio:</b> Ratio of mean squared error to mean predicted variance.
-Ideally should be close to 1.0. Values < 0.8 indicate under-confidence, values > 1.2 indicate over-confidence."""
-        para = Paragraph(calibration_note, self.styles['BodyText'])
-        self.story.append(para)
-        self.story.append(Spacer(1, 0.2*cm))
+
+
 
     def add_plots_stacked(self, checkpoint_dir):
         """Add uncertainty-specific plots stacked vertically"""
