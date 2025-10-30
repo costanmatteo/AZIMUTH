@@ -7,7 +7,7 @@ Customize the parameters below for your specific use case.
 CONFIG = {
     # Data configuration
     'data': {
-        'csv_path': 'src/data/raw/Dati_prova - Sheet16.csv',  # Path to your CSV file
+        'csv_path': 'src/data/raw/Dati_prova - Errore_omoschedastico.csv',  # Path to your CSV file
         'input_columns': ['x', 'y', 'z'],  # Input feature column names
         'output_columns': ['res_1'],  # Target output column names
         'scaling_method': 'standard',  # Feature scaling: 'standard' (zero mean, unit variance) or 'minmax' (0-1 range)
@@ -36,7 +36,7 @@ CONFIG = {
         'device': 'auto',  # Computing device: 'auto' (GPU if available), 'cuda', or 'cpu'
         'checkpoint_dir': 'checkpoints_uncertainty',  # Directory to save model checkpoints
         'variance_penalty_alpha': 1,  # Weight for variance term in loss function (1.0 = standard Gaussian NLL)
-        'calibration_lambda': 0.0  # Weight for local calibration term (0.0 = no calibration, >0 = force variance to match squared errors)
+        'calibration_lambda': 10  # Weight for local calibration term (0.0 = no calibration, >0 = force variance to match squared errors)
     },
 
     # Uncertainty configuration
