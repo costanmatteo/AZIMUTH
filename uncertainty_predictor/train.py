@@ -228,6 +228,24 @@ def main():
     print("\nGenerating visualizations...")
     checkpoint_dir = Path(CONFIG['training']['checkpoint_dir'])
 
+    # Get predictions on training set for visualization
+    print("Calculating predictions on training set for visualization...")
+    y_pred_mean_train, y_pred_variance_train = trainer.predict(X_train_scaled, return_uncertainty=True)
+
+    # Inverse transform to original scale
+    y_pred_mean_train_orig = preprocessor.inverse_transform_output(y_pred_mean_train)
+    y_train_orig = y_train
+
+    # Scale variance appropriately
+    if hasattr(preprocessor, 'y_scaler') and preprocessor.y_scaler is not None:
+        if hasattr(preprocessor.y_scaler, 'scale_'):
+            scale_factors = preprocessor.y_scaler.scale_
+            y_pred_variance_train_orig = y_pred_variance_train * (scale_factors ** 2)
+        else:
+            y_pred_variance_train_orig = y_pred_variance_train
+    else:
+        y_pred_variance_train_orig = y_pred_variance_train
+
     # Plot training history
     plot_training_history(
         history['train_losses'],
@@ -237,14 +255,17 @@ def main():
         save_path=checkpoint_dir / 'training_history.png'
     )
 
-    # Plot predictions with uncertainty bounds
+    # Plot predictions with uncertainty bounds (including training data)
     plot_predictions_with_uncertainty(
         y_test_orig,
         y_pred_mean_orig,
         y_pred_variance_orig,
         output_names=CONFIG['data']['output_columns'],
         save_path=checkpoint_dir / 'predictions_with_uncertainty.png',
-        confidence=CONFIG['uncertainty']['confidence_level']
+        confidence=CONFIG['uncertainty']['confidence_level'],
+        y_true_train=y_train_orig,
+        y_pred_mean_train=y_pred_mean_train_orig,
+        y_pred_variance_train=y_pred_variance_train_orig
     )
 
     # Plot scatter with uncertainty coloring

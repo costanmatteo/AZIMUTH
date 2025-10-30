@@ -57,22 +57,35 @@ def plot_training_history(train_losses, val_losses, train_mse=None, val_mse=None
 
 def plot_predictions_with_uncertainty(y_true, y_pred_mean, y_pred_variance,
                                      output_names=None, save_path=None,
-                                     confidence=0.95):
+                                     confidence=0.95,
+                                     y_true_train=None, y_pred_mean_train=None,
+                                     y_pred_variance_train=None):
     """
     Plot predictions vs true values with uncertainty bounds.
 
     Args:
-        y_true (np.ndarray): True values
-        y_pred_mean (np.ndarray): Predicted means
-        y_pred_variance (np.ndarray): Predicted variances
+        y_true (np.ndarray): True values (test set)
+        y_pred_mean (np.ndarray): Predicted means (test set)
+        y_pred_variance (np.ndarray): Predicted variances (test set)
         output_names (list): Names of outputs
         save_path (str or Path): Path to save the plot
         confidence (float): Confidence level for prediction intervals
+        y_true_train (np.ndarray): True values (training set, optional)
+        y_pred_mean_train (np.ndarray): Predicted means (training set, optional)
+        y_pred_variance_train (np.ndarray): Predicted variances (training set, optional)
     """
     if len(y_true.shape) == 1:
         y_true = y_true.reshape(-1, 1)
         y_pred_mean = y_pred_mean.reshape(-1, 1)
         y_pred_variance = y_pred_variance.reshape(-1, 1)
+
+    # Handle training data reshaping if provided
+    has_train_data = y_true_train is not None and y_pred_mean_train is not None and y_pred_variance_train is not None
+    if has_train_data:
+        if len(y_true_train.shape) == 1:
+            y_true_train = y_true_train.reshape(-1, 1)
+            y_pred_mean_train = y_pred_mean_train.reshape(-1, 1)
+            y_pred_variance_train = y_pred_variance_train.reshape(-1, 1)
 
     n_outputs = y_true.shape[1]
 
@@ -94,6 +107,7 @@ def plot_predictions_with_uncertainty(y_true, y_pred_mean, y_pred_variance,
     for i, name in enumerate(output_names):
         ax = axes[i]
 
+        # Test set data
         y_t = y_true[:, i]
         y_p = y_pred_mean[:, i]
         y_v = y_pred_variance[:, i]
@@ -105,21 +119,51 @@ def plot_predictions_with_uncertainty(y_true, y_pred_mean, y_pred_variance,
         y_p_sorted = y_p[sort_idx]
         y_std_sorted = y_std[sort_idx]
 
-        # Plot uncertainty bounds
+        # Plot test set uncertainty bounds
         ax.fill_between(range(len(y_p_sorted)),
                         y_p_sorted - z_score * y_std_sorted,
                         y_p_sorted + z_score * y_std_sorted,
                         alpha=0.3, color='blue',
-                        label=f'{int(confidence*100)}% Prediction Interval')
+                        label=f'Test {int(confidence*100)}% PI')
 
-        # Plot predictions and true values
-        ax.plot(y_p_sorted, 'b-', linewidth=2, label='Predicted Mean', alpha=0.7)
-        ax.plot(y_t_sorted, 'ro', markersize=3, label='True Values', alpha=0.6)
+        # Plot test set predictions and true values
+        ax.plot(y_p_sorted, 'b-', linewidth=2, label='Test Predicted Mean', alpha=0.7)
+        ax.plot(y_t_sorted, 'ro', markersize=3, label='Test True Values', alpha=0.6)
+
+        # Add training data if provided
+        if has_train_data:
+            y_t_train = y_true_train[:, i]
+            y_p_train = y_pred_mean_train[:, i]
+            y_v_train = y_pred_variance_train[:, i]
+            y_std_train = np.sqrt(y_v_train)
+
+            # Sort by predicted mean
+            sort_idx_train = np.argsort(y_p_train)
+            y_t_train_sorted = y_t_train[sort_idx_train]
+            y_p_train_sorted = y_p_train[sort_idx_train]
+            y_std_train_sorted = y_std_train[sort_idx_train]
+
+            # Offset training data points to appear after test data
+            offset = len(y_p_sorted)
+            x_train = range(offset, offset + len(y_p_train_sorted))
+
+            # Plot training set uncertainty bounds
+            ax.fill_between(x_train,
+                           y_p_train_sorted - z_score * y_std_train_sorted,
+                           y_p_train_sorted + z_score * y_std_train_sorted,
+                           alpha=0.2, color='green',
+                           label=f'Train {int(confidence*100)}% PI')
+
+            # Plot training set predictions and true values
+            ax.plot(x_train, y_p_train_sorted, 'g-', linewidth=2,
+                   label='Train Predicted Mean', alpha=0.7)
+            ax.plot(x_train, y_t_train_sorted, 'go', markersize=2,
+                   label='Train True Values', alpha=0.4)
 
         ax.set_xlabel('Sample (sorted by prediction)', fontsize=10)
         ax.set_ylabel('Value', fontsize=10)
         ax.set_title(f'{name}', fontsize=12, fontweight='bold')
-        ax.legend(fontsize=8)
+        ax.legend(fontsize=7, loc='best')
         ax.grid(True, alpha=0.3)
 
     # Hide extra subplots
