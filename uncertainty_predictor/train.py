@@ -14,7 +14,7 @@ from datetime import datetime
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
 
-from data import load_csv_data, DataPreprocessor, MachineryDataset
+from data import load_data, DataPreprocessor, MachineryDataset
 from models import (
     UncertaintyPredictor,
     GaussianNLLLoss,
@@ -57,14 +57,15 @@ def main():
     # 1. LOAD DATA
     print("\n[1/7] Loading data...")
     try:
-        X, y = load_csv_data(
-            CONFIG['data']['csv_path'],
+        X, y = load_data(
+            CONFIG['data']['data_path'],
             CONFIG['data']['input_columns'],
-            CONFIG['data']['output_columns']
+            CONFIG['data']['output_columns'],
+            output_dir=CONFIG['data'].get('output_dir', './processed_data')
         )
     except FileNotFoundError:
-        print(f"\nERROR: File not found: {CONFIG['data']['csv_path']}")
-        print("\nTo test the system, create a sample CSV file with:")
+        print(f"\nERROR: File not found: {CONFIG['data']['data_path']}")
+        print("\nTo test the system, provide a CSV or Excel file:")
         print("  - Input columns: " + ", ".join(CONFIG['data']['input_columns']))
         print("  - Output columns: " + ", ".join(CONFIG['data']['output_columns']))
         print("\nOr modify configs/example_config.py with your data.")
