@@ -7,19 +7,9 @@ Customize the parameters below for your specific use case.
 CONFIG = {
     # Data configuration
     'data': {
-        # Path to your data file - can be CSV or Excel!
-        # If Excel: Process type will be auto-detected from columns
-        # If CSV: Loaded directly
-        'data_path': 'src/data/raw/Dati_prova - Sheet42.csv',  # .csv, .xlsx, or .xls
-
-        # Examples:
-        # 'data_path': 'raw_data/laser_production.xlsx',  # Auto-detects laser process
-        # 'data_path': 'raw_data/plasma_2024.xlsx',      # Auto-detects plasma process
-        # 'data_path': 'processed_data/my_data.csv',     # Direct CSV load
-
+        'csv_path': 'src/data/raw/Dati_prova - Sheet42.csv',  # Path to your CSV file
         'input_columns': ['x', 'y', 'z'],  # Input features
         'output_columns': ['res_1'],  # Target outputs
-        'output_dir': './processed_data',  # Where to save converted Excel files
         'scaling_method': 'standard',  # 'standard', 'minmax'
         'train_size': 0.7,  # 70% for training
         'val_size': 0.15,   # 15% for validation
