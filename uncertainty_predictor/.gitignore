@@ -41,6 +41,8 @@ ENV/
 *.xlsx
 *.xls
 /data/
+**/test_data/
+processed_data/
 
 # Model checkpoints and outputs
 checkpoints*/
