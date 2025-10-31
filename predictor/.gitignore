@@ -36,6 +36,8 @@ data/raw/*.csv
 data/processed/*.csv
 data/raw/*.xlsx
 data/processed/*.xlsx
+**/test_data/
+processed_data/
 
 # Checkpoints
 checkpoints/
