@@ -195,6 +195,20 @@ def main():
     else:
         y_pred_variance_orig = y_pred_variance
 
+    # Also get predictions on training set for visualization
+    y_train_pred_mean, y_train_pred_variance = trainer.predict(X_train_scaled, return_uncertainty=True)
+    y_train_pred_mean_orig = preprocessor.inverse_transform_output(y_train_pred_mean)
+    y_train_orig = y_train
+
+    if hasattr(preprocessor, 'y_scaler') and preprocessor.y_scaler is not None:
+        if hasattr(preprocessor.y_scaler, 'scale_'):
+            scale_factors = preprocessor.y_scaler.scale_
+            y_train_pred_variance_orig = y_train_pred_variance * (scale_factors ** 2)
+        else:
+            y_train_pred_variance_orig = y_train_pred_variance
+    else:
+        y_train_pred_variance_orig = y_train_pred_variance
+
     # Calculate metrics
     metrics = calculate_metrics(
         y_test_orig,
@@ -237,13 +251,23 @@ def main():
         save_path=checkpoint_dir / 'training_history.png'
     )
 
-    # Plot predictions with uncertainty bounds
+    # Plot predictions with uncertainty bounds (test set)
     plot_predictions_with_uncertainty(
         y_test_orig,
         y_pred_mean_orig,
         y_pred_variance_orig,
         output_names=CONFIG['data']['output_columns'],
         save_path=checkpoint_dir / 'predictions_with_uncertainty.png',
+        confidence=CONFIG['uncertainty']['confidence_level']
+    )
+
+    # Plot predictions with uncertainty bounds (training set)
+    plot_predictions_with_uncertainty(
+        y_train_orig,
+        y_train_pred_mean_orig,
+        y_train_pred_variance_orig,
+        output_names=CONFIG['data']['output_columns'],
+        save_path=checkpoint_dir / 'training_predictions_with_uncertainty.png',
         confidence=CONFIG['uncertainty']['confidence_level']
     )
 
