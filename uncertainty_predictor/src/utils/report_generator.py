@@ -302,18 +302,59 @@ class UncertaintyReportGenerator:
             self.story.append(caption_table)
             self.story.append(Spacer(1, 0.15*cm))
 
-        # Predictions with uncertainty plot
+        # Predictions with uncertainty plots - side by side layout
         predictions_plot = checkpoint_dir / 'predictions_with_uncertainty.png'
-        if predictions_plot.exists():
+        training_predictions_plot = checkpoint_dir / 'training_predictions_with_uncertainty.png'
+
+        if predictions_plot.exists() and training_predictions_plot.exists():
+            # Load both images
+            img2 = Image(str(predictions_plot))
+            img3 = Image(str(training_predictions_plot))
+
+            # Calculate dimensions for side-by-side layout
+            img_width, img_height = img2.imageWidth, img2.imageHeight
+            aspect_ratio = img_height / img_width
+
+            # Each image gets half the page width (with some spacing)
+            new_width = 8.5*cm
+            new_height = new_width * aspect_ratio
+
+            # Max height constraint
+            if new_height > 8*cm:
+                new_height = 8*cm
+                new_width = new_height / aspect_ratio
+
+            img2.drawWidth = new_width
+            img2.drawHeight = new_height
+            img3.drawWidth = new_width
+            img3.drawHeight = new_height
+
+            # Create two-column table for images
+            img_table = Table([[img2, img3]], colWidths=[9*cm, 9*cm])
+            img_table.setStyle(TableStyle([
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ]))
+            self.story.append(img_table)
+
+            # Create two-column table for captions
+            caption_left = Paragraph("<i>Training Data with Uncertainty Bounds</i>", self.styles['Normal'])
+            caption_right = Paragraph("<i>Test Predictions with Uncertainty Bounds</i>", self.styles['Normal'])
+            caption_table = Table([[caption_left, caption_right]], colWidths=[9*cm, 9*cm])
+            caption_table.setStyle(TableStyle([
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ]))
+            self.story.append(caption_table)
+            self.story.append(Spacer(1, 0.15*cm))
+        elif predictions_plot.exists():
+            # Fallback to single plot if training plot doesn't exist
             img2 = Image(str(predictions_plot))
             img_width, img_height = img2.imageWidth, img2.imageHeight
             aspect_ratio = img_height / img_width
 
-            # Larger width for stacked layout
             new_width = 16*cm
             new_height = new_width * aspect_ratio
 
-            # Max height constraint
             if new_height > 10*cm:
                 new_height = 10*cm
                 new_width = new_height / aspect_ratio
@@ -321,7 +362,6 @@ class UncertaintyReportGenerator:
             img2.drawWidth = new_width
             img2.drawHeight = new_height
 
-            # Center the image
             img_table = Table([[img2]], colWidths=[18*cm])
             img_table.setStyle(TableStyle([
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
