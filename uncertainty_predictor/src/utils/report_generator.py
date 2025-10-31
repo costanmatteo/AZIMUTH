@@ -338,8 +338,8 @@ class UncertaintyReportGenerator:
             self.story.append(img_table)
 
             # Create two-column table for captions
-            caption_left = Paragraph("<i>Training Data with Uncertainty Bounds</i>", self.styles['Normal'])
-            caption_right = Paragraph("<i>Test Predictions with Uncertainty Bounds</i>", self.styles['Normal'])
+            caption_left = Paragraph("<i>Validation Predictions with Uncertainty Bounds</i>", self.styles['Normal'])
+            caption_right = Paragraph("<i>Training Data with Uncertainty Bounds</i>", self.styles['Normal'])
             caption_table = Table([[caption_left, caption_right]], colWidths=[9*cm, 9*cm])
             caption_table.setStyle(TableStyle([
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
