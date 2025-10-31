@@ -192,3 +192,118 @@ def load_csv_data(filepath, input_columns, output_columns):
     print(f"Output features: {y.shape[1]}")
 
     return X, y
+
+
+def load_process_data(process_name, data_dir='src/data/raw', output_columns=None):
+    """
+    Load data for a specific manufacturing process with automatic column mapping.
+
+    This function automatically:
+    1. Loads the correct CSV file for the process
+    2. Excludes metadata columns (timestamps, IDs, etc.)
+    3. Separates input and output columns based on process configuration
+
+    Args:
+        process_name (str): Name of the process ('laser', 'plasma', 'galvanic',
+                           'multibond', 'microetch')
+        data_dir (str): Directory containing the CSV files (default: 'src/data/raw')
+        output_columns (list, optional): Override default output columns for the process.
+                                        If None, uses columns from process_config.py
+
+    Returns:
+        tuple: (X, y, column_info) where:
+            - X (np.ndarray): Input features
+            - y (np.ndarray): Target outputs
+            - column_info (dict): Dictionary with 'input_columns', 'output_columns',
+                                 'metadata_columns' lists
+
+    Example:
+        >>> # Load laser process data with default output columns
+        >>> X, y, info = load_process_data('laser')
+        >>> print(f"Inputs: {info['input_columns']}")
+        >>> print(f"Outputs: {info['output_columns']}")
+        >>>
+        >>> # Load plasma process data with custom output columns
+        >>> X, y, info = load_process_data('plasma', output_columns=['Temperature'])
+
+    Raises:
+        ValueError: If process_name is not recognized
+        FileNotFoundError: If CSV file doesn't exist
+    """
+    import os
+    import sys
+
+    # Import process configuration
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+    from configs.process_config import get_process_config, get_column_mapping, set_output_columns
+
+    # Get process configuration
+    config = get_process_config(process_name)
+
+    # Override output columns if specified
+    if output_columns is not None:
+        set_output_columns(process_name, output_columns)
+        config = get_process_config(process_name)
+
+    # Build file path
+    filepath = os.path.join(data_dir, config['filename'])
+
+    if not os.path.exists(filepath):
+        raise FileNotFoundError(
+            f"CSV file not found: {filepath}\n"
+            f"Expected file: {config['filename']}\n"
+            f"Make sure the data file exists in {data_dir}"
+        )
+
+    # Load CSV with process-specific settings
+    df = pd.read_csv(filepath, sep=config['sep'], header=config['header'])
+
+    print(f"\n{'='*60}")
+    print(f"Loading process: {config['process_label']}")
+    print(f"File: {config['filename']}")
+    print(f"{'='*60}")
+
+    # Get automatic column mapping
+    all_columns = df.columns.tolist()
+    input_cols, output_cols, metadata_cols = get_column_mapping(process_name, all_columns)
+
+    # Check if output columns are defined
+    if len(output_cols) == 0:
+        print("\n⚠️  WARNING: No output columns defined for this process!")
+        print("Please set output columns using one of these methods:")
+        print(f"  1. In process_config.py: PROCESS_CONFIGS['{process_name}']['output_columns']")
+        print(f"  2. When calling: load_process_data('{process_name}', output_columns=['col1', 'col2'])")
+        print("\nAvailable columns (excluding metadata):")
+        non_metadata = [col for col in all_columns if col not in metadata_cols]
+        for col in non_metadata:
+            print(f"  - {col}")
+        raise ValueError(f"No output columns defined for process '{process_name}'")
+
+    # Extract data
+    X = df[input_cols].values
+    y = df[output_cols].values
+
+    # Print summary
+    print(f"\nData loaded: {X.shape[0]} samples")
+    print(f"\nMetadata columns (excluded): {len(metadata_cols)}")
+    for col in metadata_cols:
+        print(f"  ✗ {col}")
+
+    print(f"\nInput features: {len(input_cols)}")
+    for col in input_cols:
+        print(f"  → {col}")
+
+    print(f"\nOutput features: {len(output_cols)}")
+    for col in output_cols:
+        print(f"  ← {col}")
+
+    print(f"{'='*60}\n")
+
+    # Return column information for reference
+    column_info = {
+        'input_columns': input_cols,
+        'output_columns': output_cols,
+        'metadata_columns': metadata_cols
+    }
+
+    return X, y, column_info
