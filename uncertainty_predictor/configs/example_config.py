@@ -7,7 +7,7 @@ Customize the parameters below for your specific use case.
 CONFIG = {
     # Data configuration
     'data': {
-        'csv_path': r'C:\AZIMUTH\AZIMUTH\uncertainty_predictor\src\data\raw\Dati_prova - Sheet44.csv',  # Path to your CSV file (set to None to use SCM synthetic data)
+        'csv_path': None,  # Path to your CSV file (set to None to use SCM synthetic data)
         'input_columns': ['x', 'y', 'z'],  # Input features
         'output_columns': ['res_1'],  # Target outputs
         'scaling_method': 'standard',  # 'standard', 'minmax'
@@ -62,3 +62,12 @@ CONFIG = {
         'verbose': True
     }
 }
+
+
+
+
+
+
+
+
+
