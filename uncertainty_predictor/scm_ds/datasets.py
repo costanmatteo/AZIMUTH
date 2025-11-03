@@ -61,4 +61,5 @@ ds_scm_1_to_1_ct = SCMDataset(
 # - one-to-many-noCT
 
 
-ds_scm_1_to_1_ct.generate_ds(mode="flat", n=5_000, save_dir=join(ROOT_DIR, "data/example"))
+# Example usage (commented out to avoid running on import)
+# ds_scm_1_to_1_ct.generate_ds(mode="flat", n=5_000, save_dir=join(ROOT_DIR, "data/example"))

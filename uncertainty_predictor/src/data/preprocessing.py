@@ -192,3 +192,49 @@ def load_csv_data(filepath, input_columns, output_columns):
     print(f"Output features: {y.shape[1]}")
 
     return X, y
+
+
+def generate_scm_data(n_samples=5000, seed=42, dataset_type='one_to_one_ct'):
+    """
+    Generate synthetic data using Structural Causal Model (SCM).
+
+    Args:
+        n_samples (int): Number of samples to generate
+        seed (int): Random seed for reproducibility
+        dataset_type (str): Type of SCM dataset to use
+
+    Returns:
+        tuple: (X, y, input_columns, output_columns) as numpy arrays and column names
+    """
+    import sys
+    from pathlib import Path
+
+    # Add scm_ds to path
+    scm_path = Path(__file__).parent.parent.parent / 'scm_ds'
+    if str(scm_path) not in sys.path:
+        sys.path.insert(0, str(scm_path))
+
+    from datasets import ds_scm_1_to_1_ct
+
+    # Select dataset based on type
+    if dataset_type == 'one_to_one_ct':
+        scm_dataset = ds_scm_1_to_1_ct
+    else:
+        raise ValueError(f"Unknown SCM dataset type: {dataset_type}")
+
+    # Generate samples
+    print(f"Generating {n_samples} synthetic samples using SCM...")
+    df = scm_dataset.sample(n=n_samples, seed=seed)
+
+    # Extract input and output columns
+    input_columns = scm_dataset.input_labels
+    output_columns = scm_dataset.target_labels
+
+    X = df[input_columns].values
+    y = df[output_columns].values
+
+    print(f"SCM data generated: {X.shape[0]} samples")
+    print(f"Input features: {X.shape[1]} - {input_columns}")
+    print(f"Output features: {y.shape[1]} - {output_columns}")
+
+    return X, y, input_columns, output_columns

@@ -7,14 +7,22 @@ Customize the parameters below for your specific use case.
 CONFIG = {
     # Data configuration
     'data': {
-        'csv_path': 'src/data/raw/Dati_prova - Sheet42.csv',  # Path to your CSV file
+        'csv_path': None,  # Path to your CSV file (set to None to use SCM synthetic data)
         'input_columns': ['x', 'y', 'z'],  # Input features
         'output_columns': ['res_1'],  # Target outputs
         'scaling_method': 'standard',  # 'standard', 'minmax'
         'train_size': 0.7,  # 70% for training
         'val_size': 0.15,   # 15% for validation
         'test_size': 0.15,  # 15% for testing
-        'random_state': 42
+        'random_state': 42,
+
+        # SCM synthetic data generation (used if csv_path is None)
+        'use_scm': True,  # Enable SCM data generation
+        'scm': {
+            'n_samples': 5000,  # Number of samples to generate
+            'seed': 42,  # Random seed for reproducibility
+            'dataset_type': 'one_to_one_ct'  # Type of SCM dataset
+        }
     },
 
     # Model configuration
