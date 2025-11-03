@@ -194,7 +194,7 @@ def load_csv_data(filepath, input_columns, output_columns):
     return X, y
 
 
-def generate_scm_data(n_samples=5000, seed=42, dataset_type='one_to_one_ct'):
+def generate_scm_data(n_samples=5000, seed=42, dataset_type='one_to_one_ct', save_graph_to=None):
     """
     Generate synthetic data using Structural Causal Model (SCM).
 
@@ -202,6 +202,7 @@ def generate_scm_data(n_samples=5000, seed=42, dataset_type='one_to_one_ct'):
         n_samples (int): Number of samples to generate
         seed (int): Random seed for reproducibility
         dataset_type (str): Type of SCM dataset to use
+        save_graph_to (str, optional): Directory path to save SCM graph visualization
 
     Returns:
         tuple: (X, y, input_columns, output_columns) as numpy arrays and column names
@@ -238,5 +239,22 @@ def generate_scm_data(n_samples=5000, seed=42, dataset_type='one_to_one_ct'):
     print(f"SCM data generated: {X.shape[0]} samples")
     print(f"Input features: {X.shape[1]} - {input_columns}")
     print(f"Output features: {y.shape[1]} - {output_columns}")
+
+    # Save SCM graph visualization if requested
+    if save_graph_to is not None:
+        try:
+            from pathlib import Path
+            from os.path import join
+            save_dir = Path(save_graph_to)
+            save_dir.mkdir(parents=True, exist_ok=True)
+
+            graph = scm_dataset.scm.to_graphviz()
+            # Save as PNG for use in reports
+            graph.render(str(join(save_dir, 'scm_graph')), format="png", cleanup=True)
+            print(f"SCM graph saved to: {save_dir}/scm_graph.png")
+        except Exception as e:
+            print(f"Warning: Could not save SCM graph visualization.")
+            print(f"  Error: {e}")
+            print(f"  Continuing without graph...")
 
     return X, y, input_columns, output_columns

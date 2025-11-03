@@ -93,7 +93,8 @@ def main():
         X, y, input_columns, output_columns = generate_scm_data(
             n_samples=n_samples,
             seed=seed,
-            dataset_type=dataset_type
+            dataset_type=dataset_type,
+            save_graph_to=CONFIG['training']['checkpoint_dir']
         )
     else:
         print("\nERROR: No data source specified.")

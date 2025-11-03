@@ -624,9 +624,13 @@ class SCMDataset:
 
         # Try to render graph - optional, requires Graphviz installed
         try:
+            # Save as PDF
             graph.render(str(join(save_dir, 'graph')), format="pdf", cleanup=True)
+            # Also save as PNG for use in reports
+            graph.render(str(join(save_dir, 'scm_graph')), format="png", cleanup=True)
+            print(f"SCM graph saved as PDF and PNG")
         except Exception as e:
-            print(f"Warning: Could not render graph to PDF. Graphviz may not be installed.")
+            print(f"Warning: Could not render graph. Graphviz may not be installed.")
             print(f"  Error: {e}")
             print(f"  Skipping graph rendering - dataset generation will continue...")
 

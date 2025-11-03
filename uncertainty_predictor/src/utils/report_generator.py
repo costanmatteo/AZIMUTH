@@ -261,6 +261,46 @@ class UncertaintyReportGenerator:
 
 
 
+    def add_scm_graph(self, checkpoint_dir):
+        """Add SCM graph visualization if available"""
+        checkpoint_dir = Path(checkpoint_dir)
+        scm_graph = checkpoint_dir / 'scm_graph.png'
+
+        if scm_graph.exists():
+            self.add_section_title("Structural Causal Model (SCM)")
+
+            img = Image(str(scm_graph))
+            img_width, img_height = img.imageWidth, img.imageHeight
+            aspect_ratio = img_height / img_width
+
+            # Set appropriate size for SCM graph
+            new_width = 14*cm
+            new_height = new_width * aspect_ratio
+
+            # Max height constraint
+            if new_height > 10*cm:
+                new_height = 10*cm
+                new_width = new_height / aspect_ratio
+
+            img.drawWidth = new_width
+            img.drawHeight = new_height
+
+            # Center the image
+            img_table = Table([[img]], colWidths=[18*cm])
+            img_table.setStyle(TableStyle([
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ]))
+            self.story.append(img_table)
+
+            caption = Paragraph("<i>Structural Causal Model - Causal Graph Structure</i>", self.styles['Normal'])
+            caption_table = Table([[caption]], colWidths=[18*cm])
+            caption_table.setStyle(TableStyle([
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ]))
+            self.story.append(caption_table)
+            self.story.append(Spacer(1, 0.2*cm))
+
     def add_plots_stacked(self, checkpoint_dir):
         """Add uncertainty-specific plots stacked vertically"""
         self.add_section_title("Training Visualization")
@@ -455,6 +495,7 @@ class UncertaintyReportGenerator:
         self.create_two_column_section(config, history, metrics, input_dim, output_dim,
                                        total_params, n_train, n_val, n_test, coverage_results)
         self.add_metrics_table(metrics)
+        self.add_scm_graph(Path(config['training']['checkpoint_dir']))
         self.add_plots_stacked(Path(config['training']['checkpoint_dir']))
 
         # Build PDF
