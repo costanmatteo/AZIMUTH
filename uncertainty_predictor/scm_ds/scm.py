@@ -430,10 +430,11 @@ class SCM:
             g.edge(u, v)
         return g
 
-    def save_graph_matplotlib(self, filepath: str, dpi: int = 150, figsize: tuple = (10, 6)):
+    def save_graph_matplotlib(self, filepath: str, dpi: int = 150, figsize: tuple = (14, 8)):
         """
         Create and save an SCM graph visualization using matplotlib and networkx.
         This is an alternative to graphviz that doesn't require external dependencies.
+        Nodes are organized hierarchically from left to right based on causal dependencies.
 
         Parameters
         ----------
@@ -442,7 +443,7 @@ class SCM:
         dpi : int
             Resolution of the output image (default: 150)
         figsize : tuple
-            Figure size in inches (width, height) (default: (10, 6))
+            Figure size in inches (width, height) (default: (14, 8))
 
         Returns
         -------
@@ -466,59 +467,128 @@ class SCM:
         for u, v in self.edges():
             G.add_edge(u, v)
 
+        # Calculate hierarchical levels (topological layers)
+        # Level 0 = nodes with no parents (inputs)
+        # Level n = nodes whose parents are all at level < n
+        node_levels = {}
+        for node in self.order:  # Already in topological order
+            parents = list(G.predecessors(node))
+            if not parents:
+                node_levels[node] = 0
+            else:
+                node_levels[node] = max(node_levels[p] for p in parents) + 1
+
+        # Group nodes by level
+        max_level = max(node_levels.values())
+        levels = {i: [] for i in range(max_level + 1)}
+        for node, level in node_levels.items():
+            levels[level].append(node)
+
+        # Create hierarchical positions (left to right)
+        pos = {}
+        x_spacing = 3.0  # Horizontal spacing between levels
+        y_spacing = 2.0  # Vertical spacing between nodes
+
+        for level, nodes in levels.items():
+            x = level * x_spacing
+            # Center the nodes vertically
+            n_nodes = len(nodes)
+            start_y = -(n_nodes - 1) * y_spacing / 2
+            for i, node in enumerate(nodes):
+                y = start_y + i * y_spacing
+                pos[node] = (x, y)
+
+        # Determine node types for coloring
+        input_nodes = [n for n in G.nodes() if G.in_degree(n) == 0]
+        output_nodes = [n for n in G.nodes() if G.out_degree(n) == 0]
+        intermediate_nodes = [n for n in G.nodes() if n not in input_nodes and n not in output_nodes]
+
         # Create figure
         fig, ax = plt.subplots(figsize=figsize, facecolor='white')
 
-        # Use hierarchical layout for better DAG visualization
-        try:
-            # Try to use graphviz_layout if available for better hierarchical layout
-            pos = nx.nx_agraph.graphviz_layout(G, prog='dot')
-        except:
-            # Fallback to spring layout with hierarchical hints
-            try:
-                # Try hierarchical layout based on topological levels
-                pos = nx.spring_layout(G, k=2, iterations=50, seed=42)
-            except:
-                # Final fallback
-                pos = nx.kamada_kawai_layout(G)
+        # Draw nodes by type with different colors
+        node_size = 3000
+        alpha = 0.9
 
-        # Draw the graph
-        nx.draw_networkx_nodes(
-            G, pos,
-            node_color='lightblue',
-            node_size=2000,
-            alpha=0.9,
-            ax=ax
-        )
+        # Input nodes (green)
+        if input_nodes:
+            nx.draw_networkx_nodes(
+                G, pos,
+                nodelist=input_nodes,
+                node_color='#90EE90',  # Light green
+                node_size=node_size,
+                alpha=alpha,
+                ax=ax,
+                edgecolors='#2E7D32',  # Dark green border
+                linewidths=2
+            )
 
+        # Intermediate nodes (light blue)
+        if intermediate_nodes:
+            nx.draw_networkx_nodes(
+                G, pos,
+                nodelist=intermediate_nodes,
+                node_color='#87CEEB',  # Sky blue
+                node_size=node_size,
+                alpha=alpha,
+                ax=ax,
+                edgecolors='#1976D2',  # Dark blue border
+                linewidths=2
+            )
+
+        # Output nodes (orange)
+        if output_nodes:
+            nx.draw_networkx_nodes(
+                G, pos,
+                nodelist=output_nodes,
+                node_color='#FFB74D',  # Light orange
+                node_size=node_size,
+                alpha=alpha,
+                ax=ax,
+                edgecolors='#E65100',  # Dark orange border
+                linewidths=2
+            )
+
+        # Draw labels
         nx.draw_networkx_labels(
             G, pos,
-            font_size=10,
+            font_size=11,
             font_weight='bold',
+            font_family='sans-serif',
             ax=ax
         )
 
+        # Draw edges with arrows
         nx.draw_networkx_edges(
             G, pos,
-            edge_color='gray',
+            edge_color='#424242',  # Dark gray
             arrows=True,
-            arrowsize=20,
+            arrowsize=25,
             arrowstyle='->',
             connectionstyle='arc3,rad=0.1',
-            width=2,
-            ax=ax
+            width=2.5,
+            alpha=0.7,
+            ax=ax,
+            node_size=node_size
         )
 
-        ax.set_title('Structural Causal Model (SCM)', fontsize=14, fontweight='bold', pad=20)
+        # Add title with legend
+        title = 'Structural Causal Model (SCM)\n'
+        title += 'Green: Inputs | Blue: Intermediate | Orange: Outputs'
+        ax.set_title(title, fontsize=14, fontweight='bold', pad=20)
+
         ax.axis('off')
+
+        # Adjust margins
         plt.tight_layout()
 
         # Save figure
         output_path = f"{filepath}.png"
-        plt.savefig(output_path, dpi=dpi, bbox_inches='tight', facecolor='white')
+        plt.savefig(output_path, dpi=dpi, bbox_inches='tight', facecolor='white', pad_inches=0.3)
         plt.close(fig)
 
         return output_path
+
 
 
 @dataclass(frozen=True)
@@ -723,7 +793,7 @@ class SCMDataset:
         # ------------ Save SCM graph visualization --------------------
         # Try matplotlib first (no external dependencies needed)
         try:
-            self.scm.save_graph_matplotlib(join(save_dir, 'scm_graph'), dpi=150, figsize=(12, 8))
+            self.scm.save_graph_matplotlib(join(save_dir, 'scm_graph'))
             print(f"SCM graph saved using matplotlib: scm_graph.png")
         except Exception as e:
             print(f"Warning: Could not render graph with matplotlib.")

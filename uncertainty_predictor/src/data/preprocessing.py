@@ -249,7 +249,7 @@ def generate_scm_data(n_samples=5000, seed=42, dataset_type='one_to_one_ct', sav
             save_dir.mkdir(parents=True, exist_ok=True)
 
             # Use matplotlib-based visualization (no external dependencies needed)
-            scm_dataset.scm.save_graph_matplotlib(join(save_dir, 'scm_graph'), dpi=150, figsize=(12, 8))
+            scm_dataset.scm.save_graph_matplotlib(join(save_dir, 'scm_graph'))
             print(f"SCM graph saved to: {save_dir}/scm_graph.png")
         except Exception as e:
             print(f"Warning: Could not save SCM graph visualization.")
