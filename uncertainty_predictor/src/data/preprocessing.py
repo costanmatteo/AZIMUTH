@@ -214,11 +214,21 @@ def generate_scm_data(n_samples=5000, seed=42, dataset_type='one_to_one_ct'):
     if str(scm_path) not in sys.path:
         sys.path.insert(0, str(scm_path))
 
+    # Import all available datasets
     from datasets import ds_scm_1_to_1_ct
 
     # Select dataset based on type
     if dataset_type == 'one_to_one_ct':
         scm_dataset = ds_scm_1_to_1_ct
+
+    # Add your custom datasets here:
+    # elif dataset_type == 'simple_3to1':
+    #     from datasets import ds_simple_3to1
+    #     scm_dataset = ds_simple_3to1
+    # elif dataset_type == 'nonlinear':
+    #     from datasets import ds_nonlinear
+    #     scm_dataset = ds_nonlinear
+
     else:
         raise ValueError(f"Unknown SCM dataset type: {dataset_type}")
 
