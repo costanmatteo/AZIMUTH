@@ -19,9 +19,9 @@ CONFIG = {
         # SCM synthetic data generation (used if csv_path is None)
         'use_scm': True,  # Enable SCM data generation
         'scm': {
-            'n_samples': 1000,  # Number of samples to generate
+            'n_samples': 2000,  # Number of samples to generate
             'seed': 42,  # Random seed for reproducibility
-            'dataset_type': 'one_to_one_ct'  # Type of SCM dataset
+            'dataset_type': 'laser'  # Type of SCM dataset, either 'one_to_one_ct' or 'laser'
         }
     },
 
@@ -39,7 +39,7 @@ CONFIG = {
     'training': {
         'batch_size': 32,
         'epochs': 400,
-        'learning_rate': 0.0001,
+        'learning_rate': 0.001,
         'weight_decay': 0.01,  # L2 regularization
         'patience': 30,  # Early stopping patience
         'device': 'auto',  # 'auto', 'cuda', or 'cpu'
