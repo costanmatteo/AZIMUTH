@@ -83,7 +83,6 @@ ds_scm_1_to_1_ct = SCMDataset(
 
 
 
-
 # =============================================================================
 # LASER SCM MODEL — Equations Reference
 # -----------------------------------------------------------------------------
@@ -240,6 +239,9 @@ ds_scm_laser = SCMDataset(
     input_labels=["PowerTarget", "AmbientTemp"],
     target_labels=["ActualPower"],
 )
+
+
+ds_scm_laser.generate_ds(mode="flat", n=5_000, save_dir=join(ROOT_DIR, "data/example"))
 
 # Example:
 # ds_scm_1_to_1_ct.generate_ds(mode="flat", n=50_000, save_dir=join(ROOT_DIR, "data/laser_example"))
