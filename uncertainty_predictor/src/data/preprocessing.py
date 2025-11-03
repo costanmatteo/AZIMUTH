@@ -248,9 +248,8 @@ def generate_scm_data(n_samples=5000, seed=42, dataset_type='one_to_one_ct', sav
             save_dir = Path(save_graph_to)
             save_dir.mkdir(parents=True, exist_ok=True)
 
-            graph = scm_dataset.scm.to_graphviz()
-            # Save as PNG for use in reports
-            graph.render(str(join(save_dir, 'scm_graph')), format="png", cleanup=True)
+            # Use matplotlib-based visualization (no external dependencies needed)
+            scm_dataset.scm.save_graph_matplotlib(join(save_dir, 'scm_graph'), dpi=150, figsize=(12, 8))
             print(f"SCM graph saved to: {save_dir}/scm_graph.png")
         except Exception as e:
             print(f"Warning: Could not save SCM graph visualization.")

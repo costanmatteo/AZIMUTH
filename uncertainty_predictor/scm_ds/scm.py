@@ -21,7 +21,19 @@ import numpy as np
 import pandas as pd
 import sympy as sp
 import json
-from graphviz import Digraph
+
+# Optional imports for visualization
+try:
+    from graphviz import Digraph
+except ImportError:
+    Digraph = None
+
+try:
+    import matplotlib.pyplot as plt
+    import networkx as nx
+except ImportError:
+    plt = None
+    nx = None
 
 
 # ----------------------------- Type aliases --------------------------------- #
@@ -417,8 +429,98 @@ class SCM:
         for u, v in self.edges():
             g.edge(u, v)
         return g
-    
-    
+
+    def save_graph_matplotlib(self, filepath: str, dpi: int = 150, figsize: tuple = (10, 6)):
+        """
+        Create and save an SCM graph visualization using matplotlib and networkx.
+        This is an alternative to graphviz that doesn't require external dependencies.
+
+        Parameters
+        ----------
+        filepath : str
+            Path to save the PNG file (without extension)
+        dpi : int
+            Resolution of the output image (default: 150)
+        figsize : tuple
+            Figure size in inches (width, height) (default: (10, 6))
+
+        Returns
+        -------
+        str
+            Path to the saved file
+        """
+        if plt is None or nx is None:
+            raise ImportError(
+                "matplotlib and networkx are required for graph visualization. "
+                "Install with: pip install matplotlib networkx"
+            )
+
+        # Create directed graph
+        G = nx.DiGraph()
+
+        # Add nodes in topological order
+        for v in self.order:
+            G.add_node(v)
+
+        # Add edges
+        for u, v in self.edges():
+            G.add_edge(u, v)
+
+        # Create figure
+        fig, ax = plt.subplots(figsize=figsize, facecolor='white')
+
+        # Use hierarchical layout for better DAG visualization
+        try:
+            # Try to use graphviz_layout if available for better hierarchical layout
+            pos = nx.nx_agraph.graphviz_layout(G, prog='dot')
+        except:
+            # Fallback to spring layout with hierarchical hints
+            try:
+                # Try hierarchical layout based on topological levels
+                pos = nx.spring_layout(G, k=2, iterations=50, seed=42)
+            except:
+                # Final fallback
+                pos = nx.kamada_kawai_layout(G)
+
+        # Draw the graph
+        nx.draw_networkx_nodes(
+            G, pos,
+            node_color='lightblue',
+            node_size=2000,
+            alpha=0.9,
+            ax=ax
+        )
+
+        nx.draw_networkx_labels(
+            G, pos,
+            font_size=10,
+            font_weight='bold',
+            ax=ax
+        )
+
+        nx.draw_networkx_edges(
+            G, pos,
+            edge_color='gray',
+            arrows=True,
+            arrowsize=20,
+            arrowstyle='->',
+            connectionstyle='arc3,rad=0.1',
+            width=2,
+            ax=ax
+        )
+
+        ax.set_title('Structural Causal Model (SCM)', fontsize=14, fontweight='bold', pad=20)
+        ax.axis('off')
+        plt.tight_layout()
+
+        # Save figure
+        output_path = f"{filepath}.png"
+        plt.savefig(output_path, dpi=dpi, bbox_inches='tight', facecolor='white')
+        plt.close(fig)
+
+        return output_path
+
+
 @dataclass(frozen=True)
 class Spec:
     name: str
@@ -588,51 +690,55 @@ class SCMDataset:
         assert np.array_equal(df_dca.index.map(tv_map).to_numpy(), tv_order)      # rows == target variable sequential order
         assert np.array_equal(df_dca.columns.map(iv_map).to_numpy(), iv_order)    # cols == input variable sequential order
         
-        
-        # ------------ get SCM graph visualization --------------------
-        graph = self.scm.to_graphviz()
-        
-        
+
         # ---------------------- metadata -----------------------------
         if meta_dict is not None:
             for key, value in meta_dict.items():
-                self.meta[key] = value 
-        
-        
+                self.meta[key] = value
+
+
         # ---------------------- export -------------------------------
         makedirs(save_dir, exist_ok=True)
         np.savez_compressed(join(save_dir, "ds.npz"), x=input_np, y=target_np)
-        
+
         df_esa.to_csv(join(save_dir, "enc_sef_att_mask.csv"))
         df_dsa.to_csv(join(save_dir, "dec_self_att_mask.csv"))
         df_dca.to_csv(join(save_dir, "dec_cross_att_mask.csv"))
-        
+
         with open(join(save_dir, 'meta.json'),'w', encoding="utf-8")  as file:
             json.dump(self.meta, file, indent=2, sort_keys=True, ensure_ascii=False)
-            
+
         with open(join(save_dir, 'input_vars_map.json'),'w', encoding="utf-8")  as file:
             json.dump(iv_map, file, indent=2, sort_keys=True, ensure_ascii=False)
-            
+
         with open(join(save_dir, 'input_feat_map.json'),'w', encoding="utf-8")  as file:
             json.dump(if_map, file, indent=2, sort_keys=True, ensure_ascii=False)
-            
+
         with open(join(save_dir, 'target_vars_map.json'),'w', encoding="utf-8")  as file:
             json.dump(tv_map, file, indent=2, sort_keys=True, ensure_ascii=False)
-            
+
         with open(join(save_dir, 'target_feat_map.json'),'w', encoding="utf-8")  as file:
             json.dump(tf_map, file, indent=2, sort_keys=True, ensure_ascii=False)
 
-        # Try to render graph - optional, requires Graphviz installed
+        # ------------ Save SCM graph visualization --------------------
+        # Try matplotlib first (no external dependencies needed)
         try:
-            # Save as PDF
-            graph.render(str(join(save_dir, 'graph')), format="pdf", cleanup=True)
-            # Also save as PNG for use in reports
-            graph.render(str(join(save_dir, 'scm_graph')), format="png", cleanup=True)
-            print(f"SCM graph saved as PDF and PNG")
+            self.scm.save_graph_matplotlib(join(save_dir, 'scm_graph'), dpi=150, figsize=(12, 8))
+            print(f"SCM graph saved using matplotlib: scm_graph.png")
         except Exception as e:
-            print(f"Warning: Could not render graph. Graphviz may not be installed.")
+            print(f"Warning: Could not render graph with matplotlib.")
             print(f"  Error: {e}")
-            print(f"  Skipping graph rendering - dataset generation will continue...")
+            # Try graphviz as fallback
+            try:
+                if Digraph is not None:
+                    graph = self.scm.to_graphviz()
+                    graph.render(str(join(save_dir, 'scm_graph')), format="png", cleanup=True)
+                    print(f"SCM graph saved using graphviz (fallback): scm_graph.png")
+                else:
+                    print(f"  Graphviz not available. Skipping graph rendering.")
+            except Exception as e2:
+                print(f"  Graphviz rendering also failed: {e2}")
+                print(f"  Continuing without graph visualization...")
 
 
 # --------------------------- Example -------------------------------- #
