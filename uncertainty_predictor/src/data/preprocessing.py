@@ -192,3 +192,56 @@ def load_csv_data(filepath, input_columns, output_columns):
     print(f"Output features: {y.shape[1]}")
 
     return X, y
+
+
+def generate_scm_data(n_samples=1000, seed=42, dataset_type='1_to_1_ct'):
+    """
+    Generate synthetic data using Structural Causal Model (SCM) datasets.
+
+    This is useful for testing and development when real data is not available.
+    The synthetic data has known causal relationships and controllable noise levels.
+
+    Args:
+        n_samples (int): Number of samples to generate
+        seed (int): Random seed for reproducibility
+        dataset_type (str): Type of SCM dataset to generate
+            Options: '1_to_1_ct', 'multivariate', 'high_noise_regions'
+
+    Returns:
+        tuple: (X, y, input_columns, output_columns)
+            - X: Input features as numpy array
+            - y: Output targets as numpy array
+            - input_columns: List of input column names
+            - output_columns: List of output column names
+    """
+    import os
+    import sys
+
+    # Get the root directory of the project
+    root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    print("Root directory: ", root_dir)
+
+    # Add it to sys.path if not already there
+    if root_dir not in sys.path:
+        sys.path.insert(0, root_dir)
+
+    # Import from the local scm_ds package
+    from scm_ds.datasets import ds_scm_1_to_1_ct, get_dataset
+
+    print(f"Generating synthetic SCM data...")
+    print(f"  Dataset type: {dataset_type}")
+    print(f"  Samples: {n_samples}")
+    print(f"  Random seed: {seed}")
+
+    # Generate the data using the specified dataset type
+    X, y, input_columns, output_columns = get_dataset(
+        dataset_type=dataset_type,
+        n_samples=n_samples,
+        seed=seed
+    )
+
+    print(f"  Generated {X.shape[0]} samples")
+    print(f"  Input features ({len(input_columns)}): {input_columns}")
+    print(f"  Output features ({len(output_columns)}): {output_columns}")
+
+    return X, y, input_columns, output_columns
