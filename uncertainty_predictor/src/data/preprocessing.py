@@ -214,11 +214,13 @@ def generate_scm_data(n_samples=5000, seed=42, dataset_type='one_to_one_ct'):
     if str(scm_path) not in sys.path:
         sys.path.insert(0, str(scm_path))
 
-    from scm_ds.datasets import ds_scm_1_to_1_ct
+    from scm_ds.datasets import ds_scm_1_to_1_ct, ds_scm_laser
 
     # Select dataset based on type
     if dataset_type == 'one_to_one_ct':
         scm_dataset = ds_scm_1_to_1_ct
+    elif dataset_type == 'laser':
+        scm_dataset = ds_scm_laser
     else:
         raise ValueError(f"Unknown SCM dataset type: {dataset_type}")
 
