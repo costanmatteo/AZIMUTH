@@ -56,18 +56,53 @@ def main():
 
     # 1. LOAD DATA
     print("\n[1/7] Loading data...")
+
+    # Determine data source
+    csv_path = CONFIG['data']['csv_path']
+
+    if csv_path == 'auto':
+        # Auto mode: use SCM-generated data or generate it if missing
+        scm_dataset_path = Path(__file__).parent / 'scm' / 'data' / 'scm_dataset.csv'
+
+        if not scm_dataset_path.exists():
+            print("\n  Auto mode: Generating SCM dataset...")
+            try:
+                # Import SCM generator
+                sys.path.insert(0, str(Path(__file__).parent / 'scm'))
+                from generator import SCMDataGenerator
+
+                # Generate dataset
+                generator = SCMDataGenerator(random_seed=42, noise_level=0.15, heteroscedastic=True)
+                scm_dataset_path.parent.mkdir(parents=True, exist_ok=True)
+                generator.generate_and_save(str(scm_dataset_path), n_samples=2000)
+                print(f"  ✓ Generated dataset at: {scm_dataset_path}")
+            except Exception as e:
+                print(f"\n  ERROR: Failed to generate SCM dataset: {e}")
+                print("\n  Please either:")
+                print("    1. Run 'python scm/generate_dataset.py' manually, or")
+                print("    2. Set csv_path in config to your external CSV file")
+                return
+        else:
+            print(f"  ✓ Using existing SCM dataset: {scm_dataset_path}")
+
+        csv_path = str(scm_dataset_path)
+    else:
+        # Use provided path (external CSV)
+        csv_path = str(Path(__file__).parent / csv_path)
+        print(f"  Using external CSV: {csv_path}")
+
     try:
         X, y = load_csv_data(
-            CONFIG['data']['csv_path'],
+            csv_path,
             CONFIG['data']['input_columns'],
             CONFIG['data']['output_columns']
         )
     except FileNotFoundError:
-        print(f"\nERROR: File not found: {CONFIG['data']['csv_path']}")
-        print("\nTo test the system, create a sample CSV file with:")
-        print("  - Input columns: " + ", ".join(CONFIG['data']['input_columns']))
-        print("  - Output columns: " + ", ".join(CONFIG['data']['output_columns']))
-        print("\nOr modify configs/example_config.py with your data.")
+        print(f"\n  ERROR: File not found: {csv_path}")
+        print("\n  Options:")
+        print("    1. Set csv_path='auto' to auto-generate SCM dataset")
+        print("    2. Set csv_path='scm/data/scm_dataset.csv' to use SCM data")
+        print("    3. Provide path to your external CSV file")
         return
 
     print(f"  Loaded {len(X)} samples")

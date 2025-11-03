@@ -34,9 +34,8 @@ def run_command(cmd, cwd=None):
 
 
 def main():
-    project_root = Path(__file__).parent
-    scm_dir = project_root / 'scm'
-    uncertainty_dir = project_root / 'uncertainty_predictor'
+    uncertainty_dir = Path(__file__).parent
+    scm_dir = uncertainty_dir / 'scm'
 
     print("="*70)
     print("SCM DATASET GENERATION AND TRAINING PIPELINE")

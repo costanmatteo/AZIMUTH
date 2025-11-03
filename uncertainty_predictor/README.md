@@ -2,6 +2,35 @@
 
 Neural network with **Uncertainty Quantification** for machinery prediction tasks.
 
+## 🚀 Quick Start
+
+### Option A: Auto Mode (Easiest)
+```bash
+cd uncertainty_predictor
+python train.py  # Automatically generates data if needed
+```
+
+### Option B: Use Your Own CSV Data
+1. Edit `configs/example_config.py`:
+   ```python
+   'csv_path': 'path/to/your/data.csv'
+   ```
+2. Run:
+   ```bash
+   python train.py
+   ```
+
+## 📊 Data Sources
+
+This module supports **two data modes**:
+
+1. **Auto/SCM Mode**: Built-in synthetic data generator (no external data needed)
+2. **External CSV Mode**: Use your own CSV datasets
+
+See [SCM Integration Guide](../README_SCM_INTEGRATION.md) for details.
+
+---
+
 ## What is Uncertainty Quantification?
 
 Instead of predicting only a single value ŷ, this model predicts **two outputs**:
