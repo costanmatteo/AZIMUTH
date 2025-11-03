@@ -14,7 +14,7 @@ from datetime import datetime
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
 
-from data import load_csv_data, DataPreprocessor, MachineryDataset
+from data import load_csv_data, generate_scm_data, DataPreprocessor, MachineryDataset
 from models import (
     UncertaintyPredictor,
     GaussianNLLLoss,
@@ -56,18 +56,48 @@ def main():
 
     # 1. LOAD DATA
     print("\n[1/7] Loading data...")
-    try:
-        X, y = load_csv_data(
-            CONFIG['data']['csv_path'],
-            CONFIG['data']['input_columns'],
-            CONFIG['data']['output_columns']
+
+    # Determine data source: CSV file or SCM synthetic data
+    csv_path = CONFIG['data'].get('csv_path')
+    use_scm = CONFIG['data'].get('use_scm', False)
+
+    # Check if we should use CSV or SCM
+    use_csv = csv_path is not None and Path(csv_path).exists()
+
+    if use_csv:
+        # Load from CSV file
+        print(f"Using CSV file: {csv_path}")
+        try:
+            X, y = load_csv_data(
+                csv_path,
+                CONFIG['data']['input_columns'],
+                CONFIG['data']['output_columns']
+            )
+            input_columns = CONFIG['data']['input_columns']
+            output_columns = CONFIG['data']['output_columns']
+        except FileNotFoundError:
+            print(f"\nERROR: File not found: {csv_path}")
+            print("\nTo test the system, create a sample CSV file with:")
+            print("  - Input columns: " + ", ".join(CONFIG['data']['input_columns']))
+            print("  - Output columns: " + ", ".join(CONFIG['data']['output_columns']))
+            print("\nOr set csv_path to None in configs/example_config.py to use SCM synthetic data.")
+            return
+    elif use_scm:
+        # Generate synthetic data using SCM
+        print("CSV file not specified or not found. Using SCM synthetic data generation...")
+        scm_config = CONFIG['data'].get('scm', {})
+        n_samples = scm_config.get('n_samples', 5000)
+        seed = scm_config.get('seed', 42)
+        dataset_type = scm_config.get('dataset_type', 'one_to_one_ct')
+
+        X, y, input_columns, output_columns = generate_scm_data(
+            n_samples=n_samples,
+            seed=seed,
+            dataset_type=dataset_type
         )
-    except FileNotFoundError:
-        print(f"\nERROR: File not found: {CONFIG['data']['csv_path']}")
-        print("\nTo test the system, create a sample CSV file with:")
-        print("  - Input columns: " + ", ".join(CONFIG['data']['input_columns']))
-        print("  - Output columns: " + ", ".join(CONFIG['data']['output_columns']))
-        print("\nOr modify configs/example_config.py with your data.")
+    else:
+        print("\nERROR: No data source specified.")
+        print("Either provide a valid csv_path or enable use_scm in configs/example_config.py")
         return
 
     print(f"  Loaded {len(X)} samples")
@@ -214,7 +244,7 @@ def main():
         y_test_orig,
         y_pred_mean_orig,
         y_pred_variance_orig,
-        output_names=CONFIG['data']['output_columns']
+        output_names=output_columns
     )
     print_metrics(metrics)
 
@@ -256,7 +286,7 @@ def main():
         y_test_orig,
         y_pred_mean_orig,
         y_pred_variance_orig,
-        output_names=CONFIG['data']['output_columns'],
+        output_names=output_columns,
         save_path=checkpoint_dir / 'predictions_with_uncertainty.png',
         confidence=CONFIG['uncertainty']['confidence_level']
     )
@@ -266,7 +296,7 @@ def main():
         y_train_orig,
         y_train_pred_mean_orig,
         y_train_pred_variance_orig,
-        output_names=CONFIG['data']['output_columns'],
+        output_names=output_columns,
         save_path=checkpoint_dir / 'training_predictions_with_uncertainty.png',
         confidence=CONFIG['uncertainty']['confidence_level']
     )
@@ -276,14 +306,14 @@ def main():
         y_test_orig,
         y_pred_mean_orig,
         y_pred_variance_orig,
-        output_names=CONFIG['data']['output_columns'],
+        output_names=output_columns,
         save_path=checkpoint_dir / 'scatter_with_uncertainty.png'
     )
 
     # Plot uncertainty distribution
     plot_uncertainty_distribution(
         y_pred_variance_orig,
-        output_names=CONFIG['data']['output_columns'],
+        output_names=output_columns,
         save_path=checkpoint_dir / 'uncertainty_distribution.png'
     )
 
