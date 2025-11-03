@@ -7,7 +7,7 @@ Customize the parameters below for your specific use case.
 CONFIG = {
     # Data configuration
     'data': {
-        'csv_path': None,  # Path to your CSV file (set to None to use SCM synthetic data)
+        'csv_path': r'C:\AZIMUTH\AZIMUTH\uncertainty_predictor\src\data\raw\Dati_prova - Sheet44.csv',  # Path to your CSV file (set to None to use SCM synthetic data)
         'input_columns': ['x', 'y', 'z'],  # Input features
         'output_columns': ['res_1'],  # Target outputs
         'scaling_method': 'standard',  # 'standard', 'minmax'
@@ -19,7 +19,7 @@ CONFIG = {
         # SCM synthetic data generation (used if csv_path is None)
         'use_scm': True,  # Enable SCM data generation
         'scm': {
-            'n_samples': 5000,  # Number of samples to generate
+            'n_samples': 1000,  # Number of samples to generate
             'seed': 42,  # Random seed for reproducibility
             'dataset_type': 'one_to_one_ct'  # Type of SCM dataset
         }
