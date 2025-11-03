@@ -21,7 +21,14 @@ import numpy as np
 import pandas as pd
 import sympy as sp
 import json
-from graphviz import Digraph
+
+# Make graphviz optional (only needed for visualization)
+try:
+    from graphviz import Digraph
+    HAS_GRAPHVIZ = True
+except ImportError:
+    Digraph = None
+    HAS_GRAPHVIZ = False
 
 
 # ----------------------------- Type aliases --------------------------------- #
@@ -588,11 +595,19 @@ class SCMDataset:
         assert np.array_equal(df_dca.index.map(tv_map).to_numpy(), tv_order)      # rows == target variable sequential order
         assert np.array_equal(df_dca.columns.map(iv_map).to_numpy(), iv_order)    # cols == input variable sequential order
         
-        
+
         # ------------ get SCM graph visualization --------------------
-        graph = self.scm.to_graphviz()
-        
-        
+        # Skip graph visualization if graphviz is not available
+        graph = None
+        if HAS_GRAPHVIZ:
+            try:
+                graph = self.scm.to_graphviz()
+            except ImportError:
+                print("Warning: graphviz not available, skipping graph visualization")
+        else:
+            print("Warning: graphviz not installed, skipping graph visualization")
+
+
         # ---------------------- metadata -----------------------------
         if meta_dict is not None:
             for key, value in meta_dict.items():
@@ -622,7 +637,9 @@ class SCMDataset:
         with open(join(save_dir, 'target_feat_map.json'),'w', encoding="utf-8")  as file:
             json.dump(tf_map, file, indent=2, sort_keys=True, ensure_ascii=False)
 
-        graph.render(str(join(save_dir, 'graph')), format="pdf", cleanup=True)
+        # Only render graph if graphviz is available
+        if graph is not None:
+            graph.render(str(join(save_dir, 'graph')), format="pdf", cleanup=True)
 
 
 # --------------------------- Example -------------------------------- #
