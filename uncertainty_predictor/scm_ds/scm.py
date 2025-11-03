@@ -622,7 +622,13 @@ class SCMDataset:
         with open(join(save_dir, 'target_feat_map.json'),'w', encoding="utf-8")  as file:
             json.dump(tf_map, file, indent=2, sort_keys=True, ensure_ascii=False)
 
-        graph.render(str(join(save_dir, 'graph')), format="pdf", cleanup=True)
+        # Try to render graph - optional, requires Graphviz installed
+        try:
+            graph.render(str(join(save_dir, 'graph')), format="pdf", cleanup=True)
+        except Exception as e:
+            print(f"Warning: Could not render graph to PDF. Graphviz may not be installed.")
+            print(f"  Error: {e}")
+            print(f"  Skipping graph rendering - dataset generation will continue...")
 
 
 # --------------------------- Example -------------------------------- #
