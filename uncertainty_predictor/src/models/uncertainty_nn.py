@@ -238,6 +238,136 @@ class GaussianNLLLoss(nn.Module):
             return loss
 
 
+class EnergyScoreLoss(nn.Module):
+    """
+    Energy Score Loss for Uncertainty Quantification.
+
+    The Energy Score is a proper scoring rule for evaluating probabilistic predictions.
+    Unlike Gaussian NLL which assumes and enforces a specific distribution shape,
+    the Energy Score evaluates the quality of predictions without assuming a
+    particular distribution form.
+
+    The Energy Score is computed as:
+        ES(F, y) = E[||X - y||] - β/2 * E[||X - X'||]
+
+    Where:
+    - F is the predicted distribution (Gaussian with mean μ and variance σ²)
+    - y is the true target value
+    - X and X' are independent samples from F
+    - β is a weight for the diversity term (default: 1.0)
+    - || || is a norm (we use L1: absolute value)
+
+    Implementation via Monte Carlo sampling:
+    1. Sample n_samples from N(μ, σ²)
+    2. Compute mean absolute error between samples and target
+    3. Compute mean pairwise distances between samples
+    4. ES = MAE(samples, y) - β/2 * mean_pairwise_distance
+
+    The β parameter controls the trade-off:
+    - β = 1.0: Standard Energy Score (default, recommended)
+    - β < 1.0: Less penalty for diverse predictions (allows wider distributions)
+    - β > 1.0: More penalty for diverse predictions (encourages tighter distributions)
+
+    Advantages over Gaussian NLL:
+    - More robust to distribution misspecification
+    - Direct evaluation of predictive distribution quality
+    - Better calibrated uncertainty estimates in practice
+    - Encourages proper uncertainty quantification naturally
+
+    Args:
+        n_samples (int): Number of samples for Monte Carlo estimation (default: 50)
+        beta (float): Weight for diversity term (default: 1.0)
+        reduction (str): Reduction method ('mean', 'sum', 'none')
+        epsilon (float): Small value for numerical stability
+
+    Reference:
+        Gneiting, T., & Raftery, A. E. (2007). "Strictly proper scoring rules,
+        prediction, and estimation." Journal of the American Statistical Association.
+    """
+
+    def __init__(self, n_samples=50, beta=1.0, reduction='mean', epsilon=1e-6):
+        super(EnergyScoreLoss, self).__init__()
+        self.n_samples = n_samples
+        self.beta = beta
+        self.reduction = reduction
+        self.epsilon = epsilon
+
+        if n_samples <= 1:
+            raise ValueError(f"n_samples must be > 1, got {n_samples}")
+        if beta <= 0:
+            raise ValueError(f"beta must be positive, got {beta}")
+
+        print(f"EnergyScoreLoss initialized with n_samples={n_samples}, beta={beta:.3f}")
+        if beta < 1.0:
+            print("  → Reduced diversity penalty (allows wider uncertainty)")
+        elif beta > 1.0:
+            print("  → Increased diversity penalty (encourages tighter uncertainty)")
+        else:
+            print("  → Standard Energy Score (balanced)")
+        print(f"  → Using {n_samples} Monte Carlo samples per prediction")
+
+    def forward(self, mean, variance, target):
+        """
+        Compute Energy Score loss via Monte Carlo sampling.
+
+        Args:
+            mean (torch.Tensor): Predicted mean, shape (batch_size, output_size)
+            variance (torch.Tensor): Predicted variance, shape (batch_size, output_size)
+            target (torch.Tensor): True values, shape (batch_size, output_size)
+
+        Returns:
+            torch.Tensor: Energy Score loss value
+
+        Formula:
+            ES = E[|X - y|] - β/2 * E[|X - X'|]
+        """
+        # Ensure variance is positive
+        variance = variance + self.epsilon
+        std = torch.sqrt(variance)
+
+        batch_size = mean.shape[0]
+        output_size = mean.shape[1]
+
+        # Generate samples from predicted Gaussian distribution
+        # Shape: (n_samples, batch_size, output_size)
+        noise = torch.randn(self.n_samples, batch_size, output_size,
+                          device=mean.device, dtype=mean.dtype)
+        samples = mean.unsqueeze(0) + noise * std.unsqueeze(0)
+
+        # First term: E[|X - y|]
+        # Mean absolute error between samples and target
+        # Shape: (n_samples, batch_size, output_size)
+        abs_errors = torch.abs(samples - target.unsqueeze(0))
+        first_term = abs_errors.mean(dim=0)  # Average over samples
+
+        # Second term: E[|X - X'|]
+        # Mean pairwise distance between samples
+        # Efficient computation: for each pair (i,j), compute |Xi - Xj|
+        pairwise_distances = torch.zeros_like(first_term)
+
+        # Compute mean pairwise distance
+        # For efficiency, we compute this as:
+        # E[|X - X'|] ≈ (1/n²) * Σᵢ Σⱼ |Xᵢ - Xⱼ|
+        for i in range(self.n_samples):
+            for j in range(i + 1, self.n_samples):
+                pairwise_distances += torch.abs(samples[i] - samples[j])
+
+        # Normalize: we computed sum over upper triangle, so divide by n_pairs
+        n_pairs = self.n_samples * (self.n_samples - 1) / 2
+        second_term = pairwise_distances / n_pairs
+
+        # Energy Score: ES = first_term - (beta/2) * second_term
+        energy_score = first_term - (self.beta / 2.0) * second_term
+
+        # Apply reduction
+        if self.reduction == 'mean':
+            return energy_score.mean()
+        elif self.reduction == 'sum':
+            return energy_score.sum()
+        else:
+            return energy_score
+
+
 # Convenience functions for creating common model architectures
 
 def create_small_uncertainty_model(input_size, output_size):

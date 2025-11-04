@@ -18,6 +18,7 @@ from data import load_csv_data, generate_scm_data, DataPreprocessor, MachineryDa
 from models import (
     UncertaintyPredictor,
     GaussianNLLLoss,
+    EnergyScoreLoss,
     create_small_uncertainty_model,
     create_medium_uncertainty_model,
     create_large_uncertainty_model
@@ -174,13 +175,31 @@ def main():
     print(f"  Output: Mean (μ) and Variance (σ²) for each target")
 
     # 5. CREATE LOSS FUNCTION
-    print("\n[5/7] Setting up Gaussian NLL Loss...")
-    alpha = CONFIG['training'].get('variance_penalty_alpha', 1.0)
-    criterion = GaussianNLLLoss(alpha=alpha, reduction='mean')
-    print(f"  Loss: L = 0.5 * ((y - μ)² / σ² + α * log(σ²)) with α={alpha:.3f}")
-    print("  This penalizes large errors but accounts for predicted uncertainty")
-    if alpha < 1.0:
-        print(f"  Note: α={alpha:.3f} < 1 allows model to be more honest about uncertainty")
+    print("\n[5/7] Setting up loss function...")
+    loss_type = CONFIG['training'].get('loss_type', 'gaussian_nll')
+
+    if loss_type == 'gaussian_nll':
+        print("Using Gaussian NLL Loss...")
+        alpha = CONFIG['training'].get('variance_penalty_alpha', 1.0)
+        criterion = GaussianNLLLoss(alpha=alpha, reduction='mean')
+        print(f"  Loss: L = 0.5 * ((y - μ)² / σ² + α * log(σ²)) with α={alpha:.3f}")
+        print("  This penalizes large errors but accounts for predicted uncertainty")
+        if alpha < 1.0:
+            print(f"  Note: α={alpha:.3f} < 1 allows model to be more honest about uncertainty")
+    elif loss_type == 'energy_score':
+        print("Using Energy Score Loss...")
+        n_samples = CONFIG['training'].get('energy_score_samples', 50)
+        beta = CONFIG['training'].get('energy_score_beta', 1.0)
+        criterion = EnergyScoreLoss(n_samples=n_samples, beta=beta, reduction='mean')
+        print(f"  Loss: ES = E[|X - y|] - β/2 * E[|X - X'|] with β={beta:.3f}")
+        print(f"  Using {n_samples} Monte Carlo samples for estimation")
+        print("  Energy Score is a proper scoring rule without distribution assumptions")
+        if beta < 1.0:
+            print(f"  Note: β={beta:.3f} < 1 allows wider uncertainty distributions")
+        elif beta > 1.0:
+            print(f"  Note: β={beta:.3f} > 1 encourages tighter uncertainty distributions")
+    else:
+        raise ValueError(f"Unknown loss_type: {loss_type}. Choose 'gaussian_nll' or 'energy_score'")
 
     # 6. TRAINING
     print("\n[6/7] Starting training...")

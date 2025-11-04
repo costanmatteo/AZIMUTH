@@ -131,12 +131,24 @@ class UncertaintyReportGenerator:
 
         epochs_run = len(history['train_losses'])
         epochs_total = config['training']['epochs']
+
+        # Loss function parameters
+        loss_type = config['training'].get('loss_type', 'gaussian_nll')
+        if loss_type == 'gaussian_nll':
+            loss_params = f"""• <b>Loss Function:</b> Gaussian NLL<br/>
+• <b>Variance Penalty (α):</b> {config['training'].get('variance_penalty_alpha', 1.0)}"""
+        elif loss_type == 'energy_score':
+            loss_params = f"""• <b>Loss Function:</b> Energy Score<br/>
+• <b>MC Samples:</b> {config['training'].get('energy_score_samples', 50)}<br/>
+• <b>Diversity Penalty (β):</b> {config['training'].get('energy_score_beta', 1.0)}"""
+        else:
+            loss_params = f"• <b>Loss Function:</b> {loss_type}"
+
         training_text = f"""• <b>Epochs:</b> {epochs_run}/{epochs_total}<br/>
 • <b>Batch Size:</b> {config['training']['batch_size']}<br/>
 • <b>Learning Rate:</b> {config['training']['learning_rate']}<br/>
 • <b>Weight Decay:</b> {config['training']['weight_decay']}<br/>
-• <b>Loss Function:</b> Gaussian NLL<br/>
-• <b>Variance Penalty (α):</b> {config['training']['variance_penalty_alpha']}<br/>
+{loss_params}<br/>
 • <b>Patience:</b> {config['training']['patience']}<br/>
 • <b>Device:</b> {config['training']['device']}<br/>
 • <b>Checkpoint Dir:</b> {config['training']['checkpoint_dir']}"""
@@ -154,9 +166,11 @@ class UncertaintyReportGenerator:
         final_train_mse = history['train_mse'][-1] if 'train_mse' in history else 0.0
         final_val_mse = history['val_mse'][-1] if 'val_mse' in history else 0.0
 
-        results_text = f"""• <b>Final Train NLL:</b> {final_train_loss:.6f}<br/>
-• <b>Final Val NLL:</b> {final_val_loss:.6f}<br/>
-• <b>Best Val NLL:</b> {best_val_loss:.6f}<br/>
+        # Use generic "Loss" label instead of NLL for compatibility
+        loss_label = "Loss" if loss_type == 'energy_score' else "NLL"
+        results_text = f"""• <b>Final Train {loss_label}:</b> {final_train_loss:.6f}<br/>
+• <b>Final Val {loss_label}:</b> {final_val_loss:.6f}<br/>
+• <b>Best Val {loss_label}:</b> {best_val_loss:.6f}<br/>
 • <b>Final Train MSE:</b> {final_train_mse:.6f}<br/>
 • <b>Final Val MSE:</b> {final_val_mse:.6f}"""
 

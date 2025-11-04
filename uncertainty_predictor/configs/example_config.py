@@ -44,11 +44,26 @@ CONFIG = {
         'patience': 30,  # Early stopping patience
         'device': 'auto',  # 'auto', 'cuda', or 'cpu'
         'checkpoint_dir': 'checkpoints_uncertainty',
+
+        # Loss function type: 'gaussian_nll' or 'energy_score'
+        'loss_type': 'energy_score',  # Choose between 'gaussian_nll' or 'energy_score'
+
+        # Gaussian NLL parameters (used only if loss_type='gaussian_nll')
         # Variance penalty weight in loss function: L = (y-μ)²/σ² + α*log(σ²)
         # α = 1.0: Standard Gaussian NLL
         # α < 1.0: Reduces penalty for large variances (recommended for over-confident models)
         # α > 1.0: Increases penalty for large variances
-        'variance_penalty_alpha': 1 # Try values like 0.1-0.5 for over-confident models
+        'variance_penalty_alpha': 1.0,  # Try values like 0.1-0.5 for over-confident models
+
+        # Energy Score parameters (used only if loss_type='energy_score')
+        # Number of Monte Carlo samples for Energy Score computation
+        # Higher values = more accurate but slower. Recommended: 50-200
+        'energy_score_samples': 50,
+        # β parameter: controls diversity penalty in ES = E[|X-y|] - β/2*E[|X-X'|]
+        # β = 1.0: Standard Energy Score (recommended)
+        # β < 1.0: Less penalty for diverse predictions (allows wider uncertainty)
+        # β > 1.0: More penalty for diverse predictions (encourages tighter uncertainty)
+        'energy_score_beta': 1.0
     },
 
     # Uncertainty configuration
