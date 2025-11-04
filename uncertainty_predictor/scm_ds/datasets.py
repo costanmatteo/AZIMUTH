@@ -141,18 +141,6 @@ ds_scm_1_to_1_ct = SCMDataset(
 # =============================================================================
 
 
-
-
-from os.path import abspath, dirname, join
-import sys
-import numpy as np
-
-ROOT_DIR = dirname(dirname(abspath(__file__)))
-print("Root directory: ", ROOT_DIR)
-sys.path.append(ROOT_DIR)
-
-from scm_ds.scm import SCMDataset, NodeSpec  # avoid wildcard
-
 # =========================
 # DATASET: LASER ACTUAL POWER
 # =========================
@@ -213,10 +201,10 @@ ds_scm_laser = SCMDataset(
         "K_T":      lambda rng, n: np.full(n, 0.03),
         "T0":       lambda rng, n: np.full(n, 25.0),
         "SIGMA_M0": lambda rng, n: np.full(n, 0.01),
-        "C_T":      lambda rng, n: np.full(n, 0.0005),
-        "C_I":      lambda rng, n: np.full(n, 0.01),
+        "C_T":      lambda rng, n: np.full(n, 0.0025),
+        "C_I":      lambda rng, n: np.full(n, 0.05),
         "SIGMA_A0": lambda rng, n: np.full(n, 0.005),
-        "D_I":      lambda rng, n: np.full(n, 0.002),
+        "D_I":      lambda rng, n: np.full(n, 0.01),
         "IMAX":     lambda rng, n: np.full(n, 1.0),
         "PFS":      lambda rng, n: np.full(n, 1.0),
 

@@ -19,7 +19,7 @@ CONFIG = {
         # SCM synthetic data generation (used if csv_path is None)
         'use_scm': True,  # Enable SCM data generation
         'scm': {
-            'n_samples': 2000,  # Number of samples to generate
+            'n_samples': 3000,  # Number of samples to generate
             'seed': 42,  # Random seed for reproducibility
             'dataset_type': 'laser'  # Type of SCM dataset, either 'one_to_one_ct' or 'laser'
         }
@@ -29,7 +29,7 @@ CONFIG = {
     'model': {
         'model_type': 'custom',  # 'small', 'medium', 'large', or 'custom'
         # If 'custom', specify architecture below:
-        'hidden_sizes': [64, 32],  # Used only if model_type='custom'
+        'hidden_sizes': [32, 16],  # Used only if model_type='custom'
         'dropout_rate': 0.1,
         'use_batchnorm': False,
         'min_variance': 1e-6  # Minimum variance for numerical stability
@@ -40,7 +40,7 @@ CONFIG = {
         'batch_size': 32,
         'epochs': 400,
         'learning_rate': 0.001,
-        'weight_decay': 0.01,  # L2 regularization
+        'weight_decay': 0.001,  # L2 regularization
         'patience': 30,  # Early stopping patience
         'device': 'auto',  # 'auto', 'cuda', or 'cpu'
         'checkpoint_dir': 'checkpoints_uncertainty',
@@ -48,7 +48,7 @@ CONFIG = {
         # α = 1.0: Standard Gaussian NLL
         # α < 1.0: Reduces penalty for large variances (recommended for over-confident models)
         # α > 1.0: Increases penalty for large variances
-        'variance_penalty_alpha': 0.2 # Try values like 0.1-0.5 for over-confident models
+        'variance_penalty_alpha': 1 # Try values like 0.1-0.5 for over-confident models
     },
 
     # Uncertainty configuration
