@@ -7,6 +7,7 @@ and trains it to predict both mean values and uncertainties.
 
 import sys
 import torch
+import numpy as np
 from torch.utils.data import DataLoader
 from pathlib import Path
 from datetime import datetime
@@ -230,20 +231,57 @@ def main():
 
     y_pred_mean, y_pred_variance = trainer.predict(X_test_scaled, return_uncertainty=True)
 
+    # DEBUG: Check for NaN in scaled predictions
+    print("\n" + "="*70)
+    print("DEBUG: Checking for NaN values in predictions...")
+    print("="*70)
+    print(f"X_test_scaled shape: {X_test_scaled.shape}")
+    print(f"X_test_scaled contains NaN: {np.isnan(X_test_scaled).any()}")
+    print(f"X_test_scaled NaN count: {np.isnan(X_test_scaled).sum()}")
+
+    print(f"\ny_pred_mean shape: {y_pred_mean.shape}")
+    print(f"y_pred_mean contains NaN: {np.isnan(y_pred_mean).any()}")
+    print(f"y_pred_mean NaN count: {np.isnan(y_pred_mean).sum()}")
+    print(f"y_pred_mean min: {np.nanmin(y_pred_mean) if not np.all(np.isnan(y_pred_mean)) else 'all NaN'}")
+    print(f"y_pred_mean max: {np.nanmax(y_pred_mean) if not np.all(np.isnan(y_pred_mean)) else 'all NaN'}")
+
+    print(f"\ny_pred_variance shape: {y_pred_variance.shape}")
+    print(f"y_pred_variance contains NaN: {np.isnan(y_pred_variance).any()}")
+    print(f"y_pred_variance NaN count: {np.isnan(y_pred_variance).sum()}")
+    print(f"y_pred_variance min: {np.nanmin(y_pred_variance) if not np.all(np.isnan(y_pred_variance)) else 'all NaN'}")
+    print(f"y_pred_variance max: {np.nanmax(y_pred_variance) if not np.all(np.isnan(y_pred_variance)) else 'all NaN'}")
+
     # Inverse transform to original scale
     y_pred_mean_orig = preprocessor.inverse_transform_output(y_pred_mean)
     y_test_orig = y_test
+
+    # DEBUG: Check for NaN after inverse transform
+    print(f"\ny_pred_mean_orig shape: {y_pred_mean_orig.shape}")
+    print(f"y_pred_mean_orig contains NaN: {np.isnan(y_pred_mean_orig).any()}")
+    print(f"y_pred_mean_orig NaN count: {np.isnan(y_pred_mean_orig).sum()}")
+    print(f"y_pred_mean_orig min: {np.nanmin(y_pred_mean_orig) if not np.all(np.isnan(y_pred_mean_orig)) else 'all NaN'}")
+    print(f"y_pred_mean_orig max: {np.nanmax(y_pred_mean_orig) if not np.all(np.isnan(y_pred_mean_orig)) else 'all NaN'}")
+
+    print(f"\ny_test_orig shape: {y_test_orig.shape}")
+    print(f"y_test_orig contains NaN: {np.isnan(y_test_orig).any()}")
+    print(f"y_test_orig NaN count: {np.isnan(y_test_orig).sum()}")
 
     # Need to scale variance appropriately
     # Variance scales with the square of the scaling factor
     if hasattr(preprocessor, 'y_scaler') and preprocessor.y_scaler is not None:
         if hasattr(preprocessor.y_scaler, 'scale_'):
             scale_factors = preprocessor.y_scaler.scale_
+            print(f"\nScale factors: {scale_factors}")
             y_pred_variance_orig = y_pred_variance * (scale_factors ** 2)
         else:
             y_pred_variance_orig = y_pred_variance
     else:
         y_pred_variance_orig = y_pred_variance
+
+    # DEBUG: Check variance after scaling
+    print(f"\ny_pred_variance_orig contains NaN: {np.isnan(y_pred_variance_orig).any()}")
+    print(f"y_pred_variance_orig NaN count: {np.isnan(y_pred_variance_orig).sum()}")
+    print("="*70)
 
     # Also get predictions on training set for visualization
     y_train_pred_mean, y_train_pred_variance = trainer.predict(X_train_scaled, return_uncertainty=True)

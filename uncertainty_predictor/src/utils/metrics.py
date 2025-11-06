@@ -39,6 +39,25 @@ def calculate_metrics(y_true, y_pred_mean, y_pred_variance=None, output_names=No
         y_t = y_true[:, i]
         y_p = y_pred_mean[:, i]
 
+        # DEBUG: Check for NaN before computing metrics
+        print(f"\n--- DEBUG: Metrics for output '{name}' (index {i}) ---")
+        print(f"y_true[:, {i}] shape: {y_t.shape}")
+        print(f"y_true[:, {i}] contains NaN: {np.isnan(y_t).any()}")
+        print(f"y_true[:, {i}] NaN count: {np.isnan(y_t).sum()}")
+        print(f"y_true[:, {i}] min: {np.nanmin(y_t) if not np.all(np.isnan(y_t)) else 'all NaN'}")
+        print(f"y_true[:, {i}] max: {np.nanmax(y_t) if not np.all(np.isnan(y_t)) else 'all NaN'}")
+
+        print(f"\ny_pred_mean[:, {i}] shape: {y_p.shape}")
+        print(f"y_pred_mean[:, {i}] contains NaN: {np.isnan(y_p).any()}")
+        print(f"y_pred_mean[:, {i}] NaN count: {np.isnan(y_p).sum()}")
+        print(f"y_pred_mean[:, {i}] min: {np.nanmin(y_p) if not np.all(np.isnan(y_p)) else 'all NaN'}")
+        print(f"y_pred_mean[:, {i}] max: {np.nanmax(y_p) if not np.all(np.isnan(y_p)) else 'all NaN'}")
+
+        if np.isnan(y_p).any():
+            nan_indices = np.where(np.isnan(y_p))[0]
+            print(f"\nNaN found at indices: {nan_indices[:10]}...")  # Show first 10
+            print(f"Total NaN count: {len(nan_indices)}")
+
         output_metrics = {
             'MSE': mean_squared_error(y_t, y_p),
             'RMSE': np.sqrt(mean_squared_error(y_t, y_p)),

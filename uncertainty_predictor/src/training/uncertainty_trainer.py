@@ -279,10 +279,29 @@ class UncertaintyTrainer:
         if isinstance(X, np.ndarray):
             X = torch.FloatTensor(X)
 
+        # DEBUG: Check input before prediction
+        print(f"\n--- DEBUG: predict() method ---")
+        print(f"Input X shape: {X.shape}")
+        print(f"Input X contains NaN: {torch.isnan(X).any().item()}")
+        print(f"Input X NaN count: {torch.isnan(X).sum().item()}")
+
         X = X.to(self.device)
 
         with torch.no_grad():
             mean, variance = self.model(X)
+
+            # DEBUG: Check model outputs
+            print(f"\nModel output mean shape: {mean.shape}")
+            print(f"Model output mean contains NaN: {torch.isnan(mean).any().item()}")
+            print(f"Model output mean NaN count: {torch.isnan(mean).sum().item()}")
+            print(f"Model output mean min: {torch.min(mean[~torch.isnan(mean)]).item() if not torch.all(torch.isnan(mean)) else 'all NaN'}")
+            print(f"Model output mean max: {torch.max(mean[~torch.isnan(mean)]).item() if not torch.all(torch.isnan(mean)) else 'all NaN'}")
+
+            print(f"\nModel output variance shape: {variance.shape}")
+            print(f"Model output variance contains NaN: {torch.isnan(variance).any().item()}")
+            print(f"Model output variance NaN count: {torch.isnan(variance).sum().item()}")
+            print(f"Model output variance min: {torch.min(variance[~torch.isnan(variance)]).item() if not torch.all(torch.isnan(variance)) else 'all NaN'}")
+            print(f"Model output variance max: {torch.max(variance[~torch.isnan(variance)]).item() if not torch.all(torch.isnan(variance)) else 'all NaN'}")
 
         if return_uncertainty:
             return mean.cpu().numpy(), variance.cpu().numpy()
