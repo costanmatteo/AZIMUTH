@@ -42,6 +42,10 @@ class UncertaintyPredictor(nn.Module):
         dropout_rate (float): Dropout rate for regularization (default: 0.2)
         use_batchnorm (bool): Whether to use batch normalization (default: False)
         min_variance (float): Minimum allowed variance for numerical stability (default: 1e-6)
+        max_log_variance (float): Maximum value for log(variance) to prevent overflow (default: 10.0)
+                                  max_log_variance=10 → max variance ≈ 22026
+        min_log_variance (float): Minimum value for log(variance) to prevent underflow (default: -10.0)
+                                  min_log_variance=-10 → min variance ≈ 0.000045
 
     Example:
         >>> model = UncertaintyPredictor(
@@ -55,11 +59,14 @@ class UncertaintyPredictor(nn.Module):
     """
 
     def __init__(self, input_size, hidden_sizes, output_size,
-                 dropout_rate=0.2, use_batchnorm=False, min_variance=1e-6):
+                 dropout_rate=0.2, use_batchnorm=False, min_variance=1e-6,
+                 max_log_variance=10.0, min_log_variance=-10.0):
         super(UncertaintyPredictor, self).__init__()
 
         self.output_size = output_size
         self.min_variance = min_variance
+        self.max_log_variance = max_log_variance
+        self.min_log_variance = min_log_variance
 
         # Build shared hidden layers
         shared_layers = []
@@ -83,6 +90,11 @@ class UncertaintyPredictor(nn.Module):
         # Using log-space helps with numerical stability
         self.log_variance_head = nn.Linear(prev_size, output_size)
 
+        # Initialize log_variance_head for stable training
+        # Start with small weights and negative bias to ensure small initial variance
+        nn.init.xavier_uniform_(self.log_variance_head.weight, gain=0.01)
+        nn.init.constant_(self.log_variance_head.bias, -5.0)  # Initial log(variance) ≈ -5 → variance ≈ 0.0067
+
     def forward(self, x):
         """
         Forward pass of the uncertainty network.
@@ -103,6 +115,10 @@ class UncertaintyPredictor(nn.Module):
 
         # Predict variance (log-space for stability, then exp)
         log_variance = self.log_variance_head(features)
+
+        # Clamp log_variance to prevent numerical overflow/underflow
+        log_variance = torch.clamp(log_variance, self.min_log_variance, self.max_log_variance)
+
         variance = torch.exp(log_variance) + self.min_variance  # ensure positivity
 
         return mean, variance

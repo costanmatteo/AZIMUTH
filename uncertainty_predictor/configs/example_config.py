@@ -32,7 +32,10 @@ CONFIG = {
         'hidden_sizes': [64, 32],  # Used only if model_type='custom'
         'dropout_rate': 0.1,
         'use_batchnorm': True,
-        'min_variance': 1e-6  # Minimum variance for numerical stability
+        'min_variance': 1e-6,  # Minimum variance for numerical stability
+        # Variance bounds to prevent numerical overflow
+        'max_log_variance': 10.0,  # Maximum log(variance), max_variance ≈ 22026
+        'min_log_variance': -10.0  # Minimum log(variance), min_variance ≈ 0.000045
     },
 
     # Training configuration

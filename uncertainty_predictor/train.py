@@ -167,7 +167,9 @@ def main():
             output_size=output_dim,
             dropout_rate=CONFIG['model']['dropout_rate'],
             use_batchnorm=CONFIG['model']['use_batchnorm'],
-            min_variance=CONFIG['model']['min_variance']
+            min_variance=CONFIG['model']['min_variance'],
+            max_log_variance=CONFIG['model'].get('max_log_variance', 10.0),
+            min_log_variance=CONFIG['model'].get('min_log_variance', -10.0)
         )
 
     print(f"  Model type: {model_type}")
