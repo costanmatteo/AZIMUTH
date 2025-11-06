@@ -201,7 +201,12 @@ def generate_scm_data(n_samples=5000, seed=42, dataset_type='one_to_one_ct', sav
     Args:
         n_samples (int): Number of samples to generate
         seed (int): Random seed for reproducibility
-        dataset_type (str): Type of SCM dataset to use
+        dataset_type (str): Type of SCM dataset to use. Available types:
+            - 'one_to_one_ct': Simple one-to-one with cross-talk
+            - 'laser': Laser drilling optical power (L-I-T model with physical noise)
+            - 'plasma': Plasma cleaning residue removal (with micro-arcing jumps)
+            - 'galvanic': Galvanic copper deposition (with spatial variation and ripple)
+            - 'microetch': Micro-etching Cu removal (Arrhenius kinetics with Student-t noise)
         save_graph_to (str, optional): Directory path to save SCM graph visualization
 
     Returns:
@@ -215,15 +220,28 @@ def generate_scm_data(n_samples=5000, seed=42, dataset_type='one_to_one_ct', sav
     if str(scm_path) not in sys.path:
         sys.path.insert(0, str(scm_path))
 
-    from scm_ds.datasets import ds_scm_1_to_1_ct, ds_scm_laser
+    from scm_ds.datasets import (
+        ds_scm_1_to_1_ct,
+        ds_scm_laser,
+        ds_scm_plasma,
+        ds_scm_galvanic,
+        ds_scm_microetch
+    )
 
     # Select dataset based on type
     if dataset_type == 'one_to_one_ct':
         scm_dataset = ds_scm_1_to_1_ct
     elif dataset_type == 'laser':
         scm_dataset = ds_scm_laser
+    elif dataset_type == 'plasma':
+        scm_dataset = ds_scm_plasma
+    elif dataset_type == 'galvanic':
+        scm_dataset = ds_scm_galvanic
+    elif dataset_type == 'microetch':
+        scm_dataset = ds_scm_microetch
     else:
-        raise ValueError(f"Unknown SCM dataset type: {dataset_type}")
+        raise ValueError(f"Unknown SCM dataset type: {dataset_type}. "
+                         f"Available types: 'one_to_one_ct', 'laser', 'plasma', 'galvanic', 'microetch'")
 
     # Generate samples
     print(f"Generating {n_samples} synthetic samples using SCM...")

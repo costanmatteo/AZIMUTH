@@ -21,7 +21,8 @@ CONFIG = {
         'scm': {
             'n_samples': 1000,  # Number of samples to generate
             'seed': 42,  # Random seed for reproducibility
-            'dataset_type': 'laser'  # Type of SCM dataset, either 'one_to_one_ct' or 'laser'
+            # Type of SCM dataset: 'one_to_one_ct', 'laser', 'plasma', 'galvanic', 'microetch'
+            'dataset_type': 'laser'
         }
     },
 
