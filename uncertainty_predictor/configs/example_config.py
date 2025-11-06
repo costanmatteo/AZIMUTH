@@ -11,18 +11,18 @@ CONFIG = {
         'input_columns': ['x', 'y', 'z'],  # Input features
         'output_columns': ['res_1'],  # Target outputs
         'scaling_method': 'standard',  # 'standard', 'minmax'
-        'train_size': 0.7,  # 70% for training
-        'val_size': 0.15,   # 15% for validation
-        'test_size': 0.15,  # 15% for testing
+        'train_size': 0.8,  # 70% for training
+        'val_size': 0.01,   # 15% for validation
+        'test_size': 0.19,  # 15% for testing
         'random_state': 42,
 
         # SCM synthetic data generation (used if csv_path is None)
         'use_scm': True,  # Enable SCM data generation
         'scm': {
-            'n_samples': 1000,  # Number of samples to generate
+            'n_samples': 2000,  # Number of samples to generate
             'seed': 42,  # Random seed for reproducibility
             # Type of SCM dataset: 'one_to_one_ct', 'laser', 'plasma', 'galvanic', 'microetch'
-            'dataset_type': 'laser'
+            'dataset_type': 'microetch'
         }
     },
 
@@ -30,7 +30,7 @@ CONFIG = {
     'model': {
         'model_type': 'custom',  # 'small', 'medium', 'large', or 'custom'
         # If 'custom', specify architecture below:
-        'hidden_sizes': [64, 32],  # Used only if model_type='custom'
+        'hidden_sizes': [64, 32, 16],  # Used only if model_type='custom'
         'dropout_rate': 0.1,
         'use_batchnorm': True,
         'min_variance': 1e-6  # Minimum variance for numerical stability
@@ -38,7 +38,7 @@ CONFIG = {
 
     # Training configuration
     'training': {
-        'batch_size': 32,
+        'batch_size': 64,
         'epochs': 400,
         'learning_rate': 0.001,
         'weight_decay': 0.001,  # L2 regularization
@@ -47,14 +47,14 @@ CONFIG = {
         'checkpoint_dir': 'checkpoints_uncertainty',
 
         # Loss function type: 'gaussian_nll' or 'energy_score'
-        'loss_type': 'energy_score',  # Choose between 'gaussian_nll' or 'energy_score'
+        'loss_type': 'gaussian_nll',  # Choose between 'gaussian_nll' or 'energy_score'
 
         # Gaussian NLL parameters (used only if loss_type='gaussian_nll')
         # Variance penalty weight in loss function: L = (y-μ)²/σ² + α*log(σ²)
         # α = 1.0: Standard Gaussian NLL
         # α < 1.0: Reduces penalty for large variances (recommended for over-confident models)
         # α > 1.0: Increases penalty for large variances
-        'variance_penalty_alpha': 5,  
+        'variance_penalty_alpha': 0.1,  
 
         # Energy Score parameters (used only if loss_type='energy_score')
         # Number of Monte Carlo samples for Energy Score computation
@@ -64,7 +64,7 @@ CONFIG = {
         # β = 1.0: Standard Energy Score (recommended)
         # β < 1.0: Less penalty for diverse predictions (allows wider uncertainty)
         # β > 1.0: More penalty for diverse predictions (encourages tighter uncertainty)
-        'energy_score_beta': 1
+        'energy_score_beta': 0.1
     },
 
     # Uncertainty configuration

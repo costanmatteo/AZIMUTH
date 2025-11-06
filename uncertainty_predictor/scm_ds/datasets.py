@@ -589,56 +589,47 @@ ds_scm_microetch = SCMDataset(
         NodeSpec("NU",       [], "eps_NU"),
         NodeSpec("S_T",      [], "eps_S_T"),
 
-        # ==================== DETERMINISTIC EQUATION (Eq. 13) ====================
-        # Rremoved = ketch * exp(-Ea/(R*T)) * C^α * τ
+        # ==================== DETERMINISTIC EQUATION ====================
         NodeSpec("Rremoved", ["K_ETCH", "E_A", "R_GAS", "Temperature", "Concentration", "ALPHA", "Duration"],
                  "K_ETCH * exp(-E_A / (R_GAS * Temperature)) * Concentration**ALPHA * Duration + 0*eps_Rremoved"),
 
         # ==================== NOISE COMPONENTS ====================
-        # 1. Lognormal multiplicative noise Zln ~ LogNormal(-σ²m/2, σ²m) [Eq. 14]
         NodeSpec("Zln", ["SIGMA_M"], "exp(-SIGMA_M**2 / 2.0 + SIGMA_M * eps_Zln)"),
-
-        # 2. Student-t heavy-tailed noise εt ~ Student-t(ν, 0, st) [Eq. 14]
         NodeSpec("NoiseStudentT", ["S_T"], "S_T * eps_NoiseStudentT"),
 
-        # ==================== OUTPUT (Eq. 14) ====================
-        # Ractual = Rremoved * Zln + εt
+        # ==================== OUTPUT ====================
         NodeSpec("RemovalDepth", ["Rremoved", "Zln", "NoiseStudentT"],
                  "Rremoved * Zln + NoiseStudentT + 0*eps_RemovalDepth"),
     ],
     params={},
     singles={
-        # ==================== RANDOM INPUTS ====================
-        "Temperature":   lambda rng, n: rng.uniform(low=293.0, high=323.0, size=n),  # 20-50°C in Kelvin
+        # Inputs
+        "Temperature":   lambda rng, n: rng.uniform(low=293.0, high=323.0, size=n),
         "Concentration": lambda rng, n: rng.uniform(low=0.5, high=3.0, size=n),
         "Duration":      lambda rng, n: rng.uniform(low=30.0, high=180.0, size=n),
 
-        # ==================== CONSTANTS ====================
-        "K_ETCH":  lambda rng, n: np.full(n, 1.0),
-        "E_A":     lambda rng, n: np.full(n, 50000.0),
+        # RECOMMENDED: Realistic activation energy
+        "K_ETCH":  lambda rng, n: np.full(n, 8e5),      # Pre-exponential factor
+        "E_A":     lambda rng, n: np.full(n, 42000.0),  # 42 kJ/mol - typical for acid etching
         "R_GAS":   lambda rng, n: np.full(n, 8.314),
-        "ALPHA":   lambda rng, n: np.full(n, 0.5),
-        "SIGMA_M": lambda rng, n: np.full(n, 0.04),
-        "NU":      lambda rng, n: np.full(n, 5.0),
-        "S_T":     lambda rng, n: np.full(n, 0.02),
-
-        # ==================== INTERMEDIATE NODES ====================
+        "ALPHA":   lambda rng, n: np.full(n, 0.5),      # Square-root concentration dependence
+    
+        # Noise parameters
+        "SIGMA_M": lambda rng, n: np.full(n, 0.06),     # 6% multiplicative noise
+        "NU":      lambda rng, n: np.full(n, 5.0),      # Student-t degrees of freedom
+        "S_T":     lambda rng, n: np.full(n, 0.3),      # 0.3 μm additive noise
+        
+        # ==================== INTERMEDIATE & NOISE NODES ====================
         "Rremoved": lambda rng, n: np.zeros(n),
-
-        # ==================== NOISE SOURCES ====================
-        # Lognormal: standard normal (transformed in equation)
         "Zln": lambda rng, n: rng.standard_normal(n),
-
-        # Student-t: heavy-tailed noise
         "NoiseStudentT": lambda rng, n: rng.standard_t(df=5, size=n),
-
-        # ==================== OUTPUT ====================
         "RemovalDepth": lambda rng, n: np.zeros(n),
     },
     groups=None,
     input_labels=["Temperature", "Concentration", "Duration"],
     target_labels=["RemovalDepth"],
 )
+
 
 
 # =============================================================================
