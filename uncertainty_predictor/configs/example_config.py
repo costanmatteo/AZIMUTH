@@ -19,7 +19,7 @@ CONFIG = {
         # SCM synthetic data generation (used if csv_path is None)
         'use_scm': True,  # Enable SCM data generation
         'scm': {
-            'n_samples': 3000,  # Number of samples to generate
+            'n_samples': 1000,  # Number of samples to generate
             'seed': 42,  # Random seed for reproducibility
             'dataset_type': 'laser'  # Type of SCM dataset, either 'one_to_one_ct' or 'laser'
         }
@@ -29,9 +29,9 @@ CONFIG = {
     'model': {
         'model_type': 'custom',  # 'small', 'medium', 'large', or 'custom'
         # If 'custom', specify architecture below:
-        'hidden_sizes': [32, 16],  # Used only if model_type='custom'
+        'hidden_sizes': [64, 32],  # Used only if model_type='custom'
         'dropout_rate': 0.1,
-        'use_batchnorm': False,
+        'use_batchnorm': True,
         'min_variance': 1e-6  # Minimum variance for numerical stability
     },
 
@@ -53,17 +53,17 @@ CONFIG = {
         # α = 1.0: Standard Gaussian NLL
         # α < 1.0: Reduces penalty for large variances (recommended for over-confident models)
         # α > 1.0: Increases penalty for large variances
-        'variance_penalty_alpha': 1.0,  # Try values like 0.1-0.5 for over-confident models
+        'variance_penalty_alpha': 5,  
 
         # Energy Score parameters (used only if loss_type='energy_score')
         # Number of Monte Carlo samples for Energy Score computation
         # Higher values = more accurate but slower. Recommended: 50-200
-        'energy_score_samples': 50,
+        'energy_score_samples': 30,
         # β parameter: controls diversity penalty in ES = E[|X-y|] - β/2*E[|X-X'|]
         # β = 1.0: Standard Energy Score (recommended)
         # β < 1.0: Less penalty for diverse predictions (allows wider uncertainty)
         # β > 1.0: More penalty for diverse predictions (encourages tighter uncertainty)
-        'energy_score_beta': 1.0
+        'energy_score_beta': 1
     },
 
     # Uncertainty configuration

@@ -69,7 +69,7 @@ class UncertaintyPredictor(nn.Module):
             shared_layers.append(nn.Linear(prev_size, hidden_size))
             if use_batchnorm:
                 shared_layers.append(nn.BatchNorm1d(hidden_size))
-            shared_layers.append(nn.ReLU())
+            shared_layers.append(nn.SiLU())
             shared_layers.append(nn.Dropout(dropout_rate))
             prev_size = hidden_size
 
