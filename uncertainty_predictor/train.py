@@ -231,6 +231,16 @@ def main():
     # 3. CREATE DATASET AND DATALOADER
     print("\n[3/7] Creating PyTorch datasets...")
 
+    # DEBUG: Check for NaN in data
+    if conditioning_enabled and df is not None:
+        print("\n  DEBUG: Checking for NaN values in data...")
+        print(f"    X_train: {np.isnan(data_train['X']).sum()} NaN values")
+        print(f"    y_train: {np.isnan(data_train['y']).sum()} NaN values")
+        if data_train.get('env_continuous') is not None:
+            print(f"    env_continuous: {np.isnan(data_train['env_continuous']).sum()} NaN values")
+        if data_train.get('timestamp') is not None:
+            print(f"    timestamp: {np.isnan(data_train['timestamp']).sum()} NaN values")
+
     if conditioning_enabled:
         # Create conditional datasets
         train_dataset = ConditionalMachineryDataset(data_train)
@@ -316,6 +326,43 @@ def main():
     else:
         print(f"  Mode: Standard (single-process)")
     print(f"  Output: Mean (μ) and Variance (σ²) for each target")
+
+    # DEBUG: Test first forward pass
+    print("\n  DEBUG: Testing first forward pass...")
+    model.eval()
+    with torch.no_grad():
+        try:
+            # Get first batch
+            first_batch = next(iter(train_loader))
+            if isinstance(first_batch, dict):
+                X_test = first_batch['X']
+                conditioning_kwargs_test = {}
+                if conditioning_enabled:
+                    if 'process_id' in first_batch:
+                        conditioning_kwargs_test['process_id'] = first_batch['process_id']
+                    if 'env_continuous' in first_batch:
+                        conditioning_kwargs_test['env_continuous'] = first_batch['env_continuous']
+                    if 'env_continuous_masks' in first_batch:
+                        conditioning_kwargs_test['env_masks'] = first_batch['env_continuous_masks']
+                    if 'env_categorical' in first_batch:
+                        conditioning_kwargs_test['env_categorical'] = first_batch['env_categorical']
+                    if 'timestamp' in first_batch:
+                        conditioning_kwargs_test['timestamp'] = first_batch['timestamp']
+            else:
+                X_test = first_batch[0]
+                conditioning_kwargs_test = {}
+
+            mean_test, var_test = model(X_test, **conditioning_kwargs_test)
+            print(f"    Input shape: {X_test.shape}")
+            print(f"    Mean output: min={mean_test.min().item():.6f}, max={mean_test.max().item():.6f}, has_nan={torch.isnan(mean_test).any().item()}")
+            print(f"    Variance output: min={var_test.min().item():.6f}, max={var_test.max().item():.6f}, has_nan={torch.isnan(var_test).any().item()}")
+            if conditioning_enabled and 'process_id' in conditioning_kwargs_test:
+                print(f"    Process IDs in batch: {torch.unique(conditioning_kwargs_test['process_id']).cpu().numpy()}")
+        except Exception as e:
+            print(f"    ERROR during forward pass: {e}")
+            import traceback
+            traceback.print_exc()
+    model.train()
 
     # 5. CREATE LOSS FUNCTION
     print("\n[5/7] Setting up loss function...")
