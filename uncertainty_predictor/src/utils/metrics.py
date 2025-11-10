@@ -170,3 +170,166 @@ def evaluate_prediction_intervals(y_true, y_pred_mean, y_pred_variance, confiden
         'coverage_error': coverage - (confidence * 100),
         'well_calibrated': abs(coverage - confidence * 100) < 5  # within 5% is considered good
     }
+
+
+def calculate_metrics_per_process(
+    y_true,
+    y_pred_mean,
+    process_ids,
+    y_pred_variance=None,
+    output_names=None,
+    process_names=None
+):
+    """
+    Calculate metrics separately for each process.
+
+    This function computes metrics for each manufacturing process independently,
+    as well as overall metrics across all processes.
+
+    Args:
+        y_true (np.ndarray): True values, shape (n_samples, n_outputs)
+        y_pred_mean (np.ndarray): Predicted mean values, shape (n_samples, n_outputs)
+        process_ids (np.ndarray): Process IDs for each sample, shape (n_samples,)
+        y_pred_variance (np.ndarray, optional): Predicted variance, shape (n_samples, n_outputs)
+        output_names (list, optional): Names of output variables
+        process_names (dict, optional): Mapping {process_id: process_name}
+
+    Returns:
+        dict: Dictionary with structure:
+            {
+                'process_0': {...metrics...},
+                'process_1': {...metrics...},
+                'process_2': {...metrics...},
+                'process_3': {...metrics...},
+                'overall': {...metrics...},
+                'process_counts': {0: count, 1: count, ...}
+            }
+    """
+    if len(y_true.shape) == 1:
+        y_true = y_true.reshape(-1, 1)
+    if len(y_pred_mean.shape) == 1:
+        y_pred_mean = y_pred_mean.reshape(-1, 1)
+    if y_pred_variance is not None and len(y_pred_variance.shape) == 1:
+        y_pred_variance = y_pred_variance.reshape(-1, 1)
+
+    # Default process names
+    if process_names is None:
+        process_names = {
+            0: 'laser',
+            1: 'plasma',
+            2: 'galvanic',
+            3: 'microetch'
+        }
+
+    results = {}
+
+    # Get unique process IDs
+    unique_processes = np.unique(process_ids)
+
+    # Count samples per process
+    process_counts = {}
+    for pid in unique_processes:
+        process_counts[int(pid)] = int(np.sum(process_ids == pid))
+
+    # Calculate metrics for each process
+    for pid in unique_processes:
+        # Get mask for this process
+        mask = (process_ids == pid)
+
+        # Extract data for this process
+        y_true_proc = y_true[mask]
+        y_pred_mean_proc = y_pred_mean[mask]
+
+        if y_pred_variance is not None:
+            y_pred_variance_proc = y_pred_variance[mask]
+        else:
+            y_pred_variance_proc = None
+
+        # Calculate metrics
+        proc_name = process_names.get(int(pid), f'process_{int(pid)}')
+        proc_metrics = calculate_metrics(
+            y_true_proc,
+            y_pred_mean_proc,
+            y_pred_variance_proc,
+            output_names
+        )
+
+        results[f'process_{int(pid)}'] = proc_metrics
+        results[f'process_{int(pid)}_name'] = proc_name
+
+    # Calculate overall metrics (across all processes)
+    overall_metrics = calculate_metrics(
+        y_true,
+        y_pred_mean,
+        y_pred_variance,
+        output_names
+    )
+
+    results['overall'] = overall_metrics
+    results['process_counts'] = process_counts
+
+    return results
+
+
+def print_metrics_per_process(metrics_per_process):
+    """
+    Print multi-process metrics in a formatted way.
+
+    Args:
+        metrics_per_process (dict): Dictionary returned by calculate_metrics_per_process
+    """
+    print("\n" + "="*80)
+    print("MULTI-PROCESS EVALUATION METRICS")
+    print("="*80)
+
+    # Print sample counts
+    if 'process_counts' in metrics_per_process:
+        print("\nSample counts per process:")
+        print("-" * 50)
+        for pid, count in sorted(metrics_per_process['process_counts'].items()):
+            proc_name = metrics_per_process.get(f'process_{pid}_name', f'process_{pid}')
+            print(f"  Process {pid} ({proc_name:12s}): {count:5d} samples")
+
+    # Print metrics for each process
+    for key in sorted(metrics_per_process.keys()):
+        if key.startswith('process_') and not key.endswith('_name'):
+            pid = int(key.split('_')[1])
+            proc_name = metrics_per_process.get(f'{key}_name', key)
+
+            print(f"\n{'='*80}")
+            print(f"Process {pid}: {proc_name.upper()}")
+            print(f"{'='*80}")
+
+            proc_metrics = metrics_per_process[key]
+            for output_name, values in proc_metrics.items():
+                print(f"\n{output_name}:")
+                print("-" * 50)
+                for metric_name, value in values.items():
+                    if isinstance(value, (int, float)):
+                        if metric_name in ['R2', 'Calibration_Ratio']:
+                            print(f"  {metric_name:20s}: {value:12.4f}")
+                        else:
+                            print(f"  {metric_name:20s}: {value:12.6f}")
+                    else:
+                        print(f"  {metric_name:20s}: {value}")
+
+    # Print overall metrics
+    if 'overall' in metrics_per_process:
+        print(f"\n{'='*80}")
+        print("OVERALL (ALL PROCESSES COMBINED)")
+        print(f"{'='*80}")
+
+        overall_metrics = metrics_per_process['overall']
+        for output_name, values in overall_metrics.items():
+            print(f"\n{output_name}:")
+            print("-" * 50)
+            for metric_name, value in values.items():
+                if isinstance(value, (int, float)):
+                    if metric_name in ['R2', 'Calibration_Ratio']:
+                        print(f"  {metric_name:20s}: {value:12.4f}")
+                    else:
+                        print(f"  {metric_name:20s}: {value:12.6f}")
+                else:
+                    print(f"  {metric_name:20s}: {value}")
+
+    print(f"\n{'='*80}\n")

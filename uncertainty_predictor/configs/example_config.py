@@ -36,6 +36,48 @@ CONFIG = {
         'min_variance': 1e-6  # Minimum variance for numerical stability
     },
 
+    # Conditioning configuration (for multi-process and environmental adaptation)
+    'conditioning': {
+        # Process ID embedding (e.g., 4 PCB manufacturing processes)
+        'num_processes': 4,  # Number of different processes
+        'd_proc': 16,  # Dimension of process embedding
+
+        # Context vector dimension (final fused representation)
+        'd_context': 64,  # Dimension of context vector passed to conditional norms
+
+        # Environmental features - CONTINUOUS
+        'env_continuous': {
+            'enabled': True,  # Enable continuous environmental features
+            'features': ['temperature', 'humidity', 'load_factor'],  # List of feature names
+            'd_env_float': 32,  # Projection dimension for continuous features
+            'handle_missing': True,  # Enable missing value handling with mask
+        },
+
+        # Environmental features - CATEGORICAL
+        'env_categorical': {
+            'enabled': True,  # Enable categorical environmental features
+            'features': {
+                # Format: 'feature_name': cardinality
+                'batch_id': 50,      # e.g., 50 different batches
+                'operator_id': 10,   # e.g., 10 different operators
+                'shift': 3,          # e.g., 3 shifts (morning/afternoon/night)
+            },
+            'd_embedding_rule': 'sqrt',  # Embedding size rule: 'sqrt' (1.6*sqrt(card)) or 'fixed'
+            'd_embedding_fixed': 16,     # Used if d_embedding_rule='fixed'
+        },
+
+        # Temporal encoding (timestamp → learned representation)
+        'time_encoding': {
+            'enabled': True,  # Enable temporal encoding
+            'method': 'time2vec',  # 'time2vec' or 'sincos'
+            'd_time': 16,  # Dimension of time encoding
+            'num_periods': 3,  # Number of periodic components (for Time2Vec)
+        },
+
+        # Conditional Normalization (replaces standard BatchNorm with conditional variant)
+        'use_conditional_norm': True,  # Use Conditional LayerNorm/BatchNorm instead of standard
+    },
+
     # Training configuration
     'training': {
         'batch_size': 64,

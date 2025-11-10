@@ -633,6 +633,174 @@ ds_scm_microetch = SCMDataset(
 
 
 # =============================================================================
+# HELPER FUNCTIONS FOR MULTI-PROCESS CONDITIONING
+# =============================================================================
+
+def add_environmental_features(df, process_id, seed=None, missing_rate=0.1):
+    """
+    Add environmental and conditioning features to a sampled SCM dataset.
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        Sampled dataset from SCMDataset.sample()
+    process_id : int
+        Process identifier (0=laser, 1=plasma, 2=galvanic, 3=microetch)
+    seed : int, optional
+        Random seed for reproducibility
+    missing_rate : float
+        Fraction of samples with missing continuous env features (default: 0.1)
+
+    Returns:
+    --------
+    pd.DataFrame
+        Original dataframe with additional columns:
+        - process_id (int): process identifier
+        - temperature (float): ambient temperature [°C], may contain NaN
+        - humidity (float): relative humidity [%], may contain NaN
+        - load_factor (float): machine load factor [0-1], may contain NaN
+        - batch_id (int): batch/lot identifier [0-49]
+        - operator_id (int): operator identifier [0-9]
+        - shift (int): work shift [0=morning, 1=afternoon, 2=night]
+        - timestamp (float): unix timestamp [seconds since epoch]
+    """
+    import pandas as pd
+    import numpy as np
+    from datetime import datetime
+
+    rng = np.random.default_rng(seed)
+    n = len(df)
+
+    # Create a copy to avoid modifying original
+    df_out = df.copy()
+
+    # 1. Process ID (constant for this dataset)
+    df_out['process_id'] = process_id
+
+    # 2. Environmental features - CONTINUOUS
+    # Temperature: 19-25°C
+    df_out['temperature'] = rng.uniform(low=19.0, high=25.0, size=n)
+
+    # Humidity: 40-70%
+    df_out['humidity'] = rng.uniform(low=40.0, high=70.0, size=n)
+
+    # Load factor: 0.5-1.0 (machine utilization)
+    df_out['load_factor'] = rng.uniform(low=0.5, high=1.0, size=n)
+
+    # Introduce missing values (NaN) in continuous features
+    if missing_rate > 0:
+        missing_mask = rng.random(n) < missing_rate
+        n_missing = np.sum(missing_mask)
+        if n_missing > 0:
+            # Randomly select which feature(s) to set as missing
+            for feature in ['temperature', 'humidity', 'load_factor']:
+                # Each missing sample has 50% chance for each feature to be NaN
+                feature_missing = missing_mask & (rng.random(n) < 0.5)
+                df_out.loc[feature_missing, feature] = np.nan
+
+    # 3. Environmental features - CATEGORICAL
+    # Batch ID: 0-49 (50 different batches)
+    df_out['batch_id'] = rng.integers(low=0, high=50, size=n)
+
+    # Operator ID: 0-9 (10 different operators)
+    df_out['operator_id'] = rng.integers(low=0, high=10, size=n)
+
+    # Shift: 0=morning, 1=afternoon, 2=night
+    df_out['shift'] = rng.integers(low=0, high=3, size=n)
+
+    # 4. Temporal feature - TIMESTAMP
+    # Base timestamp: Jan 1, 2024 00:00:00 UTC
+    base_timestamp = datetime(2024, 1, 1).timestamp()
+    # Add random offset: 0 to 365 days (1 year)
+    time_offset = rng.uniform(low=0, high=365*24*3600, size=n)
+    df_out['timestamp'] = base_timestamp + time_offset
+
+    return df_out
+
+
+def sample_multi_process_dataset(n_per_process=2000, seed=42, missing_rate=0.1):
+    """
+    Generate a combined multi-process dataset with all 4 PCB manufacturing processes.
+
+    Parameters:
+    -----------
+    n_per_process : int
+        Number of samples per process (default: 2000)
+    seed : int
+        Random seed for reproducibility
+    missing_rate : float
+        Fraction of samples with missing continuous env features
+
+    Returns:
+    --------
+    pd.DataFrame
+        Combined dataset with all processes and environmental features
+    dict
+        Metadata with process names and input/output columns
+    """
+    import pandas as pd
+
+    # Define process mapping
+    process_datasets = {
+        0: ('laser', ds_scm_laser),
+        1: ('plasma', ds_scm_plasma),
+        2: ('galvanic', ds_scm_galvanic),
+        3: ('microetch', ds_scm_microetch),
+    }
+
+    all_dfs = []
+
+    for process_id, (name, scm_dataset) in process_datasets.items():
+        # Sample from SCM
+        df = scm_dataset.sample(n=n_per_process, seed=seed + process_id)
+
+        # Add environmental features
+        df_augmented = add_environmental_features(
+            df,
+            process_id=process_id,
+            seed=seed + process_id + 1000,
+            missing_rate=missing_rate
+        )
+
+        all_dfs.append(df_augmented)
+
+    # Combine all datasets
+    combined_df = pd.concat(all_dfs, ignore_index=True)
+
+    # Shuffle the combined dataset
+    combined_df = combined_df.sample(frac=1.0, random_state=seed).reset_index(drop=True)
+
+    # Create metadata
+    metadata = {
+        'process_names': {
+            0: 'laser',
+            1: 'plasma',
+            2: 'galvanic',
+            3: 'microetch'
+        },
+        'n_per_process': n_per_process,
+        'total_samples': len(combined_df),
+        'input_columns': {
+            0: ds_scm_laser.input_labels,
+            1: ds_scm_plasma.input_labels,
+            2: ds_scm_galvanic.input_labels,
+            3: ds_scm_microetch.input_labels,
+        },
+        'output_columns': {
+            0: ds_scm_laser.target_labels,
+            1: ds_scm_plasma.target_labels,
+            2: ds_scm_galvanic.target_labels,
+            3: ds_scm_microetch.target_labels,
+        },
+        'env_continuous': ['temperature', 'humidity', 'load_factor'],
+        'env_categorical': ['batch_id', 'operator_id', 'shift'],
+        'temporal': ['timestamp'],
+    }
+
+    return combined_df, metadata
+
+
+# =============================================================================
 # EXAMPLE USAGE (commented out)
 # =============================================================================
 # Uncomment and modify as needed to generate datasets
@@ -642,3 +810,9 @@ ds_scm_microetch = SCMDataset(
 # ds_scm_plasma.generate_ds(mode="flat", n=5_000, save_dir=join(ROOT_DIR, "data/plasma"))
 # ds_scm_galvanic.generate_ds(mode="flat", n=5_000, save_dir=join(ROOT_DIR, "data/galvanic"))
 # ds_scm_microetch.generate_ds(mode="flat", n=5_000, save_dir=join(ROOT_DIR, "data/microetch"))
+
+# Example: Generate multi-process dataset with environmental features
+# combined_df, metadata = sample_multi_process_dataset(n_per_process=2000, seed=42)
+# print(f"Total samples: {len(combined_df)}")
+# print(f"Columns: {combined_df.columns.tolist()}")
+# print(f"Process distribution:\n{combined_df['process_id'].value_counts().sort_index()}")

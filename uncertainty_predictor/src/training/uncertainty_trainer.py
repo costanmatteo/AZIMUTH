@@ -82,15 +82,54 @@ class UncertaintyTrainer:
         epoch_loss = 0.0
         epoch_mse = 0.0
 
-        for batch_X, batch_y in train_loader:
-            # Move data to device
-            batch_X = batch_X.to(self.device)
-            batch_y = batch_y.to(self.device)
+        for batch in train_loader:
+            # Handle both dict batch (with conditioning) and tuple batch (legacy)
+            if isinstance(batch, dict):
+                batch_X = batch['x'].to(self.device)
+                batch_y = batch['y'].to(self.device)
 
-            # Forward pass
-            mean, variance = self.model(batch_X)
+                # Extract conditioning features
+                process_id = batch.get('process_id')
+                if process_id is not None:
+                    process_id = process_id.to(self.device)
 
-            # Compute Gaussian NLL loss
+                env_cont = batch.get('env_cont')
+                if env_cont is not None:
+                    env_cont = env_cont.to(self.device)
+
+                env_cont_mask = batch.get('env_cont_mask')
+                if env_cont_mask is not None:
+                    env_cont_mask = env_cont_mask.to(self.device)
+
+                env_cat = batch.get('env_cat')
+                if env_cat is not None:
+                    env_cat = {k: v.to(self.device) for k, v in env_cat.items()}
+
+                timestamp = batch.get('timestamp')
+                if timestamp is not None:
+                    timestamp = timestamp.to(self.device)
+            else:
+                # Legacy tuple format (batch_X, batch_y)
+                batch_X, batch_y = batch
+                batch_X = batch_X.to(self.device)
+                batch_y = batch_y.to(self.device)
+                process_id = None
+                env_cont = None
+                env_cont_mask = None
+                env_cat = None
+                timestamp = None
+
+            # Forward pass with conditioning
+            mean, variance = self.model(
+                batch_X,
+                process_id=process_id,
+                env_cont=env_cont,
+                env_cont_mask=env_cont_mask,
+                env_cat=env_cat,
+                timestamp=timestamp,
+            )
+
+            # Compute loss
             loss = self.criterion(mean, variance, batch_y)
 
             # Compute MSE for monitoring (not used for backprop)
@@ -128,11 +167,52 @@ class UncertaintyTrainer:
         val_variance = 0.0
 
         with torch.no_grad():
-            for batch_X, batch_y in val_loader:
-                batch_X = batch_X.to(self.device)
-                batch_y = batch_y.to(self.device)
+            for batch in val_loader:
+                # Handle both dict batch (with conditioning) and tuple batch (legacy)
+                if isinstance(batch, dict):
+                    batch_X = batch['x'].to(self.device)
+                    batch_y = batch['y'].to(self.device)
 
-                mean, variance = self.model(batch_X)
+                    # Extract conditioning features
+                    process_id = batch.get('process_id')
+                    if process_id is not None:
+                        process_id = process_id.to(self.device)
+
+                    env_cont = batch.get('env_cont')
+                    if env_cont is not None:
+                        env_cont = env_cont.to(self.device)
+
+                    env_cont_mask = batch.get('env_cont_mask')
+                    if env_cont_mask is not None:
+                        env_cont_mask = env_cont_mask.to(self.device)
+
+                    env_cat = batch.get('env_cat')
+                    if env_cat is not None:
+                        env_cat = {k: v.to(self.device) for k, v in env_cat.items()}
+
+                    timestamp = batch.get('timestamp')
+                    if timestamp is not None:
+                        timestamp = timestamp.to(self.device)
+                else:
+                    # Legacy tuple format
+                    batch_X, batch_y = batch
+                    batch_X = batch_X.to(self.device)
+                    batch_y = batch_y.to(self.device)
+                    process_id = None
+                    env_cont = None
+                    env_cont_mask = None
+                    env_cat = None
+                    timestamp = None
+
+                # Forward pass with conditioning
+                mean, variance = self.model(
+                    batch_X,
+                    process_id=process_id,
+                    env_cont=env_cont,
+                    env_cont_mask=env_cont_mask,
+                    env_cat=env_cat,
+                    timestamp=timestamp,
+                )
 
                 # Compute losses
                 loss = self.criterion(mean, variance, batch_y)
@@ -311,11 +391,52 @@ class UncertaintyTrainer:
         variances = []
 
         with torch.no_grad():
-            for batch_X, batch_y in val_loader:
-                batch_X = batch_X.to(self.device)
-                batch_y = batch_y.to(self.device)
+            for batch in val_loader:
+                # Handle both dict batch (with conditioning) and tuple batch (legacy)
+                if isinstance(batch, dict):
+                    batch_X = batch['x'].to(self.device)
+                    batch_y = batch['y'].to(self.device)
 
-                mean, variance = self.model(batch_X)
+                    # Extract conditioning features
+                    process_id = batch.get('process_id')
+                    if process_id is not None:
+                        process_id = process_id.to(self.device)
+
+                    env_cont = batch.get('env_cont')
+                    if env_cont is not None:
+                        env_cont = env_cont.to(self.device)
+
+                    env_cont_mask = batch.get('env_cont_mask')
+                    if env_cont_mask is not None:
+                        env_cont_mask = env_cont_mask.to(self.device)
+
+                    env_cat = batch.get('env_cat')
+                    if env_cat is not None:
+                        env_cat = {k: v.to(self.device) for k, v in env_cat.items()}
+
+                    timestamp = batch.get('timestamp')
+                    if timestamp is not None:
+                        timestamp = timestamp.to(self.device)
+                else:
+                    # Legacy tuple format
+                    batch_X, batch_y = batch
+                    batch_X = batch_X.to(self.device)
+                    batch_y = batch_y.to(self.device)
+                    process_id = None
+                    env_cont = None
+                    env_cont_mask = None
+                    env_cat = None
+                    timestamp = None
+
+                # Forward pass with conditioning
+                mean, variance = self.model(
+                    batch_X,
+                    process_id=process_id,
+                    env_cont=env_cont,
+                    env_cont_mask=env_cont_mask,
+                    env_cat=env_cat,
+                    timestamp=timestamp,
+                )
 
                 # Compute squared errors
                 sq_error = (mean - batch_y) ** 2

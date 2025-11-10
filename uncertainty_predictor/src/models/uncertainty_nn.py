@@ -10,11 +10,20 @@ The network outputs two values:
 - σ²(x): estimated uncertainty (variance)
 
 This allows the model to learn where the data is noisy or uncertain.
+
+NEW: Supports conditional normalization for multi-process and environmental adaptation.
 """
 
 import torch
 import torch.nn as nn
 import numpy as np
+from typing import Dict, Optional
+
+from .conditional_layers import (
+    ConditionalBatchNorm1d,
+    ConditionalLayerNorm,
+    ContextEmbedding,
+)
 
 
 class UncertaintyPredictor(nn.Module):
@@ -55,25 +64,51 @@ class UncertaintyPredictor(nn.Module):
     """
 
     def __init__(self, input_size, hidden_sizes, output_size,
-                 dropout_rate=0.2, use_batchnorm=False, min_variance=1e-6):
+                 dropout_rate=0.2, use_batchnorm=False, min_variance=1e-6,
+                 conditioning_config=None):
         super(UncertaintyPredictor, self).__init__()
 
         self.output_size = output_size
         self.min_variance = min_variance
+        self.conditioning_config = conditioning_config
 
-        # Build shared hidden layers
-        shared_layers = []
+        # Determine if conditional normalization is enabled
+        self.use_conditioning = conditioning_config is not None
+        if self.use_conditioning:
+            self.use_conditional_norm = conditioning_config.get('use_conditional_norm', False)
+            # Create context embedding module
+            self.context_embedding = ContextEmbedding(conditioning_config)
+            d_context = conditioning_config.get('d_context', 64)
+        else:
+            self.use_conditional_norm = False
+            d_context = None
+
+        # Build shared hidden layers with conditional normalization support
+        self.shared_layers = nn.ModuleList()
         prev_size = input_size
 
         for hidden_size in hidden_sizes:
-            shared_layers.append(nn.Linear(prev_size, hidden_size))
-            if use_batchnorm:
-                shared_layers.append(nn.BatchNorm1d(hidden_size))
-            shared_layers.append(nn.SiLU())
-            shared_layers.append(nn.Dropout(dropout_rate))
-            prev_size = hidden_size
+            # Linear layer
+            linear = nn.Linear(prev_size, hidden_size)
 
-        self.shared_network = nn.Sequential(*shared_layers)
+            # Normalization layer (conditional or standard)
+            if use_batchnorm:
+                if self.use_conditional_norm and self.use_conditioning:
+                    norm = ConditionalBatchNorm1d(hidden_size, d_context)
+                else:
+                    norm = nn.BatchNorm1d(hidden_size)
+            else:
+                norm = None
+
+            # Store as tuple: (linear, norm, activation, dropout)
+            self.shared_layers.append(nn.ModuleDict({
+                'linear': linear,
+                'norm': norm,
+                'activation': nn.SiLU(),
+                'dropout': nn.Dropout(dropout_rate),
+            }))
+
+            prev_size = hidden_size
 
         # Output heads
         # Mean head: linear output for the predicted mean μ
@@ -83,20 +118,61 @@ class UncertaintyPredictor(nn.Module):
         # Using log-space helps with numerical stability
         self.log_variance_head = nn.Linear(prev_size, output_size)
 
-    def forward(self, x):
+    def forward(
+        self,
+        x: torch.Tensor,
+        process_id: Optional[torch.Tensor] = None,
+        env_cont: Optional[torch.Tensor] = None,
+        env_cont_mask: Optional[torch.Tensor] = None,
+        env_cat: Optional[Dict[str, torch.Tensor]] = None,
+        timestamp: Optional[torch.Tensor] = None,
+    ):
         """
-        Forward pass of the uncertainty network.
+        Forward pass of the uncertainty network with optional conditioning.
 
         Args:
             x (torch.Tensor): Input tensor of shape (batch_size, input_size)
+            process_id (torch.Tensor, optional): Process IDs, shape (batch_size,)
+            env_cont (torch.Tensor, optional): Continuous env features, shape (batch_size, n_features)
+            env_cont_mask (torch.Tensor, optional): Mask for missing values, shape (batch_size, n_features)
+            env_cat (Dict[str, torch.Tensor], optional): Categorical env features
+            timestamp (torch.Tensor, optional): Timestamps, shape (batch_size,)
 
         Returns:
             tuple: (mean, variance)
                 - mean: Predicted mean values of shape (batch_size, output_size)
                 - variance: Predicted variance of shape (batch_size, output_size)
         """
-        # Shared feature extraction
-        features = self.shared_network(x)
+        # Generate context vector if conditioning is enabled
+        if self.use_conditioning:
+            context = self.context_embedding(
+                process_id=process_id,
+                env_cont=env_cont,
+                env_cont_mask=env_cont_mask,
+                env_cat=env_cat,
+                timestamp=timestamp,
+            )
+        else:
+            context = None
+
+        # Shared feature extraction with conditional normalization
+        features = x
+        for layer_dict in self.shared_layers:
+            # Linear transformation
+            features = layer_dict['linear'](features)
+
+            # Normalization (conditional or standard)
+            if layer_dict['norm'] is not None:
+                if self.use_conditional_norm and context is not None:
+                    features = layer_dict['norm'](features, context)
+                else:
+                    features = layer_dict['norm'](features)
+
+            # Activation
+            features = layer_dict['activation'](features)
+
+            # Dropout
+            features = layer_dict['dropout'](features)
 
         # Predict mean
         mean = self.mean_head(features)
@@ -107,7 +183,16 @@ class UncertaintyPredictor(nn.Module):
 
         return mean, variance
 
-    def predict_with_uncertainty(self, x, n_samples=100):
+    def predict_with_uncertainty(
+        self,
+        x: torch.Tensor,
+        n_samples: int = 100,
+        process_id: Optional[torch.Tensor] = None,
+        env_cont: Optional[torch.Tensor] = None,
+        env_cont_mask: Optional[torch.Tensor] = None,
+        env_cat: Optional[Dict[str, torch.Tensor]] = None,
+        timestamp: Optional[torch.Tensor] = None,
+    ):
         """
         Make predictions with uncertainty estimation using sampling.
 
@@ -117,6 +202,7 @@ class UncertaintyPredictor(nn.Module):
         Args:
             x (torch.Tensor): Input tensor
             n_samples (int): Number of samples to draw (default: 100)
+            process_id, env_cont, env_cont_mask, env_cat, timestamp: Conditioning inputs (optional)
 
         Returns:
             dict: Dictionary containing:
@@ -127,7 +213,14 @@ class UncertaintyPredictor(nn.Module):
         """
         self.eval()
         with torch.no_grad():
-            mean, variance = self.forward(x)
+            mean, variance = self.forward(
+                x,
+                process_id=process_id,
+                env_cont=env_cont,
+                env_cont_mask=env_cont_mask,
+                env_cat=env_cat,
+                timestamp=timestamp,
+            )
             std = torch.sqrt(variance)
 
             # Sample from the predicted distribution

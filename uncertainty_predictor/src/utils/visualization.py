@@ -281,3 +281,190 @@ def plot_uncertainty_distribution(y_pred_variance, output_names=None, save_path=
         print(f"Uncertainty distribution plot saved: {save_path}")
 
     plt.close()
+
+
+# =============================================================================
+# MULTI-PROCESS VISUALIZATION FUNCTIONS
+# =============================================================================
+
+def plot_predictions_per_process(
+    y_true_dict,
+    y_pred_mean_dict,
+    y_pred_variance_dict,
+    process_names,
+    output_names=None,
+    save_path=None,
+    confidence=0.95
+):
+    """
+    Create separate prediction plots for each process in a 2x2 grid.
+
+    Args:
+        y_true_dict (dict): {process_id: y_true} for each process
+        y_pred_mean_dict (dict): {process_id: y_pred_mean} for each process
+        y_pred_variance_dict (dict): {process_id: y_pred_variance} for each process
+        process_names (dict): {process_id: process_name}
+        output_names (list): Names of outputs (optional)
+        save_path (str or Path): Path to save the plot
+        confidence (float): Confidence level for prediction intervals
+    """
+    from scipy import stats
+    z_score = stats.norm.ppf((1 + confidence) / 2)
+
+    fig, axes = plt.subplots(2, 2, figsize=(14, 12))
+    axes = axes.flatten()
+
+    for i, process_id in enumerate(sorted(y_true_dict.keys())):
+        ax = axes[i]
+
+        y_true = y_true_dict[process_id]
+        y_pred_mean = y_pred_mean_dict[process_id]
+        y_pred_variance = y_pred_variance_dict[process_id]
+
+        if len(y_true.shape) > 1:
+            y_true = y_true.flatten()
+            y_pred_mean = y_pred_mean.flatten()
+            y_pred_variance = y_pred_variance.flatten()
+
+        y_std = np.sqrt(y_pred_variance)
+
+        # Sort by predicted mean for better visualization
+        sort_idx = np.argsort(y_pred_mean)
+        y_t_sorted = y_true[sort_idx]
+        y_p_sorted = y_pred_mean[sort_idx]
+        y_std_sorted = y_std[sort_idx]
+
+        # Plot uncertainty bounds
+        ax.fill_between(
+            range(len(y_p_sorted)),
+            y_p_sorted - z_score * y_std_sorted,
+            y_p_sorted + z_score * y_std_sorted,
+            alpha=0.3,
+            color='blue',
+            label=f'{int(confidence*100)}% Interval'
+        )
+
+        # Plot predictions and true values
+        ax.plot(y_p_sorted, 'b-', linewidth=2, label='Predicted Mean', alpha=0.7)
+        ax.plot(y_t_sorted, 'ro', markersize=2, label='True Values', alpha=0.6)
+
+        process_name = process_names.get(process_id, f'Process {process_id}')
+        ax.set_title(f'Process {process_id}: {process_name.upper()}', fontsize=12, fontweight='bold')
+        ax.set_xlabel('Sample (sorted by prediction)', fontsize=10)
+        ax.set_ylabel('Value', fontsize=10)
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Multi-process predictions plot saved: {save_path}")
+
+    plt.close()
+
+
+def plot_scatter_per_process(
+    y_true_dict,
+    y_pred_mean_dict,
+    y_pred_variance_dict,
+    process_names,
+    save_path=None
+):
+    """
+    Create separate scatter plots for each process in a 2x2 grid.
+
+    Args:
+        y_true_dict (dict): {process_id: y_true} for each process
+        y_pred_mean_dict (dict): {process_id: y_pred_mean} for each process
+        y_pred_variance_dict (dict): {process_id: y_pred_variance} for each process
+        process_names (dict): {process_id: process_name}
+        save_path (str or Path): Path to save the plot
+    """
+    from sklearn.metrics import r2_score
+
+    fig, axes = plt.subplots(2, 2, figsize=(14, 12))
+    axes = axes.flatten()
+
+    for i, process_id in enumerate(sorted(y_true_dict.keys())):
+        ax = axes[i]
+
+        y_true = y_true_dict[process_id]
+        y_pred_mean = y_pred_mean_dict[process_id]
+        y_pred_variance = y_pred_variance_dict[process_id]
+
+        if len(y_true.shape) > 1:
+            y_true = y_true.flatten()
+            y_pred_mean = y_pred_mean.flatten()
+            y_pred_variance = y_pred_variance.flatten()
+
+        # Scatter plot with variance coloring
+        scatter = ax.scatter(
+            y_true, y_pred_mean,
+            c=y_pred_variance,
+            cmap='viridis',
+            alpha=0.6,
+            s=30,
+            edgecolors='black',
+            linewidth=0.5
+        )
+
+        # Perfect prediction line
+        min_val = min(y_true.min(), y_pred_mean.min())
+        max_val = max(y_true.max(), y_pred_mean.max())
+        ax.plot([min_val, max_val], [min_val, max_val],
+               'r--', linewidth=2, label='Perfect Prediction', alpha=0.7)
+
+        # R² score
+        r2 = r2_score(y_true, y_pred_mean)
+        ax.text(0.05, 0.95, f'R² = {r2:.4f}',
+               transform=ax.transAxes,
+               bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5),
+               verticalalignment='top', fontsize=9)
+
+        process_name = process_names.get(process_id, f'Process {process_id}')
+        ax.set_title(f'Process {process_id}: {process_name.upper()}', fontsize=12, fontweight='bold')
+        ax.set_xlabel('True Values', fontsize=10)
+        ax.set_ylabel('Predicted Mean', fontsize=10)
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        # Colorbar
+        cbar = plt.colorbar(scatter, ax=ax)
+        cbar.set_label('Variance', fontsize=9)
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Multi-process scatter plot saved: {save_path}")
+
+    plt.close()
+
+
+def prepare_data_per_process(y_true, y_pred_mean, y_pred_variance, process_ids):
+    """
+    Helper function to split data by process_id into separate dictionaries.
+
+    Args:
+        y_true (np.ndarray): True values
+        y_pred_mean (np.ndarray): Predicted means
+        y_pred_variance (np.ndarray): Predicted variances
+        process_ids (np.ndarray): Process IDs
+
+    Returns:
+        tuple: (y_true_dict, y_pred_mean_dict, y_pred_variance_dict)
+    """
+    unique_processes = np.unique(process_ids)
+
+    y_true_dict = {}
+    y_pred_mean_dict = {}
+    y_pred_variance_dict = {}
+
+    for pid in unique_processes:
+        mask = (process_ids == pid)
+        y_true_dict[int(pid)] = y_true[mask]
+        y_pred_mean_dict[int(pid)] = y_pred_mean[mask]
+        y_pred_variance_dict[int(pid)] = y_pred_variance[mask]
+
+    return y_true_dict, y_pred_mean_dict, y_pred_variance_dict
