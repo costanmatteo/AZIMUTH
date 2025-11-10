@@ -768,47 +768,48 @@ class SCMDataset:
 
 
         # ---------------------- export -------------------------------
-        makedirs(save_dir, exist_ok=True)
-        np.savez_compressed(join(save_dir, "ds.npz"), x=input_np, y=target_np)
+        if save_dir is not None:
+            makedirs(save_dir, exist_ok=True)
+            np.savez_compressed(join(save_dir, "ds.npz"), x=input_np, y=target_np)
 
-        df_esa.to_csv(join(save_dir, "enc_sef_att_mask.csv"))
-        df_dsa.to_csv(join(save_dir, "dec_self_att_mask.csv"))
-        df_dca.to_csv(join(save_dir, "dec_cross_att_mask.csv"))
+            df_esa.to_csv(join(save_dir, "enc_sef_att_mask.csv"))
+            df_dsa.to_csv(join(save_dir, "dec_self_att_mask.csv"))
+            df_dca.to_csv(join(save_dir, "dec_cross_att_mask.csv"))
 
-        with open(join(save_dir, 'meta.json'),'w', encoding="utf-8")  as file:
-            json.dump(self.meta, file, indent=2, sort_keys=True, ensure_ascii=False)
+            with open(join(save_dir, 'meta.json'),'w', encoding="utf-8")  as file:
+                json.dump(self.meta, file, indent=2, sort_keys=True, ensure_ascii=False)
 
-        with open(join(save_dir, 'input_vars_map.json'),'w', encoding="utf-8")  as file:
-            json.dump(iv_map, file, indent=2, sort_keys=True, ensure_ascii=False)
+            with open(join(save_dir, 'input_vars_map.json'),'w', encoding="utf-8")  as file:
+                json.dump(iv_map, file, indent=2, sort_keys=True, ensure_ascii=False)
 
-        with open(join(save_dir, 'input_feat_map.json'),'w', encoding="utf-8")  as file:
-            json.dump(if_map, file, indent=2, sort_keys=True, ensure_ascii=False)
+            with open(join(save_dir, 'input_feat_map.json'),'w', encoding="utf-8")  as file:
+                json.dump(if_map, file, indent=2, sort_keys=True, ensure_ascii=False)
 
-        with open(join(save_dir, 'target_vars_map.json'),'w', encoding="utf-8")  as file:
-            json.dump(tv_map, file, indent=2, sort_keys=True, ensure_ascii=False)
+            with open(join(save_dir, 'target_vars_map.json'),'w', encoding="utf-8")  as file:
+                json.dump(tv_map, file, indent=2, sort_keys=True, ensure_ascii=False)
 
-        with open(join(save_dir, 'target_feat_map.json'),'w', encoding="utf-8")  as file:
-            json.dump(tf_map, file, indent=2, sort_keys=True, ensure_ascii=False)
+            with open(join(save_dir, 'target_feat_map.json'),'w', encoding="utf-8")  as file:
+                json.dump(tf_map, file, indent=2, sort_keys=True, ensure_ascii=False)
 
-        # ------------ Save SCM graph visualization --------------------
-        # Try matplotlib first (no external dependencies needed)
-        try:
-            self.scm.save_graph_matplotlib(join(save_dir, 'scm_graph'))
-            print(f"SCM graph saved using matplotlib: scm_graph.png")
-        except Exception as e:
-            print(f"Warning: Could not render graph with matplotlib.")
-            print(f"  Error: {e}")
-            # Try graphviz as fallback
+            # ------------ Save SCM graph visualization --------------------
+            # Try matplotlib first (no external dependencies needed)
             try:
-                if Digraph is not None:
-                    graph = self.scm.to_graphviz()
-                    graph.render(str(join(save_dir, 'scm_graph')), format="png", cleanup=True)
-                    print(f"SCM graph saved using graphviz (fallback): scm_graph.png")
-                else:
-                    print(f"  Graphviz not available. Skipping graph rendering.")
-            except Exception as e2:
-                print(f"  Graphviz rendering also failed: {e2}")
-                print(f"  Continuing without graph visualization...")
+                self.scm.save_graph_matplotlib(join(save_dir, 'scm_graph'))
+                print(f"SCM graph saved using matplotlib: scm_graph.png")
+            except Exception as e:
+                print(f"Warning: Could not render graph with matplotlib.")
+                print(f"  Error: {e}")
+                # Try graphviz as fallback
+                try:
+                    if Digraph is not None:
+                        graph = self.scm.to_graphviz()
+                        graph.render(str(join(save_dir, 'scm_graph')), format="png", cleanup=True)
+                        print(f"SCM graph saved using graphviz (fallback): scm_graph.png")
+                    else:
+                        print(f"  Graphviz not available. Skipping graph rendering.")
+                except Exception as e2:
+                    print(f"  Graphviz rendering also failed: {e2}")
+                    print(f"  Continuing without graph visualization...")
 
 
 # --------------------------- Example -------------------------------- #
