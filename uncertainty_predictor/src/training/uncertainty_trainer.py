@@ -235,7 +235,8 @@ class UncertaintyTrainer:
         val_loader,
         epochs=100,
         patience=10,
-        save_dir='checkpoints_uncertainty'
+        save_dir='checkpoints_uncertainty',
+        compute_per_process_metrics=None
     ):
         """
         Complete training with early stopping.
@@ -246,10 +247,16 @@ class UncertaintyTrainer:
             epochs (int): Maximum number of epochs
             patience (int): Epochs to wait before early stopping
             save_dir (str): Directory to save checkpoints
+            compute_per_process_metrics (bool, optional): If True, compute per-process metrics.
+                If None (default), uses self.conditioning_enabled.
 
         Returns:
             dict: Dictionary with training history
         """
+        # Default to conditioning_enabled if not specified
+        if compute_per_process_metrics is None:
+            compute_per_process_metrics = self.conditioning_enabled
+
         save_path = Path(save_dir)
         save_path.mkdir(parents=True, exist_ok=True)
 
@@ -276,7 +283,7 @@ class UncertaintyTrainer:
             # Validation
             val_loss, val_mse, val_variance, per_process_metrics = self.validate(
                 val_loader,
-                compute_per_process_metrics=self.conditioning_enabled
+                compute_per_process_metrics=compute_per_process_metrics
             )
             self.val_losses.append(val_loss)
             self.val_mse.append(val_mse)
