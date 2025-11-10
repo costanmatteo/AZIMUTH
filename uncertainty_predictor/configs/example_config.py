@@ -22,7 +22,11 @@ CONFIG = {
             'n_samples': 2000,  # Number of samples to generate
             'seed': 42,  # Random seed for reproducibility
             # Type of SCM dataset: 'one_to_one_ct', 'laser', 'plasma', 'galvanic', 'microetch'
-            'dataset_type': 'microetch'
+            # Or 'all' for multi-process training (requires conditioning.enable=True)
+            'dataset_type': 'microetch',
+            # Multi-process configuration (used when conditioning is enabled)
+            'process_selection': 'microetch',  # 'all', 'laser', 'plasma', 'galvanic', 'microetch'
+            'add_env_vars': True  # Add environmental variables and timestamps
         }
     },
 
@@ -72,12 +76,71 @@ CONFIG = {
         'confidence_level': 0.99,  # For prediction intervals (0.95, 0.99, etc.)
     },
 
+    # Conditional embedding configuration (for multi-process training)
+    # Set enable=True to train a single model on all 4 PCB processes simultaneously
+    'conditioning': {
+        'enable': False,  # Set to True to enable conditional embeddings
+
+        # Process embedding configuration
+        'num_processes': 4,  # Number of processes (Laser, Plasma, Galvanic, Microetch)
+        'd_proc': 16,  # Process ID embedding dimension
+
+        # Continuous environment variables
+        'env_continuous': ['ambient_temp', 'humidity'],
+        'd_env_float': 16,  # Embedding dimension for each continuous variable
+        'use_missing_mask': True,  # Use missing value masks
+
+        # Categorical environment variables
+        'env_categorical': {
+            'batch_id': 10,      # 10 possible batch IDs
+            'operator_id': 5,    # 5 possible operators
+            'shift': 3           # 3 shifts (morning, afternoon, night)
+        },
+        'd_env_cat_base': 1.6,  # Base multiplier for categorical embedding dimension
+
+        # Temporal encoding
+        'use_time': True,
+        'time_column': 'timestamp',
+        'time_periods': 4,  # Number of periodic components in Time2Vec
+        'd_time': 8,  # Temporal encoding dimension
+
+        # Context fusion
+        'd_context': 64,  # Unified context vector dimension
+        'context_mlp_hidden': [128, 64],  # Hidden layers for context fusion MLP
+        'context_dropout': 0.1,  # Dropout in context MLP
+
+        # Normalization type
+        'norm_type': 'conditional_layer_norm'  # 'conditional_layer_norm', 'conditional_batch_norm', or 'layer_norm'
+    },
+
     # Miscellaneous
     'misc': {
         'random_seed': 42,
         'verbose': True
     }
 }
+
+# =============================================================================
+# EXAMPLE CONFIGURATIONS FOR DIFFERENT USE CASES
+# =============================================================================
+
+# To enable conditional multi-process training, set:
+# CONFIG['conditioning']['enable'] = True
+# CONFIG['data']['scm']['process_selection'] = 'all'
+# CONFIG['data']['scm']['n_samples'] = 500  # samples per process (total: 2000)
+
+# Minimal conditioning config (no env vars, no time):
+# 'conditioning': {
+#     'enable': True,
+#     'num_processes': 4,
+#     'd_proc': 16,
+#     'env_continuous': [],
+#     'env_categorical': {},
+#     'use_time': False,
+#     'd_context': 32,
+#     'context_mlp_hidden': [64, 32],
+#     'norm_type': 'conditional_layer_norm'
+# }
 
 
 

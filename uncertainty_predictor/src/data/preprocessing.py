@@ -275,3 +275,281 @@ def generate_scm_data(n_samples=5000, seed=42, dataset_type='one_to_one_ct', sav
             print(f"  Continuing without graph...")
 
     return X, y, input_columns, output_columns
+
+
+# =============================================================================
+# CONDITIONAL EMBEDDING DATA UTILITIES
+# =============================================================================
+
+
+def generate_conditional_scm_data(
+    process_selection='all',
+    n_samples=2000,
+    add_env_vars=True,
+    seed=42
+):
+    """
+    Generate SCM data for conditional embedding training.
+
+    Args:
+        process_selection (str): Process to generate data for:
+            - 'all': Unified dataset with all 4 processes (Laser, Plasma, Galvanic, Microetch)
+            - 'laser', 'plasma', 'galvanic', 'microetch': Single process
+        n_samples (int): Number of samples to generate
+            - For 'all': samples per process (total will be 4*n_samples)
+            - For single process: total samples
+        add_env_vars (bool): If True, add environment variables and process_id
+        seed (int): Random seed for reproducibility
+
+    Returns:
+        pd.DataFrame: Generated data with all features including conditioning variables
+    """
+    import sys
+    from pathlib import Path
+
+    # Add scm_ds to path
+    scm_path = Path(__file__).parent.parent.parent / 'scm_ds'
+    if str(scm_path) not in sys.path:
+        sys.path.insert(0, str(scm_path))
+
+    if process_selection == 'all':
+        from scm_ds.datasets import generate_unified_dataset
+        print(f"Generating unified multi-process dataset...")
+        df = generate_unified_dataset(
+            n_samples_per_process=n_samples,
+            add_env_vars=add_env_vars,
+            seed=seed,
+            mode='balanced'
+        )
+    elif process_selection in ['laser', 'plasma', 'galvanic', 'microetch']:
+        from scm_ds.datasets import generate_single_process_dataset
+        print(f"Generating single-process dataset: {process_selection}")
+        df = generate_single_process_dataset(
+            process_name=process_selection,
+            n_samples=n_samples,
+            add_env_vars=add_env_vars,
+            seed=seed
+        )
+        print(f"  Generated {len(df)} samples for {process_selection}")
+    else:
+        raise ValueError(
+            f"Invalid process_selection: {process_selection}. "
+            f"Must be 'all' or one of ['laser', 'plasma', 'galvanic', 'microetch']"
+        )
+
+    return df
+
+
+def prepare_conditional_tensors(
+    df,
+    input_columns,
+    output_columns,
+    conditioning_columns=None
+):
+    """
+    Extract features and conditioning variables from DataFrame for conditional training.
+
+    Args:
+        df (pd.DataFrame): Input DataFrame with all features
+        input_columns (list): Names of process-specific input feature columns
+        output_columns (list): Names of process-specific output feature columns
+        conditioning_columns (dict, optional): Dict specifying conditioning columns:
+            {
+                'process_id': 'process_id',
+                'timestamp': 'timestamp',
+                'env_continuous': ['ambient_temp', 'humidity'],
+                'env_categorical': ['batch_id', 'operator_id', 'shift']
+            }
+
+    Returns:
+        dict: {
+            'X': np.ndarray (n_samples, n_input_features),
+            'y': np.ndarray (n_samples, n_output_features),
+            'process_id': np.ndarray (n_samples,) or None,
+            'timestamp': np.ndarray (n_samples,) or None,
+            'env_continuous': dict {var_name: np.ndarray (n_samples,)} or None,
+            'env_categorical': dict {var_name: np.ndarray (n_samples,)} or None,
+            'env_masks': dict {var_name: np.ndarray (n_samples,)} or None,
+        }
+    """
+    result = {}
+
+    # Extract X and y (process-specific features)
+    # Handle case where different processes have different input columns
+    # Use only available columns
+    available_input_cols = [col for col in input_columns if col in df.columns]
+    available_output_cols = [col for col in output_columns if col in df.columns]
+
+    # For multi-process datasets, we need to handle different input/output columns per process
+    # Strategy: use all non-conditioning columns as features
+    if conditioning_columns is not None:
+        # Get all conditioning column names
+        cond_cols = set()
+        if 'process_id' in conditioning_columns:
+            cond_cols.add(conditioning_columns['process_id'])
+        if 'timestamp' in conditioning_columns:
+            cond_cols.add(conditioning_columns['timestamp'])
+        if 'env_continuous' in conditioning_columns:
+            cond_cols.update(conditioning_columns['env_continuous'])
+        if 'env_categorical' in conditioning_columns:
+            cond_cols.update(conditioning_columns['env_categorical'])
+
+        # All numeric columns that are not conditioning variables are features
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        feature_cols = [col for col in numeric_cols if col not in cond_cols]
+
+        # Separate input and output based on available columns
+        if available_output_cols:
+            output_cols_final = available_output_cols
+            input_cols_final = [col for col in feature_cols if col not in output_cols_final]
+        else:
+            # If no output columns available, use last column as output
+            input_cols_final = feature_cols[:-1]
+            output_cols_final = [feature_cols[-1]]
+    else:
+        input_cols_final = available_input_cols
+        output_cols_final = available_output_cols
+
+    result['X'] = df[input_cols_final].values
+    result['y'] = df[output_cols_final].values
+
+    # Extract conditioning variables if provided
+    if conditioning_columns is not None:
+        # Process ID
+        if 'process_id' in conditioning_columns:
+            pid_col = conditioning_columns['process_id']
+            if pid_col in df.columns:
+                result['process_id'] = df[pid_col].values.astype(np.int64)
+            else:
+                result['process_id'] = None
+        else:
+            result['process_id'] = None
+
+        # Timestamp
+        if 'timestamp' in conditioning_columns:
+            ts_col = conditioning_columns['timestamp']
+            if ts_col in df.columns:
+                # Normalize timestamps to [0, 1] range for better training
+                timestamps = df[ts_col].values.astype(np.float32)
+                ts_min = timestamps.min()
+                ts_max = timestamps.max()
+                if ts_max > ts_min:
+                    timestamps = (timestamps - ts_min) / (ts_max - ts_min)
+                result['timestamp'] = timestamps
+            else:
+                result['timestamp'] = None
+        else:
+            result['timestamp'] = None
+
+        # Continuous environment variables
+        if 'env_continuous' in conditioning_columns:
+            env_cont = {}
+            env_masks = {}
+            for var_name in conditioning_columns['env_continuous']:
+                if var_name in df.columns:
+                    values = df[var_name].values.astype(np.float32)
+                    # Create mask: 1.0 = present, 0.0 = missing
+                    mask = ~np.isnan(values)
+                    # Replace NaN with 0.0 (will be masked out in model)
+                    values = np.nan_to_num(values, nan=0.0)
+                    env_cont[var_name] = values
+                    env_masks[var_name] = mask.astype(np.float32)
+            result['env_continuous'] = env_cont if env_cont else None
+            result['env_masks'] = env_masks if env_masks else None
+        else:
+            result['env_continuous'] = None
+            result['env_masks'] = None
+
+        # Categorical environment variables
+        if 'env_categorical' in conditioning_columns:
+            env_cat = {}
+            for var_name in conditioning_columns['env_categorical']:
+                if var_name in df.columns:
+                    env_cat[var_name] = df[var_name].values.astype(np.int64)
+            result['env_categorical'] = env_cat if env_cat else None
+        else:
+            result['env_categorical'] = None
+    else:
+        result['process_id'] = None
+        result['timestamp'] = None
+        result['env_continuous'] = None
+        result['env_categorical'] = None
+        result['env_masks'] = None
+
+    return result
+
+
+def create_conditional_collate_fn(conditioning_enabled=True):
+    """
+    Create a collate function for DataLoader that handles conditional data.
+
+    Args:
+        conditioning_enabled (bool): If True, return dict format with conditioning vars.
+                                     If False, return standard (X, y) tuple.
+
+    Returns:
+        callable: Collate function for DataLoader
+    """
+    import torch
+
+    if not conditioning_enabled:
+        # Standard collate for non-conditional training
+        def standard_collate(batch):
+            # batch is a list of (X, y) tuples
+            X_batch = torch.stack([item['X'] for item in batch])
+            y_batch = torch.stack([item['y'] for item in batch])
+            return X_batch, y_batch
+        return standard_collate
+
+    else:
+        # Conditional collate function
+        def conditional_collate(batch):
+            # batch is a list of dicts with keys: X, y, process_id, etc.
+            result = {}
+
+            # Stack X and y
+            result['X'] = torch.stack([item['X'] for item in batch])
+            result['y'] = torch.stack([item['y'] for item in batch])
+
+            # Process ID
+            if 'process_id' in batch[0] and batch[0]['process_id'] is not None:
+                result['process_id'] = torch.stack([item['process_id'] for item in batch])
+            else:
+                result['process_id'] = None
+
+            # Timestamp
+            if 'timestamp' in batch[0] and batch[0]['timestamp'] is not None:
+                result['timestamp'] = torch.stack([item['timestamp'] for item in batch])
+            else:
+                result['timestamp'] = None
+
+            # Continuous environment variables
+            if 'env_continuous' in batch[0] and batch[0]['env_continuous'] is not None:
+                env_cont = {}
+                for var_name in batch[0]['env_continuous'].keys():
+                    env_cont[var_name] = torch.stack([item['env_continuous'][var_name] for item in batch])
+                result['env_continuous'] = env_cont
+            else:
+                result['env_continuous'] = None
+
+            # Categorical environment variables
+            if 'env_categorical' in batch[0] and batch[0]['env_categorical'] is not None:
+                env_cat = {}
+                for var_name in batch[0]['env_categorical'].keys():
+                    env_cat[var_name] = torch.stack([item['env_categorical'][var_name] for item in batch])
+                result['env_categorical'] = env_cat
+            else:
+                result['env_categorical'] = None
+
+            # Environment masks
+            if 'env_masks' in batch[0] and batch[0]['env_masks'] is not None:
+                env_masks = {}
+                for var_name in batch[0]['env_masks'].keys():
+                    env_masks[var_name] = torch.stack([item['env_masks'][var_name] for item in batch])
+                result['env_masks'] = env_masks
+            else:
+                result['env_masks'] = None
+
+            return result
+
+        return conditional_collate

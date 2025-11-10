@@ -15,6 +15,13 @@ This allows the model to learn where the data is noisy or uncertain.
 import torch
 import torch.nn as nn
 import numpy as np
+from typing import Optional, Dict
+
+try:
+    from .conditional_layers import ContextEmbeddingModule, ConditionalLayerNorm, ConditionalBatchNorm1d
+except ImportError:
+    # Fallback for when module is imported differently
+    from conditional_layers import ContextEmbeddingModule, ConditionalLayerNorm, ConditionalBatchNorm1d
 
 
 class UncertaintyPredictor(nn.Module):
@@ -35,6 +42,11 @@ class UncertaintyPredictor(nn.Module):
         * Mean head: predicts μ (linear output)
         * Variance head: predicts log(σ²) (then exponentiated for positivity)
 
+    **Conditional Embedding Support:**
+    When `conditioning_config` is provided, the model incorporates conditional
+    embeddings from process_id, environment variables, and timestamps. These
+    embeddings modulate the normalization layers via ConditionalLayerNorm.
+
     Args:
         input_size (int): Number of input features
         hidden_sizes (list): List with dimensions of shared hidden layers
@@ -42,6 +54,7 @@ class UncertaintyPredictor(nn.Module):
         dropout_rate (float): Dropout rate for regularization (default: 0.2)
         use_batchnorm (bool): Whether to use batch normalization (default: False)
         min_variance (float): Minimum allowed variance for numerical stability (default: 1e-6)
+        conditioning_config (dict, optional): Configuration for conditional embeddings
 
     Example:
         >>> model = UncertaintyPredictor(
@@ -55,25 +68,76 @@ class UncertaintyPredictor(nn.Module):
     """
 
     def __init__(self, input_size, hidden_sizes, output_size,
-                 dropout_rate=0.2, use_batchnorm=False, min_variance=1e-6):
+                 dropout_rate=0.2, use_batchnorm=False, min_variance=1e-6,
+                 conditioning_config=None):
         super(UncertaintyPredictor, self).__init__()
 
         self.output_size = output_size
         self.min_variance = min_variance
+        self.conditioning_enabled = conditioning_config is not None and conditioning_config.get('enable', False)
+        self.conditioning_config = conditioning_config or {}
 
-        # Build shared hidden layers
-        shared_layers = []
+        # Create conditional embedding module if enabled
+        if self.conditioning_enabled:
+            print("Initializing UncertaintyPredictor with Conditional Embeddings")
+            self.context_embedder = ContextEmbeddingModule(
+                num_processes=conditioning_config.get('num_processes', 4),
+                d_proc=conditioning_config.get('d_proc', 16),
+                env_continuous=conditioning_config.get('env_continuous', []),
+                d_env_float=conditioning_config.get('d_env_float', 16),
+                use_missing_mask=conditioning_config.get('use_missing_mask', True),
+                env_categorical=conditioning_config.get('env_categorical', {}),
+                d_env_cat_base=conditioning_config.get('d_env_cat_base', 1.6),
+                use_time=conditioning_config.get('use_time', True),
+                time_periods=conditioning_config.get('time_periods', 4),
+                d_time=conditioning_config.get('d_time', 8),
+                d_context=conditioning_config.get('d_context', 64),
+                context_mlp_hidden=conditioning_config.get('context_mlp_hidden', [128, 64]),
+                context_dropout=conditioning_config.get('context_dropout', 0.1)
+            )
+            d_context = conditioning_config.get('d_context', 64)
+            norm_type = conditioning_config.get('norm_type', 'conditional_layer_norm')
+            print(f"  • Context embedding dimension: {d_context}")
+            print(f"  • Normalization type: {norm_type}")
+        else:
+            self.context_embedder = None
+            d_context = None
+            norm_type = None
+
+        # Build shared hidden layers with conditional normalization
+        self.shared_layers = nn.ModuleList()
+        self.norm_layers = nn.ModuleList()
+        self.activation_layers = nn.ModuleList()
+        self.dropout_layers = nn.ModuleList()
+
         prev_size = input_size
 
-        for hidden_size in hidden_sizes:
-            shared_layers.append(nn.Linear(prev_size, hidden_size))
-            if use_batchnorm:
-                shared_layers.append(nn.BatchNorm1d(hidden_size))
-            shared_layers.append(nn.SiLU())
-            shared_layers.append(nn.Dropout(dropout_rate))
-            prev_size = hidden_size
+        for i, hidden_size in enumerate(hidden_sizes):
+            # Linear layer
+            self.shared_layers.append(nn.Linear(prev_size, hidden_size))
 
-        self.shared_network = nn.Sequential(*shared_layers)
+            # Normalization layer (conditional or standard)
+            if use_batchnorm:
+                if self.conditioning_enabled:
+                    if norm_type == 'conditional_layer_norm':
+                        self.norm_layers.append(ConditionalLayerNorm(hidden_size, d_context))
+                    elif norm_type == 'conditional_batch_norm':
+                        self.norm_layers.append(ConditionalBatchNorm1d(hidden_size, d_context))
+                    else:
+                        # Fallback to standard LayerNorm
+                        self.norm_layers.append(nn.LayerNorm(hidden_size))
+                else:
+                    self.norm_layers.append(nn.BatchNorm1d(hidden_size))
+            else:
+                self.norm_layers.append(None)
+
+            # Activation
+            self.activation_layers.append(nn.SiLU())
+
+            # Dropout
+            self.dropout_layers.append(nn.Dropout(dropout_rate))
+
+            prev_size = hidden_size
 
         # Output heads
         # Mean head: linear output for the predicted mean μ
@@ -83,20 +147,58 @@ class UncertaintyPredictor(nn.Module):
         # Using log-space helps with numerical stability
         self.log_variance_head = nn.Linear(prev_size, output_size)
 
-    def forward(self, x):
+    def forward(
+        self,
+        x,
+        process_id=None,
+        env_continuous=None,
+        env_categorical=None,
+        timestamp=None,
+        env_masks=None
+    ):
         """
         Forward pass of the uncertainty network.
 
         Args:
             x (torch.Tensor): Input tensor of shape (batch_size, input_size)
+            process_id (torch.Tensor, optional): Process IDs (batch_size,)
+            env_continuous (dict, optional): Continuous env vars {name: tensor (batch_size,)}
+            env_categorical (dict, optional): Categorical env vars {name: tensor (batch_size,)}
+            timestamp (torch.Tensor, optional): Timestamps (batch_size,)
+            env_masks (dict, optional): Missing value masks {name: tensor (batch_size,)}
 
         Returns:
             tuple: (mean, variance)
                 - mean: Predicted mean values of shape (batch_size, output_size)
                 - variance: Predicted variance of shape (batch_size, output_size)
         """
-        # Shared feature extraction
-        features = self.shared_network(x)
+        # Generate context vector if conditioning is enabled
+        context = None
+        if self.conditioning_enabled and self.context_embedder is not None:
+            context = self.context_embedder(
+                process_id=process_id,
+                env_continuous=env_continuous,
+                env_categorical=env_categorical,
+                timestamp=timestamp,
+                env_masks=env_masks
+            )
+
+        # Shared feature extraction with conditional normalization
+        features = x
+        for i, (linear, norm, activation, dropout) in enumerate(
+            zip(self.shared_layers, self.norm_layers, self.activation_layers, self.dropout_layers)
+        ):
+            features = linear(features)
+
+            # Apply normalization (conditional or standard)
+            if norm is not None:
+                if self.conditioning_enabled and isinstance(norm, (ConditionalLayerNorm, ConditionalBatchNorm1d)):
+                    features = norm(features, context)
+                else:
+                    features = norm(features)
+
+            features = activation(features)
+            features = dropout(features)
 
         # Predict mean
         mean = self.mean_head(features)

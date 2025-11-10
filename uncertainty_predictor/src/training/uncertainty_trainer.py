@@ -27,6 +27,7 @@ class UncertaintyTrainer:
     - Checkpoint saving
     - Metrics logging for both mean predictions and uncertainty
     - Separate tracking of prediction error and uncertainty calibration
+    - Per-process metrics tracking for conditional multi-process training
 
     Args:
         model (nn.Module): Uncertainty model to train
@@ -34,9 +35,11 @@ class UncertaintyTrainer:
         device (str): 'cuda' or 'cpu' (default: auto-detect)
         learning_rate (float): Learning rate (default: 0.001)
         weight_decay (float): L2 regularization strength (default: 0.0)
+        conditioning_enabled (bool): If True, expect dict batch format (default: False)
     """
 
-    def __init__(self, model, criterion, device=None, learning_rate=0.001, weight_decay=0.0):
+    def __init__(self, model, criterion, device=None, learning_rate=0.001, weight_decay=0.0,
+                 conditioning_enabled=False):
         # Setup device
         if device is None:
             self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -47,6 +50,7 @@ class UncertaintyTrainer:
         self.criterion = criterion
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
+        self.conditioning_enabled = conditioning_enabled
 
         # Setup optimizer
         self.optimizer = optim.Adam(
@@ -61,10 +65,58 @@ class UncertaintyTrainer:
         self.train_mse = []  # Track MSE separately for mean predictions
         self.val_mse = []
         self.best_val_loss = float('inf')
+        self.per_process_metrics = {}  # Track metrics per process_id
 
         print(f"UncertaintyTrainer initialized on device: {self.device}")
         print(f"Optimizer: Adam (lr={learning_rate}, weight_decay={weight_decay})")
         print(f"Loss function: {criterion.__class__.__name__}")
+        if conditioning_enabled:
+            print(f"Conditional training enabled: will compute per-process metrics")
+
+    def _extract_batch_data(self, batch):
+        """
+        Extract data from batch (supports both tuple and dict formats).
+
+        Args:
+            batch: Either (X, y) tuple or dict with keys: X, y, process_id, etc.
+
+        Returns:
+            dict: {
+                'X': tensor,
+                'y': tensor,
+                'process_id': tensor or None,
+                'timestamp': tensor or None,
+                'env_continuous': dict or None,
+                'env_categorical': dict or None,
+                'env_masks': dict or None
+            }
+        """
+        if isinstance(batch, dict):
+            # Dict format (conditional training)
+            return {
+                'X': batch['X'].to(self.device),
+                'y': batch['y'].to(self.device),
+                'process_id': batch.get('process_id').to(self.device) if batch.get('process_id') is not None else None,
+                'timestamp': batch.get('timestamp').to(self.device) if batch.get('timestamp') is not None else None,
+                'env_continuous': {k: v.to(self.device) for k, v in batch['env_continuous'].items()}
+                                  if batch.get('env_continuous') is not None else None,
+                'env_categorical': {k: v.to(self.device) for k, v in batch['env_categorical'].items()}
+                                   if batch.get('env_categorical') is not None else None,
+                'env_masks': {k: v.to(self.device) for k, v in batch['env_masks'].items()}
+                             if batch.get('env_masks') is not None else None,
+            }
+        else:
+            # Tuple format (standard training)
+            batch_X, batch_y = batch
+            return {
+                'X': batch_X.to(self.device),
+                'y': batch_y.to(self.device),
+                'process_id': None,
+                'timestamp': None,
+                'env_continuous': None,
+                'env_categorical': None,
+                'env_masks': None,
+            }
 
     def train_epoch(self, train_loader):
         """
@@ -82,20 +134,26 @@ class UncertaintyTrainer:
         epoch_loss = 0.0
         epoch_mse = 0.0
 
-        for batch_X, batch_y in train_loader:
-            # Move data to device
-            batch_X = batch_X.to(self.device)
-            batch_y = batch_y.to(self.device)
+        for batch in train_loader:
+            # Extract batch data (supports both tuple and dict formats)
+            data = self._extract_batch_data(batch)
 
-            # Forward pass
-            mean, variance = self.model(batch_X)
+            # Forward pass (with or without conditioning)
+            mean, variance = self.model(
+                data['X'],
+                process_id=data['process_id'],
+                env_continuous=data['env_continuous'],
+                env_categorical=data['env_categorical'],
+                timestamp=data['timestamp'],
+                env_masks=data['env_masks']
+            )
 
             # Compute Gaussian NLL loss
-            loss = self.criterion(mean, variance, batch_y)
+            loss = self.criterion(mean, variance, data['y'])
 
             # Compute MSE for monitoring (not used for backprop)
             with torch.no_grad():
-                mse = torch.mean((mean - batch_y) ** 2)
+                mse = torch.mean((mean - data['y']) ** 2)
                 epoch_mse += mse.item()
 
             # Backward pass and optimization
@@ -109,12 +167,14 @@ class UncertaintyTrainer:
         avg_mse = epoch_mse / len(train_loader)
         return avg_loss, avg_mse
 
-    def validate(self, val_loader):
+    def validate(self, val_loader, compute_per_process_metrics=None):
         """
-        Model validation.
+        Model validation with optional per-process metrics tracking.
 
         Args:
             val_loader (DataLoader): DataLoader for validation set
+            compute_per_process_metrics (bool, optional): If True, compute metrics per process.
+                                                          Defaults to self.conditioning_enabled.
 
         Returns:
             tuple: (avg_loss, avg_mse, avg_variance)
@@ -122,30 +182,68 @@ class UncertaintyTrainer:
                 - avg_mse: Average MSE of mean predictions
                 - avg_variance: Average predicted variance
         """
+        if compute_per_process_metrics is None:
+            compute_per_process_metrics = self.conditioning_enabled
+
         self.model.eval()
         val_loss = 0.0
         val_mse = 0.0
         val_variance = 0.0
 
-        with torch.no_grad():
-            for batch_X, batch_y in val_loader:
-                batch_X = batch_X.to(self.device)
-                batch_y = batch_y.to(self.device)
+        # Per-process tracking
+        if compute_per_process_metrics:
+            process_metrics = {}  # {process_id: {'mse': [], 'variance': []}}
 
-                mean, variance = self.model(batch_X)
+        with torch.no_grad():
+            for batch in val_loader:
+                # Extract batch data
+                data = self._extract_batch_data(batch)
+
+                # Forward pass
+                mean, variance = self.model(
+                    data['X'],
+                    process_id=data['process_id'],
+                    env_continuous=data['env_continuous'],
+                    env_categorical=data['env_categorical'],
+                    timestamp=data['timestamp'],
+                    env_masks=data['env_masks']
+                )
 
                 # Compute losses
-                loss = self.criterion(mean, variance, batch_y)
-                mse = torch.mean((mean - batch_y) ** 2)
+                loss = self.criterion(mean, variance, data['y'])
+                mse = torch.mean((mean - data['y']) ** 2)
 
                 val_loss += loss.item()
                 val_mse += mse.item()
                 val_variance += torch.mean(variance).item()
 
+                # Per-process metrics
+                if compute_per_process_metrics and data['process_id'] is not None:
+                    process_ids = data['process_id'].cpu().numpy()
+                    batch_mse = ((mean - data['y']) ** 2).cpu().numpy()
+                    batch_variance = variance.cpu().numpy()
+
+                    for i, pid in enumerate(process_ids):
+                        pid = int(pid)
+                        if pid not in process_metrics:
+                            process_metrics[pid] = {'mse': [], 'variance': []}
+                        process_metrics[pid]['mse'].append(float(batch_mse[i].mean()))
+                        process_metrics[pid]['variance'].append(float(batch_variance[i].mean()))
+
         n_batches = len(val_loader)
+
+        # Store per-process metrics
+        if compute_per_process_metrics and process_metrics:
+            for pid, metrics in process_metrics.items():
+                if pid not in self.per_process_metrics:
+                    self.per_process_metrics[pid] = {'val_mse': [], 'val_variance': []}
+                self.per_process_metrics[pid]['val_mse'].append(np.mean(metrics['mse']))
+                self.per_process_metrics[pid]['val_variance'].append(np.mean(metrics['variance']))
+
         return val_loss / n_batches, val_mse / n_batches, val_variance / n_batches
 
-    def train(self, train_loader, val_loader, epochs=100, patience=10, save_dir='checkpoints'):
+    def train(self, train_loader, val_loader, epochs=100, patience=10, save_dir='checkpoints',
+              compute_per_process_metrics=None):
         """
         Complete training with early stopping.
 
@@ -155,10 +253,14 @@ class UncertaintyTrainer:
             epochs (int): Maximum number of epochs
             patience (int): Epochs to wait before early stopping
             save_dir (str): Directory to save checkpoints
+            compute_per_process_metrics (bool, optional): Compute per-process metrics.
+                                                          Defaults to self.conditioning_enabled.
 
         Returns:
             dict: Dictionary with training history
         """
+        if compute_per_process_metrics is None:
+            compute_per_process_metrics = self.conditioning_enabled
         save_path = Path(save_dir)
         save_path.mkdir(parents=True, exist_ok=True)
 
@@ -179,7 +281,7 @@ class UncertaintyTrainer:
             self.train_mse.append(train_mse)
 
             # Validation
-            val_loss, val_mse, val_variance = self.validate(val_loader)
+            val_loss, val_mse, val_variance = self.validate(val_loader, compute_per_process_metrics)
             self.val_losses.append(val_loss)
             self.val_mse.append(val_mse)
 

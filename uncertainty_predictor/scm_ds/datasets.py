@@ -633,12 +633,200 @@ ds_scm_microetch = SCMDataset(
 
 
 # =============================================================================
+# CONDITIONAL EMBEDDING UTILITIES
+# =============================================================================
+
+import pandas as pd
+
+
+def add_environment_variables(df: pd.DataFrame, n: int, seed: int = 42) -> pd.DataFrame:
+    """
+    Add simulated environment variables to dataset for conditional embeddings.
+
+    Args:
+        df: Input DataFrame with process data
+        n: Number of samples
+        seed: Random seed for reproducibility
+
+    Returns:
+        DataFrame with additional columns: timestamp, ambient_temp, humidity,
+                                          batch_id, operator_id, shift
+    """
+    rng = np.random.default_rng(seed)
+
+    # Temporal: Unix epoch timestamps normalized to days (e.g., 0-30 days)
+    # Convert to actual timestamps for realism (e.g., Jan 2024)
+    base_timestamp = 1704067200  # Jan 1, 2024 00:00:00 UTC
+    timestamps = base_timestamp + rng.uniform(0, 30*24*3600, size=n)  # 30 days range
+    df['timestamp'] = timestamps
+
+    # Continuous environment variables
+    df['ambient_temp'] = rng.normal(loc=22.0, scale=2.5, size=n)  # °C, mean=22, std=2.5
+    df['humidity'] = rng.normal(loc=50.0, scale=10.0, size=n)      # %, mean=50, std=10
+
+    # Clip to realistic ranges
+    df['ambient_temp'] = df['ambient_temp'].clip(15.0, 30.0)
+    df['humidity'] = df['humidity'].clip(30.0, 70.0)
+
+    # Add missing values to continuous variables (10% missing rate)
+    missing_mask_temp = rng.random(n) > 0.1
+    missing_mask_humidity = rng.random(n) > 0.1
+    df.loc[~missing_mask_temp, 'ambient_temp'] = np.nan
+    df.loc[~missing_mask_humidity, 'humidity'] = np.nan
+
+    # Categorical environment variables
+    df['batch_id'] = rng.integers(0, 10, size=n)      # 10 batches
+    df['operator_id'] = rng.integers(0, 5, size=n)    # 5 operators
+    df['shift'] = rng.integers(0, 3, size=n)          # 3 shifts (morning, afternoon, night)
+
+    return df
+
+
+# Mapping from process names to SCMDataset objects
+PROCESS_DATASETS = {
+    'laser': ds_scm_laser,
+    'plasma': ds_scm_plasma,
+    'galvanic': ds_scm_galvanic,
+    'microetch': ds_scm_microetch
+}
+
+PROCESS_IDS = {
+    'laser': 0,
+    'plasma': 1,
+    'galvanic': 2,
+    'microetch': 3
+}
+
+
+def generate_single_process_dataset(
+    process_name: str,
+    n_samples: int,
+    add_env_vars: bool = True,
+    seed: int = 42
+) -> pd.DataFrame:
+    """
+    Generate a dataset for a single PCB process with optional environment variables.
+
+    Args:
+        process_name: One of ['laser', 'plasma', 'galvanic', 'microetch']
+        n_samples: Number of samples to generate
+        add_env_vars: If True, add environment variables and process_id
+        seed: Random seed for reproducibility
+
+    Returns:
+        DataFrame with process data and optionally env vars and process_id
+    """
+    if process_name not in PROCESS_DATASETS:
+        raise ValueError(f"Unknown process: {process_name}. Must be one of {list(PROCESS_DATASETS.keys())}")
+
+    # Generate base SCM dataset
+    scm_dataset = PROCESS_DATASETS[process_name]
+    df = scm_dataset.sample(n=n_samples, seed=seed)
+
+    if add_env_vars:
+        # Add process_id
+        df['process_id'] = PROCESS_IDS[process_name]
+
+        # Add environment variables
+        df = add_environment_variables(df, n_samples, seed=seed)
+
+    return df
+
+
+def generate_unified_dataset(
+    n_samples_per_process: int = 500,
+    add_env_vars: bool = True,
+    seed: int = 42,
+    mode: str = 'balanced'
+) -> pd.DataFrame:
+    """
+    Generate a unified multi-process dataset for conditional embedding training.
+
+    Combines all 4 PCB processes (Laser, Plasma, Galvanic, Microetch) into a
+    single DataFrame suitable for training with conditional embeddings.
+
+    Args:
+        n_samples_per_process: Number of samples per process
+        add_env_vars: If True, add environment variables (required for conditioning)
+        seed: Base random seed for reproducibility
+        mode: 'balanced' (equal samples) or 'imbalanced' (varied distribution)
+
+    Returns:
+        DataFrame with columns:
+            - Process-specific input features (varies by process)
+            - Process-specific output feature (varies by process)
+            - process_id: 0=Laser, 1=Plasma, 2=Galvanic, 3=Microetch
+            - timestamp, ambient_temp, humidity (if add_env_vars=True)
+            - batch_id, operator_id, shift (if add_env_vars=True)
+    """
+    process_names = ['laser', 'plasma', 'galvanic', 'microetch']
+
+    # Determine sample counts per process
+    if mode == 'balanced':
+        sample_counts = {name: n_samples_per_process for name in process_names}
+    elif mode == 'imbalanced':
+        # Simulate realistic imbalance (some processes used more frequently)
+        rng = np.random.default_rng(seed)
+        imbalance_factors = rng.uniform(0.5, 1.5, size=len(process_names))
+        sample_counts = {
+            name: int(n_samples_per_process * factor)
+            for name, factor in zip(process_names, imbalance_factors)
+        }
+    else:
+        raise ValueError(f"Unknown mode: {mode}. Must be 'balanced' or 'imbalanced'")
+
+    print(f"\n{'='*60}")
+    print(f"Generating Unified Multi-Process Dataset (mode={mode})")
+    print(f"{'='*60}")
+
+    dfs = []
+    total_samples = 0
+
+    for i, process_name in enumerate(process_names):
+        n_proc = sample_counts[process_name]
+        total_samples += n_proc
+
+        # Use different seed for each process to ensure diversity
+        proc_seed = seed + i * 1000
+
+        df_proc = generate_single_process_dataset(
+            process_name=process_name,
+            n_samples=n_proc,
+            add_env_vars=add_env_vars,
+            seed=proc_seed
+        )
+
+        print(f"  • {process_name.capitalize():12s} (ID={i}): {n_proc:5d} samples")
+
+        dfs.append(df_proc)
+
+    print(f"{'='*60}")
+    print(f"Total samples: {total_samples}")
+    print(f"{'='*60}\n")
+
+    # Concatenate all process datasets
+    df_unified = pd.concat(dfs, ignore_index=True)
+
+    # Shuffle to mix processes
+    rng = np.random.default_rng(seed)
+    shuffled_indices = rng.permutation(len(df_unified))
+    df_unified = df_unified.iloc[shuffled_indices].reset_index(drop=True)
+
+    return df_unified
+
+
+# =============================================================================
 # EXAMPLE USAGE (commented out)
 # =============================================================================
 # Uncomment and modify as needed to generate datasets
 
+# Single process datasets
 # ds_scm_1_to_1_ct.generate_ds(mode="flat", n=5_000, save_dir=join(ROOT_DIR, "data/one_to_one"))
 # ds_scm_laser.generate_ds(mode="flat", n=5_000, save_dir=join(ROOT_DIR, "data/laser"))
 # ds_scm_plasma.generate_ds(mode="flat", n=5_000, save_dir=join(ROOT_DIR, "data/plasma"))
 # ds_scm_galvanic.generate_ds(mode="flat", n=5_000, save_dir=join(ROOT_DIR, "data/galvanic"))
 # ds_scm_microetch.generate_ds(mode="flat", n=5_000, save_dir=join(ROOT_DIR, "data/microetch"))
+
+# Conditional embedding datasets
+# df_single = generate_single_process_dataset('laser', n_samples=1000, add_env_vars=True, seed=42)
+# df_unified = generate_unified_dataset(n_samples_per_process=500, add_env_vars=True, seed=42, mode='balanced')
