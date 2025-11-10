@@ -177,10 +177,11 @@ class UncertaintyTrainer:
                                                           Defaults to self.conditioning_enabled.
 
         Returns:
-            tuple: (avg_loss, avg_mse, avg_variance)
+            tuple: (avg_loss, avg_mse, avg_variance, per_process_metrics)
                 - avg_loss: Average Gaussian NLL loss
                 - avg_mse: Average MSE of mean predictions
                 - avg_variance: Average predicted variance
+                - per_process_metrics: Dict {process_id: {'mse': float, 'variance': float}} or None
         """
         if compute_per_process_metrics is None:
             compute_per_process_metrics = self.conditioning_enabled
@@ -232,15 +233,22 @@ class UncertaintyTrainer:
 
         n_batches = len(val_loader)
 
-        # Store per-process metrics
+        # Calculate per-process metrics for this epoch
+        epoch_per_process = None
         if compute_per_process_metrics and process_metrics:
+            epoch_per_process = {}
             for pid, metrics in process_metrics.items():
+                avg_mse = np.mean(metrics['mse'])
+                avg_var = np.mean(metrics['variance'])
+                epoch_per_process[pid] = {'mse': avg_mse, 'variance': avg_var}
+
+                # Store in history
                 if pid not in self.per_process_metrics:
                     self.per_process_metrics[pid] = {'val_mse': [], 'val_variance': []}
-                self.per_process_metrics[pid]['val_mse'].append(np.mean(metrics['mse']))
-                self.per_process_metrics[pid]['val_variance'].append(np.mean(metrics['variance']))
+                self.per_process_metrics[pid]['val_mse'].append(avg_mse)
+                self.per_process_metrics[pid]['val_variance'].append(avg_var)
 
-        return val_loss / n_batches, val_mse / n_batches, val_variance / n_batches
+        return val_loss / n_batches, val_mse / n_batches, val_variance / n_batches, epoch_per_process
 
     def train(self, train_loader, val_loader, epochs=100, patience=10, save_dir='checkpoints',
               compute_per_process_metrics=None):
@@ -281,7 +289,7 @@ class UncertaintyTrainer:
             self.train_mse.append(train_mse)
 
             # Validation
-            val_loss, val_mse, val_variance = self.validate(val_loader, compute_per_process_metrics)
+            val_loss, val_mse, val_variance, per_process = self.validate(val_loader, compute_per_process_metrics)
             self.val_losses.append(val_loss)
             self.val_mse.append(val_mse)
 
@@ -290,6 +298,16 @@ class UncertaintyTrainer:
             print(f"  Train - NLL Loss: {train_loss:.6f}, MSE: {train_mse:.6f}")
             print(f"  Val   - NLL Loss: {val_loss:.6f}, MSE: {val_mse:.6f}, "
                   f"Avg Variance: {val_variance:.6f}")
+
+            # Print per-process metrics if available
+            if per_process is not None:
+                process_names = ['Laser', 'Plasma', 'Galvanic', 'Microetch']
+                print(f"  Per-Process Metrics:")
+                for pid in sorted(per_process.keys()):
+                    pname = process_names[pid] if pid < len(process_names) else f"Process_{pid}"
+                    mse = per_process[pid]['mse']
+                    var = per_process[pid]['variance']
+                    print(f"    {pname:10s} - MSE: {mse:.6f}, Variance: {var:.6f}")
 
             # Save best model
             if val_loss < self.best_val_loss:
