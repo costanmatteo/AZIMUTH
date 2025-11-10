@@ -14,7 +14,16 @@ from datetime import datetime
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
 
-from data import load_csv_data, generate_scm_data, DataPreprocessor, MachineryDataset
+from data import (
+    load_csv_data,
+    generate_scm_data,
+    generate_conditional_scm_data,
+    prepare_conditional_tensors,
+    create_conditional_collate_fn,
+    DataPreprocessor,
+    MachineryDataset,
+    ConditionalMachineryDataset
+)
 from models import (
     UncertaintyPredictor,
     GaussianNLLLoss,
@@ -58,6 +67,9 @@ def main():
     # 1. LOAD DATA
     print("\n[1/7] Loading data...")
 
+    # Check if conditioning is enabled
+    conditioning_enabled = CONFIG.get('conditioning', {}).get('enable', False)
+
     # Determine data source: CSV file or SCM synthetic data
     csv_path = CONFIG['data'].get('csv_path')
     use_scm = CONFIG['data'].get('use_scm', False)
@@ -65,9 +77,19 @@ def main():
     # Check if we should use CSV or SCM
     use_csv = csv_path is not None and Path(csv_path).exists()
 
+    # For CSV data with conditioning, we'll need to load conditioning columns separately
+    # For now, we focus on SCM data which has built-in support for conditioning
+    df = None
+    conditioning_columns = None
+
     if use_csv:
-        # Load from CSV file
+        # Load from CSV file (standard mode, no conditioning support yet)
         print(f"Using CSV file: {csv_path}")
+        if conditioning_enabled:
+            print("WARNING: Conditioning is enabled but CSV mode doesn't support it yet.")
+            print("         Disabling conditioning for this run.")
+            conditioning_enabled = False
+
         try:
             X, y = load_csv_data(
                 csv_path,
@@ -85,64 +107,170 @@ def main():
             return
     elif use_scm:
         # Generate synthetic data using SCM
-        print("CSV file not specified or not found. Using SCM synthetic data generation...")
         scm_config = CONFIG['data'].get('scm', {})
         n_samples = scm_config.get('n_samples', 5000)
         seed = scm_config.get('seed', 42)
-        dataset_type = scm_config.get('dataset_type', 'one_to_one_ct')
+        process_selection = scm_config.get('process_selection', 'all')
+        add_env_vars = scm_config.get('add_env_vars', True)
 
-        X, y, input_columns, output_columns = generate_scm_data(
-            n_samples=n_samples,
-            seed=seed,
-            dataset_type=dataset_type,
-            save_graph_to=CONFIG['training']['checkpoint_dir']
-        )
+        # Validate configuration
+        if process_selection == 'all' and not conditioning_enabled:
+            print("\nERROR: process_selection='all' requires conditioning.enable=True")
+            print("Either set conditioning.enable=True or choose a single process")
+            return
+
+        if conditioning_enabled and not add_env_vars:
+            print("WARNING: Conditioning is enabled but add_env_vars=False")
+            print("         Environment variables will not be available for conditioning")
+
+        if conditioning_enabled:
+            # Use conditional data generation
+            print("CSV file not specified. Using conditional SCM synthetic data generation...")
+            df, input_columns, output_columns, conditioning_columns = generate_conditional_scm_data(
+                process_selection=process_selection,
+                n_samples=n_samples,
+                add_env_vars=add_env_vars,
+                seed=seed
+            )
+            X = None  # Will be extracted later with conditioning vars
+            y = None
+        else:
+            # Use standard data generation (backward compatible)
+            print("CSV file not specified. Using SCM synthetic data generation (standard mode)...")
+            dataset_type = scm_config.get('dataset_type', 'one_to_one_ct')
+            X, y, input_columns, output_columns = generate_scm_data(
+                n_samples=n_samples,
+                seed=seed,
+                dataset_type=dataset_type,
+                save_graph_to=CONFIG['training']['checkpoint_dir']
+            )
     else:
         print("\nERROR: No data source specified.")
         print("Either provide a valid csv_path or enable use_scm in configs/example_config.py")
         return
 
-    print(f"  Loaded {len(X)} samples")
+    if df is not None:
+        print(f"  Loaded {len(df)} samples")
+    else:
+        print(f"  Loaded {len(X)} samples")
 
     # 2. PREPROCESSING
     print("\n[2/7] Preprocessing data...")
     preprocessor = DataPreprocessor(scaling_method=CONFIG['data']['scaling_method'])
 
-    X_train, X_val, X_test, y_train, y_val, y_test = preprocessor.split_data(
-        X, y,
-        train_size=CONFIG['data']['train_size'],
-        val_size=CONFIG['data']['val_size'],
-        test_size=CONFIG['data']['test_size'],
-        random_state=CONFIG['data']['random_state']
-    )
+    if conditioning_enabled and df is not None:
+        # Conditional mode: split DataFrame then extract tensors
+        from sklearn.model_selection import train_test_split
+        import pandas as pd
 
-    print(f"  Train set: {len(X_train)} samples")
-    print(f"  Validation set: {len(X_val)} samples")
-    print(f"  Test set: {len(X_test)} samples")
+        # First split
+        df_temp, df_test = train_test_split(
+            df,
+            test_size=CONFIG['data']['test_size'],
+            random_state=CONFIG['data']['random_state']
+        )
 
-    # Fit and transform
-    X_train_scaled, y_train_scaled = preprocessor.fit_transform(X_train, y_train)
-    X_val_scaled, y_val_scaled = preprocessor.transform(X_val, y_val)
-    X_test_scaled, y_test_scaled = preprocessor.transform(X_test, y_test)
+        # Second split (train/val from remaining data)
+        val_ratio = CONFIG['data']['val_size'] / (1 - CONFIG['data']['test_size'])
+        df_train, df_val = train_test_split(
+            df_temp,
+            test_size=val_ratio,
+            random_state=CONFIG['data']['random_state']
+        )
+
+        print(f"  Train set: {len(df_train)} samples")
+        print(f"  Validation set: {len(df_val)} samples")
+        print(f"  Test set: {len(df_test)} samples")
+
+        # Extract tensors from DataFrames
+        data_train = prepare_conditional_tensors(df_train, input_columns, output_columns, conditioning_columns)
+        data_val = prepare_conditional_tensors(df_val, input_columns, output_columns, conditioning_columns)
+        data_test = prepare_conditional_tensors(df_test, input_columns, output_columns, conditioning_columns)
+
+        # Fit and transform physical features (X, y) only
+        X_train_scaled, y_train_scaled = preprocessor.fit_transform(data_train['X'], data_train['y'])
+        X_val_scaled, y_val_scaled = preprocessor.transform(data_val['X'], data_val['y'])
+        X_test_scaled, y_test_scaled = preprocessor.transform(data_test['X'], data_test['y'])
+
+        # Update data dicts with scaled values
+        data_train['X'] = X_train_scaled
+        data_train['y'] = y_train_scaled
+        data_val['X'] = X_val_scaled
+        data_val['y'] = y_val_scaled
+        data_test['X'] = X_test_scaled
+        data_test['y'] = y_test_scaled
+
+        # Keep unscaled test data for final evaluation
+        X_test_unscaled = data_test['X']
+        y_test_unscaled = data_val['y']  # Will use original from df_test later
+
+    else:
+        # Standard mode: split arrays directly
+        X_train, X_val, X_test, y_train, y_val, y_test = preprocessor.split_data(
+            X, y,
+            train_size=CONFIG['data']['train_size'],
+            val_size=CONFIG['data']['val_size'],
+            test_size=CONFIG['data']['test_size'],
+            random_state=CONFIG['data']['random_state']
+        )
+
+        print(f"  Train set: {len(X_train)} samples")
+        print(f"  Validation set: {len(X_val)} samples")
+        print(f"  Test set: {len(X_test)} samples")
+
+        # Fit and transform
+        X_train_scaled, y_train_scaled = preprocessor.fit_transform(X_train, y_train)
+        X_val_scaled, y_val_scaled = preprocessor.transform(X_val, y_val)
+        X_test_scaled, y_test_scaled = preprocessor.transform(X_test, y_test)
+
+        # For standard mode, create simple data dicts
+        data_train = {'X': X_train_scaled, 'y': y_train_scaled}
+        data_val = {'X': X_val_scaled, 'y': y_val_scaled}
+        data_test = {'X': X_test_scaled, 'y': y_test_scaled}
 
     # 3. CREATE DATASET AND DATALOADER
     print("\n[3/7] Creating PyTorch datasets...")
-    train_dataset = MachineryDataset(X_train_scaled, y_train_scaled)
-    val_dataset = MachineryDataset(X_val_scaled, y_val_scaled)
-    test_dataset = MachineryDataset(X_test_scaled, y_test_scaled)
+
+    if conditioning_enabled:
+        # Create conditional datasets
+        train_dataset = ConditionalMachineryDataset(data_train)
+        val_dataset = ConditionalMachineryDataset(data_val)
+        test_dataset = ConditionalMachineryDataset(data_test)
+
+        # Create conditional collate function
+        collate_fn = create_conditional_collate_fn(conditioning_enabled=True)
+
+        # Print conditioning statistics
+        train_stats = train_dataset.get_statistics()
+        print(f"  Conditional training enabled:")
+        if 'num_processes' in train_stats:
+            print(f"    - Processes: {train_stats['num_processes']}")
+            print(f"    - Distribution: {train_stats['process_distribution']}")
+        if 'env_continuous_dim' in train_stats:
+            print(f"    - Continuous env vars: {train_stats['env_continuous_dim']}")
+        if 'env_categorical_vars' in train_stats:
+            print(f"    - Categorical env vars: {train_stats['env_categorical_vars']}")
+    else:
+        # Create standard datasets
+        train_dataset = MachineryDataset(data_train['X'], data_train['y'])
+        val_dataset = MachineryDataset(data_val['X'], data_val['y'])
+        test_dataset = MachineryDataset(data_test['X'], data_test['y'])
+        collate_fn = None  # Use default collate
 
     train_loader = DataLoader(
         train_dataset,
         batch_size=CONFIG['training']['batch_size'],
         shuffle=True,
         num_workers=0,
-        drop_last=True  # Drop last incomplete batch to avoid BatchNorm error
+        drop_last=True,  # Drop last incomplete batch to avoid BatchNorm error
+        collate_fn=collate_fn
     )
     val_loader = DataLoader(
         val_dataset,
         batch_size=CONFIG['training']['batch_size'],
         shuffle=False,
-        num_workers=0
+        num_workers=0,
+        collate_fn=collate_fn
     )
 
     input_dim = train_dataset.get_input_dim()
@@ -154,12 +282,22 @@ def main():
     print("\n[4/7] Creating uncertainty model...")
     model_type = CONFIG['model']['model_type']
 
+    # Prepare conditioning config if enabled
+    conditioning_config = None
+    if conditioning_enabled:
+        conditioning_config = CONFIG['conditioning'].copy()
+        print(f"  Conditional model configuration:")
+        print(f"    - Processes: {conditioning_config.get('num_processes', 4)}")
+        print(f"    - Process embedding dim: {conditioning_config.get('d_proc', 16)}")
+        print(f"    - Context vector dim: {conditioning_config.get('d_context', 64)}")
+        print(f"    - Normalization type: {conditioning_config.get('norm_type', 'conditional_layer_norm')}")
+
     if model_type == 'small':
-        model = create_small_uncertainty_model(input_dim, output_dim)
+        model = create_small_uncertainty_model(input_dim, output_dim, conditioning_config=conditioning_config)
     elif model_type == 'medium':
-        model = create_medium_uncertainty_model(input_dim, output_dim)
+        model = create_medium_uncertainty_model(input_dim, output_dim, conditioning_config=conditioning_config)
     elif model_type == 'large':
-        model = create_large_uncertainty_model(input_dim, output_dim)
+        model = create_large_uncertainty_model(input_dim, output_dim, conditioning_config=conditioning_config)
     else:  # custom
         model = UncertaintyPredictor(
             input_size=input_dim,
@@ -167,11 +305,16 @@ def main():
             output_size=output_dim,
             dropout_rate=CONFIG['model']['dropout_rate'],
             use_batchnorm=CONFIG['model']['use_batchnorm'],
-            min_variance=CONFIG['model']['min_variance']
+            min_variance=CONFIG['model']['min_variance'],
+            conditioning_config=conditioning_config
         )
 
     print(f"  Model type: {model_type}")
     print(f"  Total parameters: {sum(p.numel() for p in model.parameters())}")
+    if conditioning_enabled:
+        print(f"  Mode: Conditional (multi-process)")
+    else:
+        print(f"  Mode: Standard (single-process)")
     print(f"  Output: Mean (μ) and Variance (σ²) for each target")
 
     # 5. CREATE LOSS FUNCTION
@@ -214,7 +357,8 @@ def main():
         criterion,
         device=device,
         learning_rate=CONFIG['training']['learning_rate'],
-        weight_decay=CONFIG['training']['weight_decay']
+        weight_decay=CONFIG['training']['weight_decay'],
+        conditioning_enabled=conditioning_enabled
     )
 
     history = trainer.train(
@@ -222,8 +366,25 @@ def main():
         val_loader,
         epochs=CONFIG['training']['epochs'],
         patience=CONFIG['training']['patience'],
-        save_dir=CONFIG['training']['checkpoint_dir']
+        save_dir=CONFIG['training']['checkpoint_dir'],
+        compute_per_process_metrics=conditioning_enabled  # Enable per-process metrics if conditioning
     )
+
+    # Print per-process metrics summary if available
+    if conditioning_enabled and hasattr(trainer, 'per_process_metrics') and trainer.per_process_metrics:
+        print("\n" + "="*70)
+        print("PER-PROCESS VALIDATION METRICS (Final Epoch)")
+        print("="*70)
+        process_names = ['Laser', 'Plasma', 'Galvanic', 'Microetch']
+        for process_id in range(4):
+            if process_id in trainer.per_process_metrics:
+                metrics = trainer.per_process_metrics[process_id]
+                if metrics['val_mse']:
+                    final_mse = metrics['val_mse'][-1]
+                    final_var = metrics['val_variance'][-1]
+                    print(f"  {process_names[process_id]:12s} (ID={process_id}): "
+                          f"MSE={final_mse:.6f}, Var={final_var:.6f}")
+        print("="*70)
 
     # 7. EVALUATION
     print("\n[7/7] Evaluation on test set...")
