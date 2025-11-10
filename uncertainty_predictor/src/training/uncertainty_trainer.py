@@ -36,10 +36,16 @@ class UncertaintyTrainer:
         learning_rate (float): Learning rate (default: 0.001)
         weight_decay (float): L2 regularization strength (default: 0.0)
         conditioning_enabled (bool): If True, expect dict batch format (default: False)
+        early_stopping_metric (str): Metric to use for early stopping (default: 'val_loss')
+            Options:
+            - 'val_loss': Aggregate validation NLL loss (default)
+            - 'val_mse': Aggregate validation MSE
+            - 'worst_process_mse': Worst-case MSE across all processes (recommended for multi-process)
+            - 'mean_process_mse': Average MSE across all processes
     """
 
     def __init__(self, model, criterion, device=None, learning_rate=0.001, weight_decay=0.0,
-                 conditioning_enabled=False):
+                 conditioning_enabled=False, early_stopping_metric='val_loss'):
         # Setup device
         if device is None:
             self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -51,6 +57,19 @@ class UncertaintyTrainer:
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
         self.conditioning_enabled = conditioning_enabled
+        self.early_stopping_metric = early_stopping_metric
+
+        # Validate early stopping metric
+        valid_metrics = ['val_loss', 'val_mse', 'worst_process_mse', 'mean_process_mse']
+        if early_stopping_metric not in valid_metrics:
+            raise ValueError(f"Invalid early_stopping_metric '{early_stopping_metric}'. "
+                           f"Must be one of: {valid_metrics}")
+
+        # Warn if using per-process metric without conditioning
+        if 'process' in early_stopping_metric and not conditioning_enabled:
+            print(f"WARNING: early_stopping_metric='{early_stopping_metric}' requires "
+                  f"conditioning_enabled=True. Falling back to 'val_loss'.")
+            self.early_stopping_metric = 'val_loss'
 
         # Setup optimizer
         self.optimizer = optim.Adam(
@@ -65,11 +84,13 @@ class UncertaintyTrainer:
         self.train_mse = []  # Track MSE separately for mean predictions
         self.val_mse = []
         self.best_val_loss = float('inf')
+        self.best_metric_value = float('inf')  # For early stopping metric
         self.per_process_metrics = {}  # Track metrics per process_id
 
         print(f"UncertaintyTrainer initialized on device: {self.device}")
         print(f"Optimizer: Adam (lr={learning_rate}, weight_decay={weight_decay})")
         print(f"Loss function: {criterion.__class__.__name__}")
+        print(f"Early stopping metric: {self.early_stopping_metric}")
         if conditioning_enabled:
             print(f"Conditional training enabled: will compute per-process metrics")
 
@@ -309,11 +330,41 @@ class UncertaintyTrainer:
                     var = per_process[pid]['variance']
                     print(f"    {pname:10s} - MSE: {mse:.6f}, Variance: {var:.6f}")
 
-            # Save best model
-            if val_loss < self.best_val_loss:
-                self.best_val_loss = val_loss
+            # Compute early stopping metric
+            if self.early_stopping_metric == 'val_loss':
+                current_metric = val_loss
+                metric_display = f"Val NLL Loss: {current_metric:.6f}"
+            elif self.early_stopping_metric == 'val_mse':
+                current_metric = val_mse
+                metric_display = f"Val MSE: {current_metric:.6f}"
+            elif self.early_stopping_metric == 'worst_process_mse':
+                if per_process is not None:
+                    # Worst-case MSE across all processes
+                    process_mses = [per_process[pid]['mse'] for pid in per_process.keys()]
+                    current_metric = max(process_mses)
+                    worst_pid = max(per_process.keys(), key=lambda pid: per_process[pid]['mse'])
+                    process_names = ['Laser', 'Plasma', 'Galvanic', 'Microetch']
+                    worst_name = process_names[worst_pid] if worst_pid < len(process_names) else f"Process_{worst_pid}"
+                    metric_display = f"Worst Process MSE: {current_metric:.6f} ({worst_name})"
+                else:
+                    current_metric = val_mse
+                    metric_display = f"Val MSE: {current_metric:.6f} (no per-process data)"
+            elif self.early_stopping_metric == 'mean_process_mse':
+                if per_process is not None:
+                    # Mean MSE across all processes
+                    process_mses = [per_process[pid]['mse'] for pid in per_process.keys()]
+                    current_metric = np.mean(process_mses)
+                    metric_display = f"Mean Process MSE: {current_metric:.6f}"
+                else:
+                    current_metric = val_mse
+                    metric_display = f"Val MSE: {current_metric:.6f} (no per-process data)"
+
+            # Save best model based on early stopping metric
+            if current_metric < self.best_metric_value:
+                self.best_metric_value = current_metric
+                self.best_val_loss = val_loss  # Keep for backward compatibility
                 self.save_checkpoint(save_path / 'best_model.pth', epoch, val_loss)
-                print(f"  → New best model saved! (Val NLL Loss: {val_loss:.6f})")
+                print(f"  → New best model saved! ({metric_display})")
                 epochs_without_improvement = 0
             else:
                 epochs_without_improvement += 1
@@ -321,7 +372,7 @@ class UncertaintyTrainer:
             # Early stopping
             if epochs_without_improvement >= patience:
                 print(f"\nEarly stopping triggered after {epoch+1} epochs")
-                print(f"Best Val NLL Loss: {self.best_val_loss:.6f}")
+                print(f"Best {metric_display.split(':')[0]}: {self.best_metric_value:.6f}")
                 break
 
         # Save training history
@@ -329,6 +380,7 @@ class UncertaintyTrainer:
 
         print(f"\n{'='*70}")
         print(f"TRAINING COMPLETED")
+        print(f"Best Metric ({self.early_stopping_metric}): {self.best_metric_value:.6f}")
         print(f"Best Val NLL Loss: {self.best_val_loss:.6f}")
         print(f"{'='*70}\n")
 

@@ -50,6 +50,22 @@ CONFIG = {
         'device': 'auto',  # 'auto', 'cuda', or 'cpu'
         'checkpoint_dir': 'checkpoints_uncertainty',
 
+        # Early stopping metric: which metric to use for model selection
+        # If not specified, automatically selects:
+        #   - 'worst_process_mse' when conditioning.enable=True (multi-process training)
+        #   - 'val_loss' when conditioning.enable=False (single-process training)
+        #
+        # Manual options:
+        #   'val_loss': Aggregate validation NLL loss
+        #   'val_mse': Aggregate validation MSE
+        #   'worst_process_mse': Worst-case MSE across all processes (ensures ALL processes perform well)
+        #   'mean_process_mse': Average MSE across all processes
+        #
+        # For multi-process training, 'worst_process_mse' is STRONGLY RECOMMENDED to ensure
+        # the model performs well on ALL processes, not just on average. This prevents scenarios
+        # where 3 processes have low error but 1 process has high error.
+        # 'early_stopping_metric': 'worst_process_mse',  # Uncomment to override auto-selection
+
         # Loss function type: 'gaussian_nll' or 'energy_score'
         'loss_type': 'gaussian_nll',  # Choose between 'gaussian_nll' or 'energy_score'
 
@@ -58,7 +74,7 @@ CONFIG = {
         # α = 1.0: Standard Gaussian NLL
         # α < 1.0: Reduces penalty for large variances (recommended for over-confident models)
         # α > 1.0: Increases penalty for large variances
-        'variance_penalty_alpha': 0.1,  
+        'variance_penalty_alpha': 0.1,
 
         # Energy Score parameters (used only if loss_type='energy_score')
         # Number of Monte Carlo samples for Energy Score computation
@@ -124,12 +140,28 @@ CONFIG = {
 # EXAMPLE CONFIGURATIONS FOR DIFFERENT USE CASES
 # =============================================================================
 
+# =============================================================================
+# MULTI-PROCESS TRAINING SETUP
+# =============================================================================
 # To enable conditional multi-process training, set:
 # CONFIG['conditioning']['enable'] = True
 # CONFIG['data']['scm']['process_selection'] = 'all'
 # CONFIG['data']['scm']['n_samples'] = 500  # samples per process (total: 2000)
+#
+# Early stopping will automatically use 'worst_process_mse' to ensure all processes
+# perform well. The system tracks metrics for each process individually:
+#   - Laser (ID=0)
+#   - Plasma (ID=1)
+#   - Galvanic (ID=2)
+#   - Microetch (ID=3)
+#
+# During training, you'll see per-process metrics at each epoch, and the model
+# will only be saved when the WORST-performing process improves. This ensures
+# balanced performance across all processes.
 
-# Minimal conditioning config (no env vars, no time):
+# =============================================================================
+# MINIMAL CONDITIONING CONFIG (no env vars, no time)
+# =============================================================================
 # 'conditioning': {
 #     'enable': True,
 #     'num_processes': 4,

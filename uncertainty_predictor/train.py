@@ -362,13 +362,23 @@ def main():
     if device == 'auto':
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
+    # Get early stopping metric
+    # Default to 'worst_process_mse' for multi-process, 'val_loss' for single-process
+    if 'early_stopping_metric' in CONFIG['training']:
+        early_stopping_metric = CONFIG['training']['early_stopping_metric']
+    else:
+        # Auto-select based on conditioning mode
+        early_stopping_metric = 'worst_process_mse' if conditioning_enabled else 'val_loss'
+        print(f"Auto-selected early stopping metric: {early_stopping_metric}")
+
     trainer = UncertaintyTrainer(
         model,
         criterion,
         device=device,
         learning_rate=CONFIG['training']['learning_rate'],
         weight_decay=CONFIG['training']['weight_decay'],
-        conditioning_enabled=conditioning_enabled
+        conditioning_enabled=conditioning_enabled,
+        early_stopping_metric=early_stopping_metric
     )
 
     history = trainer.train(
