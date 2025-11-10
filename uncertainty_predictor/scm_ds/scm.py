@@ -811,6 +811,10 @@ class SCMDataset:
                     print(f"  Graphviz rendering also failed: {e2}")
                     print(f"  Continuing without graph visualization...")
 
+        # ---------------------- Return DataFrame ------------------------
+        # Construct DataFrame from generated data
+        return self.sample(n, seed)
+
 
 # --------------------------- Example -------------------------------- #
 if __name__ == "__main__":
