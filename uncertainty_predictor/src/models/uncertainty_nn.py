@@ -1,36 +1,46 @@
 """
-Neural Network with Uncertainty Quantification
+Neural Network with Uncertainty Quantification and Conditional Process Embeddings
 
 This module contains the definition of a neural network that predicts
-both the mean (μ) and variance (σ²) of the output, enabling uncertainty
-quantification for each prediction.
+both the mean (μ) and variance (σ²) of the output, with optional conditioning
+on process ID and environment variables for multi-process learning.
 
 The network outputs two values:
 - μ(x): estimated mean value
 - σ²(x): estimated uncertainty (variance)
 
-This allows the model to learn where the data is noisy or uncertain.
+With conditioning enabled, the network learns process-specific and environment-aware
+representations through:
+- Process ID embeddings
+- Environment variable embeddings (continuous + categorical + temporal)
+- Conditional normalization layers
 """
 
 import torch
 import torch.nn as nn
 import numpy as np
+from typing import Optional, Dict, List
+
+# Import conditional layers
+try:
+    from .conditional_layers import (
+        ContextEmbeddingModule,
+        ConditionalLayerNorm,
+        ConditionalBatchNorm1d
+    )
+    CONDITIONAL_LAYERS_AVAILABLE = True
+except ImportError:
+    CONDITIONAL_LAYERS_AVAILABLE = False
+    print("Warning: conditional_layers not found. Conditioning will be disabled.")
 
 
 class UncertaintyPredictor(nn.Module):
     """
-    Neural Network with Uncertainty Quantification.
-
-    Instead of outputting only a single prediction ŷ, this network produces:
-    - μ(x): mean prediction
-    - σ²(x): variance (uncertainty) of the prediction
-
-    The model learns to increase σ² in regions where data is noisy or uncertain,
-    and decrease it where predictions are more reliable.
+    Neural Network with Uncertainty Quantification and optional Conditional Processing.
 
     Architecture:
-    - Input Layer: operational parameters
-    - Shared Hidden Layers: feature extraction
+    - (Optional) Context Embedding Module: process_id + env variables → context vector
+    - Shared Hidden Layers with (Conditional) Normalization
     - Two output heads:
         * Mean head: predicts μ (linear output)
         * Variance head: predicts log(σ²) (then exponentiated for positivity)
@@ -40,94 +50,202 @@ class UncertaintyPredictor(nn.Module):
         hidden_sizes (list): List with dimensions of shared hidden layers
         output_size (int): Number of output values to predict
         dropout_rate (float): Dropout rate for regularization (default: 0.2)
-        use_batchnorm (bool): Whether to use batch normalization (default: False)
+        use_batchnorm (bool): Whether to use batch normalization (default: False, deprecated if conditioning enabled)
         min_variance (float): Minimum allowed variance for numerical stability (default: 1e-6)
 
-    Example:
-        >>> model = UncertaintyPredictor(
-        ...     input_size=10,
-        ...     hidden_sizes=[64, 32, 16],
-        ...     output_size=5
-        ... )
-        >>> x = torch.randn(32, 10)  # batch of 32 examples
-        >>> mean, variance = model(x)
-        >>> print(mean.shape, variance.shape)  # both: torch.Size([32, 5])
+        # Conditioning parameters (optional)
+        conditioning_config (dict): Configuration for conditional processing. If None, standard MLP is used.
+            Expected keys:
+            - 'enable': bool, master switch
+            - 'num_processes': int
+            - 'd_proc': int
+            - 'env_continuous': list of str
+            - 'd_env_float': int
+            - 'env_categorical': dict {str: int}
+            - 'd_env_cat_base': float
+            - 'use_time': bool
+            - 'time_periods': int
+            - 'd_time': int
+            - 'd_context': int
+            - 'context_mlp_hidden': list
+            - 'context_dropout': float
+            - 'norm_type': str ('conditional_layer_norm', 'conditional_batch_norm', 'layer_norm', 'batch_norm', 'none')
+            - 'use_missing_mask': bool
     """
 
-    def __init__(self, input_size, hidden_sizes, output_size,
-                 dropout_rate=0.2, use_batchnorm=False, min_variance=1e-6):
+    def __init__(
+        self,
+        input_size: int,
+        hidden_sizes: List[int],
+        output_size: int,
+        dropout_rate: float = 0.2,
+        use_batchnorm: bool = False,
+        min_variance: float = 1e-6,
+        conditioning_config: Optional[Dict] = None
+    ):
         super(UncertaintyPredictor, self).__init__()
 
+        self.input_size = input_size
         self.output_size = output_size
         self.min_variance = min_variance
+        self.hidden_sizes = hidden_sizes
+        self.dropout_rate = dropout_rate
 
-        # Build shared hidden layers
-        shared_layers = []
+        # Parse conditioning configuration
+        self.conditioning_enabled = False
+        self.context_embedding = None
+        self.norm_type = 'batch_norm' if use_batchnorm else 'none'
+
+        if conditioning_config is not None and conditioning_config.get('enable', False):
+            if not CONDITIONAL_LAYERS_AVAILABLE:
+                raise RuntimeError("Conditioning enabled but conditional_layers module not available")
+
+            self.conditioning_enabled = True
+            self.norm_type = conditioning_config.get('norm_type', 'conditional_layer_norm')
+
+            # Create context embedding module
+            self.context_embedding = ContextEmbeddingModule(
+                num_processes=conditioning_config.get('num_processes', 4),
+                d_proc=conditioning_config.get('d_proc', 16),
+                env_continuous_names=conditioning_config.get('env_continuous', []),
+                d_env_float=conditioning_config.get('d_env_float', 16),
+                env_categorical_specs=conditioning_config.get('env_categorical', {}),
+                d_env_cat_base=conditioning_config.get('d_env_cat_base', 1.6),
+                use_time=conditioning_config.get('use_time', True),
+                time_periods=conditioning_config.get('time_periods', 4),
+                d_time=conditioning_config.get('d_time', 8),
+                d_context=conditioning_config.get('d_context', 64),
+                context_mlp_hidden=conditioning_config.get('context_mlp_hidden', [128, 64]),
+                context_dropout=conditioning_config.get('context_dropout', 0.1),
+                use_missing_mask=conditioning_config.get('use_missing_mask', True)
+            )
+
+            self.d_context = conditioning_config.get('d_context', 64)
+        else:
+            self.d_context = None
+
+        # Build shared hidden layers with appropriate normalization
+        self.shared_layers = nn.ModuleList()
+        self.norm_layers = nn.ModuleList()
+        self.activation_layers = nn.ModuleList()
+        self.dropout_layers = nn.ModuleList()
+
         prev_size = input_size
 
-        for hidden_size in hidden_sizes:
-            shared_layers.append(nn.Linear(prev_size, hidden_size))
-            if use_batchnorm:
-                shared_layers.append(nn.BatchNorm1d(hidden_size))
-            shared_layers.append(nn.SiLU())
-            shared_layers.append(nn.Dropout(dropout_rate))
+        for i, hidden_size in enumerate(hidden_sizes):
+            # Linear layer
+            self.shared_layers.append(nn.Linear(prev_size, hidden_size))
+
+            # Normalization layer
+            norm_layer = self._create_norm_layer(hidden_size)
+            self.norm_layers.append(norm_layer)
+
+            # Activation
+            self.activation_layers.append(nn.SiLU())
+
+            # Dropout
+            self.dropout_layers.append(nn.Dropout(dropout_rate))
+
             prev_size = hidden_size
 
-        self.shared_network = nn.Sequential(*shared_layers)
-
         # Output heads
-        # Mean head: linear output for the predicted mean μ
         self.mean_head = nn.Linear(prev_size, output_size)
-
-        # Variance head: outputs log(σ²) which is then exponentiated
-        # Using log-space helps with numerical stability
         self.log_variance_head = nn.Linear(prev_size, output_size)
 
-    def forward(self, x):
+    def _create_norm_layer(self, hidden_size: int) -> nn.Module:
+        """Create appropriate normalization layer based on configuration"""
+        if self.norm_type == 'conditional_layer_norm' and self.conditioning_enabled:
+            return ConditionalLayerNorm(hidden_size, self.d_context)
+        elif self.norm_type == 'conditional_batch_norm' and self.conditioning_enabled:
+            return ConditionalBatchNorm1d(hidden_size, self.d_context)
+        elif self.norm_type == 'layer_norm':
+            return nn.LayerNorm(hidden_size)
+        elif self.norm_type == 'batch_norm':
+            return nn.BatchNorm1d(hidden_size)
+        else:  # 'none'
+            return nn.Identity()
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        process_id: Optional[torch.Tensor] = None,
+        env_continuous: Optional[torch.Tensor] = None,
+        env_categorical: Optional[Dict[str, torch.Tensor]] = None,
+        timestamp: Optional[torch.Tensor] = None,
+        env_masks: Optional[torch.Tensor] = None
+    ):
         """
-        Forward pass of the uncertainty network.
+        Forward pass with optional conditioning.
 
         Args:
-            x (torch.Tensor): Input tensor of shape (batch_size, input_size)
+            x: Input features of shape (batch_size, input_size)
+            process_id: (batch_size,) long tensor with process IDs [0, num_processes-1]
+            env_continuous: (batch_size, n_env_continuous) float tensor
+            env_categorical: Dict {var_name: (batch_size,) long tensor}
+            timestamp: (batch_size,) or (batch_size, 1) float tensor
+            env_masks: (batch_size, n_env_continuous) boolean tensor (True=present, False=missing)
 
         Returns:
             tuple: (mean, variance)
                 - mean: Predicted mean values of shape (batch_size, output_size)
                 - variance: Predicted variance of shape (batch_size, output_size)
         """
-        # Shared feature extraction
-        features = self.shared_network(x)
+        # Compute context vector if conditioning is enabled
+        context = None
+        if self.conditioning_enabled and self.context_embedding is not None:
+            context = self.context_embedding(
+                process_id=process_id,
+                env_continuous=env_continuous,
+                env_categorical=env_categorical,
+                timestamp=timestamp,
+                env_masks=env_masks
+            )
+
+        # Shared feature extraction with (conditional) normalization
+        features = x
+        for linear, norm, activation, dropout in zip(
+            self.shared_layers,
+            self.norm_layers,
+            self.activation_layers,
+            self.dropout_layers
+        ):
+            # Linear transformation
+            features = linear(features)
+
+            # Normalization (conditional or standard)
+            if isinstance(norm, (ConditionalLayerNorm, ConditionalBatchNorm1d)):
+                features = norm(features, context)
+            else:
+                features = norm(features)
+
+            # Activation and dropout
+            features = activation(features)
+            features = dropout(features)
 
         # Predict mean
         mean = self.mean_head(features)
 
         # Predict variance (log-space for stability, then exp)
         log_variance = self.log_variance_head(features)
-        variance = torch.exp(log_variance) + self.min_variance  # ensure positivity
+        variance = torch.exp(log_variance) + self.min_variance
 
         return mean, variance
 
-    def predict_with_uncertainty(self, x, n_samples=100):
+    def predict_with_uncertainty(self, x, n_samples=100, **conditioning_kwargs):
         """
         Make predictions with uncertainty estimation using sampling.
-
-        This method samples from the predicted Gaussian distribution to
-        provide uncertainty estimates.
 
         Args:
             x (torch.Tensor): Input tensor
             n_samples (int): Number of samples to draw (default: 100)
+            **conditioning_kwargs: Additional conditioning arguments (process_id, env_continuous, etc.)
 
         Returns:
-            dict: Dictionary containing:
-                - 'mean': Mean predictions
-                - 'variance': Predicted variance
-                - 'std': Standard deviation
-                - 'samples': Sampled predictions (for further analysis)
+            dict: Dictionary containing mean, variance, std, samples, etc.
         """
         self.eval()
         with torch.no_grad():
-            mean, variance = self.forward(x)
+            mean, variance = self.forward(x, **conditioning_kwargs)
             std = torch.sqrt(variance)
 
             # Sample from the predicted distribution
@@ -153,12 +271,6 @@ class GaussianNLLLoss(nn.Module):
     """
     Gaussian Negative Log-Likelihood Loss for Uncertainty Quantification.
 
-    This loss function trains the network to predict both mean and variance.
-    It penalizes:
-    1. Large errors in the mean prediction
-    2. Underestimation of uncertainty (too small variance)
-    3. Overestimation of uncertainty (too large variance)
-
     The loss is computed as:
         L = 0.5 * ((y - μ)² / σ² + α * log(σ²))
 
@@ -167,19 +279,6 @@ class GaussianNLLLoss(nn.Module):
     - σ²: predicted variance
     - y: true target value
     - α: variance penalty weight (default: 1.0)
-
-    The α parameter controls the trade-off between prediction accuracy and
-    uncertainty calibration:
-    - α = 1.0: Standard Gaussian NLL (default)
-    - α < 1.0: Reduces penalty for large variances, allowing the model to be
-               more honest about its uncertainty (recommended for over-confident models)
-    - α > 1.0: Increases penalty for large variances, pushing for more confident
-               predictions
-
-    This encourages the model to:
-    - Predict accurate means where possible
-    - Increase variance in uncertain regions
-    - Balance confidence with calibration based on α
 
     Args:
         alpha (float): Weight for variance penalty term (default: 1.0)
@@ -209,23 +308,15 @@ class GaussianNLLLoss(nn.Module):
         Compute Gaussian NLL loss with weighted variance penalty.
 
         Args:
-            mean (torch.Tensor): Predicted mean, shape (batch_size, output_size)
-            variance (torch.Tensor): Predicted variance, shape (batch_size, output_size)
-            target (torch.Tensor): True values, shape (batch_size, output_size)
+            mean: Predicted mean, shape (batch_size, output_size)
+            variance: Predicted variance, shape (batch_size, output_size)
+            target: True values, shape (batch_size, output_size)
 
         Returns:
-            torch.Tensor: Loss value
-
-        Formula:
-            L = 0.5 * ((y - μ)² / σ² + α * log(σ²))
-
-        When α < 1, the model can more easily increase variance without
-        being heavily penalized, leading to better calibrated uncertainty.
+            Loss value
         """
-        # Ensure variance is positive
         variance = variance + self.epsilon
 
-        # Weighted Gaussian NLL: 0.5 * ((target - mean)^2 / var + alpha * log(var))
         squared_error_term = (target - mean) ** 2 / variance
         log_variance_term = self.alpha * torch.log(variance)
         loss = 0.5 * (squared_error_term + log_variance_term)
@@ -242,47 +333,14 @@ class EnergyScoreLoss(nn.Module):
     """
     Energy Score Loss for Uncertainty Quantification.
 
-    The Energy Score is a proper scoring rule for evaluating probabilistic predictions.
-    Unlike Gaussian NLL which assumes and enforces a specific distribution shape,
-    the Energy Score evaluates the quality of predictions without assuming a
-    particular distribution form.
-
     The Energy Score is computed as:
         ES(F, y) = E[||X - y||] - β/2 * E[||X - X'||]
-
-    Where:
-    - F is the predicted distribution (Gaussian with mean μ and variance σ²)
-    - y is the true target value
-    - X and X' are independent samples from F
-    - β is a weight for the diversity term (default: 1.0)
-    - || || is a norm (we use L1: absolute value)
-
-    Implementation via Monte Carlo sampling:
-    1. Sample n_samples from N(μ, σ²)
-    2. Compute mean absolute error between samples and target
-    3. Compute mean pairwise distances between samples
-    4. ES = MAE(samples, y) - β/2 * mean_pairwise_distance
-
-    The β parameter controls the trade-off:
-    - β = 1.0: Standard Energy Score (default, recommended)
-    - β < 1.0: Less penalty for diverse predictions (allows wider distributions)
-    - β > 1.0: More penalty for diverse predictions (encourages tighter distributions)
-
-    Advantages over Gaussian NLL:
-    - More robust to distribution misspecification
-    - Direct evaluation of predictive distribution quality
-    - Better calibrated uncertainty estimates in practice
-    - Encourages proper uncertainty quantification naturally
 
     Args:
         n_samples (int): Number of samples for Monte Carlo estimation (default: 50)
         beta (float): Weight for diversity term (default: 1.0)
         reduction (str): Reduction method ('mean', 'sum', 'none')
         epsilon (float): Small value for numerical stability
-
-    Reference:
-        Gneiting, T., & Raftery, A. E. (2007). "Strictly proper scoring rules,
-        prediction, and estimation." Journal of the American Statistical Association.
     """
 
     def __init__(self, n_samples=50, beta=1.0, reduction='mean', epsilon=1e-6):
@@ -307,21 +365,7 @@ class EnergyScoreLoss(nn.Module):
         print(f"  → Using {n_samples} Monte Carlo samples per prediction")
 
     def forward(self, mean, variance, target):
-        """
-        Compute Energy Score loss via Monte Carlo sampling.
-
-        Args:
-            mean (torch.Tensor): Predicted mean, shape (batch_size, output_size)
-            variance (torch.Tensor): Predicted variance, shape (batch_size, output_size)
-            target (torch.Tensor): True values, shape (batch_size, output_size)
-
-        Returns:
-            torch.Tensor: Energy Score loss value
-
-        Formula:
-            ES = E[|X - y|] - β/2 * E[|X - X'|]
-        """
-        # Ensure variance is positive
+        """Compute Energy Score loss via Monte Carlo sampling"""
         variance = variance + self.epsilon
         std = torch.sqrt(variance)
 
@@ -329,37 +373,27 @@ class EnergyScoreLoss(nn.Module):
         output_size = mean.shape[1]
 
         # Generate samples from predicted Gaussian distribution
-        # Shape: (n_samples, batch_size, output_size)
         noise = torch.randn(self.n_samples, batch_size, output_size,
                           device=mean.device, dtype=mean.dtype)
         samples = mean.unsqueeze(0) + noise * std.unsqueeze(0)
 
         # First term: E[|X - y|]
-        # Mean absolute error between samples and target
-        # Shape: (n_samples, batch_size, output_size)
         abs_errors = torch.abs(samples - target.unsqueeze(0))
-        first_term = abs_errors.mean(dim=0)  # Average over samples
+        first_term = abs_errors.mean(dim=0)
 
         # Second term: E[|X - X'|]
-        # Mean pairwise distance between samples
-        # Efficient computation: for each pair (i,j), compute |Xi - Xj|
         pairwise_distances = torch.zeros_like(first_term)
 
-        # Compute mean pairwise distance
-        # For efficiency, we compute this as:
-        # E[|X - X'|] ≈ (1/n²) * Σᵢ Σⱼ |Xᵢ - Xⱼ|
         for i in range(self.n_samples):
             for j in range(i + 1, self.n_samples):
                 pairwise_distances += torch.abs(samples[i] - samples[j])
 
-        # Normalize: we computed sum over upper triangle, so divide by n_pairs
         n_pairs = self.n_samples * (self.n_samples - 1) / 2
         second_term = pairwise_distances / n_pairs
 
-        # Energy Score: ES = first_term - (beta/2) * second_term
+        # Energy Score
         energy_score = first_term - (self.beta / 2.0) * second_term
 
-        # Apply reduction
         if self.reduction == 'mean':
             return energy_score.mean()
         elif self.reduction == 'sum':
@@ -368,33 +402,36 @@ class EnergyScoreLoss(nn.Module):
             return energy_score
 
 
-# Convenience functions for creating common model architectures
+# Convenience functions for creating models
 
-def create_small_uncertainty_model(input_size, output_size):
+def create_small_uncertainty_model(input_size, output_size, conditioning_config=None):
     """Small uncertainty model for limited datasets"""
     return UncertaintyPredictor(
         input_size=input_size,
         hidden_sizes=[32, 16],
         output_size=output_size,
-        dropout_rate=0.1
+        dropout_rate=0.1,
+        conditioning_config=conditioning_config
     )
 
 
-def create_medium_uncertainty_model(input_size, output_size):
+def create_medium_uncertainty_model(input_size, output_size, conditioning_config=None):
     """Medium uncertainty model for medium-sized datasets"""
     return UncertaintyPredictor(
         input_size=input_size,
         hidden_sizes=[128, 64, 32],
         output_size=output_size,
-        dropout_rate=0.2
+        dropout_rate=0.2,
+        conditioning_config=conditioning_config
     )
 
 
-def create_large_uncertainty_model(input_size, output_size):
+def create_large_uncertainty_model(input_size, output_size, conditioning_config=None):
     """Large uncertainty model for large datasets"""
     return UncertaintyPredictor(
         input_size=input_size,
         hidden_sizes=[256, 128, 64, 32],
         output_size=output_size,
-        dropout_rate=0.3
+        dropout_rate=0.3,
+        conditioning_config=conditioning_config
     )

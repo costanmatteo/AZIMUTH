@@ -633,12 +633,292 @@ ds_scm_microetch = SCMDataset(
 
 
 # =============================================================================
+# UNIFIED DATASET GENERATION WITH PROCESS ID AND ENVIRONMENT VARIABLES
+# =============================================================================
+# These functions extend the base SCM datasets with:
+# - process_id: Unique identifier for each of the 4 PCB manufacturing processes
+# - Environmental variables: Simulated ambient conditions (temperature, humidity, etc.)
+# - Batch/operator/shift information: Categorical variables for production context
+# - Timestamp: Temporal information for time-aware modeling
+
+def add_environment_variables(df: pd.DataFrame, n: int, seed: Optional[int] = None) -> pd.DataFrame:
+    """
+    Add simulated environment variables to a dataset.
+
+    Args:
+        df: Input DataFrame (will be modified in-place)
+        n: Number of samples
+        seed: Random seed for reproducibility
+
+    Returns:
+        Modified DataFrame with additional columns:
+        - ambient_temp: Ambient temperature [°C] ~ N(20, 2)
+        - humidity: Relative humidity [%] ~ N(50, 5) clipped to [20, 80]
+        - batch_id: Batch identifier [0-9]
+        - operator_id: Operator identifier [0-4]
+        - shift: Work shift [0=morning, 1=afternoon, 2=night]
+        - timestamp: Unix timestamp distributed over 30 days with daily patterns
+    """
+    rng = np.random.default_rng(seed)
+
+    # Continuous environment variables
+    df['ambient_temp'] = rng.normal(loc=20.0, scale=2.0, size=n)
+    df['humidity'] = np.clip(rng.normal(loc=50.0, scale=5.0, size=n), 20.0, 80.0)
+
+    # Categorical environment variables
+    df['batch_id'] = rng.integers(low=0, high=10, size=n)
+    df['operator_id'] = rng.integers(low=0, high=5, size=n)
+    df['shift'] = rng.choice([0, 1, 2], size=n)  # 0=morning, 1=afternoon, 2=night
+
+    # Temporal information: distributed over 30 days with daily patterns
+    base_time = 1700000000  # Reference timestamp (Nov 2023)
+    day_seconds = 86400
+
+    # Generate timestamps with realistic daily patterns
+    # Base: uniform over 30 days
+    days_offset = rng.uniform(0, 30, size=n)
+
+    # Add daily pattern: more samples during work hours (8am-6pm)
+    # Shift: 0=morning (8am-4pm), 1=afternoon (12pm-8pm), 2=night (8pm-4am)
+    hour_patterns = {
+        0: rng.uniform(8, 16, size=n),   # Morning shift: 8am-4pm
+        1: rng.uniform(12, 20, size=n),  # Afternoon shift: 12pm-8pm
+        2: np.concatenate([rng.uniform(20, 24, size=n//2), rng.uniform(0, 4, size=n-n//2)])  # Night shift
+    }
+
+    # Combine shift patterns (vectorized)
+    hour_offset = np.zeros(n)
+    for shift_id in [0, 1, 2]:
+        mask = df['shift'] == shift_id
+        hour_offset[mask] = hour_patterns[shift_id][mask]
+
+    # Final timestamp
+    df['timestamp'] = base_time + days_offset * day_seconds + hour_offset * 3600
+
+    return df
+
+
+def generate_single_process_dataset(
+    process_name: str,
+    n_samples: int = 5000,
+    add_env_vars: bool = False,
+    seed: Optional[int] = None,
+    mode: str = "flat"
+) -> pd.DataFrame:
+    """
+    Generate dataset for a single PCB manufacturing process with optional environment variables.
+
+    Args:
+        process_name: Process name, one of ['laser', 'plasma', 'galvanic', 'microetch']
+        n_samples: Number of samples to generate
+        add_env_vars: If True, add simulated environment variables
+        seed: Random seed for reproducibility
+        mode: Generation mode ('flat' or 'full'), passed to SCMDataset.generate_ds()
+
+    Returns:
+        DataFrame with process data, process_id column, and optional environment variables
+    """
+    # Map process names to SCM datasets and process IDs
+    process_map = {
+        'laser': (ds_scm_laser, 0, "Laser Drilling"),
+        'plasma': (ds_scm_plasma, 1, "Plasma Cleaning"),
+        'galvanic': (ds_scm_galvanic, 2, "Galvanic Copper Deposition"),
+        'microetch': (ds_scm_microetch, 3, "Micro-Etching"),
+    }
+
+    if process_name not in process_map:
+        raise ValueError(f"Unknown process '{process_name}'. Must be one of {list(process_map.keys())}")
+
+    scm_dataset, process_id, description = process_map[process_name]
+
+    # Generate base dataset using SCM
+    df = scm_dataset.generate_ds(mode=mode, n=n_samples, seed=seed)
+
+    # Add process_id column
+    df['process_id'] = process_id
+
+    # Optionally add environment variables
+    if add_env_vars:
+        df = add_environment_variables(df, n_samples, seed=seed)
+
+    return df
+
+
+def generate_unified_dataset(
+    n_samples_per_process: int = 5000,
+    add_env_vars: bool = True,
+    seed: Optional[int] = None,
+    mode: str = "flat",
+    processes: Optional[List[str]] = None
+) -> pd.DataFrame:
+    """
+    Generate unified dataset combining all 4 PCB manufacturing processes.
+
+    This is the primary function for multi-process conditional training.
+    Each process gets a unique process_id, and all data is combined into a single DataFrame.
+
+    Args:
+        n_samples_per_process: Number of samples to generate per process
+        add_env_vars: If True, add simulated environment variables
+        seed: Random seed for reproducibility
+        mode: Generation mode ('flat' or 'full'), passed to SCMDataset.generate_ds()
+        processes: List of process names to include (default: all 4 processes)
+
+    Returns:
+        Unified DataFrame with shape (n_processes * n_samples_per_process, n_features)
+        Contains process_id column and optional environment variables
+    """
+    if processes is None:
+        processes = ['laser', 'plasma', 'galvanic', 'microetch']
+
+    datasets = []
+
+    # Generate dataset for each process with independent random seeds
+    for i, process_name in enumerate(processes):
+        process_seed = None if seed is None else seed + i
+
+        df_process = generate_single_process_dataset(
+            process_name=process_name,
+            n_samples=n_samples_per_process,
+            add_env_vars=add_env_vars,
+            seed=process_seed,
+            mode=mode
+        )
+
+        datasets.append(df_process)
+
+    # Concatenate all processes into unified dataset
+    df_unified = pd.concat(datasets, ignore_index=True)
+
+    # Shuffle to mix processes (important for mini-batch training)
+    if seed is not None:
+        df_unified = df_unified.sample(frac=1.0, random_state=seed).reset_index(drop=True)
+    else:
+        df_unified = df_unified.sample(frac=1.0).reset_index(drop=True)
+
+    return df_unified
+
+
+# =============================================================================
+# CONVENIENCE FUNCTIONS FOR COMMON USE CASES
+# =============================================================================
+
+def get_process_info() -> Dict[str, Dict[str, Any]]:
+    """
+    Get information about all available PCB manufacturing processes.
+
+    Returns:
+        Dictionary mapping process names to metadata (id, description, inputs, outputs)
+    """
+    return {
+        'laser': {
+            'process_id': 0,
+            'name': 'Laser Drilling',
+            'description': 'Laser drilling optical power with L-I-T model',
+            'inputs': ['PowerTarget', 'AmbientTemp'],
+            'outputs': ['ActualPower'],
+            'scm_dataset': ds_scm_laser
+        },
+        'plasma': {
+            'process_id': 1,
+            'name': 'Plasma Cleaning',
+            'description': 'Plasma cleaning residue removal',
+            'inputs': ['RF_Power', 'Duration'],
+            'outputs': ['RemovalRate'],
+            'scm_dataset': ds_scm_plasma
+        },
+        'galvanic': {
+            'process_id': 2,
+            'name': 'Galvanic Copper Deposition',
+            'description': 'Electrolytic copper plating thickness',
+            'inputs': ['CurrentDensity', 'Duration'],
+            'outputs': ['Thickness'],
+            'scm_dataset': ds_scm_galvanic
+        },
+        'microetch': {
+            'process_id': 3,
+            'name': 'Micro-Etching',
+            'description': 'Copper surface removal with Arrhenius kinetics',
+            'inputs': ['Temperature', 'Concentration', 'Duration'],
+            'outputs': ['RemovalDepth'],
+            'scm_dataset': ds_scm_microetch
+        }
+    }
+
+
+def get_environment_variable_specs() -> Dict[str, Dict[str, Any]]:
+    """
+    Get specifications for all environment variables.
+
+    Returns:
+        Dictionary mapping variable names to their specifications
+    """
+    return {
+        'ambient_temp': {
+            'type': 'continuous',
+            'description': 'Ambient temperature [°C]',
+            'distribution': 'Normal(20, 2)',
+            'range': [10, 35]
+        },
+        'humidity': {
+            'type': 'continuous',
+            'description': 'Relative humidity [%]',
+            'distribution': 'Normal(50, 5) clipped [20, 80]',
+            'range': [20, 80]
+        },
+        'batch_id': {
+            'type': 'categorical',
+            'description': 'Production batch identifier',
+            'cardinality': 10,
+            'range': [0, 9]
+        },
+        'operator_id': {
+            'type': 'categorical',
+            'description': 'Operator identifier',
+            'cardinality': 5,
+            'range': [0, 4]
+        },
+        'shift': {
+            'type': 'categorical',
+            'description': 'Work shift (0=morning, 1=afternoon, 2=night)',
+            'cardinality': 3,
+            'range': [0, 2]
+        },
+        'timestamp': {
+            'type': 'temporal',
+            'description': 'Unix timestamp with daily patterns',
+            'distribution': 'Uniform over 30 days + shift-based hourly patterns',
+            'base': 1700000000
+        }
+    }
+
+
+# =============================================================================
 # EXAMPLE USAGE (commented out)
 # =============================================================================
 # Uncomment and modify as needed to generate datasets
 
+# # 1. Generate single process dataset (backward compatible, no conditioning)
+# df_laser = generate_single_process_dataset('laser', n_samples=5000, add_env_vars=False)
+# print(df_laser.head())
+
+# # 2. Generate single process with environment variables
+# df_plasma = generate_single_process_dataset('plasma', n_samples=5000, add_env_vars=True, seed=42)
+# print(df_plasma.columns)
+
+# # 3. Generate unified multi-process dataset for conditional training
+# df_unified = generate_unified_dataset(n_samples_per_process=5000, add_env_vars=True, seed=42)
+# print(f"Unified dataset shape: {df_unified.shape}")
+# print(f"Process distribution:\n{df_unified['process_id'].value_counts().sort_index()}")
+
+# # 4. Get process metadata
+# process_info = get_process_info()
+# for name, info in process_info.items():
+#     print(f"{name}: {info['name']} (ID={info['process_id']})")
+
+# # Original SCM dataset generation (still supported)
 # ds_scm_1_to_1_ct.generate_ds(mode="flat", n=5_000, save_dir=join(ROOT_DIR, "data/one_to_one"))
 # ds_scm_laser.generate_ds(mode="flat", n=5_000, save_dir=join(ROOT_DIR, "data/laser"))
 # ds_scm_plasma.generate_ds(mode="flat", n=5_000, save_dir=join(ROOT_DIR, "data/plasma"))
 # ds_scm_galvanic.generate_ds(mode="flat", n=5_000, save_dir=join(ROOT_DIR, "data/galvanic"))
-# ds_scm_microetch.generate_ds(mode="flat", n=5_000, save_dir=join(ROOT_DIR, "data/microetch"))
+# ds_scm_microetch.generate_ds(mode="flat", n=5_000, save_dir=join(ROOT_DIR, "data/microetch")}
