@@ -19,6 +19,7 @@ from pathlib import Path
 import json
 from datetime import datetime
 import torch
+import numpy as np
 
 # Add controller_optimization to path
 REPO_ROOT = Path(__file__).parent.parent
@@ -91,7 +92,16 @@ def main():
 
     print("  Target trajectory generated:")
     for process_name, data in target_trajectory.items():
+        # Check for NaN values
+        inputs_nan = np.isnan(data['inputs']).any()
+        outputs_nan = np.isnan(data['outputs']).any()
         print(f"    {process_name}: inputs={data['inputs'].shape}, outputs={data['outputs'].shape}")
+        if inputs_nan or outputs_nan:
+            print(f"      WARNING: NaN detected! inputs_nan={inputs_nan}, outputs_nan={outputs_nan}")
+            # Replace NaN with 0
+            data['inputs'] = np.nan_to_num(data['inputs'], nan=0.0)
+            data['outputs'] = np.nan_to_num(data['outputs'], nan=0.0)
+            print(f"      NaN values replaced with 0.0")
 
     # 2. Generate baseline trajectory (a')
     print("\n[2/9] Generating baseline trajectory (a', normal noise, NO controller)...")
@@ -103,7 +113,16 @@ def main():
 
     print("  Baseline trajectory generated:")
     for process_name, data in baseline_trajectory.items():
+        # Check for NaN values
+        inputs_nan = np.isnan(data['inputs']).any()
+        outputs_nan = np.isnan(data['outputs']).any()
         print(f"    {process_name}: inputs={data['inputs'].shape}, outputs={data['outputs'].shape}")
+        if inputs_nan or outputs_nan:
+            print(f"      WARNING: NaN detected! inputs_nan={inputs_nan}, outputs_nan={outputs_nan}")
+            # Replace NaN with 0
+            data['inputs'] = np.nan_to_num(data['inputs'], nan=0.0)
+            data['outputs'] = np.nan_to_num(data['outputs'], nan=0.0)
+            print(f"      NaN values replaced with 0.0")
 
     # 3. Create ProcessChain
     print("\n[3/9] Building process chain...")
