@@ -277,18 +277,19 @@ class ControllerReportGenerator:
             self.story.append(caption_table)
             self.story.append(Spacer(1, 0.15*cm))
 
-        # Trajectory comparison plot
+        # Trajectory comparison plot (larger)
         trajectory_plot = checkpoint_dir / 'trajectory_comparison.png'
         if trajectory_plot.exists():
             img = Image(str(trajectory_plot))
             img_width, img_height = img.imageWidth, img.imageHeight
             aspect_ratio = img_height / img_width
 
-            new_width = 16*cm
+            # Larger dimensions for trajectory plot
+            new_width = 18*cm
             new_height = new_width * aspect_ratio
 
-            if new_height > 10*cm:
-                new_height = 10*cm
+            if new_height > 14*cm:
+                new_height = 14*cm
                 new_width = new_height / aspect_ratio
 
             img.drawWidth = new_width
@@ -309,18 +310,19 @@ class ControllerReportGenerator:
             self.story.append(caption_table)
             self.story.append(Spacer(1, 0.15*cm))
 
-        # Reliability comparison plot
+        # Reliability comparison plot (smaller)
         reliability_plot = checkpoint_dir / 'reliability_comparison.png'
         if reliability_plot.exists():
             img = Image(str(reliability_plot))
             img_width, img_height = img.imageWidth, img.imageHeight
             aspect_ratio = img_height / img_width
 
-            new_width = 16*cm
+            # Smaller dimensions for reliability plot
+            new_width = 12*cm
             new_height = new_width * aspect_ratio
 
-            if new_height > 10*cm:
-                new_height = 10*cm
+            if new_height > 7*cm:
+                new_height = 7*cm
                 new_width = new_height / aspect_ratio
 
             img.drawWidth = new_width
