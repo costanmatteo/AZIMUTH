@@ -10,9 +10,10 @@ from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch, cm
 from reportlab.lib import colors
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle, Frame, PageTemplate, KeepTogether, PageBreak, BaseDocTemplate
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle, KeepTogether, PageBreak
+from reportlab.platypus.doctemplate import BaseDocTemplate, PageTemplate, Frame, FrameBreak
 from reportlab.lib.enums import TA_LEFT, TA_CENTER
-from reportlab.platypus.flowables import HRFlowable, FrameBreak
+from reportlab.platypus.flowables import HRFlowable
 
 
 class UncertaintyReportGenerator:
