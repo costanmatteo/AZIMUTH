@@ -83,10 +83,10 @@ class ControllerTrainer:
             target_inputs_np = self.surrogate.target_trajectory_tensors[process_name]['inputs']
             bc_loss = bc_loss + torch.mean((actual_inputs - target_inputs_np) ** 2)
 
-        # Total loss
-        total_loss = reliability_loss + self.lambda_bc * bc_loss
+        # Total loss (mean over batch)
+        total_loss = torch.mean(reliability_loss) + self.lambda_bc * bc_loss
 
-        return total_loss, reliability_loss.item(), bc_loss.item(), F.item()
+        return total_loss, torch.mean(reliability_loss).item(), bc_loss.item(), torch.mean(F).item()
 
     def train_epoch(self, n_batches=100, batch_size=32):
         """

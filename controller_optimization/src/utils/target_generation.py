@@ -76,14 +76,18 @@ def generate_target_trajectory(process_configs, n_samples=1, seed=42):
         original_groups = ds_scm.noise_model.groups.copy() if ds_scm.noise_model.groups else []
 
         try:
-            # Override with zero noise
-            zero_singles = {key: (lambda rng, n: np.zeros(n)) for key in original_singles.keys()}
+            # Override with very small noise (epsilon instead of 0 to avoid division by zero)
+            epsilon = 1e-8
+            tiny_noise_singles = {
+                key: (lambda rng, n, eps=epsilon: rng.normal(0, eps, n))
+                for key in original_singles.keys()
+            }
             zero_groups = []  # No groups with noise
 
-            ds_scm.noise_model.singles = zero_singles
+            ds_scm.noise_model.singles = tiny_noise_singles
             ds_scm.noise_model.groups = zero_groups
 
-            # Generate samples with zero noise
+            # Generate samples with near-zero noise
             df = ds_scm.sample(n=n_samples, seed=seed)
 
             # Extract inputs and outputs
