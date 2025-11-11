@@ -363,7 +363,7 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
     report_path = generate_uncertainty_training_report(
         config=config_dict,
         history=history,
-        metrics=test_metrics,
+        metrics=metrics_full,  # Pass full metrics dict, not just 'Overall'
         input_dim=input_dim,
         output_dim=output_dim,
         total_params=total_params,
