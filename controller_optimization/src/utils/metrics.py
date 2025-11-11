@@ -10,18 +10,48 @@ def convert_trajectory_to_numpy(trajectory):
     """
     Convert trajectory tensors to numpy arrays.
 
+    Handles two formats:
+    - Target/baseline: {'inputs': array, 'outputs': array}
+    - Actual: {'inputs': tensor, 'outputs_mean': tensor, 'outputs_var': tensor}
+
     Args:
-        trajectory (dict): Trajectory with torch tensors
+        trajectory (dict): Trajectory with torch tensors or numpy arrays
 
     Returns:
-        dict: Trajectory with numpy arrays
+        dict: Trajectory with numpy arrays in consistent format
+              (always 'outputs_mean' and 'outputs_var')
     """
     numpy_traj = {}
     for process_name, data in trajectory.items():
+        # Convert inputs
+        inputs = data['inputs']
+        if torch.is_tensor(inputs):
+            inputs = inputs.detach().cpu().numpy()
+
+        # Convert outputs (handle both formats)
+        if 'outputs_mean' in data:
+            # Format: outputs_mean, outputs_var
+            outputs_mean = data['outputs_mean']
+            if torch.is_tensor(outputs_mean):
+                outputs_mean = outputs_mean.detach().cpu().numpy()
+
+            outputs_var = data.get('outputs_var', None)
+            if outputs_var is not None:
+                if torch.is_tensor(outputs_var):
+                    outputs_var = outputs_var.detach().cpu().numpy()
+            else:
+                outputs_var = np.zeros_like(outputs_mean)
+        else:
+            # Format: outputs only (target/baseline)
+            outputs_mean = data['outputs']
+            if torch.is_tensor(outputs_mean):
+                outputs_mean = outputs_mean.detach().cpu().numpy()
+            outputs_var = np.zeros_like(outputs_mean)
+
         numpy_traj[process_name] = {
-            'inputs': data['inputs'].detach().cpu().numpy() if torch.is_tensor(data['inputs']) else data['inputs'],
-            'outputs_mean': data['outputs_mean'].detach().cpu().numpy() if torch.is_tensor(data['outputs_mean']) else data.get('outputs', data.get('outputs_mean')),
-            'outputs_var': data.get('outputs_var', np.zeros_like(data.get('outputs', data.get('outputs_mean')))).detach().cpu().numpy() if torch.is_tensor(data.get('outputs_var', 0)) else data.get('outputs_var', np.zeros_like(data.get('outputs', data.get('outputs_mean'))))
+            'inputs': inputs,
+            'outputs_mean': outputs_mean,
+            'outputs_var': outputs_var
         }
     return numpy_traj
 
