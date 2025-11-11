@@ -62,8 +62,8 @@ class UncertaintyReportGenerator:
             self.styles.add(ParagraphStyle(
                 name='BodyText',
                 parent=self.styles['Normal'],
-                fontSize=8,
-                leading=10,
+                fontSize=7,
+                leading=9,
                 leftIndent=10
             ))
 
@@ -288,12 +288,12 @@ class UncertaintyReportGenerator:
             aspect_ratio = img_height / img_width
 
             # Set appropriate size for SCM graph
-            new_width = 14*cm
+            new_width = 10*cm
             new_height = new_width * aspect_ratio
 
             # Max height constraint
-            if new_height > 10*cm:
-                new_height = 10*cm
+            if new_height > 7*cm:
+                new_height = 7*cm
                 new_width = new_height / aspect_ratio
 
             img.drawWidth = new_width
@@ -465,40 +465,6 @@ class UncertaintyReportGenerator:
             ]))
             self.story.append(caption_table)
             self.story.append(Spacer(1, 0.15*cm))
-
-        # Uncertainty distribution plot
-        dist_plot = checkpoint_dir / 'uncertainty_distribution.png'
-        if dist_plot.exists():
-            img4 = Image(str(dist_plot))
-            img_width, img_height = img4.imageWidth, img4.imageHeight
-            aspect_ratio = img_height / img_width
-
-            # Larger width for stacked layout
-            new_width = 16*cm
-            new_height = new_width * aspect_ratio
-
-            # Max height constraint
-            if new_height > 10*cm:
-                new_height = 10*cm
-                new_width = new_height / aspect_ratio
-
-            img4.drawWidth = new_width
-            img4.drawHeight = new_height
-
-            # Center the image
-            img_table = Table([[img4]], colWidths=[18*cm])
-            img_table.setStyle(TableStyle([
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ]))
-            self.story.append(img_table)
-
-            caption4 = Paragraph("<i>Distribution of Predicted Uncertainties</i>", self.styles['Normal'])
-            caption_table = Table([[caption4]], colWidths=[18*cm])
-            caption_table.setStyle(TableStyle([
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ]))
-            self.story.append(caption_table)
 
     def generate(self, config, history, metrics, input_dim, output_dim,
                 total_params, n_train, n_val, n_test, timestamp, coverage_results=None):
