@@ -13,19 +13,60 @@ import numpy as np
 import json
 from datetime import datetime
 import pickle
+import importlib.util
 
 # Add uncertainty_predictor to path
 REPO_ROOT = Path(__file__).parent.parent.parent.parent
 UNCERTAINTY_PREDICTOR_PATH = REPO_ROOT / 'uncertainty_predictor'
-sys.path.insert(0, str(UNCERTAINTY_PREDICTOR_PATH))
 
-# Import from uncertainty_predictor
-from src.models.uncertainty_nn import UncertaintyPredictor, GaussianNLLLoss
-from src.training.uncertainty_trainer import UncertaintyTrainer
-from src.data.preprocessing import DataPreprocessor, generate_scm_data
-from src.utils.report_generator import generate_uncertainty_training_report
-from src.utils import metrics as uq_metrics
-from src.utils import visualization as uq_viz
+# Load modules from uncertainty_predictor explicitly
+spec_nn = importlib.util.spec_from_file_location(
+    "uncertainty_nn",
+    UNCERTAINTY_PREDICTOR_PATH / "src" / "models" / "uncertainty_nn.py"
+)
+uncertainty_nn = importlib.util.module_from_spec(spec_nn)
+spec_nn.loader.exec_module(uncertainty_nn)
+UncertaintyPredictor = uncertainty_nn.UncertaintyPredictor
+GaussianNLLLoss = uncertainty_nn.GaussianNLLLoss
+
+spec_trainer = importlib.util.spec_from_file_location(
+    "uncertainty_trainer",
+    UNCERTAINTY_PREDICTOR_PATH / "src" / "training" / "uncertainty_trainer.py"
+)
+uncertainty_trainer = importlib.util.module_from_spec(spec_trainer)
+spec_trainer.loader.exec_module(uncertainty_trainer)
+UncertaintyTrainer = uncertainty_trainer.UncertaintyTrainer
+
+spec_preprocessing = importlib.util.spec_from_file_location(
+    "preprocessing",
+    UNCERTAINTY_PREDICTOR_PATH / "src" / "data" / "preprocessing.py"
+)
+preprocessing = importlib.util.module_from_spec(spec_preprocessing)
+spec_preprocessing.loader.exec_module(preprocessing)
+DataPreprocessor = preprocessing.DataPreprocessor
+generate_scm_data = preprocessing.generate_scm_data
+
+spec_report = importlib.util.spec_from_file_location(
+    "report_generator",
+    UNCERTAINTY_PREDICTOR_PATH / "src" / "utils" / "report_generator.py"
+)
+report_gen = importlib.util.module_from_spec(spec_report)
+spec_report.loader.exec_module(report_gen)
+generate_uncertainty_training_report = report_gen.generate_uncertainty_training_report
+
+spec_metrics = importlib.util.spec_from_file_location(
+    "uq_metrics",
+    UNCERTAINTY_PREDICTOR_PATH / "src" / "utils" / "metrics.py"
+)
+uq_metrics = importlib.util.module_from_spec(spec_metrics)
+spec_metrics.loader.exec_module(uq_metrics)
+
+spec_viz = importlib.util.spec_from_file_location(
+    "uq_viz",
+    UNCERTAINTY_PREDICTOR_PATH / "src" / "utils" / "visualization.py"
+)
+uq_viz = importlib.util.module_from_spec(spec_viz)
+spec_viz.loader.exec_module(uq_viz)
 
 
 def train_single_process(process_config, device='auto', verbose=True, seed=42):

@@ -8,14 +8,23 @@ Generazione target trajectory e baseline trajectory.
 import sys
 from pathlib import Path
 import numpy as np
+import importlib.util
 
 # Add uncertainty_predictor to path
 REPO_ROOT = Path(__file__).parent.parent.parent.parent
 UNCERTAINTY_PREDICTOR_PATH = REPO_ROOT / 'uncertainty_predictor'
-sys.path.insert(0, str(UNCERTAINTY_PREDICTOR_PATH))
 
-# Import SCM datasets
-from scm_ds.datasets import ds_scm_laser, ds_scm_plasma, ds_scm_galvanic
+# Load SCM datasets explicitly
+spec_datasets = importlib.util.spec_from_file_location(
+    "scm_datasets",
+    UNCERTAINTY_PREDICTOR_PATH / "scm_ds" / "datasets.py"
+)
+scm_datasets = importlib.util.module_from_spec(spec_datasets)
+sys.modules['scm_datasets'] = scm_datasets  # Add to sys.modules for nested imports
+spec_datasets.loader.exec_module(scm_datasets)
+ds_scm_laser = scm_datasets.ds_scm_laser
+ds_scm_plasma = scm_datasets.ds_scm_plasma
+ds_scm_galvanic = scm_datasets.ds_scm_galvanic
 
 
 def generate_target_trajectory(process_configs, n_samples=1, seed=42):

@@ -8,13 +8,20 @@ import torch
 import pickle
 import json
 import numpy as np
+import importlib.util
 
 # Add uncertainty_predictor to path
 REPO_ROOT = Path(__file__).parent.parent.parent.parent
 UNCERTAINTY_PREDICTOR_PATH = REPO_ROOT / 'uncertainty_predictor'
-sys.path.insert(0, str(UNCERTAINTY_PREDICTOR_PATH))
 
-from src.models.uncertainty_nn import UncertaintyPredictor
+# Load UncertaintyPredictor explicitly
+spec_nn = importlib.util.spec_from_file_location(
+    "uncertainty_nn",
+    UNCERTAINTY_PREDICTOR_PATH / "src" / "models" / "uncertainty_nn.py"
+)
+uncertainty_nn = importlib.util.module_from_spec(spec_nn)
+spec_nn.loader.exec_module(uncertainty_nn)
+UncertaintyPredictor = uncertainty_nn.UncertaintyPredictor
 
 
 def load_uncertainty_predictor(checkpoint_path, input_dim, output_dim, model_config, device='cpu'):
