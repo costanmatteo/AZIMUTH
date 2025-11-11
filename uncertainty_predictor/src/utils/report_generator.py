@@ -29,10 +29,10 @@ class UncertaintyReportGenerator:
             self.styles.add(ParagraphStyle(
                 name='ReportTitle',
                 parent=self.styles['Heading1'],
-                fontSize=16,
-                leading=19,
+                fontSize=12,
+                leading=14,
                 alignment=TA_CENTER,
-                spaceAfter=3
+                spaceAfter=2
             ))
 
         # Subtitle style
@@ -40,10 +40,10 @@ class UncertaintyReportGenerator:
             self.styles.add(ParagraphStyle(
                 name='ReportSubtitle',
                 parent=self.styles['Normal'],
-                fontSize=10,
-                leading=12,
+                fontSize=8,
+                leading=10,
                 alignment=TA_CENTER,
-                spaceAfter=6
+                spaceAfter=4
             ))
 
         # Section title style
@@ -51,11 +51,11 @@ class UncertaintyReportGenerator:
             self.styles.add(ParagraphStyle(
                 name='SectionTitle',
                 parent=self.styles['Heading2'],
-                fontSize=10,
-                leading=12,
+                fontSize=8,
+                leading=10,
                 fontName='Helvetica-Bold',
                 spaceAfter=1,
-                spaceBefore=4
+                spaceBefore=2
             ))
 
         # Body text style
@@ -63,9 +63,9 @@ class UncertaintyReportGenerator:
             self.styles.add(ParagraphStyle(
                 name='BodyText',
                 parent=self.styles['Normal'],
-                fontSize=8,
-                leading=10,
-                leftIndent=10
+                fontSize=6,
+                leading=8,
+                leftIndent=5
             ))
 
     def add_title(self, timestamp):
@@ -76,12 +76,12 @@ class UncertaintyReportGenerator:
 
         self.story.append(title)
         self.story.append(subtitle)
-        self.story.append(Spacer(1, 0.1*cm))
+        self.story.append(Spacer(1, 0.05*cm))
 
     def add_section_title(self, title):
         """Add section title with horizontal line"""
         para = Paragraph(f"<b>{title}</b>", self.styles['SectionTitle'])
-        line = HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=4)
+        line = HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=2)
         self.story.append(para)
         self.story.append(line)
 
@@ -94,7 +94,7 @@ class UncertaintyReportGenerator:
 
         # Model Configuration
         left_col.append(Paragraph("<b>Model Configuration</b>", self.styles['SectionTitle']))
-        left_col.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=4))
+        left_col.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=2))
 
         model_text = f"""• <b>Type:</b> {config['model']['model_type']}<br/>
 • <b>Hidden Layers:</b> {config['model']['hidden_sizes']}<br/>
@@ -105,11 +105,11 @@ class UncertaintyReportGenerator:
 • <b>Output Dimension:</b> {output_dim}<br/>
 • <b>Total Parameters:</b> {total_params:,}"""
         left_col.append(Paragraph(model_text, self.styles['BodyText']))
-        left_col.append(Spacer(1, 0.15*cm))
+        left_col.append(Spacer(1, 0.05*cm))
 
         # Dataset
         left_col.append(Paragraph("<b>Dataset</b>", self.styles['SectionTitle']))
-        left_col.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=4))
+        left_col.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=2))
 
         input_cols = ', '.join(config['data']['input_columns'])
         output_cols = ', '.join(config['data']['output_columns'])
@@ -128,7 +128,7 @@ class UncertaintyReportGenerator:
 
         # Training Parameters
         right_col.append(Paragraph("<b>Training Parameters</b>", self.styles['SectionTitle']))
-        right_col.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=4))
+        right_col.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=2))
 
         epochs_run = len(history['train_losses'])
         epochs_total = config['training']['epochs']
@@ -154,11 +154,11 @@ class UncertaintyReportGenerator:
 • <b>Device:</b> {config['training']['device']}<br/>
 • <b>Checkpoint Dir:</b> {config['training']['checkpoint_dir']}"""
         right_col.append(Paragraph(training_text, self.styles['BodyText']))
-        right_col.append(Spacer(1, 0.15*cm))
+        right_col.append(Spacer(1, 0.05*cm))
 
         # Training Results
         right_col.append(Paragraph("<b>Training Results</b>", self.styles['SectionTitle']))
-        right_col.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=4))
+        right_col.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=2))
 
         final_train_loss = history['train_losses'][-1]
         final_val_loss = history['val_losses'][-1]
@@ -183,19 +183,19 @@ class UncertaintyReportGenerator:
 • <b>Well Calibrated:</b> {'Yes' if coverage_results['well_calibrated'] else 'No'}"""
 
         right_col.append(Paragraph(results_text, self.styles['BodyText']))
-        right_col.append(Spacer(1, 0.15*cm))
+        right_col.append(Spacer(1, 0.05*cm))
 
         # Uncertainty Parameters
         right_col.append(Paragraph("<b>Uncertainty Parameters</b>", self.styles['SectionTitle']))
-        right_col.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=4))
+        right_col.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=2))
 
         uncertainty_text = f"""• <b>Confidence Level:</b> {config['uncertainty']['confidence_level']*100:.0f}%"""
         right_col.append(Paragraph(uncertainty_text, self.styles['BodyText']))
-        right_col.append(Spacer(1, 0.15*cm))
+        right_col.append(Spacer(1, 0.05*cm))
 
         # Miscellaneous Parameters
         right_col.append(Paragraph("<b>Miscellaneous</b>", self.styles['SectionTitle']))
-        right_col.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=4))
+        right_col.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=2))
 
         misc_text = f"""• <b>Random Seed:</b> {config['misc']['random_seed']}"""
         if 'verbose' in config['misc']:
@@ -204,7 +204,7 @@ class UncertaintyReportGenerator:
 
         # Create two-column table
         data = [[left_col, right_col]]
-        col_table = Table(data, colWidths=[9*cm, 9*cm])
+        col_table = Table(data, colWidths=[6*cm, 6*cm])
         col_table.setStyle(TableStyle([
             ('VALIGN', (0, 0), (-1, -1), 'TOP'),
             ('LEFTPADDING', (0, 0), (-1, -1), 0),
@@ -212,7 +212,7 @@ class UncertaintyReportGenerator:
         ]))
 
         self.story.append(col_table)
-        self.story.append(Spacer(1, 0.2*cm))
+        self.story.append(Spacer(1, 0.1*cm))
 
     def add_metrics_table(self, metrics):
         """Add metrics table with uncertainty-specific metrics"""
@@ -245,8 +245,8 @@ class UncertaintyReportGenerator:
 
             data.append(row)
 
-        # Create table with adjusted column widths (smaller)
-        col_widths = [1.8*cm, 1.5*cm, 1.5*cm, 1.5*cm, 1.5*cm, 1.5*cm, 1.5*cm, 1.5*cm]
+        # Create table with adjusted column widths (smaller to fit in half page)
+        col_widths = [1.3*cm, 1.1*cm, 1.1*cm, 1.1*cm, 1.1*cm, 1.1*cm, 1.1*cm, 1.1*cm]
         table = Table(data, colWidths=col_widths)
         table.setStyle(TableStyle([
             # Header row
@@ -288,33 +288,33 @@ class UncertaintyReportGenerator:
             img_width, img_height = img.imageWidth, img.imageHeight
             aspect_ratio = img_height / img_width
 
-            # Set smaller size for SCM graph
-            new_width = 10*cm
+            # Set smaller size for SCM graph to fit in half page
+            new_width = 6*cm
             new_height = new_width * aspect_ratio
 
             # Max height constraint
-            if new_height > 6*cm:
-                new_height = 6*cm
+            if new_height > 4*cm:
+                new_height = 4*cm
                 new_width = new_height / aspect_ratio
 
             img.drawWidth = new_width
             img.drawHeight = new_height
 
             # Center the image
-            img_table = Table([[img]], colWidths=[18*cm])
+            img_table = Table([[img]], colWidths=[13*cm])
             img_table.setStyle(TableStyle([
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
                 ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
             ]))
             self.story.append(img_table)
 
-            caption = Paragraph("<i>Structural Causal Model - Causal Graph Structure</i>", self.styles['Normal'])
-            caption_table = Table([[caption]], colWidths=[18*cm])
+            caption = Paragraph("<i>SCM Graph</i>", self.styles['Normal'])
+            caption_table = Table([[caption]], colWidths=[13*cm])
             caption_table.setStyle(TableStyle([
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
             ]))
             self.story.append(caption_table)
-            self.story.append(Spacer(1, 0.1*cm))
+            self.story.append(Spacer(1, 0.05*cm))
 
     def add_plots_stacked(self, checkpoint_dir):
         """Add uncertainty-specific plots stacked vertically"""
@@ -329,108 +329,66 @@ class UncertaintyReportGenerator:
             img_width, img_height = img1.imageWidth, img1.imageHeight
             aspect_ratio = img_height / img_width
 
-            # Larger width for stacked layout
-            new_width = 16*cm
+            # Smaller width to fit in half page
+            new_width = 12*cm
             new_height = new_width * aspect_ratio
 
             # Max height constraint
-            if new_height > 10*cm:
-                new_height = 10*cm
+            if new_height > 6*cm:
+                new_height = 6*cm
                 new_width = new_height / aspect_ratio
 
             img1.drawWidth = new_width
             img1.drawHeight = new_height
 
             # Center the image
-            img_table = Table([[img1]], colWidths=[18*cm])
+            img_table = Table([[img1]], colWidths=[13*cm])
             img_table.setStyle(TableStyle([
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
                 ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
             ]))
             self.story.append(img_table)
 
-            caption1 = Paragraph("<i>Training and Validation Loss (NLL and MSE)</i>", self.styles['Normal'])
-            caption_table = Table([[caption1]], colWidths=[18*cm])
+            caption1 = Paragraph("<i>Training Loss</i>", self.styles['Normal'])
+            caption_table = Table([[caption1]], colWidths=[13*cm])
             caption_table.setStyle(TableStyle([
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
             ]))
             self.story.append(caption_table)
-            self.story.append(Spacer(1, 0.15*cm))
+            self.story.append(Spacer(1, 0.1*cm))
 
-        # Predictions with uncertainty plots - side by side layout
+        # Predictions with uncertainty plot
         predictions_plot = checkpoint_dir / 'predictions_with_uncertainty.png'
-        training_predictions_plot = checkpoint_dir / 'training_predictions_with_uncertainty.png'
 
-        if predictions_plot.exists() and training_predictions_plot.exists():
-            # Load both images
+        if predictions_plot.exists():
             img2 = Image(str(predictions_plot))
-            img3 = Image(str(training_predictions_plot))
-
-            # Calculate dimensions for side-by-side layout
             img_width, img_height = img2.imageWidth, img2.imageHeight
             aspect_ratio = img_height / img_width
 
-            # Each image gets half the page width (with some spacing)
-            new_width = 8.5*cm
+            new_width = 12*cm
             new_height = new_width * aspect_ratio
 
-            # Max height constraint
-            if new_height > 8*cm:
-                new_height = 8*cm
+            if new_height > 6*cm:
+                new_height = 6*cm
                 new_width = new_height / aspect_ratio
 
             img2.drawWidth = new_width
             img2.drawHeight = new_height
-            img3.drawWidth = new_width
-            img3.drawHeight = new_height
 
-            # Create two-column table for images
-            img_table = Table([[img2, img3]], colWidths=[9*cm, 9*cm])
+            img_table = Table([[img2]], colWidths=[13*cm])
             img_table.setStyle(TableStyle([
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
                 ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
             ]))
             self.story.append(img_table)
 
-            # Create two-column table for captions
-            caption_left = Paragraph("<i>Validation Predictions with Uncertainty Bounds</i>", self.styles['Normal'])
-            caption_right = Paragraph("<i>Training Data with Uncertainty Bounds</i>", self.styles['Normal'])
-            caption_table = Table([[caption_left, caption_right]], colWidths=[9*cm, 9*cm])
+            caption2 = Paragraph("<i>Predictions</i>", self.styles['Normal'])
+            caption_table = Table([[caption2]], colWidths=[13*cm])
             caption_table.setStyle(TableStyle([
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
             ]))
             self.story.append(caption_table)
-            self.story.append(Spacer(1, 0.15*cm))
-        elif predictions_plot.exists():
-            # Fallback to single plot if training plot doesn't exist
-            img2 = Image(str(predictions_plot))
-            img_width, img_height = img2.imageWidth, img2.imageHeight
-            aspect_ratio = img_height / img_width
-
-            new_width = 16*cm
-            new_height = new_width * aspect_ratio
-
-            if new_height > 10*cm:
-                new_height = 10*cm
-                new_width = new_height / aspect_ratio
-
-            img2.drawWidth = new_width
-            img2.drawHeight = new_height
-
-            img_table = Table([[img2]], colWidths=[18*cm])
-            img_table.setStyle(TableStyle([
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ]))
-            self.story.append(img_table)
-
-            caption2 = Paragraph("<i>Predictions with Uncertainty Bounds</i>", self.styles['Normal'])
-            caption_table = Table([[caption2]], colWidths=[18*cm])
-            caption_table.setStyle(TableStyle([
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ]))
-            self.story.append(caption_table)
-            self.story.append(Spacer(1, 0.15*cm))
+            self.story.append(Spacer(1, 0.1*cm))
 
         # Scatter plot with uncertainty coloring
         scatter_plot = checkpoint_dir / 'scatter_with_uncertainty.png'
@@ -439,33 +397,33 @@ class UncertaintyReportGenerator:
             img_width, img_height = img3.imageWidth, img3.imageHeight
             aspect_ratio = img_height / img_width
 
-            # Larger width for stacked layout
-            new_width = 16*cm
+            # Smaller width to fit in half page
+            new_width = 12*cm
             new_height = new_width * aspect_ratio
 
             # Max height constraint
-            if new_height > 10*cm:
-                new_height = 10*cm
+            if new_height > 6*cm:
+                new_height = 6*cm
                 new_width = new_height / aspect_ratio
 
             img3.drawWidth = new_width
             img3.drawHeight = new_height
 
             # Center the image
-            img_table = Table([[img3]], colWidths=[18*cm])
+            img_table = Table([[img3]], colWidths=[13*cm])
             img_table.setStyle(TableStyle([
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
                 ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
             ]))
             self.story.append(img_table)
 
-            caption3 = Paragraph("<i>Scatter Plot with Uncertainty Coloring</i>", self.styles['Normal'])
-            caption_table = Table([[caption3]], colWidths=[18*cm])
+            caption3 = Paragraph("<i>Scatter Plot</i>", self.styles['Normal'])
+            caption_table = Table([[caption3]], colWidths=[13*cm])
             caption_table.setStyle(TableStyle([
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
             ]))
             self.story.append(caption_table)
-            self.story.append(Spacer(1, 0.15*cm))
+            self.story.append(Spacer(1, 0.1*cm))
 
         # Uncertainty distribution plot - REMOVED per user request
         # dist_plot = checkpoint_dir / 'uncertainty_distribution.png'
@@ -512,32 +470,31 @@ class UncertaintyReportGenerator:
         self.add_metrics_table(metrics)
         self.add_scm_graph(Path(config['training']['checkpoint_dir']))
 
-        # Add a frame break to move to the second "page" (right column)
+        # Add a frame break to move to the second column
         self.story.append(FrameBreak())
 
         self.add_plots_stacked(Path(config['training']['checkpoint_dir']))
 
-        # Create custom page size: two A4 pages side by side in landscape orientation
-        # A4 landscape is (29.7cm, 21cm), so two side by side is (59.4cm, 21cm)
-        custom_pagesize = (A4[1]*2, A4[0])  # (width, height)
+        # Use A4 landscape page size
+        page_size = landscape(A4)  # (29.7cm, 21cm)
 
         # Build PDF with two-column layout
         doc = BaseDocTemplate(
             str(self.output_path),
-            pagesize=custom_pagesize,
-            rightMargin=1*cm,
-            leftMargin=1*cm,
-            topMargin=1*cm,
-            bottomMargin=1*cm,
+            pagesize=page_size,
+            rightMargin=0.75*cm,
+            leftMargin=0.75*cm,
+            topMargin=0.75*cm,
+            bottomMargin=0.75*cm,
         )
 
-        # Define two frames side by side
-        frame_width = (custom_pagesize[0] - 3*cm) / 2  # divide available width by 2
-        frame_height = custom_pagesize[1] - 2*cm
+        # Define two frames side by side on a single A4 landscape page
+        frame_width = (page_size[0] - 2*cm) / 2  # divide available width by 2
+        frame_height = page_size[1] - 1.5*cm
 
         frame1 = Frame(
-            1*cm,  # x
-            1*cm,  # y
+            0.75*cm,  # x
+            0.75*cm,  # y
             frame_width,  # width
             frame_height,  # height
             id='col1',
@@ -545,8 +502,8 @@ class UncertaintyReportGenerator:
         )
 
         frame2 = Frame(
-            1*cm + frame_width + 1*cm,  # x (shifted right with gap)
-            1*cm,  # y
+            0.75*cm + frame_width + 0.5*cm,  # x (shifted right with gap)
+            0.75*cm,  # y
             frame_width,  # width
             frame_height,  # height
             id='col2',
