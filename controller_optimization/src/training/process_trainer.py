@@ -392,21 +392,36 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
     with open(scaler_path, 'wb') as f:
         pickle.dump(preprocessor, f)
 
+    # Helper function to convert numpy types to native Python types for JSON
+    def convert_to_native(obj):
+        """Recursively convert numpy types to native Python types"""
+        if isinstance(obj, (np.integer, np.int32, np.int64)):
+            return int(obj)
+        elif isinstance(obj, (np.floating, np.float32, np.float64)):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, dict):
+            return {key: convert_to_native(value) for key, value in obj.items()}
+        elif isinstance(obj, list):
+            return [convert_to_native(item) for item in obj]
+        else:
+            return obj
+
     # Save training info
     training_info = {
         'process_name': process_name,
         'scm_dataset_type': scm_dataset_type,
-        'input_dim': input_dim,
-        'output_dim': output_dim,
+        'input_dim': int(input_dim),
+        'output_dim': int(output_dim),
         'input_labels': input_labels,
         'output_labels': output_labels,
         'model_config': model_config,
         'training_config': training_config,
-        'total_params': total_params,
-        'metrics': test_metrics,
-        'coverage': coverage_results,
-        'history': {k: [float(v) for v in vals] if isinstance(vals, list) else float(vals)
-                    for k, vals in history.items()},
+        'total_params': int(total_params),
+        'metrics': convert_to_native(test_metrics),
+        'coverage': convert_to_native(coverage_results),
+        'history': convert_to_native(history),
         'timestamp': datetime.now().isoformat(),
     }
 
