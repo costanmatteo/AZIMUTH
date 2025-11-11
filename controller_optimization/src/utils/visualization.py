@@ -112,9 +112,10 @@ def plot_trajectory_comparison(target_trajectory, baseline_trajectory,
         baseline_outputs = baseline[process_name]['outputs_mean'].flatten()
         actual_outputs = actual[process_name]['outputs_mean'].flatten()
 
-        ax_out.plot(x, target_outputs, 'o-', color='green', label='Target (a*)', linewidth=2)
-        ax_out.plot(x, baseline_outputs, 's--', color='red', label='Baseline (a\')', linewidth=2, alpha=0.7)
-        ax_out.plot(x, actual_outputs, '^-', color='blue', label='Controller (a)', linewidth=2, alpha=0.7)
+        x_out = np.arange(len(target_outputs))
+        ax_out.plot(x_out, target_outputs, 'o-', color='green', label='Target (a*)', linewidth=2)
+        ax_out.plot(x_out, baseline_outputs, 's--', color='red', label='Baseline (a\')', linewidth=2, alpha=0.7)
+        ax_out.plot(x_out, actual_outputs, '^-', color='blue', label='Controller (a)', linewidth=2, alpha=0.7)
 
         ax_out.set_title(f'{process_name.capitalize()} - Outputs')
         ax_out.set_xlabel('Sample Index')
