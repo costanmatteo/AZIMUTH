@@ -19,8 +19,12 @@ try:
     from pypdf import PdfReader, PdfWriter
     from pypdf.generic import Transformation
     PYPDF_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     PYPDF_AVAILABLE = False
+    import sys
+    print(f"Warning: pypdf not available (reason: {e})", file=sys.stderr)
+    print(f"Python executable: {sys.executable}", file=sys.stderr)
+    print(f"Install with: {sys.executable} -m pip install pypdf", file=sys.stderr)
 
 
 class UncertaintyReportGenerator:
