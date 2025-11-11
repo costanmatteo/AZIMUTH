@@ -19,6 +19,12 @@ import importlib.util
 REPO_ROOT = Path(__file__).parent.parent.parent.parent
 UNCERTAINTY_PREDICTOR_PATH = REPO_ROOT / 'uncertainty_predictor'
 
+# CRITICAL: Add uncertainty_predictor to sys.path FIRST
+# This allows nested imports (like scm_ds.datasets) to work when calling
+# functions like generate_scm_data() from the loaded modules
+if str(UNCERTAINTY_PREDICTOR_PATH) not in sys.path:
+    sys.path.insert(0, str(UNCERTAINTY_PREDICTOR_PATH))
+
 # Load modules from uncertainty_predictor explicitly
 spec_nn = importlib.util.spec_from_file_location(
     "uncertainty_nn",
