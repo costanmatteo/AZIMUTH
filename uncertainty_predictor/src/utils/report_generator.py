@@ -13,8 +13,14 @@ from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle, Frame, PageTemplate, KeepTogether
 from reportlab.lib.enums import TA_LEFT, TA_CENTER
 from reportlab.platypus.flowables import HRFlowable
-from pypdf import PdfReader, PdfWriter
-from pypdf.generic import Transformation
+
+# Optional PDF manipulation for 2-up layout
+try:
+    from pypdf import PdfReader, PdfWriter
+    from pypdf.generic import Transformation
+    PYPDF_AVAILABLE = True
+except ImportError:
+    PYPDF_AVAILABLE = False
 
 
 class UncertaintyReportGenerator:
@@ -500,7 +506,13 @@ def create_2up_pdf(input_pdf_path, output_pdf_path):
     Args:
         input_pdf_path: Path to the input PDF
         output_pdf_path: Path to save the 2-up PDF
+
+    Raises:
+        ImportError: If pypdf is not available
     """
+    if not PYPDF_AVAILABLE:
+        raise ImportError("pypdf library is required for 2-up layout. Install with: pip install pypdf")
+
     reader = PdfReader(input_pdf_path)
     writer = PdfWriter()
 
