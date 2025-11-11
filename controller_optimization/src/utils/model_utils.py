@@ -29,6 +29,15 @@ sys.modules['uncertainty_nn'] = uncertainty_nn  # Register for pickle
 spec_nn.loader.exec_module(uncertainty_nn)
 UncertaintyPredictor = uncertainty_nn.UncertaintyPredictor
 
+# Load preprocessing module for pickle compatibility
+spec_preprocessing = importlib.util.spec_from_file_location(
+    "preprocessing",
+    UNCERTAINTY_PREDICTOR_PATH / "src" / "data" / "preprocessing.py"
+)
+preprocessing = importlib.util.module_from_spec(spec_preprocessing)
+sys.modules['preprocessing'] = preprocessing  # Register for pickle
+spec_preprocessing.loader.exec_module(preprocessing)
+
 
 def load_uncertainty_predictor(checkpoint_path, input_dim, output_dim, model_config, device='cpu'):
     """
