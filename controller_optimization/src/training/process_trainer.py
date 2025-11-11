@@ -1,0 +1,375 @@
+"""
+Trainer per uncertainty predictor di un singolo processo.
+
+Importa e usa la classe UncertaintyPredictor esistente da uncertainty_predictor/
+GENERA REPORT PDF con metriche e visualizzazioni.
+"""
+
+import sys
+from pathlib import Path
+import torch
+from torch.utils.data import DataLoader, TensorDataset
+import numpy as np
+import json
+from datetime import datetime
+import pickle
+
+# Add uncertainty_predictor to path
+REPO_ROOT = Path(__file__).parent.parent.parent.parent
+UNCERTAINTY_PREDICTOR_PATH = REPO_ROOT / 'uncertainty_predictor'
+sys.path.insert(0, str(UNCERTAINTY_PREDICTOR_PATH))
+
+# Import from uncertainty_predictor
+from src.models.uncertainty_nn import UncertaintyPredictor, GaussianNLLLoss
+from src.training.uncertainty_trainer import UncertaintyTrainer
+from src.data.preprocessing import DataPreprocessor, generate_scm_data
+from src.utils.report_generator import generate_uncertainty_training_report
+from src.utils import metrics as uq_metrics
+from src.utils import visualization as uq_viz
+
+
+def train_single_process(process_config, device='auto', verbose=True, seed=42):
+    """
+    Addestra uncertainty predictor per un processo e genera report.
+
+    Args:
+        process_config (dict): Config da PROCESSES
+        device (str): 'cuda', 'cpu', o 'auto'
+        verbose (bool): Print progress
+        seed (int): Random seed
+
+    Returns:
+        dict: {
+            'model_path': str,
+            'scaler_path': str,
+            'metrics': dict,
+            'history': dict,
+            'report_path': str  # Path al PDF report generato
+        }
+    """
+    # Setup device
+    if device == 'auto':
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    # Set random seeds
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+
+    # Extract config
+    process_name = process_config['name']
+    scm_dataset_type = process_config['scm_dataset_type']
+    input_dim = process_config['input_dim']
+    output_dim = process_config['output_dim']
+    input_labels = process_config['input_labels']
+    output_labels = process_config['output_labels']
+    model_config = process_config['uncertainty_predictor']['model']
+    training_config = process_config['uncertainty_predictor']['training']
+    checkpoint_dir = Path(process_config['checkpoint_dir'])
+
+    # Create checkpoint directory
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+    if verbose:
+        print(f"\n{'='*70}")
+        print(f"Training Uncertainty Predictor for Process: {process_name.upper()}")
+        print(f"{'='*70}")
+
+    # 1. Generate SCM dataset
+    if verbose:
+        print(f"\n[1/9] Generating SCM dataset ({scm_dataset_type})...")
+
+    X, y, input_cols, output_cols = generate_scm_data(
+        n_samples=training_config['n_samples'],
+        seed=seed,
+        dataset_type=scm_dataset_type,
+        save_graph_to=checkpoint_dir  # Save SCM graph
+    )
+
+    # 2. Preprocessing
+    if verbose:
+        print(f"\n[2/9] Preprocessing data...")
+
+    preprocessor = DataPreprocessor(scaling_method='standard')
+
+    # Split data
+    X_train, X_val, X_test, y_train, y_val, y_test = preprocessor.split_data(
+        X, y,
+        train_size=0.7,
+        val_size=0.15,
+        test_size=0.15,
+        random_state=seed
+    )
+
+    # Fit and transform
+    X_train_scaled, y_train_scaled = preprocessor.fit_transform(X_train, y_train)
+    X_val_scaled, y_val_scaled = preprocessor.transform(X_val, y_val)
+    X_test_scaled, y_test_scaled = preprocessor.transform(X_test, y_test)
+
+    # Convert to tensors
+    train_dataset = TensorDataset(
+        torch.FloatTensor(X_train_scaled),
+        torch.FloatTensor(y_train_scaled)
+    )
+    val_dataset = TensorDataset(
+        torch.FloatTensor(X_val_scaled),
+        torch.FloatTensor(y_val_scaled)
+    )
+    test_dataset = TensorDataset(
+        torch.FloatTensor(X_test_scaled),
+        torch.FloatTensor(y_test_scaled)
+    )
+
+    # Create data loaders
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=training_config['batch_size'],
+        shuffle=True
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=training_config['batch_size'],
+        shuffle=False
+    )
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=training_config['batch_size'],
+        shuffle=False
+    )
+
+    if verbose:
+        print(f"  Train: {len(X_train)} samples")
+        print(f"  Val:   {len(X_val)} samples")
+        print(f"  Test:  {len(X_test)} samples")
+
+    # 3. Create UncertaintyPredictor
+    if verbose:
+        print(f"\n[3/9] Creating UncertaintyPredictor model...")
+
+    model = UncertaintyPredictor(
+        input_size=input_dim,
+        output_size=output_dim,
+        hidden_sizes=model_config['hidden_sizes'],
+        dropout_rate=model_config['dropout_rate'],
+        use_batchnorm=model_config['use_batchnorm'],
+        min_variance=model_config['min_variance']
+    )
+
+    total_params = sum(p.numel() for p in model.parameters())
+    if verbose:
+        print(f"  Total parameters: {total_params:,}")
+
+    # 4. Create loss function
+    criterion = GaussianNLLLoss(alpha=training_config['variance_penalty_alpha'])
+
+    # 5. Create trainer
+    if verbose:
+        print(f"\n[4/9] Creating trainer...")
+
+    trainer = UncertaintyTrainer(
+        model=model,
+        criterion=criterion,
+        device=device,
+        learning_rate=training_config['learning_rate'],
+        weight_decay=training_config['weight_decay']
+    )
+
+    # 6. Train
+    if verbose:
+        print(f"\n[5/9] Training model...")
+
+    history = trainer.train(
+        train_loader=train_loader,
+        val_loader=val_loader,
+        epochs=training_config['epochs'],
+        patience=training_config['patience'],
+        save_dir=str(checkpoint_dir)
+    )
+
+    # 7. Evaluate on test set
+    if verbose:
+        print(f"\n[6/9] Evaluating on test set...")
+
+    model.eval()
+    all_means = []
+    all_vars = []
+    all_targets = []
+
+    with torch.no_grad():
+        for batch_X, batch_y in test_loader:
+            batch_X = batch_X.to(device)
+            batch_y = batch_y.to(device)
+
+            mean, variance = model(batch_X)
+            all_means.append(mean.cpu().numpy())
+            all_vars.append(variance.cpu().numpy())
+            all_targets.append(batch_y.cpu().numpy())
+
+    means_scaled = np.vstack(all_means)
+    vars_scaled = np.vstack(all_vars)
+    targets_scaled = np.vstack(all_targets)
+
+    # Unscale predictions
+    means = preprocessor.output_scaler.inverse_transform(means_scaled)
+    targets = preprocessor.output_scaler.inverse_transform(targets_scaled)
+
+    # Unscale variances (variance scales with scale^2)
+    output_scale = preprocessor.output_scaler.scale_
+    variances = vars_scaled * (output_scale ** 2)
+
+    # Compute metrics
+    test_metrics = uq_metrics.compute_metrics(means, targets, variances)
+
+    # Compute coverage
+    coverage_results = uq_metrics.compute_prediction_interval_coverage(
+        means, targets, variances, confidence_level=0.95
+    )
+
+    if verbose:
+        print("\n  Test Metrics:")
+        print(f"    MSE:             {test_metrics['mse']:.6f}")
+        print(f"    RMSE:            {test_metrics['rmse']:.6f}")
+        print(f"    MAE:             {test_metrics['mae']:.6f}")
+        print(f"    R²:              {test_metrics['r2']:.6f}")
+        print(f"    Mean Variance:   {test_metrics['mean_variance']:.6f}")
+        print(f"    Calibration Ratio: {test_metrics['calibration_ratio']:.6f}")
+        print(f"    NLL:             {test_metrics['nll']:.6f}")
+        print(f"\n  Coverage:")
+        print(f"    Expected: {coverage_results['expected_coverage']:.1f}%")
+        print(f"    Actual:   {coverage_results['actual_coverage']:.1f}%")
+        print(f"    Well calibrated: {coverage_results['well_calibrated']}")
+
+    # 8. Generate visualizations
+    if verbose:
+        print(f"\n[7/9] Generating visualizations...")
+
+    # Training history plot
+    uq_viz.plot_training_history(
+        history=history,
+        save_path=str(checkpoint_dir / 'training_history.png')
+    )
+
+    # Predictions plot
+    uq_viz.plot_predictions_with_uncertainty(
+        y_true=targets.flatten(),
+        y_pred=means.flatten(),
+        uncertainty=np.sqrt(variances.flatten()),
+        title=f'{process_name.capitalize()} - Test Set Predictions',
+        save_path=str(checkpoint_dir / 'predictions.png')
+    )
+
+    # Scatter plot with uncertainty
+    uq_viz.plot_scatter_with_uncertainty(
+        y_true=targets.flatten(),
+        y_pred=means.flatten(),
+        uncertainty=np.sqrt(variances.flatten()),
+        title=f'{process_name.capitalize()} - Prediction Scatter',
+        save_path=str(checkpoint_dir / 'scatter.png')
+    )
+
+    # 9. Generate PDF report
+    if verbose:
+        print(f"\n[8/9] Generating PDF report...")
+
+    # Build config dict for report
+    config_dict = {
+        'model': {
+            'model_type': 'UncertaintyPredictor',
+            'hidden_sizes': model_config['hidden_sizes'],
+            'dropout_rate': model_config['dropout_rate'],
+            'use_batchnorm': model_config['use_batchnorm'],
+            'min_variance': model_config['min_variance'],
+        },
+        'data': {
+            'csv_path': f'SCM:{scm_dataset_type}',
+            'input_columns': input_labels,
+            'output_columns': output_labels,
+            'train_size': 0.7,
+            'val_size': 0.15,
+            'test_size': 0.15,
+            'scaling_method': 'standard',
+            'random_state': seed,
+        },
+        'training': {
+            'epochs': training_config['epochs'],
+            'batch_size': training_config['batch_size'],
+            'learning_rate': training_config['learning_rate'],
+            'weight_decay': training_config['weight_decay'],
+            'loss_type': training_config['loss_type'],
+            'variance_penalty_alpha': training_config['variance_penalty_alpha'],
+            'patience': training_config['patience'],
+            'device': device,
+            'checkpoint_dir': str(checkpoint_dir),
+        },
+        'uncertainty': {
+            'confidence_level': 0.95,
+        },
+        'misc': {
+            'random_seed': seed,
+            'verbose': verbose,
+        }
+    }
+
+    report_path = generate_uncertainty_training_report(
+        config=config_dict,
+        history=history,
+        metrics=test_metrics,
+        input_dim=input_dim,
+        output_dim=output_dim,
+        total_params=total_params,
+        n_train=len(X_train),
+        n_val=len(X_val),
+        n_test=len(X_test),
+        checkpoint_dir=checkpoint_dir,
+        timestamp=datetime.now(),
+        coverage_results=coverage_results
+    )
+
+    # 10. Save model, scaler, and metadata
+    if verbose:
+        print(f"\n[9/9] Saving artifacts...")
+
+    # Save model weights
+    model_path = checkpoint_dir / 'uncertainty_predictor.pth'
+    torch.save(model.state_dict(), model_path)
+
+    # Save preprocessor
+    scaler_path = checkpoint_dir / 'scalers.pkl'
+    with open(scaler_path, 'wb') as f:
+        pickle.dump(preprocessor, f)
+
+    # Save training info
+    training_info = {
+        'process_name': process_name,
+        'scm_dataset_type': scm_dataset_type,
+        'input_dim': input_dim,
+        'output_dim': output_dim,
+        'input_labels': input_labels,
+        'output_labels': output_labels,
+        'model_config': model_config,
+        'training_config': training_config,
+        'total_params': total_params,
+        'metrics': test_metrics,
+        'coverage': coverage_results,
+        'history': {k: [float(v) for v in vals] for k, vals in history.items()},
+        'timestamp': datetime.now().isoformat(),
+    }
+
+    info_path = checkpoint_dir / 'training_info.json'
+    with open(info_path, 'w') as f:
+        json.dump(training_info, f, indent=2)
+
+    if verbose:
+        print(f"\n  Saved:")
+        print(f"    Model:       {model_path}")
+        print(f"    Scaler:      {scaler_path}")
+        print(f"    Info:        {info_path}")
+        print(f"    Report:      {report_path}")
+
+    return {
+        'model_path': str(model_path),
+        'scaler_path': str(scaler_path),
+        'info_path': str(info_path),
+        'metrics': test_metrics,
+        'history': history,
+        'report_path': str(report_path),
+    }
