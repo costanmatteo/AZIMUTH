@@ -6,13 +6,15 @@ LaTeX-style report with two-column layout for UQ models
 
 from datetime import datetime
 from pathlib import Path
-from reportlab.lib.pagesizes import A4
+from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch, cm
 from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle, Frame, PageTemplate, KeepTogether
 from reportlab.lib.enums import TA_LEFT, TA_CENTER
 from reportlab.platypus.flowables import HRFlowable
+from pypdf import PdfReader, PdfWriter
+from pypdf.generic import Transformation
 
 
 class UncertaintyReportGenerator:
@@ -491,6 +493,66 @@ class UncertaintyReportGenerator:
         print(f"PDF report generated: {self.output_path}")
 
 
+def create_2up_pdf(input_pdf_path, output_pdf_path):
+    """
+    Convert a PDF to 2-up format: 2 pages side-by-side on A4 landscape
+
+    Args:
+        input_pdf_path: Path to the input PDF
+        output_pdf_path: Path to save the 2-up PDF
+    """
+    reader = PdfReader(input_pdf_path)
+    writer = PdfWriter()
+
+    # A4 landscape dimensions in points (1 point = 1/72 inch)
+    a4_width, a4_height = landscape(A4)  # 842 x 595 points
+
+    # Process pages in pairs
+    num_pages = len(reader.pages)
+    for i in range(0, num_pages, 2):
+        # Create new blank page (A4 landscape)
+        blank_page = writer.add_blank_page(width=a4_width, height=a4_height)
+
+        # Get first page (left side)
+        page1 = reader.pages[i]
+
+        # Calculate scaling to fit A5 size (half of A4 landscape width)
+        target_width = a4_width / 2
+        target_height = a4_height
+
+        # Scale page to fit A5 width while maintaining aspect ratio
+        orig_width = float(page1.mediabox.width)
+        orig_height = float(page1.mediabox.height)
+        scale = min(target_width / orig_width, target_height / orig_height)
+
+        # Calculate centering offsets for left page
+        scaled_width = orig_width * scale
+        scaled_height = orig_height * scale
+        offset_x_left = (target_width - scaled_width) / 2
+        offset_y = (target_height - scaled_height) / 2
+
+        # Apply transformation to first page (left side)
+        page1.scale(scale, scale)
+        page1.add_transformation(Transformation().translate(offset_x_left, offset_y))
+        blank_page.merge_page(page1)
+
+        # Get second page (right side) if it exists
+        if i + 1 < num_pages:
+            page2 = reader.pages[i + 1]
+
+            # Calculate offset for right page
+            offset_x_right = target_width + (target_width - scaled_width) / 2
+
+            # Apply transformation to second page (right side)
+            page2.scale(scale, scale)
+            page2.add_transformation(Transformation().translate(offset_x_right, offset_y))
+            blank_page.merge_page(page2)
+
+    # Write output
+    with open(output_pdf_path, 'wb') as output_file:
+        writer.write(output_file)
+
+
 def generate_uncertainty_training_report(
     config,
     history,
@@ -526,10 +588,20 @@ def generate_uncertainty_training_report(
         timestamp = datetime.now()
 
     checkpoint_dir = Path(checkpoint_dir)
-    report_path = checkpoint_dir / 'training_report.pdf'
+    temp_report_path = checkpoint_dir / 'training_report_temp.pdf'
+    final_report_path = checkpoint_dir / 'training_report.pdf'
 
-    generator = UncertaintyReportGenerator(report_path)
+    # Generate the original PDF
+    generator = UncertaintyReportGenerator(temp_report_path)
     generator.generate(config, history, metrics, input_dim, output_dim,
                       total_params, n_train, n_val, n_test, timestamp, coverage_results)
 
-    return report_path
+    # Convert to 2-up format
+    create_2up_pdf(temp_report_path, final_report_path)
+
+    # Remove temporary file
+    temp_report_path.unlink()
+
+    print(f"2-up PDF report generated: {final_report_path}")
+
+    return final_report_path
