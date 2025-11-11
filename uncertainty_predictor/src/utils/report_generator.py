@@ -528,29 +528,26 @@ def create_2up_pdf(input_pdf_path, output_pdf_path):
         # Create new blank page (A4 landscape)
         blank_page = writer.add_blank_page(width=a4_width, height=a4_height)
 
-        # Get first page (left side)
-        page1 = reader.pages[i]
-
         # Calculate scaling to fit A5 size (half of A4 landscape width)
         target_width = a4_width / 2
         target_height = a4_height
 
-        # Scale page to fit A5 width while maintaining aspect ratio
+        # Get first page (left side)
+        page1 = reader.pages[i]
         orig_width = float(page1.mediabox.width)
         orig_height = float(page1.mediabox.height)
         scale = min(target_width / orig_width, target_height / orig_height)
 
-        # Calculate centering offsets for left page
+        # Calculate centering offsets
         scaled_width = orig_width * scale
         scaled_height = orig_height * scale
         offset_x_left = (target_width - scaled_width) / 2
         offset_y = (target_height - scaled_height) / 2
 
-        # Apply transformation to first page (left side)
-        # Translate first, then scale (order matters with transformation matrices)
-        transformation_left = Transformation().translate(tx=offset_x_left/scale, ty=offset_y/scale).scale(sx=scale, sy=scale)
-        page1.add_transformation(transformation_left)
-        blank_page.merge_page(page1)
+        # Scale and position first page (left side)
+        page1.scale_by(scale)
+        page1.add_transformation(Transformation().translate(tx=offset_x_left, ty=offset_y))
+        blank_page.merge_page(page1, expand=True)
 
         # Get second page (right side) if it exists
         if i + 1 < num_pages:
@@ -559,11 +556,10 @@ def create_2up_pdf(input_pdf_path, output_pdf_path):
             # Calculate offset for right page
             offset_x_right = target_width + (target_width - scaled_width) / 2
 
-            # Apply transformation to second page (right side)
-            # Translate first, then scale
-            transformation_right = Transformation().translate(tx=offset_x_right/scale, ty=offset_y/scale).scale(sx=scale, sy=scale)
-            page2.add_transformation(transformation_right)
-            blank_page.merge_page(page2)
+            # Scale and position second page (right side)
+            page2.scale_by(scale)
+            page2.add_transformation(Transformation().translate(tx=offset_x_right, ty=offset_y))
+            blank_page.merge_page(page2, expand=True)
 
     # Write output
     with open(output_pdf_path, 'wb') as output_file:
