@@ -450,12 +450,12 @@ class UncertaintyReportGenerator:
             aspect_ratio = img_height / img_width
 
             # Larger width for stacked layout
-            new_width = 16*cm
+            new_width = 18*cm
             new_height = new_width * aspect_ratio
 
             # Max height constraint
-            if new_height > 10*cm:
-                new_height = 10*cm
+            if new_height > 14*cm:
+                new_height = 14*cm
                 new_width = new_height / aspect_ratio
 
             img3.drawWidth = new_width
