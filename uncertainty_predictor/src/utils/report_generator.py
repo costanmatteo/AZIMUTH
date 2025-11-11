@@ -6,13 +6,13 @@ LaTeX-style report with two-column layout for UQ models
 
 from datetime import datetime
 from pathlib import Path
-from reportlab.lib.pagesizes import A4
+from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch, cm
 from reportlab.lib import colors
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle, Frame, PageTemplate, KeepTogether
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle, Frame, PageTemplate, KeepTogether, PageBreak, BaseDocTemplate
 from reportlab.lib.enums import TA_LEFT, TA_CENTER
-from reportlab.platypus.flowables import HRFlowable
+from reportlab.platypus.flowables import HRFlowable, FrameBreak
 
 
 class UncertaintyReportGenerator:
@@ -244,8 +244,8 @@ class UncertaintyReportGenerator:
 
             data.append(row)
 
-        # Create table with adjusted column widths
-        col_widths = [2.2*cm, 1.9*cm, 1.9*cm, 1.9*cm, 1.9*cm, 1.9*cm, 1.9*cm, 1.9*cm]
+        # Create table with adjusted column widths (smaller)
+        col_widths = [1.8*cm, 1.5*cm, 1.5*cm, 1.5*cm, 1.5*cm, 1.5*cm, 1.5*cm, 1.5*cm]
         table = Table(data, colWidths=col_widths)
         table.setStyle(TableStyle([
             # Header row
@@ -253,15 +253,15 @@ class UncertaintyReportGenerator:
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
             ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, 0), 8),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
-            ('TOPPADDING', (0, 0), (-1, 0), 8),
+            ('FONTSIZE', (0, 0), (-1, 0), 6),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 4),
+            ('TOPPADDING', (0, 0), (-1, 0), 4),
 
             # Data rows
             ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-            ('FONTSIZE', (0, 1), (-1, -1), 8),
-            ('TOPPADDING', (0, 1), (-1, -1), 6),
-            ('BOTTOMPADDING', (0, 1), (-1, -1), 6),
+            ('FONTSIZE', (0, 1), (-1, -1), 6),
+            ('TOPPADDING', (0, 1), (-1, -1), 3),
+            ('BOTTOMPADDING', (0, 1), (-1, -1), 3),
 
             # Top and bottom lines
             ('LINEABOVE', (0, 0), (-1, 0), 1.5, colors.black),
@@ -270,7 +270,7 @@ class UncertaintyReportGenerator:
         ]))
 
         self.story.append(table)
-        self.story.append(Spacer(1, 0.1*cm))
+        self.story.append(Spacer(1, 0.05*cm))
 
 
 
@@ -287,13 +287,13 @@ class UncertaintyReportGenerator:
             img_width, img_height = img.imageWidth, img.imageHeight
             aspect_ratio = img_height / img_width
 
-            # Set appropriate size for SCM graph
-            new_width = 14*cm
+            # Set smaller size for SCM graph
+            new_width = 10*cm
             new_height = new_width * aspect_ratio
 
             # Max height constraint
-            if new_height > 10*cm:
-                new_height = 10*cm
+            if new_height > 6*cm:
+                new_height = 6*cm
                 new_width = new_height / aspect_ratio
 
             img.drawWidth = new_width
@@ -313,7 +313,7 @@ class UncertaintyReportGenerator:
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
             ]))
             self.story.append(caption_table)
-            self.story.append(Spacer(1, 0.2*cm))
+            self.story.append(Spacer(1, 0.1*cm))
 
     def add_plots_stacked(self, checkpoint_dir):
         """Add uncertainty-specific plots stacked vertically"""
@@ -466,61 +466,95 @@ class UncertaintyReportGenerator:
             self.story.append(caption_table)
             self.story.append(Spacer(1, 0.15*cm))
 
-        # Uncertainty distribution plot
-        dist_plot = checkpoint_dir / 'uncertainty_distribution.png'
-        if dist_plot.exists():
-            img4 = Image(str(dist_plot))
-            img_width, img_height = img4.imageWidth, img4.imageHeight
-            aspect_ratio = img_height / img_width
-
-            # Larger width for stacked layout
-            new_width = 16*cm
-            new_height = new_width * aspect_ratio
-
-            # Max height constraint
-            if new_height > 10*cm:
-                new_height = 10*cm
-                new_width = new_height / aspect_ratio
-
-            img4.drawWidth = new_width
-            img4.drawHeight = new_height
-
-            # Center the image
-            img_table = Table([[img4]], colWidths=[18*cm])
-            img_table.setStyle(TableStyle([
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ]))
-            self.story.append(img_table)
-
-            caption4 = Paragraph("<i>Distribution of Predicted Uncertainties</i>", self.styles['Normal'])
-            caption_table = Table([[caption4]], colWidths=[18*cm])
-            caption_table.setStyle(TableStyle([
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ]))
-            self.story.append(caption_table)
+        # Uncertainty distribution plot - REMOVED per user request
+        # dist_plot = checkpoint_dir / 'uncertainty_distribution.png'
+        # if dist_plot.exists():
+        #     img4 = Image(str(dist_plot))
+        #     img_width, img_height = img4.imageWidth, img4.imageHeight
+        #     aspect_ratio = img_height / img_width
+        #
+        #     # Larger width for stacked layout
+        #     new_width = 16*cm
+        #     new_height = new_width * aspect_ratio
+        #
+        #     # Max height constraint
+        #     if new_height > 10*cm:
+        #         new_height = 10*cm
+        #         new_width = new_height / aspect_ratio
+        #
+        #     img4.drawWidth = new_width
+        #     img4.drawHeight = new_height
+        #
+        #     # Center the image
+        #     img_table = Table([[img4]], colWidths=[18*cm])
+        #     img_table.setStyle(TableStyle([
+        #         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        #         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        #     ]))
+        #     self.story.append(img_table)
+        #
+        #     caption4 = Paragraph("<i>Distribution of Predicted Uncertainties</i>", self.styles['Normal'])
+        #     caption_table = Table([[caption4]], colWidths=[18*cm])
+        #     caption_table.setStyle(TableStyle([
+        #         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        #     ]))
+        #     self.story.append(caption_table)
 
     def generate(self, config, history, metrics, input_dim, output_dim,
                 total_params, n_train, n_val, n_test, timestamp, coverage_results=None):
         """Generate the complete PDF"""
 
-        # Add all sections
+        # Add all sections to story
         self.add_title(timestamp)
         self.create_two_column_section(config, history, metrics, input_dim, output_dim,
                                        total_params, n_train, n_val, n_test, coverage_results)
         self.add_metrics_table(metrics)
         self.add_scm_graph(Path(config['training']['checkpoint_dir']))
+
+        # Add a frame break to move to the second "page" (right column)
+        self.story.append(FrameBreak())
+
         self.add_plots_stacked(Path(config['training']['checkpoint_dir']))
 
-        # Build PDF
-        doc = SimpleDocTemplate(
+        # Create custom page size: two A4 pages side by side in landscape orientation
+        # A4 landscape is (29.7cm, 21cm), so two side by side is (59.4cm, 21cm)
+        custom_pagesize = (A4[1]*2, A4[0])  # (width, height)
+
+        # Build PDF with two-column layout
+        doc = BaseDocTemplate(
             str(self.output_path),
-            pagesize=A4,
-            rightMargin=1.5*cm,
-            leftMargin=1.5*cm,
-            topMargin=1.5*cm,
-            bottomMargin=1.5*cm,
+            pagesize=custom_pagesize,
+            rightMargin=1*cm,
+            leftMargin=1*cm,
+            topMargin=1*cm,
+            bottomMargin=1*cm,
         )
+
+        # Define two frames side by side
+        frame_width = (custom_pagesize[0] - 3*cm) / 2  # divide available width by 2
+        frame_height = custom_pagesize[1] - 2*cm
+
+        frame1 = Frame(
+            1*cm,  # x
+            1*cm,  # y
+            frame_width,  # width
+            frame_height,  # height
+            id='col1',
+            showBoundary=0
+        )
+
+        frame2 = Frame(
+            1*cm + frame_width + 1*cm,  # x (shifted right with gap)
+            1*cm,  # y
+            frame_width,  # width
+            frame_height,  # height
+            id='col2',
+            showBoundary=0
+        )
+
+        # Create page template with two frames
+        page_template = PageTemplate(id='TwoColumn', frames=[frame1, frame2])
+        doc.addPageTemplates([page_template])
 
         doc.build(self.story)
         print(f"PDF report generated: {self.output_path}")
