@@ -16,8 +16,7 @@ from reportlab.platypus.flowables import HRFlowable
 
 # Optional PDF manipulation for 2-up layout
 try:
-    from pypdf import PdfReader, PdfWriter
-    from pypdf.generic import Transformation
+    from pypdf import PdfReader, PdfWriter, Transformation
     PYPDF_AVAILABLE = True
 except ImportError as e:
     PYPDF_AVAILABLE = False
