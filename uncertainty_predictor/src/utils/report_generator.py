@@ -475,7 +475,6 @@ class UncertaintyReportGenerator:
         self.create_two_column_section(config, history, metrics, input_dim, output_dim,
                                        total_params, n_train, n_val, n_test, coverage_results)
         self.add_metrics_table(metrics)
-        self.add_scm_graph(Path(config['training']['checkpoint_dir']))
         self.add_plots_stacked(Path(config['training']['checkpoint_dir']))
 
         # Build PDF
