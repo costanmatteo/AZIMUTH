@@ -395,7 +395,9 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
     # Helper function to convert numpy types to native Python types for JSON
     def convert_to_native(obj):
         """Recursively convert numpy types to native Python types"""
-        if isinstance(obj, (np.integer, np.int32, np.int64)):
+        if isinstance(obj, np.bool_):
+            return bool(obj)
+        elif isinstance(obj, (np.integer, np.int32, np.int64)):
             return int(obj)
         elif isinstance(obj, (np.floating, np.float32, np.float64)):
             return float(obj)
