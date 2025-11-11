@@ -183,17 +183,10 @@ class UncertaintyTrainer:
             self.val_losses.append(val_loss)
             self.val_mse.append(val_mse)
 
-            # Logging
-            print(f"Epoch {epoch+1}/{epochs}")
-            print(f"  Train - NLL Loss: {train_loss:.6f}, MSE: {train_mse:.6f}")
-            print(f"  Val   - NLL Loss: {val_loss:.6f}, MSE: {val_mse:.6f}, "
-                  f"Avg Variance: {val_variance:.6f}")
-
             # Save best model
             if val_loss < self.best_val_loss:
                 self.best_val_loss = val_loss
                 self.save_checkpoint(save_path / 'best_model.pth', epoch, val_loss)
-                print(f"  → New best model saved! (Val NLL Loss: {val_loss:.6f})")
                 epochs_without_improvement = 0
             else:
                 epochs_without_improvement += 1
