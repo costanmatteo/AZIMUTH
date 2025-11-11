@@ -26,11 +26,13 @@ if str(UNCERTAINTY_PREDICTOR_PATH) not in sys.path:
     sys.path.insert(0, str(UNCERTAINTY_PREDICTOR_PATH))
 
 # Load modules from uncertainty_predictor explicitly
+# Register them in sys.modules for pickle compatibility
 spec_nn = importlib.util.spec_from_file_location(
     "uncertainty_nn",
     UNCERTAINTY_PREDICTOR_PATH / "src" / "models" / "uncertainty_nn.py"
 )
 uncertainty_nn = importlib.util.module_from_spec(spec_nn)
+sys.modules['uncertainty_nn'] = uncertainty_nn  # Register for pickle
 spec_nn.loader.exec_module(uncertainty_nn)
 UncertaintyPredictor = uncertainty_nn.UncertaintyPredictor
 GaussianNLLLoss = uncertainty_nn.GaussianNLLLoss
@@ -40,6 +42,7 @@ spec_trainer = importlib.util.spec_from_file_location(
     UNCERTAINTY_PREDICTOR_PATH / "src" / "training" / "uncertainty_trainer.py"
 )
 uncertainty_trainer = importlib.util.module_from_spec(spec_trainer)
+sys.modules['uncertainty_trainer'] = uncertainty_trainer  # Register for pickle
 spec_trainer.loader.exec_module(uncertainty_trainer)
 UncertaintyTrainer = uncertainty_trainer.UncertaintyTrainer
 
@@ -48,6 +51,7 @@ spec_preprocessing = importlib.util.spec_from_file_location(
     UNCERTAINTY_PREDICTOR_PATH / "src" / "data" / "preprocessing.py"
 )
 preprocessing = importlib.util.module_from_spec(spec_preprocessing)
+sys.modules['preprocessing'] = preprocessing  # Register for pickle
 spec_preprocessing.loader.exec_module(preprocessing)
 DataPreprocessor = preprocessing.DataPreprocessor
 generate_scm_data = preprocessing.generate_scm_data

@@ -25,6 +25,7 @@ spec_nn = importlib.util.spec_from_file_location(
     UNCERTAINTY_PREDICTOR_PATH / "src" / "models" / "uncertainty_nn.py"
 )
 uncertainty_nn = importlib.util.module_from_spec(spec_nn)
+sys.modules['uncertainty_nn'] = uncertainty_nn  # Register for pickle
 spec_nn.loader.exec_module(uncertainty_nn)
 UncertaintyPredictor = uncertainty_nn.UncertaintyPredictor
 
