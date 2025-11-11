@@ -1,0 +1,341 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{booktabs}
+
+\title{\textbf{Controller Optimization System for Manufacturing Process Chain}\\
+\large Uncertainty Quantification and Policy Learning}
+\author{AZIMUTH Project}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This document describes the conceptual architecture and methodology of a two-phase controller optimization system for sequential manufacturing processes. The system combines uncertainty quantification with reinforcement learning-inspired policy optimization to improve manufacturing reliability. Phase 1 trains process-specific uncertainty predictors using Structural Causal Models (SCMs). Phase 2 optimizes policy generators that adapt process inputs to minimize uncertainty propagation while maintaining product quality.
+\end{abstract}
+
+\section{Introduction}
+
+Modern manufacturing involves sequential processes where the output of one stage becomes the input to the next. In this work, we consider a three-stage chain:
+
+\begin{enumerate}
+    \item \textbf{Laser Processing}: Precision cutting or surface treatment
+    \item \textbf{Plasma Treatment}: Surface modification or cleaning
+    \item \textbf{Galvanic Deposition}: Metal coating application
+\end{enumerate}
+
+Each process introduces uncertainty due to environmental variations, material inconsistencies, and equipment tolerances. Our goal is to develop an adaptive controller that:
+\begin{itemize}
+    \item Learns to predict process uncertainties
+    \item Generates optimal control inputs to minimize uncertainty propagation
+    \item Maximizes final product reliability
+\end{itemize}
+
+\section{System Architecture}
+
+The system operates in two distinct phases, following a curriculum learning approach:
+
+\subsection{Phase 1: Uncertainty Predictor Training}
+
+For each manufacturing process $p \in \{\text{laser, plasma, galvanic}\}$, we train an \textbf{Uncertainty Predictor} $\mathcal{U}_p$ that maps control inputs to output distributions.
+
+\subsubsection{Input-Output Relationship}
+Given control inputs $\mathbf{x}_p \in \mathbb{R}^{d_{in}}$, the uncertainty predictor outputs:
+\begin{align}
+\mathcal{U}_p(\mathbf{x}_p) = (\boldsymbol{\mu}_p, \boldsymbol{\sigma}^2_p)
+\end{align}
+where $\boldsymbol{\mu}_p \in \mathbb{R}^{d_{out}}$ is the mean output and $\boldsymbol{\sigma}^2_p \in \mathbb{R}^{d_{out}}$ is the variance (uncertainty).
+
+\subsubsection{Training Data Generation}
+Training data is generated using \textbf{Structural Causal Models (SCMs)} that simulate realistic manufacturing processes with:
+\begin{itemize}
+    \item Physical equations modeling process dynamics
+    \item Stochastic noise terms representing environmental variations
+    \item Causal relationships between variables
+\end{itemize}
+
+\subsubsection{Neural Network Architecture}
+Each uncertainty predictor is a neural network with:
+\begin{itemize}
+    \item Shared hidden layers with batch normalization and dropout
+    \item Dual output heads:
+    \begin{itemize}
+        \item Mean head: predicts expected output $\boldsymbol{\mu}_p$
+        \item Variance head: predicts aleatoric uncertainty $\boldsymbol{\sigma}^2_p$ (constrained positive)
+    \end{itemize}
+\end{itemize}
+
+\subsubsection{Loss Function}
+The network is trained using \textbf{Negative Log-Likelihood (NLL)} loss:
+\begin{align}
+\mathcal{L}_{NLL} = \frac{1}{N} \sum_{i=1}^{N} \left[ \frac{1}{2}\log(\sigma_i^2) + \frac{(y_i - \mu_i)^2}{2\sigma_i^2} \right]
+\end{align}
+This loss encourages the model to:
+\begin{itemize}
+    \item Minimize prediction error $|y_i - \mu_i|$
+    \item Calibrate uncertainty $\sigma_i^2$ appropriately (not too large, not too small)
+\end{itemize}
+
+\subsubsection{Training Output}
+For each process, Phase 1 produces:
+\begin{itemize}
+    \item Trained uncertainty predictor weights (frozen for Phase 2)
+    \item Input/output scalers for normalization
+    \item Performance metrics (MSE, MAE, R$^2$, calibration ratio)
+    \item PDF report with visualizations
+\end{itemize}
+
+\subsection{Phase 2: Policy Generator Training}
+
+In this phase, we train \textbf{Policy Generators} $\pi_p$ that learn to produce optimal control inputs for each process, given the current system state.
+
+\subsubsection{Process Chain Architecture}
+The complete process chain consists of:
+\begin{enumerate}
+    \item \textbf{Frozen Uncertainty Predictors} $\mathcal{U}_{\text{laser}}, \mathcal{U}_{\text{plasma}}, \mathcal{U}_{\text{galvanic}}$ from Phase 1
+    \item \textbf{Trainable Policy Generators}:
+    \begin{itemize}
+        \item $\pi_{\text{plasma}}$: generates plasma inputs from laser outputs
+        \item $\pi_{\text{galvanic}}$: generates galvanic inputs from plasma outputs
+    \end{itemize}
+\end{enumerate}
+
+Note: The laser process receives external inputs, so no policy generator is needed for it.
+
+\subsubsection{Forward Pass Through Process Chain}
+\begin{enumerate}
+    \item External inputs $\mathbf{x}_{\text{laser}}$ enter laser process
+    \item Laser uncertainty predictor: $(\boldsymbol{\mu}_{\text{laser}}, \boldsymbol{\sigma}^2_{\text{laser}}) = \mathcal{U}_{\text{laser}}(\mathbf{x}_{\text{laser}})$
+    \item Plasma policy generator: $\mathbf{x}_{\text{plasma}} = \pi_{\text{plasma}}(\boldsymbol{\mu}_{\text{laser}})$
+    \item Plasma uncertainty predictor: $(\boldsymbol{\mu}_{\text{plasma}}, \boldsymbol{\sigma}^2_{\text{plasma}}) = \mathcal{U}_{\text{plasma}}(\mathbf{x}_{\text{plasma}})$
+    \item Galvanic policy generator: $\mathbf{x}_{\text{galvanic}} = \pi_{\text{galvanic}}(\boldsymbol{\mu}_{\text{plasma}})$
+    \item Galvanic uncertainty predictor: $(\boldsymbol{\mu}_{\text{galvanic}}, \boldsymbol{\sigma}^2_{\text{galvanic}}) = \mathcal{U}_{\text{galvanic}}(\mathbf{x}_{\text{galvanic}})$
+\end{enumerate}
+
+The complete trajectory is defined as:
+\begin{align}
+\mathbf{a} = \{(\mathbf{x}_p, \boldsymbol{\mu}_p, \boldsymbol{\sigma}^2_p) : p \in \{\text{laser, plasma, galvanic}\}\}
+\end{align}
+
+\subsubsection{Training Trajectories}
+We generate three reference trajectories for comparison:
+
+\begin{enumerate}
+    \item \textbf{Target Trajectory} $\mathbf{a}^*$: Generated using SCMs with near-zero noise ($\epsilon = 10^{-8}$). Represents the ideal, deterministic behavior.
+
+    \item \textbf{Baseline Trajectory} $\mathbf{a}'$: Generated using SCMs with normal process noise. Represents uncontrolled operation without policy generators.
+
+    \item \textbf{Actual Trajectory} $\mathbf{a}$: Generated by the process chain with policy generators during training. Represents controlled operation.
+\end{enumerate}
+
+\section{Surrogate Reliability Model}
+
+A key component is the \textbf{Surrogate Model} that evaluates trajectory quality.
+
+\subsection{Reliability Function}
+The surrogate computes a reliability score $F(\mathbf{a})$ for any trajectory $\mathbf{a}$. Higher $F$ indicates better quality.
+
+\subsubsection{Sampling-Based Evaluation}
+For each process output distribution $(\boldsymbol{\mu}_p, \boldsymbol{\sigma}^2_p)$, we sample:
+\begin{align}
+\mathbf{y}_p \sim \mathcal{N}(\boldsymbol{\mu}_p, \boldsymbol{\sigma}^2_p)
+\end{align}
+using the reparameterization trick:
+\begin{align}
+\mathbf{y}_p = \boldsymbol{\mu}_p + \boldsymbol{\epsilon} \odot \sqrt{\boldsymbol{\sigma}^2_p}, \quad \boldsymbol{\epsilon} \sim \mathcal{N}(0, I)
+\end{align}
+This maintains differentiability for backpropagation.
+
+\subsubsection{Quality Metrics}
+For each process, we compute a quality score based on proximity to optimal values:
+\begin{align}
+q_{\text{laser}} &= \exp\left(-\frac{(y_{\text{laser}} - 0.5)^2}{0.1}\right) \\
+q_{\text{plasma}} &= \exp\left(-\frac{(y_{\text{plasma}} - 5.0)^2}{2.0}\right) \\
+q_{\text{galvanic}} &= \exp\left(-\frac{(y_{\text{galvanic}} - 10.0)^2}{4.0}\right)
+\end{align}
+
+where the optimal values (0.5, 5.0, 10.0) and variances (0.1, 2.0, 4.0) are domain-specific parameters.
+
+\subsubsection{Weighted Combination}
+The final reliability score is a weighted combination emphasizing the final product:
+\begin{align}
+F(\mathbf{a}) = 0.2 \cdot q_{\text{laser}} + 0.3 \cdot q_{\text{plasma}} + 0.5 \cdot q_{\text{galvanic}}
+\end{align}
+
+\subsection{Target Reliability}
+We compute $F^* = F(\mathbf{a}^*)$ once at initialization. Since $\mathbf{a}^*$ has near-zero uncertainty and optimal parameter values, $F^*$ represents the best achievable reliability.
+
+\section{Policy Optimization}
+
+\subsection{Loss Function}
+The policy generators are trained using a composite loss:
+\begin{align}
+\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{reliability}} + \lambda \cdot \mathcal{L}_{\text{BC}}
+\end{align}
+
+\subsubsection{Reliability Loss}
+Encourages the actual trajectory to achieve high reliability:
+\begin{align}
+\mathcal{L}_{\text{reliability}} = (F(\mathbf{a}) - F^*)^2
+\end{align}
+Minimizing this pushes $F(\mathbf{a})$ toward the optimal $F^*$.
+
+\subsubsection{Behavior Cloning Loss}
+Regularizes the policy to stay close to target inputs:
+\begin{align}
+\mathcal{L}_{\text{BC}} = \sum_{p} \|\mathbf{x}_p - \mathbf{x}_p^*\|^2
+\end{align}
+This prevents the policy from exploring unrealistic input regions.
+
+\subsection{Training Algorithm}
+\begin{enumerate}
+    \item Sample a batch of initial laser inputs
+    \item Forward pass through process chain to obtain $\mathbf{a}$
+    \item Compute $F(\mathbf{a})$ using surrogate model
+    \item Compute loss $\mathcal{L}_{\text{total}}$
+    \item Backpropagate gradients \textbf{only through policy generators}
+    \item Update policy parameters using optimizer (Adam)
+\end{enumerate}
+
+Note: Uncertainty predictor parameters remain frozen throughout Phase 2.
+
+\section{Evaluation Metrics}
+
+\subsection{Reliability Comparison}
+We compare three reliability scores:
+\begin{itemize}
+    \item $F^*$: Target reliability (optimal, near-zero noise)
+    \item $F'$: Baseline reliability (uncontrolled, normal noise)
+    \item $F$: Actual reliability (controlled, with policy generators)
+\end{itemize}
+
+\textbf{Success criteria}:
+\begin{itemize}
+    \item $F > F'$: Controller improves over baseline
+    \item $F \approx F^*$: Controller approaches optimal performance
+\end{itemize}
+
+\subsection{Trajectory Distance Metrics}
+For each pair of trajectories, we compute:
+\begin{align}
+d(\mathbf{a}_1, \mathbf{a}_2) = \sum_p \left( \|\mathbf{x}_{p,1} - \mathbf{x}_{p,2}\|^2 + \|\boldsymbol{\mu}_{p,1} - \boldsymbol{\mu}_{p,2}\|^2 \right)
+\end{align}
+
+Key comparisons:
+\begin{itemize}
+    \item $d(\mathbf{a}, \mathbf{a}^*)$: How close is the controlled trajectory to optimal?
+    \item $d(\mathbf{a}', \mathbf{a}^*)$: How close is the uncontrolled trajectory to optimal?
+    \item $d(\mathbf{a}, \mathbf{a}')$: How different is controlled vs. uncontrolled?
+\end{itemize}
+
+\subsection{Process-Wise Analysis}
+For each individual process, we report:
+\begin{itemize}
+    \item Input deviation: $\|\mathbf{x}_p - \mathbf{x}_p^*\|$
+    \item Output deviation: $\|\boldsymbol{\mu}_p - \boldsymbol{\mu}_p^*\|$
+    \item Uncertainty magnitude: $\|\boldsymbol{\sigma}_p^2\|$
+\end{itemize}
+
+\section{Results Interpretation}
+
+\subsection{Training Convergence}
+Monitor the training history for:
+\begin{itemize}
+    \item Total loss decreasing over epochs
+    \item Reliability loss: $(F - F^*)^2$ approaching zero
+    \item Behavior cloning loss: stabilizing at reasonable level
+    \item $F$ (actual reliability) increasing toward $F^*$
+\end{itemize}
+
+\subsection{Performance Indicators}
+
+\textbf{Improvement over baseline}:
+\begin{align}
+\text{Improvement} = \frac{F - F'}{F'} \times 100\%
+\end{align}
+Positive values indicate successful controller learning.
+
+\textbf{Gap from optimal}:
+\begin{align}
+\text{Gap} = \frac{F^* - F}{F^*} \times 100\%
+\end{align}
+Lower values indicate better approximation of optimal behavior.
+
+\subsection{Visualization Outputs}
+The system generates:
+\begin{enumerate}
+    \item \textbf{Training History Plot}: Loss evolution over epochs
+    \item \textbf{Trajectory Comparison}: Side-by-side visualization of $\mathbf{a}^*$, $\mathbf{a}'$, $\mathbf{a}$
+    \item \textbf{Reliability Comparison}: Bar chart of $F^*$, $F'$, $F$
+    \item \textbf{Process Improvements}: Per-process metric breakdown
+    \item \textbf{PDF Report}: Comprehensive summary with all metrics and plots
+\end{enumerate}
+
+\section{Key Design Principles}
+
+\subsection{Modularity}
+\begin{itemize}
+    \item Each process has its own uncertainty predictor (separate weights)
+    \item Policy generators are process-specific
+    \item Easy to add/remove processes from the chain
+\end{itemize}
+
+\subsection{Transfer Learning}
+\begin{itemize}
+    \item Phase 1 uncertainty predictors are pre-trained on SCM data
+    \item Phase 2 leverages frozen predictors, focusing only on policy learning
+    \item Reduces sample complexity and training time
+\end{itemize}
+
+\subsection{Uncertainty Awareness}
+\begin{itemize}
+    \item Policies receive uncertainty information from previous stages
+    \item Can adapt inputs to compensate for upstream variability
+    \item Minimizes uncertainty propagation through the chain
+\end{itemize}
+
+\subsection{Differentiable Simulation}
+\begin{itemize}
+    \item Entire process chain is differentiable
+    \item Enables gradient-based policy optimization
+    \item Reparameterization trick maintains differentiability through stochastic sampling
+\end{itemize}
+
+\section{Future Extensions}
+
+\subsection{Real Process Integration}
+Replace SCM-generated data with real sensor measurements from manufacturing equipment.
+
+\subsection{Online Adaptation}
+Implement continual learning to adapt policies as process conditions drift over time.
+
+\subsection{Multi-Objective Optimization}
+Extend to optimize multiple objectives: reliability, energy efficiency, throughput, cost.
+
+\subsection{ProT Surrogate Model}
+Replace the placeholder surrogate with a trained transformer model (ProT) that learns complex quality functions from data.
+
+\subsection{Constraint Handling}
+Add explicit constraints on inputs/outputs (e.g., safety limits, material compatibility).
+
+\section{Conclusion}
+
+This two-phase controller optimization system demonstrates a principled approach to managing uncertainty in sequential manufacturing processes. By separating uncertainty quantification (Phase 1) from policy learning (Phase 2), the system achieves:
+
+\begin{itemize}
+    \item Reliable uncertainty estimates calibrated to process physics
+    \item Data-efficient policy learning leveraging pre-trained models
+    \item Interpretable results through comprehensive metrics and visualizations
+    \item Scalable architecture adaptable to various manufacturing chains
+\end{itemize}
+
+The combination of neural uncertainty quantification and gradient-based policy optimization provides a foundation for intelligent, adaptive manufacturing control systems.
+
+\end{document}
