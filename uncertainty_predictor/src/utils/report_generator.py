@@ -600,20 +600,33 @@ def generate_uncertainty_training_report(
         timestamp = datetime.now()
 
     checkpoint_dir = Path(checkpoint_dir)
-    temp_report_path = checkpoint_dir / 'training_report_temp.pdf'
     final_report_path = checkpoint_dir / 'training_report.pdf'
 
-    # Generate the original PDF
-    generator = UncertaintyReportGenerator(temp_report_path)
-    generator.generate(config, history, metrics, input_dim, output_dim,
-                      total_params, n_train, n_val, n_test, timestamp, coverage_results)
+    # Try to generate 2-up layout if pypdf is available
+    if PYPDF_AVAILABLE:
+        temp_report_path = checkpoint_dir / 'training_report_temp.pdf'
 
-    # Convert to 2-up format
-    create_2up_pdf(temp_report_path, final_report_path)
+        # Generate the original PDF
+        generator = UncertaintyReportGenerator(temp_report_path)
+        generator.generate(config, history, metrics, input_dim, output_dim,
+                          total_params, n_train, n_val, n_test, timestamp, coverage_results)
 
-    # Remove temporary file
-    temp_report_path.unlink()
-
-    print(f"2-up PDF report generated: {final_report_path}")
+        # Convert to 2-up format
+        try:
+            create_2up_pdf(temp_report_path, final_report_path)
+            temp_report_path.unlink()
+            print(f"2-up PDF report generated: {final_report_path}")
+        except Exception as e:
+            print(f"Warning: Failed to create 2-up layout: {e}")
+            print(f"Falling back to standard layout")
+            # If 2-up fails, rename temp to final
+            temp_report_path.rename(final_report_path)
+            print(f"PDF report generated: {final_report_path}")
+    else:
+        # Generate standard PDF without 2-up layout
+        print("Note: pypdf not available, generating standard layout (install pypdf for 2-up layout)")
+        generator = UncertaintyReportGenerator(final_report_path)
+        generator.generate(config, history, metrics, input_dim, output_dim,
+                          total_params, n_train, n_val, n_test, timestamp, coverage_results)
 
     return final_report_path
