@@ -39,7 +39,10 @@ class ProTSurrogate:
 
     def compute_reliability(self, trajectory):
         """
-        Calcola reliability F per una trajectory attuale.
+        Calcola reliability F per una trajectory.
+
+        Fa sampling dalle distribuzioni degli outputs e calcola una metrica
+        fisica combinata che rappresenta la qualità del processo.
 
         Args:
             trajectory (dict): {
@@ -49,40 +52,48 @@ class ProTSurrogate:
                     'outputs_var': tensor (batch, output_dim)
                 },
                 'plasma': {...},
-                ...
+                'galvanic': {...}
             }
 
         Returns:
             torch.Tensor: Reliability score F (scalar, differentiable)
         """
-        total_distance = 0.0
-        num_components = 0
+        # Sample outputs da distribuzioni N(mean, var)
+        sampled_outputs = {}
 
         for process_name, data in trajectory.items():
-            # Get target data
-            target_inputs = self.target_trajectory_tensors[process_name]['inputs']
-            target_outputs = self.target_trajectory_tensors[process_name]['outputs']
+            mean = data['outputs_mean']
+            var = data['outputs_var']
 
-            # Get actual data
-            actual_inputs = data['inputs']
-            actual_outputs_mean = data['outputs_mean']
+            # Sample: x ~ N(mean, var)
+            # Usa reparameterization trick per differenziabilità
+            std = torch.sqrt(var + 1e-8)
+            epsilon = torch.randn_like(mean)
+            sample = mean + epsilon * std
 
-            # Compute MSE distance for inputs
-            input_distance = torch.mean((actual_inputs - target_inputs) ** 2)
-            total_distance = total_distance + input_distance
-            num_components += 1
+            sampled_outputs[process_name] = sample
 
-            # Compute MSE distance for outputs
-            output_distance = torch.mean((actual_outputs_mean - target_outputs) ** 2)
-            total_distance = total_distance + output_distance
-            num_components += 1
+        # Formula fisica inventata per reliability
+        # F combina gli outputs di tutti i processi in una metrica di qualità
 
-        # Average distance across all components
-        avg_distance = total_distance / num_components
+        # Estrai i valori (assumo 1 output per processo come da config)
+        laser_power = sampled_outputs['laser'].squeeze()      # ActualPower
+        plasma_rate = sampled_outputs['plasma'].squeeze()     # RemovalRate
+        galvanic_thick = sampled_outputs['galvanic'].squeeze() # Thickness
 
-        # Convert distance to reliability score
-        # F = exp(-distance), so smaller distance → higher reliability
-        F = torch.exp(-avg_distance)
+        # Formula inventata: F = weighted combination di qualità processo
+        # Normalizzazione basata su valori tipici:
+        # - Laser ActualPower: ~0.4-0.6 → target 0.5
+        # - Plasma RemovalRate: ~3-7 → target 5.0
+        # - Galvanic Thickness: ~8-12 μm → target 10.0
+
+        # Ogni componente: quanto è vicino al valore ottimale
+        laser_quality = torch.exp(-((laser_power - 0.5) ** 2) / 0.1)
+        plasma_quality = torch.exp(-((plasma_rate - 5.0) ** 2) / 2.0)
+        galvanic_quality = torch.exp(-((galvanic_thick - 10.0) ** 2) / 4.0)
+
+        # Combinazione pesata (galvanic più importante = prodotto finale)
+        F = 0.2 * laser_quality + 0.3 * plasma_quality + 0.5 * galvanic_quality
 
         return F
 
