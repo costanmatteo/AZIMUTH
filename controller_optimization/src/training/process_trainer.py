@@ -263,23 +263,24 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
     output_scale = preprocessor.output_scaler.scale_
     variances = vars_scaled * (output_scale ** 2)
 
-    # Compute metrics
-    test_metrics = uq_metrics.compute_metrics(means, targets, variances)
+    # Compute metrics (note: calculate_metrics expects y_true, y_pred_mean, y_pred_variance)
+    metrics_full = uq_metrics.calculate_metrics(targets, means, variances)
+    test_metrics = metrics_full['Overall']  # Get overall metrics
 
     # Compute coverage
-    coverage_results = uq_metrics.compute_prediction_interval_coverage(
-        means, targets, variances, confidence_level=0.95
+    coverage_results = uq_metrics.evaluate_prediction_intervals(
+        targets, means, variances, confidence=0.95
     )
 
     if verbose:
         print("\n  Test Metrics:")
-        print(f"    MSE:             {test_metrics['mse']:.6f}")
-        print(f"    RMSE:            {test_metrics['rmse']:.6f}")
-        print(f"    MAE:             {test_metrics['mae']:.6f}")
-        print(f"    R²:              {test_metrics['r2']:.6f}")
-        print(f"    Mean Variance:   {test_metrics['mean_variance']:.6f}")
-        print(f"    Calibration Ratio: {test_metrics['calibration_ratio']:.6f}")
-        print(f"    NLL:             {test_metrics['nll']:.6f}")
+        print(f"    MSE:               {test_metrics['MSE']:.6f}")
+        print(f"    RMSE:              {test_metrics['RMSE']:.6f}")
+        print(f"    MAE:               {test_metrics['MAE']:.6f}")
+        print(f"    R²:                {test_metrics['R2']:.6f}")
+        print(f"    Mean Variance:     {test_metrics['Mean_Variance']:.6f}")
+        print(f"    Calibration Ratio: {test_metrics['Calibration_Ratio']:.6f}")
+        print(f"    NLL:               {test_metrics['NLL']:.6f}")
         print(f"\n  Coverage:")
         print(f"    Expected: {coverage_results['expected_coverage']:.1f}%")
         print(f"    Actual:   {coverage_results['actual_coverage']:.1f}%")
