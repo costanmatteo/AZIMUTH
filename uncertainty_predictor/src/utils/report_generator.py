@@ -631,3 +631,55 @@ def generate_uncertainty_training_report(
                           total_params, n_train, n_val, n_test, timestamp, coverage_results)
 
     return final_report_path
+
+
+def combine_process_reports(report_paths, output_path, process_names=None):
+    """
+    Combine multiple process reports into a single PDF
+
+    Args:
+        report_paths: List of paths to individual process reports
+        output_path: Path to save the combined report
+        process_names: Optional list of process names (for display)
+
+    Returns:
+        Path to the combined report
+    """
+    if not PYPDF_AVAILABLE:
+        print("Warning: pypdf not available, cannot combine reports")
+        return None
+
+    writer = PdfWriter()
+
+    # Add all pages from all reports
+    for i, report_path in enumerate(report_paths):
+        report_path = Path(report_path)
+        if not report_path.exists():
+            process_name = process_names[i] if process_names else f"Process {i+1}"
+            print(f"Warning: Report not found for {process_name}: {report_path}")
+            continue
+
+        try:
+            reader = PdfReader(report_path)
+            process_name = process_names[i] if process_names else f"Process {i+1}"
+            print(f"Adding {len(reader.pages)} page(s) from {process_name} report...")
+
+            for page in reader.pages:
+                writer.add_page(page)
+
+        except Exception as e:
+            process_name = process_names[i] if process_names else f"Process {i+1}"
+            print(f"Error reading report for {process_name}: {e}")
+            continue
+
+    # Write combined PDF
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(output_path, 'wb') as output_file:
+        writer.write(output_file)
+
+    print(f"\n✓ Combined report generated: {output_path}")
+    print(f"  Total pages: {len(writer.pages)}")
+
+    return output_path

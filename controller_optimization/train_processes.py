@@ -22,6 +22,16 @@ sys.path.insert(0, str(REPO_ROOT))
 from controller_optimization.configs.processes_config import PROCESSES, get_process_by_name
 from controller_optimization.src.training.process_trainer import train_single_process
 
+# Import report combining function
+import importlib.util
+spec_report = importlib.util.spec_from_file_location(
+    "report_generator",
+    REPO_ROOT / "uncertainty_predictor" / "src" / "utils" / "report_generator.py"
+)
+report_gen = importlib.util.module_from_spec(spec_report)
+spec_report.loader.exec_module(report_gen)
+combine_process_reports = report_gen.combine_process_reports
+
 
 def main():
     """
@@ -194,6 +204,29 @@ def main():
         json.dump(summary_output, f, indent=2)
 
     print(f"\n✓ Summary saved to: {summary_path}")
+
+    # Combine all process reports into a single PDF
+    if summary_data and len(summary_data) > 1:
+        print("\n" + "="*70)
+        print("COMBINING PROCESS REPORTS")
+        print("="*70)
+
+        report_paths = [data['report_path'] for data in summary_data]
+        process_names = [data['process'] for data in summary_data]
+        combined_report_path = Path('controller_optimization/checkpoints/combined_training_report.pdf')
+
+        try:
+            combined_path = combine_process_reports(
+                report_paths=report_paths,
+                output_path=combined_report_path,
+                process_names=process_names
+            )
+            if combined_path:
+                print(f"\n✓ All process reports combined into: {combined_path}")
+        except Exception as e:
+            print(f"\n✗ Error combining reports: {e}")
+            import traceback
+            traceback.print_exc()
 
     print("\n" + "="*70)
     print("STEP 1 COMPLETED SUCCESSFULLY!")
