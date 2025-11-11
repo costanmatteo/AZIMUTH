@@ -546,9 +546,10 @@ def create_2up_pdf(input_pdf_path, output_pdf_path):
         offset_x_left = (target_width - scaled_width) / 2
         offset_y = (target_height - scaled_height) / 2
 
-        # Apply transformation to first page (left side)
-        page1.scale(scale, scale)
-        page1.add_transformation(Transformation().translate(offset_x_left, offset_y))
+        # Apply combined transformation to first page (left side)
+        # Use a single transformation that includes both scale and translate
+        transformation_left = Transformation().scale(sx=scale, sy=scale).translate(tx=offset_x_left, ty=offset_y)
+        page1.add_transformation(transformation_left)
         blank_page.merge_page(page1)
 
         # Get second page (right side) if it exists
@@ -558,9 +559,9 @@ def create_2up_pdf(input_pdf_path, output_pdf_path):
             # Calculate offset for right page
             offset_x_right = target_width + (target_width - scaled_width) / 2
 
-            # Apply transformation to second page (right side)
-            page2.scale(scale, scale)
-            page2.add_transformation(Transformation().translate(offset_x_right, offset_y))
+            # Apply combined transformation to second page (right side)
+            transformation_right = Transformation().scale(sx=scale, sy=scale).translate(tx=offset_x_right, ty=offset_y)
+            page2.add_transformation(transformation_right)
             blank_page.merge_page(page2)
 
     # Write output
