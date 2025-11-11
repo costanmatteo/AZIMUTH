@@ -132,11 +132,11 @@ def main():
             # Add to summary
             summary_data.append({
                 'process': process_name,
-                'mse': result['metrics']['mse'],
-                'rmse': result['metrics']['rmse'],
-                'mae': result['metrics']['mae'],
-                'r2': result['metrics']['r2'],
-                'calibration_ratio': result['metrics']['calibration_ratio'],
+                'MSE': result['metrics']['MSE'],
+                'RMSE': result['metrics']['RMSE'],
+                'MAE': result['metrics']['MAE'],
+                'R2': result['metrics']['R2'],
+                'Calibration_Ratio': result['metrics']['Calibration_Ratio'],
                 'report_path': result['report_path'],
             })
 
