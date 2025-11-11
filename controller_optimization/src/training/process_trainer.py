@@ -292,25 +292,28 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
 
     # Training history plot
     uq_viz.plot_training_history(
-        history=history,
+        train_losses=history['train_losses'],
+        val_losses=history['val_losses'],
+        train_mse=history.get('train_mse'),
+        val_mse=history.get('val_mse'),
         save_path=str(checkpoint_dir / 'training_history.png')
     )
 
-    # Predictions plot
+    # Predictions plot (note: function expects y_pred_mean and y_pred_variance, not uncertainty)
     uq_viz.plot_predictions_with_uncertainty(
-        y_true=targets.flatten(),
-        y_pred=means.flatten(),
-        uncertainty=np.sqrt(variances.flatten()),
-        title=f'{process_name.capitalize()} - Test Set Predictions',
+        y_true=targets,
+        y_pred_mean=means,
+        y_pred_variance=variances,
+        output_names=output_labels,
         save_path=str(checkpoint_dir / 'predictions.png')
     )
 
     # Scatter plot with uncertainty
     uq_viz.plot_scatter_with_uncertainty(
-        y_true=targets.flatten(),
-        y_pred=means.flatten(),
-        uncertainty=np.sqrt(variances.flatten()),
-        title=f'{process_name.capitalize()} - Prediction Scatter',
+        y_true=targets,
+        y_pred_mean=means,
+        y_pred_variance=variances,
+        output_names=output_labels,
         save_path=str(checkpoint_dir / 'scatter.png')
     )
 
