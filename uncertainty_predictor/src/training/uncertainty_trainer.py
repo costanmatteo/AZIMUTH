@@ -183,11 +183,7 @@ class UncertaintyTrainer:
             self.val_losses.append(val_loss)
             self.val_mse.append(val_mse)
 
-            # Logging
-            print(f"Epoch {epoch+1}/{epochs}")
-            print(f"  Train - NLL Loss: {train_loss:.6f}, MSE: {train_mse:.6f}")
-            print(f"  Val   - NLL Loss: {val_loss:.6f}, MSE: {val_mse:.6f}, "
-                  f"Avg Variance: {val_variance:.6f}")
+            # Logging removed
 
             # Save best model
             if val_loss < self.best_val_loss:
