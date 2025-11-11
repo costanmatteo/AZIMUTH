@@ -405,7 +405,8 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
         'total_params': total_params,
         'metrics': test_metrics,
         'coverage': coverage_results,
-        'history': {k: [float(v) for v in vals] for k, vals in history.items()},
+        'history': {k: [float(v) for v in vals] if isinstance(vals, list) else float(vals)
+                    for k, vals in history.items()},
         'timestamp': datetime.now().isoformat(),
     }
 
