@@ -290,6 +290,20 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
         print(f"    Actual:   {coverage_results['actual_coverage']:.1f}%")
         print(f"    Well calibrated: {coverage_results['well_calibrated']}")
 
+    # Also get predictions on training set for visualization
+    y_train_pred_mean, y_train_pred_variance = trainer.predict(X_train_scaled, return_uncertainty=True)
+    y_train_pred_mean_orig = preprocessor.inverse_transform_output(y_train_pred_mean)
+    y_train_orig = y_train
+
+    if hasattr(preprocessor, 'output_scaler') and preprocessor.output_scaler is not None:
+        if hasattr(preprocessor.output_scaler, 'scale_'):
+            scale_factors = preprocessor.output_scaler.scale_
+            y_train_pred_variance_orig = y_train_pred_variance * (scale_factors ** 2)
+        else:
+            y_train_pred_variance_orig = y_train_pred_variance
+    else:
+        y_train_pred_variance_orig = y_train_pred_variance
+
     # 8. Generate visualizations
     if verbose:
         print(f"\n[7/9] Generating visualizations...")
@@ -303,13 +317,22 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
         save_path=str(checkpoint_dir / 'training_history.png')
     )
 
-    # Predictions plot (note: function expects y_pred_mean and y_pred_variance, not uncertainty)
+    # Predictions plot - test set
     uq_viz.plot_predictions_with_uncertainty(
         y_true=targets,
         y_pred_mean=means,
         y_pred_variance=variances,
         output_names=output_labels,
-        save_path=str(checkpoint_dir / 'predictions.png')
+        save_path=str(checkpoint_dir / 'predictions_with_uncertainty.png')
+    )
+
+    # Predictions plot - training set
+    uq_viz.plot_predictions_with_uncertainty(
+        y_true=y_train_orig,
+        y_pred_mean=y_train_pred_mean_orig,
+        y_pred_variance=y_train_pred_variance_orig,
+        output_names=output_labels,
+        save_path=str(checkpoint_dir / 'training_predictions_with_uncertainty.png')
     )
 
     # Scatter plot with uncertainty
@@ -318,7 +341,14 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
         y_pred_mean=means,
         y_pred_variance=variances,
         output_names=output_labels,
-        save_path=str(checkpoint_dir / 'scatter.png')
+        save_path=str(checkpoint_dir / 'scatter_with_uncertainty.png')
+    )
+
+    # Uncertainty distribution plot
+    uq_viz.plot_uncertainty_distribution(
+        y_pred_variance=variances,
+        output_names=output_labels,
+        save_path=str(checkpoint_dir / 'uncertainty_distribution.png')
     )
 
     # 9. Generate PDF report

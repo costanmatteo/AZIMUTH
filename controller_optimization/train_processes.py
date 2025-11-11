@@ -164,11 +164,11 @@ def main():
     for data in summary_data:
         print(
             f"{data['process']:<12} "
-            f"{data['mse']:<10.6f} "
-            f"{data['rmse']:<10.6f} "
-            f"{data['mae']:<10.6f} "
-            f"{data['r2']:<10.6f} "
-            f"{data['calibration_ratio']:<12.6f}"
+            f"{data['MSE']:<10.6f} "
+            f"{data['RMSE']:<10.6f} "
+            f"{data['MAE']:<10.6f} "
+            f"{data['R2']:<10.6f} "
+            f"{data['Calibration_Ratio']:<12.6f}"
         )
 
     # Print report paths
