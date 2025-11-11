@@ -50,7 +50,7 @@ def generate_controller_report(
     report_path = checkpoint_dir / 'controller_report.pdf'
 
     # Create PDF
-    doc = SimpleDocDocument(report_path)
+    doc = SimpleDocTemplate(str(report_path), pagesize=A4)
     story = []
     styles = getSampleStyleSheet()
 
