@@ -68,7 +68,7 @@ def generate_target_trajectory(process_configs, n_samples=1, seed=42):
         elif scm_type == 'plasma':
             ds_scm = ds_scm_plasma
         elif scm_type == 'galvanic':
-            ds_scm = ds_scm_galvanic¨
+            ds_scm = ds_scm_galvanic
         elif scm_type == 'microetch':
             ds_scm = ds_scm_microetch
     
@@ -81,7 +81,7 @@ def generate_target_trajectory(process_configs, n_samples=1, seed=42):
 
         try:
             # Override with very small noise (epsilon instead of 0 to avoid division by zero)
-            epsilon = 1e-8
+            epsilon = 1e-4
             tiny_noise_singles = {
                 key: (lambda rng, n, eps=epsilon: rng.normal(0, eps, n))
                 for key in original_singles.keys()
@@ -149,6 +149,8 @@ def generate_baseline_trajectory(process_configs, n_samples=1, seed=42):
             ds_scm = ds_scm_plasma
         elif scm_type == 'galvanic':
             ds_scm = ds_scm_galvanic
+        elif scm_type == 'microetch':
+            ds_scm = ds_scm_microetch
         else:
             raise ValueError(f"Unknown SCM dataset type: {scm_type}")
 

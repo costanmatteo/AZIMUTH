@@ -49,6 +49,10 @@ class ProcessChain(nn.Module):
 
         self.device = device
         self.process_names = [p['name'] for p in processes_config]
+
+
+
+
         self.processes_config = processes_config
         self.target_trajectory = target_trajectory
 
@@ -153,6 +157,33 @@ class ProcessChain(nn.Module):
         """Unscale outputs using preprocessor."""
         outputs_np = outputs.detach().cpu().numpy()
         outputs_unscaled = self.preprocessors[process_idx].output_scaler.inverse_transform(outputs_np)
+
+        
+
+
+        # DEBUG
+        if process_idx == 'microetch':
+            print(f"\n=== UNSCALE OUTPUTS: {process_idx} ===")
+            print(f"Scaled outputs (from model): {outputs_np}")
+            print(f"Scaler type: {type(self.preprocessors[process_idx].output_scaler)}")
+            print(f"Scaler mean_: {self.preprocessors[process_idx].output_scaler.mean_}")
+            print(f"Scaler scale_: {self.preprocessors[process_idx].output_scaler.scale_}")
+    
+        outputs_unscaled = self.preprocessors[process_idx].output_scaler.inverse_transform(outputs_np)
+    
+        if process_idx == 'microetch':
+            print(f"Unscaled outputs: {outputs_unscaled}")
+            print(f"Expected range: 0-40")
+            print("=" * 50)
+
+
+
+
+
+
+
+
+
         return torch.tensor(outputs_unscaled, dtype=torch.float32, device=self.device)
 
     def unscale_variance(self, variance, process_idx):
@@ -176,6 +207,10 @@ class ProcessChain(nn.Module):
                 ...
             }
         """
+
+      
+
+
         trajectory = {}
 
         # a1 è fisso dalla target trajectory
