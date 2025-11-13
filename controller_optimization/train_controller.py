@@ -82,17 +82,31 @@ def main():
     checkpoint_dir = Path(CONTROLLER_CONFIG['training']['checkpoint_dir'])
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Generate target trajectory (a*)
-    print("\n[1/9] Generating target trajectory (a*, noise=0)...")
-    target_trajectory = generate_target_trajectory(
+    # 1. Generate target trajectories
+    # 1a. Reference trajectory (n_samples=1) for F* calculation and ProcessChain init
+    print("\n[1/9] Generating target trajectories (a*, noise=0)...")
+    print("  [1a] Reference trajectory (n_samples=1) for F* and ProcessChain...")
+    target_trajectory_reference = generate_target_trajectory(
+        process_configs=PROCESSES,
+        n_samples=1,
+        seed=CONTROLLER_CONFIG['target']['seed']
+    )
+
+    print("    Reference trajectory generated:")
+    for process_name, data in target_trajectory_reference.items():
+        print(f"      {process_name}: inputs={data['inputs'].shape}, outputs={data['outputs'].shape}")
+
+    # 1b. Evaluation trajectory (n_samples=50) for final metrics and plots
+    print("  [1b] Evaluation trajectory (n_samples=50) for metrics and plots...")
+    target_trajectory_eval = generate_target_trajectory(
         process_configs=PROCESSES,
         n_samples=CONTROLLER_CONFIG['target']['n_samples'],
         seed=CONTROLLER_CONFIG['target']['seed']
     )
 
-    print("  Target trajectory generated:")
-    for process_name, data in target_trajectory.items():
-        print(f"    {process_name}: inputs={data['inputs'].shape}, outputs={data['outputs'].shape}")
+    print("    Evaluation trajectory generated:")
+    for process_name, data in target_trajectory_eval.items():
+        print(f"      {process_name}: inputs={data['inputs'].shape}, outputs={data['outputs'].shape}")
 
     # 2. Generate baseline trajectory (a')
     print("\n[2/9] Generating baseline trajectory (a', normal noise, NO controller)...")
@@ -106,12 +120,12 @@ def main():
     for process_name, data in baseline_trajectory.items():
         print(f"    {process_name}: inputs={data['inputs'].shape}, outputs={data['outputs'].shape}")
 
-    # 3. Create ProcessChain
+    # 3. Create ProcessChain (uses reference trajectory for initialization)
     print("\n[3/9] Building process chain...")
     try:
         process_chain = ProcessChain(
             processes_config=PROCESSES,
-            target_trajectory=target_trajectory,
+            target_trajectory=target_trajectory_reference,
             policy_config=CONTROLLER_CONFIG['policy_generator'],
             device=device
         )
@@ -130,10 +144,10 @@ def main():
         print("\nPlease run train_processes.py first to train uncertainty predictors.")
         return
 
-    # 4. Create Surrogate
+    # 4. Create Surrogate (uses reference trajectory for F* calculation)
     print("\n[4/9] Initializing surrogate model...")
     surrogate = ProTSurrogate(
-        target_trajectory=target_trajectory,
+        target_trajectory=target_trajectory_reference,
         device=device
     )
     F_star = surrogate.F_star
@@ -183,9 +197,9 @@ def main():
         F_baseline = surrogate.compute_reliability(baseline_trajectory_tensor).item()
         F_actual = surrogate.compute_reliability(actual_trajectory_tensor).item()
 
-    # Compute final metrics
+    # Compute final metrics (uses evaluation trajectory with 50 samples)
     final_metrics = compute_final_metrics(
-        target_trajectory=target_trajectory,
+        target_trajectory=target_trajectory_eval,
         baseline_trajectory=baseline_trajectory,
         actual_trajectory=actual_trajectory,
         F_star=F_star,
@@ -219,7 +233,7 @@ def main():
     )
 
     plot_trajectory_comparison(
-        target_trajectory=target_trajectory,
+        target_trajectory=target_trajectory_eval,
         baseline_trajectory=baseline_trajectory,
         actual_trajectory=actual_trajectory,
         save_path=str(checkpoint_dir / 'trajectory_comparison.png')
