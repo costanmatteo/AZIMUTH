@@ -82,64 +82,46 @@ def main():
     checkpoint_dir = Path(CONTROLLER_CONFIG['training']['checkpoint_dir'])
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Generate target trajectories
-    # 1a. Reference trajectory (n_samples=1) for F* calculation and ProcessChain init
-    print("\n[1/9] Generating target trajectories (a*, noise=0)...")
-    print("  [1a] Reference trajectory (n_samples=1) for F* and ProcessChain...")
-    target_trajectory_reference = generate_target_trajectory(
+    # 1. Generate target trajectory (MULTI-SCENARIO: n_samples=50)
+    print("\n[1/9] Generating target trajectory (a*, diverse structural + zero process noise)...")
+    n_scenarios = CONTROLLER_CONFIG['target']['n_samples']
+    print(f"  Generating {n_scenarios} scenarios with diverse structural conditions...")
+
+    target_trajectory = generate_target_trajectory(
         process_configs=PROCESSES,
-        n_samples=1,
+        n_samples=n_scenarios,
         seed=CONTROLLER_CONFIG['target']['seed']
     )
 
-    print("    Reference trajectory generated:")
-    for process_name, data in target_trajectory_reference.items():
-        print(f"      {process_name}: inputs={data['inputs'].shape}, outputs={data['outputs'].shape}")
+    print("  Target trajectory generated:")
+    for process_name, data in target_trajectory.items():
+        print(f"    {process_name}: inputs={data['inputs'].shape}, outputs={data['outputs'].shape}")
+        if 'structural_conditions' in data and data['structural_conditions']:
+            for var, vals in data['structural_conditions'].items():
+                print(f"      {var}: [{vals.min():.2f}, {vals.max():.2f}] (range)")
 
-    # 1b. Evaluation trajectory (n_samples=50) for final metrics and plots
-    print("  [1b] Evaluation trajectory (n_samples=50) for metrics and plots...")
-    target_trajectory_eval = generate_target_trajectory(
+
+    # 2. Generate baseline trajectory (ALIGNED with target structural conditions)
+    print("\n[2/9] Generating baseline trajectory (a', same structural + active process noise)...")
+    print(f"  Aligning structural conditions with {n_scenarios} target scenarios...")
+
+    baseline_trajectory = generate_baseline_trajectory(
         process_configs=PROCESSES,
-        n_samples=CONTROLLER_CONFIG['target']['n_samples'],
-        seed=CONTROLLER_CONFIG['target']['seed']
-    )
-
-    print("    Evaluation trajectory generated:")
-    for process_name, data in target_trajectory_eval.items():
-        print(f"      {process_name}: inputs={data['inputs'].shape}, outputs={data['outputs'].shape}")
-
-    # 2. Generate baseline trajectories (a')
-    # 2a. Reference trajectory (n_samples=1) for F_baseline calculation
-    print("\n[2/9] Generating baseline trajectories (a', normal noise, NO controller)...")
-    print("  [2a] Reference trajectory (n_samples=1) for F_baseline...")
-    baseline_trajectory_reference = generate_baseline_trajectory(
-        process_configs=PROCESSES,
-        n_samples=1,
+        target_trajectory=target_trajectory,  # For structural alignment
+        n_samples=n_scenarios,
         seed=CONTROLLER_CONFIG['baseline']['seed']
     )
 
-    print("    Reference trajectory generated:")
-    for process_name, data in baseline_trajectory_reference.items():
-        print(f"      {process_name}: inputs={data['inputs'].shape}, outputs={data['outputs'].shape}")
+    print("  Baseline trajectory generated:")
+    for process_name, data in baseline_trajectory.items():
+        print(f"    {process_name}: inputs={data['inputs'].shape}, outputs={data['outputs'].shape}")
 
-    # 2b. Evaluation trajectory (n_samples=50) for metrics and plots
-    print("  [2b] Evaluation trajectory (n_samples=50) for metrics and plots...")
-    baseline_trajectory_eval = generate_baseline_trajectory(
-        process_configs=PROCESSES,
-        n_samples=CONTROLLER_CONFIG['baseline']['n_samples'],
-        seed=CONTROLLER_CONFIG['baseline']['seed']
-    )
-
-    print("    Evaluation trajectory generated:")
-    for process_name, data in baseline_trajectory_eval.items():
-        print(f"      {process_name}: inputs={data['inputs'].shape}, outputs={data['outputs'].shape}")
-
-    # 3. Create ProcessChain (uses reference trajectory for initialization)
+    # 3. Create ProcessChain (uses multi-scenario trajectory)
     print("\n[3/9] Building process chain...")
     try:
         process_chain = ProcessChain(
             processes_config=PROCESSES,
-            target_trajectory=target_trajectory_reference,
+            target_trajectory=target_trajectory,
             policy_config=CONTROLLER_CONFIG['policy_generator'],
             device=device
         )
@@ -158,15 +140,19 @@ def main():
         print("\nPlease run train_processes.py first to train uncertainty predictors.")
         return
 
-    # 4. Create Surrogate (uses reference trajectory for F* calculation)
+    # 4. Create Surrogate (computes F* for all scenarios)
     print("\n[4/9] Initializing surrogate model...")
     surrogate = ProTSurrogate(
-        target_trajectory=target_trajectory_reference,
+        target_trajectory=target_trajectory,
         device=device
     )
-    F_star = surrogate.F_star
+    F_star_array = surrogate.F_star  # Now an array of (n_scenarios,)
+    F_star_mean = np.mean(F_star_array)
+    F_star_std = np.std(F_star_array)
     print(f"  ✓ Surrogate initialized")
-    print(f"    F* (target reliability): {F_star:.6f}")
+    print(f"    F* per scenario computed for {n_scenarios} scenarios")
+    print(f"    F* (mean): {F_star_mean:.6f} ± {F_star_std:.6f}")
+    print(f"    F* (range): [{F_star_array.min():.6f}, {F_star_array.max():.6f}]")
 
     # 5. Create Trainer
     print("\n[5/9] Creating controller trainer...")
@@ -185,123 +171,178 @@ def main():
 
     history = trainer.train(
         epochs=CONTROLLER_CONFIG['training']['epochs'],
-        n_batches_per_epoch=CONTROLLER_CONFIG['training']['n_batches_per_epoch'],
         batch_size=CONTROLLER_CONFIG['training']['batch_size'],
         patience=CONTROLLER_CONFIG['training']['patience'],
         save_dir=checkpoint_dir,
         verbose=True
     )
 
-    # 7. FINAL EVALUATION
-    print("\n[7/9] Final evaluation...")
+    # 7. FINAL EVALUATION ACROSS ALL SCENARIOS
+    print("\n[7/9] Final evaluation across all scenarios...")
     print("-"*70)
 
-    # Generate actual trajectories con policy generators
-    process_chain.eval()
+    # Evaluate controller on all scenarios
+    print(f"  Evaluating controller on {n_scenarios} scenarios...")
+    eval_results = trainer.evaluate_all_scenarios()
+
+    F_actual_per_scenario = eval_results['F_actual_per_scenario']
+    F_actual_mean = eval_results['F_actual_mean']
+    F_actual_std = eval_results['F_actual_std']
+
+    # Compute baseline reliability for all scenarios
+    print(f"  Computing baseline reliability for {n_scenarios} scenarios...")
+    F_baseline_values = []
     with torch.no_grad():
-        # 7a. Reference trajectory (batch_size=1) for F_actual calculation
-        print("  [7a] Generating actual trajectory (batch_size=1) for F_actual...")
-        actual_trajectory_tensor_reference = process_chain.forward(batch_size=1)
+        for scenario_idx in range(n_scenarios):
+            # Extract scenario from baseline trajectory
+            baseline_scenario = {}
+            for process_name, data in baseline_trajectory.items():
+                baseline_scenario[process_name] = {
+                    'inputs': data['inputs'][scenario_idx:scenario_idx+1],
+                    'outputs': data['outputs'][scenario_idx:scenario_idx+1]
+                }
 
-        # 7b. Evaluation trajectory (batch_size=50) for metrics and plots
-        print("  [7b] Generating actual trajectory (batch_size=50) for metrics and plots...")
-        actual_trajectory_tensor_eval = process_chain.forward(batch_size=CONTROLLER_CONFIG['baseline']['n_samples'])
+            # Convert to tensor
+            baseline_scenario_tensor = convert_numpy_to_tensor(baseline_scenario, device=device)
 
-    # Convert to numpy for metrics
-    actual_trajectory_reference = convert_trajectory_to_numpy(actual_trajectory_tensor_reference)
-    actual_trajectory_eval = convert_trajectory_to_numpy(actual_trajectory_tensor_eval)
+            # Compute reliability
+            F_baseline_i = surrogate.compute_reliability(baseline_scenario_tensor).item()
+            F_baseline_values.append(F_baseline_i)
 
-    # Calculate reliability scores (use reference trajectories with 1 sample for scalar values)
-    baseline_trajectory_tensor_reference = convert_numpy_to_tensor(baseline_trajectory_reference, device=device)
+    F_baseline_array = np.array(F_baseline_values)
+    F_baseline_mean = np.mean(F_baseline_array)
+    F_baseline_std = np.std(F_baseline_array)
 
-    with torch.no_grad():
-        F_baseline = surrogate.compute_reliability(baseline_trajectory_tensor_reference).item()
-        F_actual = surrogate.compute_reliability(actual_trajectory_tensor_reference).item()
-
-    # Compute final metrics (uses evaluation trajectories with 50 samples)
-    final_metrics = compute_final_metrics(
-        target_trajectory=target_trajectory_eval,
-        baseline_trajectory=baseline_trajectory_eval,
-        actual_trajectory=actual_trajectory_eval,
-        F_star=F_star,
-        F_baseline=F_baseline,
-        F_actual=F_actual
-    )
+    # Aggregate final metrics
+    improvement = (F_actual_mean - F_baseline_mean) / abs(F_baseline_mean) * 100 if F_baseline_mean != 0 else 0
+    target_gap = abs(F_star_mean - F_actual_mean) / F_star_mean * 100 if F_star_mean != 0 else 0
 
     # Print summary
     print("\n" + "="*70)
-    print("FINAL RESULTS")
+    print("FINAL RESULTS - AGGREGATED OVER ALL SCENARIOS")
     print("="*70)
-    print(f"F* (target, optimal):          {F_star:.6f}")
-    print(f"F' (baseline, no controller):  {F_baseline:.6f}")
-    print(f"F  (actual, with controller):  {F_actual:.6f}")
-    print(f"\nImprovement over baseline:     {final_metrics['improvement_pct']:+.2f}%")
-    print(f"Gap from optimal:              {final_metrics['target_gap_pct']:.2f}%")
+    print(f"Number of scenarios:           {n_scenarios}")
+    print(f"\nF* (target, optimal):")
+    print(f"  Mean:  {F_star_mean:.6f} ± {F_star_std:.6f}")
+    print(f"  Range: [{F_star_array.min():.6f}, {F_star_array.max():.6f}]")
+    print(f"\nF' (baseline, no controller):")
+    print(f"  Mean:  {F_baseline_mean:.6f} ± {F_baseline_std:.6f}")
+    print(f"  Range: [{F_baseline_array.min():.6f}, {F_baseline_array.max():.6f}]")
+    print(f"\nF  (actual, with controller):")
+    print(f"  Mean:  {F_actual_mean:.6f} ± {F_actual_std:.6f}")
+    print(f"  Range: [{F_actual_per_scenario.min():.6f}, {F_actual_per_scenario.max():.6f}]")
+    print(f"\nImprovement over baseline:     {improvement:+.2f}%")
+    print(f"Gap from optimal:              {target_gap:.2f}%")
+    print(f"Robustness (std of F):         {F_actual_std:.6f}  (lower = more robust)")
     print("="*70)
-
-    # Process-wise metrics
-    process_metrics = final_metrics['process_metrics']
 
     # 8. Generate visualizations
-    print("\n[8/9] Generating visualizations and report...")
+    print("\n[8/9] Generating visualizations...")
 
-    # Add F_star to history for plotting
-    history['F_star'] = F_star
+    # Add F_star mean to history for plotting
+    history['F_star'] = F_star_mean
 
+    # Plot training history
     plot_training_history(
         history=history,
         save_path=str(checkpoint_dir / 'training_history.png')
     )
 
-    plot_trajectory_comparison(
-        target_trajectory=target_trajectory_eval,
-        baseline_trajectory=baseline_trajectory_eval,
-        actual_trajectory=actual_trajectory_eval,
-        save_path=str(checkpoint_dir / 'trajectory_comparison.png')
-    )
-
+    # Plot reliability comparison (using mean values)
     plot_reliability_comparison(
-        F_star=F_star,
-        F_baseline=F_baseline,
-        F_actual=F_actual,
+        F_star=F_star_mean,
+        F_baseline=F_baseline_mean,
+        F_actual=F_actual_mean,
         save_path=str(checkpoint_dir / 'reliability_comparison.png')
     )
 
-    plot_process_improvements(
-        process_metrics=process_metrics,
-        save_path=str(checkpoint_dir / 'process_improvements.png')
-    )
+    print("  ✓ Basic visualizations generated")
 
-    # Generate PDF report
+    # 8b. Generate PDF report (if enabled)
     if CONTROLLER_CONFIG['report']['generate_pdf']:
-        report_path = generate_controller_report(
-            config=CONTROLLER_CONFIG,
-            training_history=history,
-            final_metrics=final_metrics,
-            process_metrics=process_metrics,
-            F_star=F_star,
-            F_baseline=F_baseline,
-            F_actual=F_actual,
-            checkpoint_dir=checkpoint_dir,
-            timestamp=datetime.now()
-        )
-        print(f"\n  ✓ Controller report saved: {report_path}")
+        print("\n  Generating PDF report...")
+
+        # Prepare F values in dict format for multi-scenario
+        F_star_dict = {
+            'mean': float(F_star_mean),
+            'std': float(F_star_std),
+            'min': float(F_star_array.min()),
+            'max': float(F_star_array.max())
+        }
+
+        F_baseline_dict = {
+            'mean': float(F_baseline_mean),
+            'std': float(F_baseline_std),
+            'min': float(F_baseline_array.min()),
+            'max': float(F_baseline_array.max())
+        }
+
+        F_actual_dict = {
+            'mean': float(F_actual_mean),
+            'std': float(F_actual_std),
+            'min': float(F_actual_per_scenario.min()),
+            'max': float(F_actual_per_scenario.max())
+        }
+
+        # Prepare final metrics for report
+        report_final_metrics = {
+            'improvement': improvement / 100,  # Convert back to fraction
+            'target_gap': target_gap / 100
+        }
+
+        # Process-wise metrics not available for multi-scenario (optional)
+        process_metrics = {}
+
+        # Generate report
+        try:
+            report_path = generate_controller_report(
+                config=CONTROLLER_CONFIG,
+                training_history=history,
+                final_metrics=report_final_metrics,
+                process_metrics=process_metrics,
+                F_star=F_star_dict,
+                F_baseline=F_baseline_dict,
+                F_actual=F_actual_dict,
+                checkpoint_dir=checkpoint_dir,
+                timestamp=datetime.now(),
+                n_scenarios=n_scenarios
+            )
+            print(f"  ✓ PDF report generated: {report_path}")
+        except Exception as e:
+            print(f"  ✗ Warning: Failed to generate PDF report: {e}")
+            print(f"    Continuing without report...")
 
     # 9. Save all metrics to JSON
     print("\n[9/9] Saving final results...")
 
     # Convert history values to lists for JSON serialization
     history_serializable = {k: [float(v) for v in vals] for k, vals in history.items() if isinstance(vals, list)}
-    history_serializable['F_star'] = float(F_star)
+    history_serializable['F_star'] = float(F_star_mean)
 
     final_results = {
         'timestamp': datetime.now().isoformat(),
         'config': CONTROLLER_CONFIG,
-        'F_star': float(F_star),
-        'F_baseline': float(F_baseline),
-        'F_actual': float(F_actual),
-        'final_metrics': final_metrics,
-        'process_metrics': process_metrics,
+        'n_scenarios': int(n_scenarios),
+
+        # Aggregated metrics
+        'F_star_mean': float(F_star_mean),
+        'F_star_std': float(F_star_std),
+        'F_baseline_mean': float(F_baseline_mean),
+        'F_baseline_std': float(F_baseline_std),
+        'F_actual_mean': float(F_actual_mean),
+        'F_actual_std': float(F_actual_std),
+
+        # Per-scenario metrics
+        'F_star_per_scenario': F_star_array.tolist(),
+        'F_baseline_per_scenario': F_baseline_array.tolist(),
+        'F_actual_per_scenario': F_actual_per_scenario.tolist(),
+
+        # Summary metrics
+        'improvement_pct': float(improvement),
+        'target_gap_pct': float(target_gap),
+        'robustness_std': float(F_actual_std),
+
+        # Training history
         'history': history_serializable,
     }
 
@@ -312,14 +353,17 @@ def main():
     print(f"  ✓ Final results saved: {results_path}")
 
     print("\n" + "="*70)
-    print("TRAINING COMPLETED SUCCESSFULLY!")
+    print("MULTI-SCENARIO CONTROLLER TRAINING COMPLETED!")
     print("="*70)
     print(f"\nFiles saved in: {checkpoint_dir}/")
     print("  - policy_*.pth                     : Policy generators")
     print("  - training_history.json            : Training history")
-    print("  - final_results.json               : All metrics")
-    print("  - controller_report.pdf            : Complete PDF report")
-    print("  - *.png                            : Comparison plots")
+    print("  - final_results.json               : All metrics (with per-scenario data)")
+    print("  - *.png                            : Visualization plots")
+    print(f"\nController trained on {n_scenarios} diverse scenarios")
+    print(f"  → Generalizes across varying structural conditions")
+    print(f"  → Robustness: {F_actual_std:.6f} (std across scenarios)")
+    print(f"  → Mean improvement: {improvement:+.2f}%")
     print("\n" + "="*70)
 
 

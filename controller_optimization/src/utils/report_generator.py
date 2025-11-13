@@ -95,8 +95,13 @@ class ControllerReportGenerator:
         self.story.append(para)
         self.story.append(line)
 
-    def create_two_column_section(self, config, training_history, F_star, F_baseline, F_actual, final_metrics):
-        """Create two-column layout for compact info"""
+    def create_two_column_section(self, config, training_history, F_star, F_baseline, F_actual, final_metrics, n_scenarios=None):
+        """Create two-column layout for compact info
+
+        Args:
+            F_star, F_baseline, F_actual: Can be scalar (single scenario) or dict with 'mean', 'std', 'min', 'max'
+            n_scenarios: Number of scenarios (for multi-scenario mode)
+        """
 
         # Left column data
         left_col = []
@@ -111,6 +116,11 @@ class ControllerReportGenerator:
 • <b>Hidden Sizes:</b> {config['policy_generator'].get('hidden_sizes', 'N/A')}<br/>
 • <b>Activation:</b> {config['policy_generator'].get('activation', 'N/A')}<br/>
 • <b>Dropout Rate:</b> {config['policy_generator'].get('dropout_rate', 'N/A')}"""
+
+        # Add multi-scenario info
+        if n_scenarios is not None and n_scenarios > 1:
+            config_text += f"<br/>• <b>Training Scenarios:</b> {n_scenarios}"
+
         left_col.append(Paragraph(config_text, self.styles['BodyText']))
         left_col.append(Spacer(1, 0.15*cm))
 
@@ -151,14 +161,30 @@ class ControllerReportGenerator:
         right_col.append(Paragraph(results_text, self.styles['BodyText']))
         right_col.append(Spacer(1, 0.15*cm))
 
-        # Reliability Metrics
+        # Reliability Metrics (handle both scalar and multi-scenario format)
         right_col.append(Paragraph("<b>Reliability Metrics</b>", self.styles['SectionTitle']))
         right_col.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=4))
 
         improvement = final_metrics.get('improvement', 0) * 100
         target_gap = final_metrics.get('target_gap', 0) * 100
 
-        reliability_text = f"""• <b>Target Reliability (F*):</b> {F_star:.6f}<br/>
+        # Check if multi-scenario format (dict with mean/std)
+        if isinstance(F_star, dict):
+            reliability_text = f"""• <b>Target Reliability (F*):</b><br/>
+  Mean: {F_star['mean']:.6f} ± {F_star['std']:.6f}<br/>
+  Range: [{F_star['min']:.6f}, {F_star['max']:.6f}]<br/>
+• <b>Baseline Reliability (F'):</b><br/>
+  Mean: {F_baseline['mean']:.6f} ± {F_baseline['std']:.6f}<br/>
+  Range: [{F_baseline['min']:.6f}, {F_baseline['max']:.6f}]<br/>
+• <b>Controller Reliability (F):</b><br/>
+  Mean: {F_actual['mean']:.6f} ± {F_actual['std']:.6f}<br/>
+  Range: [{F_actual['min']:.6f}, {F_actual['max']:.6f}]<br/>
+• <b>Improvement over Baseline:</b> {improvement:+.2f}%<br/>
+• <b>Gap from Target:</b> {target_gap:.2f}%<br/>
+• <b>Robustness (std):</b> {F_actual['std']:.6f}"""
+        else:
+            # Single scenario format (backward compatible)
+            reliability_text = f"""• <b>Target Reliability (F*):</b> {F_star:.6f}<br/>
 • <b>Baseline Reliability (F'):</b> {F_baseline:.6f}<br/>
 • <b>Controller Reliability (F):</b> {F_actual:.6f}<br/>
 • <b>Improvement over Baseline:</b> {improvement:+.2f}%<br/>
@@ -375,12 +401,17 @@ class ControllerReportGenerator:
             self.story.append(Spacer(1, 0.15*cm))
 
     def generate(self, config, training_history, final_metrics, process_metrics,
-                 F_star, F_baseline, F_actual, timestamp):
-        """Generate the complete PDF"""
+                 F_star, F_baseline, F_actual, timestamp, n_scenarios=None):
+        """Generate the complete PDF
+
+        Args:
+            n_scenarios: Number of scenarios (for multi-scenario training)
+        """
 
         # Add all sections
         self.add_title(timestamp)
-        self.create_two_column_section(config, training_history, F_star, F_baseline, F_actual, final_metrics)
+        self.create_two_column_section(config, training_history, F_star, F_baseline, F_actual,
+                                      final_metrics, n_scenarios=n_scenarios)
         self.add_process_metrics_table(process_metrics)
         self.add_plots_stacked(Path(config['training']['checkpoint_dir']))
 
@@ -469,7 +500,8 @@ def generate_controller_report(
     F_baseline,
     F_actual,
     checkpoint_dir,
-    timestamp=None
+    timestamp=None,
+    n_scenarios=None
 ):
     """
     Generate a LaTeX-style controller optimization training report
@@ -479,11 +511,12 @@ def generate_controller_report(
         training_history: Training history dictionary
         final_metrics: Final metrics dictionary
         process_metrics: Process-wise metrics dictionary
-        F_star: Target reliability
-        F_baseline: Baseline reliability
-        F_actual: Actual controller reliability
+        F_star: Target reliability (scalar or dict with mean/std/min/max)
+        F_baseline: Baseline reliability (scalar or dict with mean/std/min/max)
+        F_actual: Actual controller reliability (scalar or dict with mean/std/min/max)
         checkpoint_dir: Directory to save the report
         timestamp: Training timestamp (optional)
+        n_scenarios: Number of scenarios (for multi-scenario training)
 
     Returns:
         Path to the generated PDF report
@@ -501,7 +534,7 @@ def generate_controller_report(
         # Generate the original PDF
         generator = ControllerReportGenerator(temp_report_path)
         generator.generate(config, training_history, final_metrics, process_metrics,
-                          F_star, F_baseline, F_actual, timestamp)
+                          F_star, F_baseline, F_actual, timestamp, n_scenarios=n_scenarios)
 
         # Convert to 2-up format
         try:
@@ -519,7 +552,7 @@ def generate_controller_report(
         print("Note: pypdf not available, generating standard layout (install pypdf for 2-up layout)")
         generator = ControllerReportGenerator(final_report_path)
         generator.generate(config, training_history, final_metrics, process_metrics,
-                          F_star, F_baseline, F_actual, timestamp)
+                          F_star, F_baseline, F_actual, timestamp, n_scenarios=n_scenarios)
 
     return final_report_path
 

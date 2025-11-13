@@ -1,8 +1,19 @@
 """
-Generazione target trajectory e baseline trajectory.
+Multi-scenario target and baseline trajectory generation.
 
-- a* (target): SCM con noise=0 (ottimale, deterministico)
-- a' (baseline): SCM con noise normale (per confronto con controller)
+Key Concepts:
+- Structural Noise: Environmental conditions that create scenario diversity (ACTIVE in target)
+- Process Noise: Measurement/actuator imperfections (ZERO in target, ACTIVE in baseline)
+
+Target Trajectory (a*):
+- Diverse structural conditions (50 scenarios with different temperatures, etc.)
+- Zero process noise (ideal deterministic behavior)
+- Represents: "Best achievable performance under varying conditions"
+
+Baseline Trajectory (a'):
+- SAME structural conditions as target (fair comparison)
+- Active process noise (realistic equipment variability)
+- Represents: "Actual performance WITHOUT controller"
 """
 
 import sys
@@ -15,7 +26,6 @@ REPO_ROOT = Path(__file__).parent.parent.parent.parent
 UNCERTAINTY_PREDICTOR_PATH = REPO_ROOT / 'uncertainty_predictor'
 
 # CRITICAL: Add uncertainty_predictor to sys.path FIRST
-# This allows the SCM datasets module to import its dependencies
 if str(UNCERTAINTY_PREDICTOR_PATH) not in sys.path:
     sys.path.insert(0, str(UNCERTAINTY_PREDICTOR_PATH))
 
@@ -25,7 +35,7 @@ spec_datasets = importlib.util.spec_from_file_location(
     UNCERTAINTY_PREDICTOR_PATH / "scm_ds" / "datasets.py"
 )
 scm_datasets = importlib.util.module_from_spec(spec_datasets)
-sys.modules['scm_datasets'] = scm_datasets  # Add to sys.modules for nested imports
+sys.modules['scm_datasets'] = scm_datasets
 spec_datasets.loader.exec_module(scm_datasets)
 ds_scm_laser = scm_datasets.ds_scm_laser
 ds_scm_plasma = scm_datasets.ds_scm_plasma
@@ -33,75 +43,123 @@ ds_scm_galvanic = scm_datasets.ds_scm_galvanic
 ds_scm_microetch = scm_datasets.ds_scm_microetch
 
 
-def generate_target_trajectory(process_configs, n_samples=1, seed=42):
-    """
-    Genera target trajectory deterministico (noise=0).
+def get_scm_dataset(process_config):
+    """Get SCM dataset for a process configuration."""
+    scm_type = process_config['scm_dataset_type']
 
-    Questa è la trajectory OTTIMALE senza noise.
+    if scm_type == 'laser':
+        return ds_scm_laser
+    elif scm_type == 'plasma':
+        return ds_scm_plasma
+    elif scm_type == 'galvanic':
+        return ds_scm_galvanic
+    elif scm_type == 'microetch':
+        return ds_scm_microetch
+    else:
+        raise ValueError(f"Unknown SCM dataset type: {scm_type}")
+
+
+def generate_target_trajectory(process_configs, n_samples=50, seed=42):
+    """
+    Generate N target trajectories with diverse operating conditions.
+
+    Each trajectory represents:
+    - Different environmental conditions (structural noise ACTIVE)
+    - Ideal deterministic behavior (process noise = 0)
+
+    Example output for laser with n_samples=3:
+    {
+        'laser': {
+            'inputs': [[0.5, 12.0],   # Scenario 1: Temp=12°C
+                      [0.5, 15.0],   # Scenario 2: Temp=15°C
+                      [0.5, 18.0]],  # Scenario 3: Temp=18°C
+            'outputs': [[0.455],
+                       [0.450],
+                       [0.447]],
+            'structural_conditions': {
+                'AmbientTemp': [12.0, 15.0, 18.0]
+            }
+        }
+    }
 
     Args:
-        process_configs (list): Lista di config processi (da PROCESSES)
-        n_samples (int): Numero di samples (default 1)
-        seed (int): Random seed
+        process_configs (list): List of process configurations (from PROCESSES)
+        n_samples (int): Number of scenarios to generate (default: 50)
+        seed (int): Random seed for reproducibility
 
     Returns:
         dict: {
-            'laser': {
-                'inputs': np.array,      # Shape: (n_samples, input_dim)
-                'outputs': np.array,     # Shape: (n_samples, output_dim)
-            },
-            'plasma': {...},
-            ...
+            process_name: {
+                'inputs': np.array of shape (n_samples, input_dim),
+                'outputs': np.array of shape (n_samples, output_dim),
+                'structural_conditions': dict of structural variable values per sample
+            }
         }
     """
     trajectory = {}
 
     for process_config in process_configs:
         process_name = process_config['name']
-        scm_type = process_config['scm_dataset_type']
         input_labels = process_config['input_labels']
         output_labels = process_config['output_labels']
 
-        # Get appropriate SCM dataset
-        if scm_type == 'laser':
-            ds_scm = ds_scm_laser
-        elif scm_type == 'plasma':
-            ds_scm = ds_scm_plasma
-        elif scm_type == 'galvanic':
-            ds_scm = ds_scm_galvanic
-        elif scm_type == 'microetch':
-            ds_scm = ds_scm_microetch
-    
-        else:
-            raise ValueError(f"Unknown SCM dataset type: {scm_type}")
+        # Get SCM dataset
+        ds_scm = get_scm_dataset(process_config)
 
         # Backup original noise model
         original_singles = ds_scm.noise_model.singles.copy()
         original_groups = ds_scm.noise_model.groups.copy() if ds_scm.noise_model.groups else []
 
         try:
-            # Override with very small noise (epsilon instead of 0 to avoid division by zero)
-            epsilon = 1e-4
-            tiny_noise_singles = {
-                key: (lambda rng, n, eps=epsilon: rng.normal(0, eps, n))
-                for key in original_singles.keys()
-            }
-            zero_groups = []  # No groups with noise
+            # Create modified noise model:
+            # - Structural noise: KEEP ORIGINAL (for scenario diversity)
+            # - Process noise: SET TO EPSILON (near zero, ideal behavior)
+            # - Other variables: KEEP ORIGINAL (for safety)
 
-            ds_scm.noise_model.singles = tiny_noise_singles
-            ds_scm.noise_model.groups = zero_groups
+            modified_singles = {}
+            epsilon = 1e-6  # Very small value to avoid numerical issues
 
-            # Generate samples with near-zero noise
+            for var_name, noise_fn in original_singles.items():
+                if var_name in ds_scm.structural_noise_vars:
+                    # Keep structural noise ACTIVE for scenario diversity
+                    modified_singles[var_name] = noise_fn
+                elif var_name in ds_scm.process_noise_vars:
+                    # Zero out process noise for ideal deterministic behavior
+                    modified_singles[var_name] = lambda rng, n, eps=epsilon: rng.normal(0, eps, n)
+                else:
+                    # Unknown variable - keep original for safety
+                    # (This includes inputs, constants, intermediate nodes)
+                    modified_singles[var_name] = noise_fn
+
+            # Apply modified noise model
+            ds_scm.noise_model.singles = modified_singles
+            ds_scm.noise_model.groups = []  # No grouped noise
+
+            # Generate samples with diverse structural conditions
             df = ds_scm.sample(n=n_samples, seed=seed)
 
             # Extract inputs and outputs
             inputs = df[input_labels].values  # Shape: (n_samples, input_dim)
             outputs = df[output_labels].values  # Shape: (n_samples, output_dim)
 
+            # Extract structural conditions for alignment with baseline
+            structural_conditions = {}
+            for var in ds_scm.structural_noise_vars:
+                if var in df.columns:
+                    structural_conditions[var] = df[var].values
+
             trajectory[process_name] = {
                 'inputs': inputs,
                 'outputs': outputs,
+                'structural_conditions': structural_conditions
             }
+
+            print(f"Generated target trajectory for {process_name}:")
+            print(f"  - Shape: {inputs.shape}")
+            print(f"  - Structural vars: {list(structural_conditions.keys())}")
+            if structural_conditions:
+                for var, vals in structural_conditions.items():
+                    print(f"    {var}: [{vals.min():.2f}, {vals.max():.2f}] (range)")
 
         finally:
             # Restore original noise model
@@ -111,51 +169,73 @@ def generate_target_trajectory(process_configs, n_samples=1, seed=42):
     return trajectory
 
 
-def generate_baseline_trajectory(process_configs, n_samples=1, seed=42):
+def generate_baseline_trajectory(process_configs, target_trajectory, n_samples=50, seed=43):
     """
-    Genera baseline trajectory CON noise normale.
+    Generate baseline trajectories aligned with target structural conditions.
 
-    Questa rappresenta la trajectory SENZA controller (no adaptation).
-    Usa gli stessi input della target ma con noise del processo.
+    For each scenario in target_trajectory:
+    - Use SAME structural conditions (temperature, humidity, etc.)
+    - Use ACTIVE process noise (realistic equipment variability)
+
+    This represents: "What happens in reality WITHOUT the controller"
 
     Args:
-        process_configs (list): Lista di config processi
-        n_samples (int): Numero di samples
-        seed (int): Random seed
+        process_configs (list): Process configuration list
+        target_trajectory (dict): Output from generate_target_trajectory() - used for structural alignment
+        n_samples (int): Must match target trajectory n_samples
+        seed (int): Different from target seed to get different process noise
 
     Returns:
-        dict: Stessa struttura di generate_target_trajectory()
-
-    Note:
-        Questa trajectory serve per il confronto finale:
-        - a* = target trajectory (noise=0, ottimale)
-        - a' = baseline trajectory (noise normale, NO controller)
-        - a = actual trajectory (con policy generator, DA VALUTARE)
-
-        Vogliamo dimostrare che: F(a) > F(a') ≈ F(a*)
+        dict: {
+            process_name: {
+                'inputs': np.array of shape (n_samples, input_dim),
+                'outputs': np.array of shape (n_samples, output_dim)
+            }
+        }
     """
     trajectory = {}
 
     for process_config in process_configs:
         process_name = process_config['name']
-        scm_type = process_config['scm_dataset_type']
         input_labels = process_config['input_labels']
         output_labels = process_config['output_labels']
 
-        # Get appropriate SCM dataset
-        if scm_type == 'laser':
-            ds_scm = ds_scm_laser
-        elif scm_type == 'plasma':
-            ds_scm = ds_scm_plasma
-        elif scm_type == 'galvanic':
-            ds_scm = ds_scm_galvanic
-        elif scm_type == 'microetch':
-            ds_scm = ds_scm_microetch
-        else:
-            raise ValueError(f"Unknown SCM dataset type: {scm_type}")
+        # Get SCM dataset
+        ds_scm = get_scm_dataset(process_config)
 
-        # Generate samples WITH normal noise (default behavior)
-        df = ds_scm.sample(n=n_samples, seed=seed)
+        # Get structural conditions from target
+        target_structural = target_trajectory[process_name]['structural_conditions']
+
+        if not target_structural:
+            # No structural noise in this process - just sample normally
+            df = ds_scm.sample(n=n_samples, seed=seed)
+        else:
+            # Strategy: Override structural noise samplers to return target values
+            # This ensures the SAME structural conditions while allowing process noise
+
+            # Backup original noise model
+            original_singles = ds_scm.noise_model.singles.copy()
+
+            try:
+                modified_singles = original_singles.copy()
+
+                # For each structural variable, replace sampler with target values
+                for var_name, var_values in target_structural.items():
+                    # Create a closure to capture var_values
+                    def make_structural_sampler(values):
+                        return lambda rng, n: values[:n]
+
+                    modified_singles[var_name] = make_structural_sampler(var_values)
+
+                # Apply modified noise model
+                ds_scm.noise_model.singles = modified_singles
+
+                # Generate samples with aligned structural conditions
+                df = ds_scm.sample(n=n_samples, seed=seed)
+
+            finally:
+                # Restore original noise model
+                ds_scm.noise_model.singles = original_singles
 
         # Extract inputs and outputs
         inputs = df[input_labels].values  # Shape: (n_samples, input_dim)
@@ -163,47 +243,114 @@ def generate_baseline_trajectory(process_configs, n_samples=1, seed=42):
 
         trajectory[process_name] = {
             'inputs': inputs,
-            'outputs': outputs,
+            'outputs': outputs
         }
+
+        print(f"Generated baseline trajectory for {process_name}:")
+        print(f"  - Shape: {inputs.shape}")
+        if target_structural:
+            print(f"  - Aligned structural vars: {list(target_structural.keys())}")
 
     return trajectory
 
 
 if __name__ == '__main__':
-    # Test trajectory generation
+    # Test multi-scenario trajectory generation
     from controller_optimization.configs.processes_config import PROCESSES
 
-    print("Testing trajectory generation...")
+    print("="*70)
+    print("TESTING MULTI-SCENARIO TRAJECTORY GENERATION")
+    print("="*70)
 
-    # Generate target trajectory (noise=0)
-    print("\nGenerating target trajectory (a*, noise=0)...")
-    target_traj = generate_target_trajectory(PROCESSES, n_samples=5, seed=42)
+    # Generate target trajectory with 10 scenarios (testing with smaller number)
+    print("\n" + "="*70)
+    print("GENERATING TARGET TRAJECTORY (a*, diverse structural + zero process noise)")
+    print("="*70)
+    n_test_scenarios = 10
+    target_traj = generate_target_trajectory(PROCESSES, n_samples=n_test_scenarios, seed=42)
 
+    print("\n" + "="*70)
+    print("TARGET TRAJECTORY ANALYSIS")
+    print("="*70)
     for process_name, data in target_traj.items():
-        print(f"\n{process_name}:")
+        print(f"\n{process_name.upper()}:")
         print(f"  Inputs shape: {data['inputs'].shape}")
-        print(f"  Inputs sample:\n{data['inputs'][:2]}")
         print(f"  Outputs shape: {data['outputs'].shape}")
-        print(f"  Outputs sample:\n{data['outputs'][:2]}")
 
-    # Generate baseline trajectory (noise normal)
+        # Show first 3 scenarios
+        print(f"  First 3 scenarios:")
+        for i in range(min(3, n_test_scenarios)):
+            print(f"    Scenario {i}: inputs={data['inputs'][i]}, output={data['outputs'][i]}")
+
+        # Show output variance (should still vary due to input/structural variation)
+        output_var = np.var(data['outputs'])
+        output_std = np.std(data['outputs'])
+        print(f"  Output variance: {output_var:.6f} (std: {output_std:.6f})")
+
+        # Show structural conditions
+        if data['structural_conditions']:
+            print(f"  Structural conditions:")
+            for var, vals in data['structural_conditions'].items():
+                print(f"    {var}: min={vals.min():.4f}, max={vals.max():.4f}, std={vals.std():.4f}")
+
+    # Generate baseline trajectory (aligned structural conditions)
     print("\n" + "="*70)
-    print("\nGenerating baseline trajectory (a', normal noise)...")
-    baseline_traj = generate_baseline_trajectory(PROCESSES, n_samples=5, seed=43)
+    print("GENERATING BASELINE TRAJECTORY (a', same structural + active process noise)")
+    print("="*70)
+    baseline_traj = generate_baseline_trajectory(
+        PROCESSES,
+        target_trajectory=target_traj,
+        n_samples=n_test_scenarios,
+        seed=43
+    )
 
+    print("\n" + "="*70)
+    print("BASELINE TRAJECTORY ANALYSIS")
+    print("="*70)
     for process_name, data in baseline_traj.items():
-        print(f"\n{process_name}:")
+        print(f"\n{process_name.upper()}:")
         print(f"  Inputs shape: {data['inputs'].shape}")
-        print(f"  Inputs sample:\n{data['inputs'][:2]}")
         print(f"  Outputs shape: {data['outputs'].shape}")
-        print(f"  Outputs sample:\n{data['outputs'][:2]}")
 
-    # Compare: target should be more consistent
+        # Show first 3 scenarios
+        print(f"  First 3 scenarios:")
+        for i in range(min(3, n_test_scenarios)):
+            print(f"    Scenario {i}: inputs={data['inputs'][i]}, output={data['outputs'][i]}")
+
+        # Show output variance (should be higher due to process noise)
+        output_var = np.var(data['outputs'])
+        output_std = np.std(data['outputs'])
+        print(f"  Output variance: {output_var:.6f} (std: {output_std:.6f})")
+
+    # Compare target vs baseline
     print("\n" + "="*70)
-    print("\nComparison (output variance):")
+    print("COMPARISON: TARGET vs BASELINE")
+    print("="*70)
     for process_name in target_traj.keys():
-        target_var = np.var(target_traj[process_name]['outputs'])
-        baseline_var = np.var(baseline_traj[process_name]['outputs'])
-        print(f"{process_name}:")
-        print(f"  Target variance:   {target_var:.6f}")
-        print(f"  Baseline variance: {baseline_var:.6f}")
+        target_outputs = target_traj[process_name]['outputs']
+        baseline_outputs = baseline_traj[process_name]['outputs']
+
+        print(f"\n{process_name.upper()}:")
+        print(f"  Target output std:   {np.std(target_outputs):.6f}")
+        print(f"  Baseline output std: {np.std(baseline_outputs):.6f}")
+        print(f"  Std ratio (baseline/target): {np.std(baseline_outputs) / np.std(target_outputs):.3f}")
+
+        # Check structural alignment for processes with structural noise
+        struct_conds = target_traj[process_name]['structural_conditions']
+        if struct_conds:
+            target_inputs = target_traj[process_name]['inputs']
+            baseline_inputs = baseline_traj[process_name]['inputs']
+
+            # For each structural variable that's also an input, check alignment
+            input_labels = PROCESSES[[p['name'] for p in PROCESSES].index(process_name)]['input_labels']
+            for var_name in struct_conds.keys():
+                if var_name in input_labels:
+                    idx = input_labels.index(var_name)
+                    target_vals = target_inputs[:, idx]
+                    baseline_vals = baseline_inputs[:, idx]
+                    max_diff = np.max(np.abs(target_vals - baseline_vals))
+                    print(f"  Structural alignment ({var_name}): max_diff={max_diff:.10f} (should be ~0)")
+
+    print("\n" + "="*70)
+    print("TEST COMPLETE")
+    print("="*70)

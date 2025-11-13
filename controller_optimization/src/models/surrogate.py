@@ -15,18 +15,20 @@ class ProTSurrogate:
     Placeholder per surrogate model ProT.
 
     Valuta reliability di una trajectory completa.
+    Supporta multi-scenario training con F_star calcolato per ogni scenario.
     """
 
     def __init__(self, target_trajectory, device='cpu'):
         """
         Args:
             target_trajectory (dict): Target trajectory da target_generation
+                                     Ora contiene n_samples scenarios
             device (str): Device for computations
         """
         self.device = device
-        self.F_star = None  # Calcolato una volta all'inizio
+        self.n_scenarios = None  # Will be inferred from data
 
-        # Convert target trajectory to tensors
+        # Convert target trajectory to tensors (all scenarios)
         self.target_trajectory_tensors = {}
         for process_name, data in target_trajectory.items():
             self.target_trajectory_tensors[process_name] = {
@@ -34,8 +36,12 @@ class ProTSurrogate:
                 'outputs': torch.tensor(data['outputs'], dtype=torch.float32, device=device)
             }
 
-        # Compute target reliability once
-        self.F_star = self.compute_target_reliability()
+            # Infer number of scenarios
+            if self.n_scenarios is None:
+                self.n_scenarios = data['inputs'].shape[0]
+
+        # Compute F_star for each scenario
+        self.F_star = self.compute_all_target_reliabilities()
 
     def compute_reliability(self, trajectory):
         """
@@ -106,29 +112,39 @@ class ProTSurrogate:
 
         return F
 
-    def compute_target_reliability(self):
+    def compute_all_target_reliabilities(self):
         """
-        Calcola F* (reliability target, fisso).
+        Calcola F* (reliability target, fisso) per tutti gli n_scenarios.
 
         Returns:
-            float: Target reliability F*
+            np.array: F_star values, shape (n_scenarios,)
         """
-        # For target trajectory with itself, distance = 0, so F* = exp(0) = 1.0
-        # We compute it explicitly for consistency
-
-        # Create dummy trajectory from target
-        target_traj_for_eval = {}
-        for process_name, data in self.target_trajectory_tensors.items():
-            target_traj_for_eval[process_name] = {
-                'inputs': data['inputs'],
-                'outputs_mean': data['outputs'],
-                'outputs_var': torch.zeros_like(data['outputs'])
-            }
+        F_star_values = []
 
         with torch.no_grad():
-            F_star = self.compute_reliability(target_traj_for_eval)
+            for scenario_idx in range(self.n_scenarios):
+                # Create trajectory for this specific scenario
+                scenario_traj = {}
+                for process_name, data in self.target_trajectory_tensors.items():
+                    scenario_traj[process_name] = {
+                        'inputs': data['inputs'][scenario_idx:scenario_idx+1],  # Keep batch dim
+                        'outputs_mean': data['outputs'][scenario_idx:scenario_idx+1],
+                        'outputs_var': torch.zeros_like(data['outputs'][scenario_idx:scenario_idx+1])
+                    }
 
-        return F_star.item()
+                F_star = self.compute_reliability(scenario_traj)
+                F_star_values.append(F_star.item())
+
+        return np.array(F_star_values)
+
+    def compute_target_reliability(self):
+        """
+        Backward compatibility: returns mean of all F_star values.
+
+        Returns:
+            float: Mean target reliability across all scenarios
+        """
+        return float(np.mean(self.F_star))
 
 
 if __name__ == '__main__':
