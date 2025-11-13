@@ -80,6 +80,7 @@ class ProTSurrogate:
         laser_power = sampled_outputs['laser'].squeeze()      # ActualPower
         plasma_rate = sampled_outputs['plasma'].squeeze()     # RemovalRate
         galvanic_thick = sampled_outputs['galvanic'].squeeze() # Thickness
+        microetch_depth = sampled_outputs['microetch'].squeeze() # Depth
 
         # Formula inventata: F = weighted combination di qualità processo
         # Normalizzazione basata su valori tipici:
@@ -91,9 +92,10 @@ class ProTSurrogate:
         laser_quality = torch.exp(-((laser_power - 0.5) ** 2) / 0.1)
         plasma_quality = torch.exp(-((plasma_rate - 5.0) ** 2) / 2.0)
         galvanic_quality = torch.exp(-((galvanic_thick - 10.0) ** 2) / 4.0)
+        microetch_quality = torch.exp(-((microetch_depth - 150.0) ** 2) / 400.0)
 
         # Combinazione pesata (galvanic più importante = prodotto finale)
-        F = 0.2 * laser_quality + 0.3 * plasma_quality + 0.5 * galvanic_quality
+        F = 0.2 * laser_quality + 0.15 * plasma_quality + 0.5 * galvanic_quality +0.15 * microetch_quality
 
         return F
 

@@ -30,6 +30,7 @@ spec_datasets.loader.exec_module(scm_datasets)
 ds_scm_laser = scm_datasets.ds_scm_laser
 ds_scm_plasma = scm_datasets.ds_scm_plasma
 ds_scm_galvanic = scm_datasets.ds_scm_galvanic
+ds_scm_microetch = scm_datasets.ds_scm_microetch
 
 
 def generate_target_trajectory(process_configs, n_samples=1, seed=42):
@@ -67,7 +68,10 @@ def generate_target_trajectory(process_configs, n_samples=1, seed=42):
         elif scm_type == 'plasma':
             ds_scm = ds_scm_plasma
         elif scm_type == 'galvanic':
-            ds_scm = ds_scm_galvanic
+            ds_scm = ds_scm_galvanic¨
+        elif scm_type == 'microetch':
+            ds_scm = ds_scm_microetch
+    
         else:
             raise ValueError(f"Unknown SCM dataset type: {scm_type}")
 

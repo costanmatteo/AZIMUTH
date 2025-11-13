@@ -4,7 +4,7 @@ Configurazione per training policy generators (controller).
 
 CONTROLLER_CONFIG = {
     # Processi da includere (presi da PROCESSES)
-    'process_names': ['laser', 'plasma', 'galvanic'],
+    'process_names': ['laser', 'plasma', 'galvanic', 'microetch'],
 
     # Policy generator architecture
     'policy_generator': {
