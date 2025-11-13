@@ -20,20 +20,20 @@ PROCESSES = [
 
         'uncertainty_predictor': {
             'model': {
-                'hidden_sizes': [128, 64, 32],
-                'dropout_rate': 0.2,
+                'hidden_sizes': [64, 32],
+                'dropout_rate': 0.1,
                 'use_batchnorm': False,
                 'min_variance': 1e-6,
             },
             'training': {
                 'n_samples': 2000,
-                'batch_size': 32,
+                'batch_size': 64,
                 'epochs': 200,
                 'learning_rate': 0.001,
-                'weight_decay': 0.01,
+                'weight_decay': 0.001,
                 'patience': 30,
                 'loss_type': 'gaussian_nll',
-                'variance_penalty_alpha': 0.2,
+                'variance_penalty_alpha': 1,
             }
         },
 
@@ -50,20 +50,20 @@ PROCESSES = [
 
         'uncertainty_predictor': {
             'model': {
-                'hidden_sizes': [128, 64, 32],
-                'dropout_rate': 0.2,
+                'hidden_sizes': [64, 32],
+                'dropout_rate': 0.1,
                 'use_batchnorm': False,
                 'min_variance': 1e-6,
             },
             'training': {
                 'n_samples': 2000,
-                'batch_size': 32,
+                'batch_size': 64,
                 'epochs': 200,
                 'learning_rate': 0.001,
-                'weight_decay': 0.01,
+                'weight_decay': 0.001,
                 'patience': 30,
                 'loss_type': 'gaussian_nll',
-                'variance_penalty_alpha': 0.2,
+                'variance_penalty_alpha': 0.5,
             }
         },
 
@@ -80,24 +80,55 @@ PROCESSES = [
 
         'uncertainty_predictor': {
             'model': {
-                'hidden_sizes': [128, 64, 32],
-                'dropout_rate': 0.2,
+                'hidden_sizes': [32, 16],
+                'dropout_rate': 0.1,
                 'use_batchnorm': False,
                 'min_variance': 1e-6,
             },
             'training': {
                 'n_samples': 2000,
-                'batch_size': 32,
+                'batch_size': 645,
                 'epochs': 200,
                 'learning_rate': 0.001,
-                'weight_decay': 0.01,
+                'weight_decay': 0.001,
                 'patience': 30,
                 'loss_type': 'gaussian_nll',
-                'variance_penalty_alpha': 0.2,
+                'variance_penalty_alpha': 2,
             }
         },
 
         'checkpoint_dir': 'checkpoints/galvanic',
+    },
+
+    {
+        'name': 'microetch',
+        'scm_dataset_type': 'microetch',
+        'input_dim': 3,
+        'output_dim': 1,
+        'input_labels': ['Temperature', 'Concentration', 'Duration'],
+        'output_labels': ['RemovalDepth'],
+
+        'uncertainty_predictor': {
+            'model': {
+                'hidden_sizes': [64, 32, 16],
+                'dropout_rate': 0.1,
+                'use_batchnorm': False,
+                'min_variance': 1e-6,
+            },
+            'training': {
+                'n_samples': 2000,
+                'batch_size': 64,
+                'epochs': 200,
+                'learning_rate': 0.001,
+                'weight_decay': 0.001,
+                'patience': 30,
+                'loss_type': 'gaussian_nll',
+                'variance_penalty_alpha': 2,
+            }
+        },
+
+        'checkpoint_dir': 'checkpoints/microetch',
+
     },
 ]
 
