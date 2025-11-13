@@ -171,7 +171,6 @@ def main():
 
     history = trainer.train(
         epochs=CONTROLLER_CONFIG['training']['epochs'],
-        n_batches_per_epoch=CONTROLLER_CONFIG['training']['n_batches_per_epoch'],
         batch_size=CONTROLLER_CONFIG['training']['batch_size'],
         patience=CONTROLLER_CONFIG['training']['patience'],
         save_dir=checkpoint_dir,

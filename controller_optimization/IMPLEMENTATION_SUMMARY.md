@@ -120,24 +120,37 @@ print(np.mean(surrogate.F_star))  # 0.849  (mean across scenarios)
 
 ---
 
-#### ✅ PHASE 6: Multi-Scenario Training Loop
+#### ✅ PHASE 6: Multi-Scenario Training Loop (Updated with Option C)
 
 **File**: `controller_optimization/src/training/controller_trainer.py`
 
-**Changes**:
+**Implemented equal-coverage training strategy**:
 
-**`train_epoch()`**:
-- Randomly samples a scenario for each batch
-- Uses scenario-specific F_star for loss calculation
-- Ensures exposure to all scenarios during training
-
+**`train_epoch()` - Cycles through all scenarios once per epoch**:
 ```python
-for batch in range(n_batches):
-    scenario_idx = np.random.randint(0, n_scenarios)  # Random scenario
-    trajectory = process_chain.forward(batch_size=32, scenario_idx=scenario_idx)
-    loss = (F - F_star[scenario_idx])**2 + lambda_bc * BC_loss
-    # ... backward pass
+def train_epoch(self, batch_size=32):
+    n_scenarios = len(self.surrogate.F_star)
+
+    # Shuffle scenario order each epoch for diversity
+    scenario_order = np.random.permutation(n_scenarios)
+
+    # Cycle through all scenarios exactly once
+    for scenario_idx in scenario_order:
+        trajectory = process_chain.forward(batch_size=batch_size, scenario_idx=scenario_idx)
+        loss = (F - F_star[scenario_idx])**2 + lambda_bc * BC_loss
+        # ... backward pass and optimizer step
 ```
+
+**Benefits of Option C (Cycle through all scenarios)**:
+- ✅ **Equal coverage**: Every scenario trained exactly once per epoch
+- ✅ **Shuffled order**: Prevents overfitting to scenario patterns
+- ✅ **Balanced generalization**: No scenario over/under-represented
+- ✅ **Easy tracking**: "After 10 epochs, each scenario trained 10 times"
+
+**Configuration updates**:
+- Removed `n_batches_per_epoch` parameter (now implicit: 50 scenarios)
+- Increased `epochs` from 100 to 200 to maintain total batches
+- Total batches: 200 epochs × 50 scenarios = **10,000 batches**
 
 **New method: `evaluate_all_scenarios()`**:
 ```python

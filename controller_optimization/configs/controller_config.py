@@ -16,8 +16,7 @@ CONTROLLER_CONFIG = {
 
     # Training parameters
     'training': {
-        'epochs': 100,
-        'n_batches_per_epoch': 100,
+        'epochs': 200,  # Increased from 100 to maintain total batches (200 epochs × 50 scenarios = 10,000 batches)
         'batch_size': 32,
         'learning_rate': 0.001,
         'weight_decay': 0.01,

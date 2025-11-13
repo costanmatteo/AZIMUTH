@@ -97,18 +97,27 @@ class ControllerTrainer:
 
         return total_loss, torch.mean(reliability_loss).item(), bc_loss.item(), torch.mean(F).item()
 
-    def train_epoch(self, n_batches=100, batch_size=32):
+    def train_epoch(self, batch_size=32):
         """
         Training per un epoch ACROSS ALL SCENARIOS.
 
-        Per ogni batch:
-        1. Randomly sample a scenario
-        2. Forward pass → trajectory for that scenario
-        3. Compute F (surrogate) using scenario-specific F_star
-        4. Loss = (F - F*_scenario)^2 + λ_BC * BC_loss
-        5. Backward + optimizer step
+        Each epoch cycles through ALL scenarios exactly once in shuffled order.
+        This ensures:
+        - Equal coverage: every scenario trained once per epoch
+        - Diversity: shuffled order prevents overfitting patterns
+        - Balanced generalization: no scenario over/under-represented
 
-        This ensures the controller learns to generalize across all scenarios.
+        Per ogni scenario:
+        1. Forward pass → trajectory for that scenario
+        2. Compute F (surrogate) using scenario-specific F_star
+        3. Loss = (F - F*_scenario)^2 + λ_BC * BC_loss
+        4. Backward + optimizer step
+
+        Args:
+            batch_size: Number of samples per scenario (default 32)
+
+        Returns:
+            Tuple of (avg_total_loss, avg_reliability_loss, avg_bc_loss, avg_F)
         """
         self.process_chain.train()
 
@@ -119,10 +128,11 @@ class ControllerTrainer:
 
         n_scenarios = len(self.surrogate.F_star)
 
-        for batch_idx in range(n_batches):
-            # Randomly sample a scenario for this batch
-            scenario_idx = np.random.randint(0, n_scenarios)
+        # Shuffle scenario order each epoch for diversity
+        scenario_order = np.random.permutation(n_scenarios)
 
+        # Cycle through all scenarios exactly once
+        for scenario_idx in scenario_order:
             # Forward pass through process chain for this scenario
             trajectory = self.process_chain.forward(
                 batch_size=batch_size,
@@ -143,18 +153,27 @@ class ControllerTrainer:
             epoch_bc_loss += bc_loss
             epoch_F_values.append(F)
 
-        # Average over batches
-        avg_total_loss = epoch_total_loss / n_batches
-        avg_reliability_loss = epoch_reliability_loss / n_batches
-        avg_bc_loss = epoch_bc_loss / n_batches
+        # Average over all scenarios
+        avg_total_loss = epoch_total_loss / n_scenarios
+        avg_reliability_loss = epoch_reliability_loss / n_scenarios
+        avg_bc_loss = epoch_bc_loss / n_scenarios
         avg_F = np.mean(epoch_F_values)
 
         return avg_total_loss, avg_reliability_loss, avg_bc_loss, avg_F
 
-    def train(self, epochs=100, n_batches_per_epoch=100, batch_size=32,
+    def train(self, epochs=100, batch_size=32,
               patience=20, save_dir='checkpoints/controller', verbose=True):
         """
         Training loop completo con early stopping.
+
+        Each epoch cycles through all scenarios exactly once in shuffled order.
+
+        Args:
+            epochs: Number of training epochs
+            batch_size: Number of samples per scenario
+            patience: Early stopping patience
+            save_dir: Directory to save checkpoints
+            verbose: Print training progress
 
         Returns:
             history (dict): Training history con tutte le metriche
@@ -162,22 +181,23 @@ class ControllerTrainer:
         save_dir = Path(save_dir)
         save_dir.mkdir(parents=True, exist_ok=True)
 
+        n_scenarios = len(self.surrogate.F_star)
+
         if verbose:
             print(f"\n{'='*70}")
             print("STARTING CONTROLLER TRAINING")
             print(f"{'='*70}")
             print(f"  Epochs: {epochs}")
-            print(f"  Batches per epoch: {n_batches_per_epoch}")
-            print(f"  Batch size: {batch_size}")
+            print(f"  Scenarios per epoch: {n_scenarios} (all scenarios)")
+            print(f"  Batch size per scenario: {batch_size}")
+            print(f"  Total batches: {epochs * n_scenarios}")
             print(f"  Patience: {patience}")
             print(f"  Save dir: {save_dir}")
-            print(f"  N scenarios: {len(self.surrogate.F_star)}")
             print(f"  F* (target, mean): {np.mean(self.surrogate.F_star):.6f} ± {np.std(self.surrogate.F_star):.6f}")
 
         for epoch in range(1, epochs + 1):
-            # Train epoch
+            # Train epoch (cycles through all scenarios once)
             avg_total_loss, avg_rel_loss, avg_bc_loss, avg_F = self.train_epoch(
-                n_batches=n_batches_per_epoch,
                 batch_size=batch_size
             )
 
