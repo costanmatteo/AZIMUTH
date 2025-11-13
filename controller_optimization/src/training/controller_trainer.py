@@ -57,11 +57,37 @@ class ControllerTrainer:
         self.best_F = -float('inf')
         self.epochs_without_improvement = 0
 
+        # Compute normalization statistics from target trajectories
+        self._compute_normalization_stats()
+
         print(f"ControllerTrainer initialized:")
         print(f"  Trainable parameters: {sum(p.numel() for p in trainable_params):,}")
         print(f"  Learning rate: {learning_rate}")
         print(f"  Lambda BC: {lambda_bc}")
         print(f"  Device: {device}")
+
+    def _compute_normalization_stats(self):
+        """
+        Compute normalization statistics (min, max) for each process's inputs
+        from the target trajectories to scale BC loss to [0,1] range.
+        """
+        self.input_stats = {}
+
+        for process_name, data in self.surrogate.target_trajectory_tensors.items():
+            inputs = data['inputs']  # Shape: (n_scenarios, seq_len, input_dim)
+
+            # Compute min and max across all scenarios and timesteps
+            # Add small epsilon to avoid division by zero
+            input_min = inputs.min(dim=0)[0].min(dim=0)[0]  # Shape: (input_dim,)
+            input_max = inputs.max(dim=0)[0].max(dim=0)[0]  # Shape: (input_dim,)
+            input_range = input_max - input_min + 1e-8  # Avoid division by zero
+
+            self.input_stats[process_name] = {
+                'min': input_min.to(self.device),
+                'range': input_range.to(self.device)
+            }
+
+        print(f"  Input normalization stats computed for {len(self.input_stats)} processes")
 
     def compute_loss(self, trajectory, scenario_idx):
         """
@@ -82,15 +108,27 @@ class ControllerTrainer:
         F_star_tensor = torch.tensor(F_star_value, dtype=torch.float32, device=self.device)
         reliability_loss = (F - F_star_tensor) ** 2
 
-        # Behavior cloning loss: Σ ||a_t - a_t*||^2
+        # Behavior cloning loss: mean( ||a_t - a_t*||^2 ) across all processes
         # Compare to the specific scenario's target inputs
+        # Inputs are normalized to [0,1] range to match reliability loss scale
         bc_loss = torch.tensor(0.0, device=self.device)
+        n_processes = len(trajectory.keys())
 
         for process_name in trajectory.keys():
             actual_inputs = trajectory[process_name]['inputs']
             # Select target inputs for this specific scenario
             target_inputs_scenario = self.surrogate.target_trajectory_tensors[process_name]['inputs'][scenario_idx:scenario_idx+1]
-            bc_loss = bc_loss + torch.mean((actual_inputs - target_inputs_scenario) ** 2)
+
+            # Normalize inputs to [0,1] using precomputed stats
+            stats = self.input_stats[process_name]
+            actual_inputs_norm = (actual_inputs - stats['min']) / stats['range']
+            target_inputs_norm = (target_inputs_scenario - stats['min']) / stats['range']
+
+            # Compute MSE on normalized inputs
+            bc_loss = bc_loss + torch.mean((actual_inputs_norm - target_inputs_norm) ** 2)
+
+        # Average BC loss across processes (not sum!)
+        bc_loss = bc_loss / n_processes
 
         # Total loss (mean over batch)
         total_loss = torch.mean(reliability_loss) + self.lambda_bc * bc_loss
