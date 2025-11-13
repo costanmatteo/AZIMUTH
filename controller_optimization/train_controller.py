@@ -108,17 +108,31 @@ def main():
     for process_name, data in target_trajectory_eval.items():
         print(f"      {process_name}: inputs={data['inputs'].shape}, outputs={data['outputs'].shape}")
 
-    # 2. Generate baseline trajectory (a')
-    print("\n[2/9] Generating baseline trajectory (a', normal noise, NO controller)...")
-    baseline_trajectory = generate_baseline_trajectory(
+    # 2. Generate baseline trajectories (a')
+    # 2a. Reference trajectory (n_samples=1) for F_baseline calculation
+    print("\n[2/9] Generating baseline trajectories (a', normal noise, NO controller)...")
+    print("  [2a] Reference trajectory (n_samples=1) for F_baseline...")
+    baseline_trajectory_reference = generate_baseline_trajectory(
+        process_configs=PROCESSES,
+        n_samples=1,
+        seed=CONTROLLER_CONFIG['baseline']['seed']
+    )
+
+    print("    Reference trajectory generated:")
+    for process_name, data in baseline_trajectory_reference.items():
+        print(f"      {process_name}: inputs={data['inputs'].shape}, outputs={data['outputs'].shape}")
+
+    # 2b. Evaluation trajectory (n_samples=50) for metrics and plots
+    print("  [2b] Evaluation trajectory (n_samples=50) for metrics and plots...")
+    baseline_trajectory_eval = generate_baseline_trajectory(
         process_configs=PROCESSES,
         n_samples=CONTROLLER_CONFIG['baseline']['n_samples'],
         seed=CONTROLLER_CONFIG['baseline']['seed']
     )
 
-    print("  Baseline trajectory generated:")
-    for process_name, data in baseline_trajectory.items():
-        print(f"    {process_name}: inputs={data['inputs'].shape}, outputs={data['outputs'].shape}")
+    print("    Evaluation trajectory generated:")
+    for process_name, data in baseline_trajectory_eval.items():
+        print(f"      {process_name}: inputs={data['inputs'].shape}, outputs={data['outputs'].shape}")
 
     # 3. Create ProcessChain (uses reference trajectory for initialization)
     print("\n[3/9] Building process chain...")
@@ -182,26 +196,33 @@ def main():
     print("\n[7/9] Final evaluation...")
     print("-"*70)
 
-    # Generate actual trajectory con policy generators
+    # Generate actual trajectories con policy generators
     process_chain.eval()
     with torch.no_grad():
-        actual_trajectory_tensor = process_chain.forward(batch_size=1)
+        # 7a. Reference trajectory (batch_size=1) for F_actual calculation
+        print("  [7a] Generating actual trajectory (batch_size=1) for F_actual...")
+        actual_trajectory_tensor_reference = process_chain.forward(batch_size=1)
+
+        # 7b. Evaluation trajectory (batch_size=50) for metrics and plots
+        print("  [7b] Generating actual trajectory (batch_size=50) for metrics and plots...")
+        actual_trajectory_tensor_eval = process_chain.forward(batch_size=CONTROLLER_CONFIG['baseline']['n_samples'])
 
     # Convert to numpy for metrics
-    actual_trajectory = convert_trajectory_to_numpy(actual_trajectory_tensor)
+    actual_trajectory_reference = convert_trajectory_to_numpy(actual_trajectory_tensor_reference)
+    actual_trajectory_eval = convert_trajectory_to_numpy(actual_trajectory_tensor_eval)
 
-    # Calculate reliability scores
-    baseline_trajectory_tensor = convert_numpy_to_tensor(baseline_trajectory, device=device)
+    # Calculate reliability scores (use reference trajectories with 1 sample for scalar values)
+    baseline_trajectory_tensor_reference = convert_numpy_to_tensor(baseline_trajectory_reference, device=device)
 
     with torch.no_grad():
-        F_baseline = surrogate.compute_reliability(baseline_trajectory_tensor).item()
-        F_actual = surrogate.compute_reliability(actual_trajectory_tensor).item()
+        F_baseline = surrogate.compute_reliability(baseline_trajectory_tensor_reference).item()
+        F_actual = surrogate.compute_reliability(actual_trajectory_tensor_reference).item()
 
-    # Compute final metrics (uses evaluation trajectory with 50 samples)
+    # Compute final metrics (uses evaluation trajectories with 50 samples)
     final_metrics = compute_final_metrics(
         target_trajectory=target_trajectory_eval,
-        baseline_trajectory=baseline_trajectory,
-        actual_trajectory=actual_trajectory,
+        baseline_trajectory=baseline_trajectory_eval,
+        actual_trajectory=actual_trajectory_eval,
         F_star=F_star,
         F_baseline=F_baseline,
         F_actual=F_actual
@@ -234,8 +255,8 @@ def main():
 
     plot_trajectory_comparison(
         target_trajectory=target_trajectory_eval,
-        baseline_trajectory=baseline_trajectory,
-        actual_trajectory=actual_trajectory,
+        baseline_trajectory=baseline_trajectory_eval,
+        actual_trajectory=actual_trajectory_eval,
         save_path=str(checkpoint_dir / 'trajectory_comparison.png')
     )
 
