@@ -71,9 +71,10 @@ def plot_trajectory_comparison(target_trajectory, baseline_trajectory,
     - a' (baseline, rosso)
     - a (actual, blu)
 
-    Un subplot per ogni processo, mostrando inputs e outputs.
+    Un subplot separato per ogni singolo input e output di ogni processo.
     """
     from controller_optimization.src.utils.metrics import convert_trajectory_to_numpy
+    from controller_optimization.configs.processes_config import get_process_by_name
 
     # Convert to numpy
     target = convert_trajectory_to_numpy(target_trajectory)
@@ -81,47 +82,91 @@ def plot_trajectory_comparison(target_trajectory, baseline_trajectory,
     actual = convert_trajectory_to_numpy(actual_trajectory)
 
     process_names = list(target.keys())
-    n_processes = len(process_names)
 
-    fig, axes = plt.subplots(n_processes, 2, figsize=(14, 5 * n_processes))
+    # Calculate total number of subplots needed
+    total_subplots = 0
+    process_subplot_info = []
 
-    if n_processes == 1:
-        axes = axes.reshape(1, -1)
+    for process_name in process_names:
+        process_config = get_process_by_name(process_name)
+        n_inputs = process_config['input_dim']
+        n_outputs = process_config['output_dim']
+        n_plots_for_process = n_inputs + n_outputs
 
-    for i, process_name in enumerate(process_names):
-        # Inputs plot
-        ax_in = axes[i, 0]
-        target_inputs = target[process_name]['inputs'].flatten()
-        baseline_inputs = baseline[process_name]['inputs'].flatten()
-        actual_inputs = actual[process_name]['inputs'].flatten()
+        process_subplot_info.append({
+            'name': process_name,
+            'config': process_config,
+            'n_inputs': n_inputs,
+            'n_outputs': n_outputs,
+            'n_plots': n_plots_for_process,
+            'start_idx': total_subplots
+        })
+        total_subplots += n_plots_for_process
 
-        x = np.arange(len(target_inputs))
-        ax_in.plot(x, target_inputs, 'o-', color='green', label='Target (a*)', linewidth=2)
-        ax_in.plot(x, baseline_inputs, 's--', color='red', label='Baseline (a\')', linewidth=2, alpha=0.7)
-        ax_in.plot(x, actual_inputs, '^-', color='blue', label='Controller (a)', linewidth=2, alpha=0.7)
+    # Create figure with dynamic number of subplots
+    n_cols = 3  # 3 columns for better layout
+    n_rows = int(np.ceil(total_subplots / n_cols))
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(6 * n_cols, 4 * n_rows))
+    axes = axes.flatten() if total_subplots > 1 else [axes]
 
-        ax_in.set_title(f'{process_name.capitalize()} - Inputs')
-        ax_in.set_xlabel('Sample Index')
-        ax_in.set_ylabel('Input Value')
-        ax_in.legend()
-        ax_in.grid(True, alpha=0.3)
+    subplot_idx = 0
 
-        # Outputs plot
-        ax_out = axes[i, 1]
-        target_outputs = target[process_name]['outputs_mean'].flatten()
-        baseline_outputs = baseline[process_name]['outputs_mean'].flatten()
-        actual_outputs = actual[process_name]['outputs_mean'].flatten()
+    for proc_info in process_subplot_info:
+        process_name = proc_info['name']
+        process_config = proc_info['config']
+        n_inputs = proc_info['n_inputs']
+        n_outputs = proc_info['n_outputs']
 
-        x_out = np.arange(len(target_outputs))
-        ax_out.plot(x_out, target_outputs, 'o-', color='green', label='Target (a*)', linewidth=2)
-        ax_out.plot(x_out, baseline_outputs, 's--', color='red', label='Baseline (a\')', linewidth=2, alpha=0.7)
-        ax_out.plot(x_out, actual_outputs, '^-', color='blue', label='Controller (a)', linewidth=2, alpha=0.7)
+        target_inputs = target[process_name]['inputs']  # shape: (n_samples, input_dim)
+        baseline_inputs = baseline[process_name]['inputs']
+        actual_inputs = actual[process_name]['inputs']
 
-        ax_out.set_title(f'{process_name.capitalize()} - Outputs')
-        ax_out.set_xlabel('Sample Index')
-        ax_out.set_ylabel('Output Value')
-        ax_out.legend()
-        ax_out.grid(True, alpha=0.3)
+        target_outputs = target[process_name]['outputs_mean']  # shape: (n_samples, output_dim)
+        baseline_outputs = baseline[process_name]['outputs_mean']
+        actual_outputs = actual[process_name]['outputs_mean']
+
+        n_samples = target_inputs.shape[0]
+        x = np.arange(n_samples)
+
+        # Plot each input dimension separately
+        for i in range(n_inputs):
+            ax = axes[subplot_idx]
+
+            input_label = process_config['input_labels'][i] if i < len(process_config['input_labels']) else f'Input {i}'
+
+            ax.plot(x, target_inputs[:, i], 'o-', color='green', label='Target (a*)', linewidth=2, markersize=4)
+            ax.plot(x, baseline_inputs[:, i], 's--', color='red', label='Baseline (a\')', linewidth=2, alpha=0.7, markersize=4)
+            ax.plot(x, actual_inputs[:, i], '^-', color='blue', label='Controller (a)', linewidth=2, alpha=0.7, markersize=4)
+
+            ax.set_title(f'{process_name.capitalize()} - {input_label}', fontsize=12, fontweight='bold')
+            ax.set_xlabel('Sample Index')
+            ax.set_ylabel(input_label)
+            ax.legend(loc='best', fontsize=9)
+            ax.grid(True, alpha=0.3)
+
+            subplot_idx += 1
+
+        # Plot each output dimension separately
+        for i in range(n_outputs):
+            ax = axes[subplot_idx]
+
+            output_label = process_config['output_labels'][i] if i < len(process_config['output_labels']) else f'Output {i}'
+
+            ax.plot(x, target_outputs[:, i], 'o-', color='green', label='Target (a*)', linewidth=2, markersize=4)
+            ax.plot(x, baseline_outputs[:, i], 's--', color='red', label='Baseline (a\')', linewidth=2, alpha=0.7, markersize=4)
+            ax.plot(x, actual_outputs[:, i], '^-', color='blue', label='Controller (a)', linewidth=2, alpha=0.7, markersize=4)
+
+            ax.set_title(f'{process_name.capitalize()} - {output_label}', fontsize=12, fontweight='bold')
+            ax.set_xlabel('Sample Index')
+            ax.set_ylabel(output_label)
+            ax.legend(loc='best', fontsize=9)
+            ax.grid(True, alpha=0.3)
+
+            subplot_idx += 1
+
+    # Hide any unused subplots
+    for idx in range(subplot_idx, len(axes)):
+        axes[idx].set_visible(False)
 
     plt.tight_layout()
 
