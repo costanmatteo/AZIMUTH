@@ -108,10 +108,11 @@ class ControllerTrainer:
         F_star_tensor = torch.tensor(F_star_value, dtype=torch.float32, device=self.device)
         reliability_loss = (F - F_star_tensor) ** 2
 
-        # Behavior cloning loss: Σ ||a_t - a_t*||^2
+        # Behavior cloning loss: mean( ||a_t - a_t*||^2 ) across all processes
         # Compare to the specific scenario's target inputs
         # Inputs are normalized to [0,1] range to match reliability loss scale
         bc_loss = torch.tensor(0.0, device=self.device)
+        n_processes = len(trajectory.keys())
 
         for process_name in trajectory.keys():
             actual_inputs = trajectory[process_name]['inputs']
@@ -125,6 +126,9 @@ class ControllerTrainer:
 
             # Compute MSE on normalized inputs
             bc_loss = bc_loss + torch.mean((actual_inputs_norm - target_inputs_norm) ** 2)
+
+        # Average BC loss across processes (not sum!)
+        bc_loss = bc_loss / n_processes
 
         # Total loss (mean over batch)
         total_loss = torch.mean(reliability_loss) + self.lambda_bc * bc_loss
