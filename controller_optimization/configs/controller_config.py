@@ -56,7 +56,7 @@ CONTROLLER_CONFIG = {
 
     # Policy generator architecture
     'policy_generator': {
-        'architecture': 'medium',  # 'small', 'medium', 'large', 'custom'
+        'architecture': 'custom',  # 'small', 'medium', 'large', 'custom'
         'hidden_sizes': [64, 32],  # Usato solo se 'custom'
         'dropout': 0.1,
         'use_batchnorm': False,
@@ -96,13 +96,13 @@ CONTROLLER_CONFIG = {
 
     # Target trajectory
     'target': {
-        'n_samples': 50,  # Multi-scenario training for generalization
+        'n_samples': 1,  # Multi-scenario training for generalization
         'seed': 42,
     },
 
     # Baseline trajectory (per comparison)
     'baseline': {
-        'n_samples': 50,  # Must match target for structural alignment
+        'n_samples': 1,  # Must match target for structural alignment
         'seed': 43,  # Diverso seed per noise diverso
     },
 
