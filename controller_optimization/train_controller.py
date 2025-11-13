@@ -257,12 +257,61 @@ def main():
         save_path=str(checkpoint_dir / 'reliability_comparison.png')
     )
 
-    # Note: Additional multi-scenario visualizations will be added in Phase 8
-    # - plot_reliability_per_scenario()
-    # - plot_robustness_analysis()
-
     print("  ✓ Basic visualizations generated")
-    print("  Note: Run visualization script for detailed multi-scenario plots")
+
+    # 8b. Generate PDF report (if enabled)
+    if CONTROLLER_CONFIG['report']['generate_pdf']:
+        print("\n  Generating PDF report...")
+
+        # Prepare F values in dict format for multi-scenario
+        F_star_dict = {
+            'mean': float(F_star_mean),
+            'std': float(F_star_std),
+            'min': float(F_star_array.min()),
+            'max': float(F_star_array.max())
+        }
+
+        F_baseline_dict = {
+            'mean': float(F_baseline_mean),
+            'std': float(F_baseline_std),
+            'min': float(F_baseline_array.min()),
+            'max': float(F_baseline_array.max())
+        }
+
+        F_actual_dict = {
+            'mean': float(F_actual_mean),
+            'std': float(F_actual_std),
+            'min': float(F_actual_per_scenario.min()),
+            'max': float(F_actual_per_scenario.max())
+        }
+
+        # Prepare final metrics for report
+        report_final_metrics = {
+            'improvement': improvement / 100,  # Convert back to fraction
+            'target_gap': target_gap / 100
+        }
+
+        # Process-wise metrics not available for multi-scenario (optional)
+        process_metrics = {}
+
+        # Generate report
+        try:
+            report_path = generate_controller_report(
+                config=CONTROLLER_CONFIG,
+                training_history=history,
+                final_metrics=report_final_metrics,
+                process_metrics=process_metrics,
+                F_star=F_star_dict,
+                F_baseline=F_baseline_dict,
+                F_actual=F_actual_dict,
+                checkpoint_dir=checkpoint_dir,
+                timestamp=datetime.now(),
+                n_scenarios=n_scenarios
+            )
+            print(f"  ✓ PDF report generated: {report_path}")
+        except Exception as e:
+            print(f"  ✗ Warning: Failed to generate PDF report: {e}")
+            print(f"    Continuing without report...")
 
     # 9. Save all metrics to JSON
     print("\n[9/9] Saving final results...")

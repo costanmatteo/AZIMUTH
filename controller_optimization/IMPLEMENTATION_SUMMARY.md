@@ -448,11 +448,67 @@ Run training (~5-10 minutes with 5 scenarios vs ~30-60 minutes with 50).
 
 ---
 
+#### ✅ PHASE 8: PDF Report Generation
+
+**File**: `controller_optimization/src/utils/report_generator.py`
+
+**Restored and adapted PDF report generation for multi-scenario training**:
+
+- Modified `create_two_column_section()` to accept dict format for F values:
+  ```python
+  # Multi-scenario format
+  F_star_dict = {
+      'mean': 0.849,
+      'std': 0.003,
+      'min': 0.843,
+      'max': 0.855
+  }
+  ```
+
+- Updated reliability metrics display to show mean ± std and range:
+  ```
+  • Target Reliability (F*):
+    Mean: 0.849 ± 0.003
+    Range: [0.843, 0.855]
+  • Robustness (std): 0.003
+  ```
+
+- Added `n_scenarios` parameter throughout report generation pipeline
+- Maintained backward compatibility with single-scenario format (scalar F values)
+
+**File**: `controller_optimization/train_controller.py`
+
+**Integrated PDF report generation**:
+- Formats F values as dicts with mean/std/min/max
+- Calls `generate_controller_report()` after visualizations
+- Error handling for report generation failures
+- Report includes:
+  - Configuration summary with scenario count
+  - Training parameters and results
+  - Multi-scenario reliability metrics with robustness
+  - Training visualizations
+  - 2-up layout for compact printing (if pypdf available)
+
+**File**: `controller_optimization/configs/controller_config.py`
+
+**Updated configuration**:
+- Set `n_samples: 50` for multi-scenario training (was 1)
+- Enabled PDF report generation by default
+- Both target and baseline use 50 scenarios
+
+**Output**: `checkpoints/controller/controller_report.pdf`
+- Professional LaTeX-style report
+- Shows aggregated metrics across all scenarios
+- Includes robustness analysis
+- All training visualizations embedded
+
+---
+
 ## Future Enhancements (Optional)
 
-### Phase 8: Advanced Visualizations
+### Advanced Visualizations (Not Yet Implemented)
 
-**New plot functions** (not yet implemented):
+**New plot functions**:
 - `plot_reliability_per_scenario()`: Line plot of F values for all 50 scenarios
 - `plot_robustness_analysis()`: Histogram of F_actual distribution
 - `plot_structural_conditions_heatmap()`: Visualize which conditions are challenging
@@ -474,17 +530,19 @@ Run training (~5-10 minutes with 5 scenarios vs ~30-60 minutes with 50).
 
 ## Summary
 
-✅ **Phases 1-7 Complete**: Full multi-scenario training pipeline implemented and tested
+✅ **Phases 1-8 Complete**: Full multi-scenario training pipeline with PDF reporting implemented and tested
 
 **Key Achievement**: Controller now trains on 50 diverse operating conditions and properly generalizes to unseen scenarios
 
 **Core Innovation**: Separated structural (environmental) vs process (measurement) noise for proper scenario generation and fair evaluation
 
+**PDF Report Restored**: Professional training report with multi-scenario metrics, robustness analysis, and all visualizations
+
 **Next Steps**:
 1. Run full training with 50 scenarios
-2. Analyze per-scenario results
+2. Analyze per-scenario results and PDF report
 3. Validate generalization on hold-out conditions
-4. (Optional) Add advanced visualizations (Phase 8)
+4. (Optional) Add advanced multi-scenario visualizations
 5. (Optional) Update comprehensive documentation (Phase 9)
 
 ---
