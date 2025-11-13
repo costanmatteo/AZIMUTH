@@ -63,25 +63,34 @@ class ControllerTrainer:
         print(f"  Lambda BC: {lambda_bc}")
         print(f"  Device: {device}")
 
-    def compute_loss(self, trajectory):
+    def compute_loss(self, trajectory, scenario_idx):
         """
-        Calcola loss totale.
+        Calcola loss totale per uno specifico scenario.
+
+        Args:
+            trajectory (dict): Output trajectory from process_chain.forward()
+            scenario_idx (int): Index of the scenario being evaluated
 
         Returns:
             total_loss, reliability_loss, bc_loss, F
         """
         # Reliability loss: (F - F*)^2
         F = self.surrogate.compute_reliability(trajectory)
-        F_star_tensor = torch.tensor(self.surrogate.F_star, dtype=torch.float32, device=self.device)
+
+        # Get F_star for this specific scenario
+        F_star_value = self.surrogate.F_star[scenario_idx]
+        F_star_tensor = torch.tensor(F_star_value, dtype=torch.float32, device=self.device)
         reliability_loss = (F - F_star_tensor) ** 2
 
         # Behavior cloning loss: Σ ||a_t - a_t*||^2
+        # Compare to the specific scenario's target inputs
         bc_loss = torch.tensor(0.0, device=self.device)
 
         for process_name in trajectory.keys():
             actual_inputs = trajectory[process_name]['inputs']
-            target_inputs_np = self.surrogate.target_trajectory_tensors[process_name]['inputs']
-            bc_loss = bc_loss + torch.mean((actual_inputs - target_inputs_np) ** 2)
+            # Select target inputs for this specific scenario
+            target_inputs_scenario = self.surrogate.target_trajectory_tensors[process_name]['inputs'][scenario_idx:scenario_idx+1]
+            bc_loss = bc_loss + torch.mean((actual_inputs - target_inputs_scenario) ** 2)
 
         # Total loss (mean over batch)
         total_loss = torch.mean(reliability_loss) + self.lambda_bc * bc_loss
@@ -90,13 +99,16 @@ class ControllerTrainer:
 
     def train_epoch(self, n_batches=100, batch_size=32):
         """
-        Training per un epoch.
+        Training per un epoch ACROSS ALL SCENARIOS.
 
         Per ogni batch:
-        1. Forward pass → trajectory
-        2. Compute F (surrogate)
-        3. Loss = (F - F*)^2 + λ_BC * BC_loss
-        4. Backward + optimizer step
+        1. Randomly sample a scenario
+        2. Forward pass → trajectory for that scenario
+        3. Compute F (surrogate) using scenario-specific F_star
+        4. Loss = (F - F*_scenario)^2 + λ_BC * BC_loss
+        5. Backward + optimizer step
+
+        This ensures the controller learns to generalize across all scenarios.
         """
         self.process_chain.train()
 
@@ -105,12 +117,20 @@ class ControllerTrainer:
         epoch_bc_loss = 0.0
         epoch_F_values = []
 
-        for batch_idx in range(n_batches):
-            # Forward pass through process chain
-            trajectory = self.process_chain.forward(batch_size=batch_size)
+        n_scenarios = len(self.surrogate.F_star)
 
-            # Compute loss
-            total_loss, rel_loss, bc_loss, F = self.compute_loss(trajectory)
+        for batch_idx in range(n_batches):
+            # Randomly sample a scenario for this batch
+            scenario_idx = np.random.randint(0, n_scenarios)
+
+            # Forward pass through process chain for this scenario
+            trajectory = self.process_chain.forward(
+                batch_size=batch_size,
+                scenario_idx=scenario_idx
+            )
+
+            # Compute loss using scenario-specific F_star
+            total_loss, rel_loss, bc_loss, F = self.compute_loss(trajectory, scenario_idx)
 
             # Backward pass
             self.optimizer.zero_grad()
@@ -151,7 +171,8 @@ class ControllerTrainer:
             print(f"  Batch size: {batch_size}")
             print(f"  Patience: {patience}")
             print(f"  Save dir: {save_dir}")
-            print(f"  F* (target): {self.surrogate.F_star:.6f}")
+            print(f"  N scenarios: {len(self.surrogate.F_star)}")
+            print(f"  F* (target, mean): {np.mean(self.surrogate.F_star):.6f} ± {np.std(self.surrogate.F_star):.6f}")
 
         for epoch in range(1, epochs + 1):
             # Train epoch
@@ -173,7 +194,7 @@ class ControllerTrainer:
                 print(f"  Reliability Loss: {avg_rel_loss:.6f}")
                 print(f"  BC Loss:          {avg_bc_loss:.6f}")
                 print(f"  F (actual):       {avg_F:.6f}")
-                print(f"  F* (target):      {self.surrogate.F_star:.6f}")
+                print(f"  F* (target, mean):{np.mean(self.surrogate.F_star):.6f}")
 
             # Check for improvement
             if avg_F > self.best_F:
@@ -208,9 +229,53 @@ class ControllerTrainer:
             print(f"{'='*70}")
             print(f"  Best F: {self.best_F:.6f}")
             print(f"  Final F: {self.history['F_values'][-1]:.6f}")
-            print(f"  Target F*: {self.surrogate.F_star:.6f}")
+            print(f"  Target F* (mean): {np.mean(self.surrogate.F_star):.6f}")
 
         return self.history
+
+    def evaluate_all_scenarios(self):
+        """
+        Evaluate controller performance on ALL scenarios.
+
+        Returns:
+            dict: {
+                'F_actual_per_scenario': np.array of shape (n_scenarios,),
+                'F_actual_mean': float,
+                'F_actual_std': float,
+                'F_star_mean': float,
+                'F_star_std': float,
+                'trajectories': list of trajectories for each scenario
+            }
+        """
+        self.process_chain.eval()
+
+        n_scenarios = len(self.surrogate.F_star)
+        F_actual_values = []
+        trajectories = []
+
+        with torch.no_grad():
+            for scenario_idx in range(n_scenarios):
+                # Run forward pass for this scenario
+                trajectory = self.process_chain.forward(
+                    batch_size=1,
+                    scenario_idx=scenario_idx
+                )
+
+                # Compute reliability
+                F_actual = self.surrogate.compute_reliability(trajectory).item()
+                F_actual_values.append(F_actual)
+                trajectories.append(trajectory)
+
+        F_actual_array = np.array(F_actual_values)
+
+        return {
+            'F_actual_per_scenario': F_actual_array,
+            'F_actual_mean': np.mean(F_actual_array),
+            'F_actual_std': np.std(F_actual_array),
+            'F_star_mean': np.mean(self.surrogate.F_star),
+            'F_star_std': np.std(self.surrogate.F_star),
+            'trajectories': trajectories
+        }
 
     def save_checkpoint(self, path, epoch):
         """Save model checkpoint."""

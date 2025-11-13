@@ -130,18 +130,26 @@ class ProcessChain(nn.Module):
             policy = policy.to(device)
             self.policy_generators.append(policy)
 
-    def get_initial_inputs(self, batch_size=1):
+    def get_initial_inputs(self, batch_size=1, scenario_idx=None):
         """
         Get initial inputs a1 from target trajectory.
 
         Args:
-            batch_size (int): Batch size
+            batch_size (int): Number of parallel samples
+            scenario_idx (int, optional): Which scenario's structural conditions to use.
+                                         If None, uses scenario 0.
 
         Returns:
             torch.Tensor: Initial inputs for first process
         """
+        if scenario_idx is None:
+            scenario_idx = 0
+
         first_process_name = self.process_names[0]
-        target_inputs = self.target_trajectory[first_process_name]['inputs']
+        target_inputs_all = self.target_trajectory[first_process_name]['inputs']
+
+        # Select specific scenario
+        target_inputs = target_inputs_all[scenario_idx]  # Shape: (input_dim,)
 
         # Replicate for batch
         initial_inputs = np.tile(target_inputs, (batch_size, 1))
@@ -192,9 +200,13 @@ class ProcessChain(nn.Module):
         scale_squared = torch.tensor(output_scale ** 2, dtype=torch.float32, device=self.device)
         return variance * scale_squared
 
-    def forward(self, batch_size=1):
+    def forward(self, batch_size=1, scenario_idx=0):
         """
-        Forward pass attraverso tutta la catena.
+        Forward pass attraverso tutta la catena per uno scenario specifico.
+
+        Args:
+            batch_size (int): Number of parallel samples
+            scenario_idx (int): Which scenario's structural conditions to use (default: 0)
 
         Returns:
             trajectory (dict): {
@@ -208,13 +220,13 @@ class ProcessChain(nn.Module):
             }
         """
 
-      
+
 
 
         trajectory = {}
 
-        # a1 è fisso dalla target trajectory
-        current_inputs = self.get_initial_inputs(batch_size)
+        # a1 è fisso dalla target trajectory (per lo scenario specifico)
+        current_inputs = self.get_initial_inputs(batch_size, scenario_idx)
 
         for i, process_name in enumerate(self.process_names):
             # 1. Se i > 0: policy generator produce inputs

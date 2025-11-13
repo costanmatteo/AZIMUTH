@@ -252,6 +252,15 @@ ds_scm_laser = SCMDataset(
     target_labels=["ActualPower"],
 )
 
+# =============================================================================
+# NOISE CLASSIFICATION FOR MULTI-SCENARIO TRAINING
+# -----------------------------------------------------------------------------
+# Structural noise: Environmental conditions that create scenario diversity
+# Process noise: Measurement/actuator imperfections (zeroed in target trajectory)
+# =============================================================================
+ds_scm_laser.structural_noise_vars = ['AmbientTemp']
+ds_scm_laser.process_noise_vars = ['Zln', 'NoiseShot', 'NoiseMeas', 'NoiseDrift']
+
 
 # =============================================================================
 # PLASMA CLEANING SCM MODEL — Section 3 of PDF
@@ -388,6 +397,10 @@ ds_scm_plasma = SCMDataset(
     input_labels=["RF_Power", "Duration"],
     target_labels=["RemovalRate"],
 )
+
+# Noise classification: No structural noise (scenario diversity from upstream processes)
+ds_scm_plasma.structural_noise_vars = []
+ds_scm_plasma.process_noise_vars = ['Zln', 'NoiseAdd', 'Jump']
 
 
 # =============================================================================
@@ -529,6 +542,10 @@ ds_scm_galvanic = SCMDataset(
     target_labels=["Thickness"],
 )
 
+# Noise classification: No structural noise (scenario diversity from upstream processes)
+ds_scm_galvanic.structural_noise_vars = []
+ds_scm_galvanic.process_noise_vars = ['SpatialVar', 'TimeRand', 'PhaseRand', 'NoiseMeas']
+
 
 # =============================================================================
 # MICRO-ETCHING SCM MODEL — Section 5 of PDF
@@ -613,12 +630,12 @@ ds_scm_microetch = SCMDataset(
         "E_A":     lambda rng, n: np.full(n, 42000.0),  # 42 kJ/mol - typical for acid etching
         "R_GAS":   lambda rng, n: np.full(n, 8.314),
         "ALPHA":   lambda rng, n: np.full(n, 0.5),      # Square-root concentration dependence
-    
+
         # Noise parameters
         "SIGMA_M": lambda rng, n: np.full(n, 0.06),     # 6% multiplicative noise
         "NU":      lambda rng, n: np.full(n, 5.0),      # Student-t degrees of freedom
         "S_T":     lambda rng, n: np.full(n, 0.3),      # 0.3 μm additive noise
-        
+
         # ==================== INTERMEDIATE & NOISE NODES ====================
         "Rremoved": lambda rng, n: np.zeros(n),
         "Zln": lambda rng, n: rng.standard_normal(n),
@@ -629,6 +646,10 @@ ds_scm_microetch = SCMDataset(
     input_labels=["Temperature", "Concentration", "Duration"],
     target_labels=["RemovalDepth"],
 )
+
+# Noise classification: Temperature as structural (environmental/facility variation)
+ds_scm_microetch.structural_noise_vars = ['Temperature']
+ds_scm_microetch.process_noise_vars = ['Zln', 'NoiseStudentT']
 
 
 
