@@ -96,13 +96,13 @@ CONTROLLER_CONFIG = {
 
     # Target trajectory
     'target': {
-        'n_samples': 3,  # Multi-scenario training for generalization
+        'n_samples': 1,  # Multi-scenario training for generalization
         'seed': 42,
     },
 
     # Baseline trajectory (per comparison)
     'baseline': {
-        'n_samples': 3,  # Must match target for structural alignment
+        'n_samples': 1,  # Must match target for structural alignment
         'seed': 43,  # Diverso seed per noise diverso
     },
 
