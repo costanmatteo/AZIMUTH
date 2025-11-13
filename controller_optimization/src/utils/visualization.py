@@ -11,14 +11,25 @@ def plot_training_history(history, save_path=None):
     """
     Plot training history (total loss, reliability loss, BC loss, F values).
 
+    Supports both old format (single metrics) and new format (train/val split).
+
     Args:
         history (dict): Training history
         save_path (str): Path to save figure
     """
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
 
+    # Determine if we have train/val split
+    has_validation = 'val_total_loss' in history and len(history['val_total_loss']) > 0
+
     # Total loss
-    axes[0, 0].plot(history['total_loss'], label='Total Loss', color='blue')
+    if has_validation:
+        axes[0, 0].plot(history['train_total_loss'], label='Train Total Loss', color='blue')
+        axes[0, 0].plot(history['val_total_loss'], label='Val Total Loss', color='cyan', linestyle='--')
+    else:
+        # Backward compatibility: check both old and new format
+        loss_key = 'train_total_loss' if 'train_total_loss' in history else 'total_loss'
+        axes[0, 0].plot(history[loss_key], label='Total Loss', color='blue')
     axes[0, 0].set_xlabel('Epoch')
     axes[0, 0].set_ylabel('Loss')
     axes[0, 0].set_title('Total Loss')
@@ -26,7 +37,12 @@ def plot_training_history(history, save_path=None):
     axes[0, 0].grid(True, alpha=0.3)
 
     # Reliability loss
-    axes[0, 1].plot(history['reliability_loss'], label='Reliability Loss', color='red')
+    if has_validation:
+        axes[0, 1].plot(history['train_reliability_loss'], label='Train Reliability Loss', color='red')
+        axes[0, 1].plot(history['val_reliability_loss'], label='Val Reliability Loss', color='orange', linestyle='--')
+    else:
+        rel_loss_key = 'train_reliability_loss' if 'train_reliability_loss' in history else 'reliability_loss'
+        axes[0, 1].plot(history[rel_loss_key], label='Reliability Loss', color='red')
     axes[0, 1].set_xlabel('Epoch')
     axes[0, 1].set_ylabel('Loss')
     axes[0, 1].set_title('Reliability Loss (F - F*)²')
@@ -34,7 +50,12 @@ def plot_training_history(history, save_path=None):
     axes[0, 1].grid(True, alpha=0.3)
 
     # BC loss
-    axes[1, 0].plot(history['bc_loss'], label='Behavior Cloning Loss', color='green')
+    if has_validation:
+        axes[1, 0].plot(history['train_bc_loss'], label='Train BC Loss', color='green')
+        axes[1, 0].plot(history['val_bc_loss'], label='Val BC Loss', color='lime', linestyle='--')
+    else:
+        bc_loss_key = 'train_bc_loss' if 'train_bc_loss' in history else 'bc_loss'
+        axes[1, 0].plot(history[bc_loss_key], label='Behavior Cloning Loss', color='green')
     axes[1, 0].set_xlabel('Epoch')
     axes[1, 0].set_ylabel('Loss')
     axes[1, 0].set_title('Behavior Cloning Loss')
@@ -42,8 +63,11 @@ def plot_training_history(history, save_path=None):
     axes[1, 0].grid(True, alpha=0.3)
 
     # F values
-    if 'F_values' in history:
-        axes[1, 1].plot(history['F_values'], label='F (Actual)', color='purple')
+    F_values_key = 'train_F_values' if 'train_F_values' in history else 'F_values'
+    if F_values_key in history:
+        axes[1, 1].plot(history[F_values_key], label='F (Train)', color='purple')
+        if has_validation:
+            axes[1, 1].plot(history['val_F_values'], label='F (Val)', color='magenta', linestyle='--')
         if 'F_star' in history:
             axes[1, 1].axhline(y=history['F_star'], color='gold', linestyle='--', label='F* (Target)')
         axes[1, 1].set_xlabel('Epoch')
@@ -63,23 +87,33 @@ def plot_training_history(history, save_path=None):
     plt.close()
 
 
-def plot_trajectory_comparison(target_trajectory, baseline_trajectory,
-                               actual_trajectory, save_path=None):
+def plot_trajectory_comparison(target_trajectory, baseline_trajectories,
+                               actual_trajectories, save_path=None):
     """
-    Plot confronto tra le 3 trajectories:
-    - a* (target, verde)
-    - a' (baseline, rosso)
-    - a (actual, blu)
+    Plot confronto tra le trajectories:
+    - a* (target, verde) - single trajectory
+    - a' (baseline, rosso) - multiple trajectories (list)
+    - a (actual, blu) - multiple trajectories (list)
 
     Un subplot separato per ogni singolo input e output di ogni processo.
+
+    Args:
+        target_trajectory: Single target trajectory (dict)
+        baseline_trajectories: List of baseline trajectories (list of dicts)
+        actual_trajectories: List of actual trajectories (list of dicts)
+        save_path: Path to save the plot
     """
     from controller_optimization.src.utils.metrics import convert_trajectory_to_numpy
     from controller_optimization.configs.processes_config import get_process_by_name
 
-    # Convert to numpy
+    # Convert target to numpy
     target = convert_trajectory_to_numpy(target_trajectory)
-    baseline = convert_trajectory_to_numpy(baseline_trajectory)
-    actual = convert_trajectory_to_numpy(actual_trajectory)
+
+    # Convert baseline trajectories to numpy (list of dicts)
+    baselines = [convert_trajectory_to_numpy(baseline_traj) for baseline_traj in baseline_trajectories]
+
+    # Convert actual trajectories to numpy (list of dicts)
+    actuals = [convert_trajectory_to_numpy(actual_traj) for actual_traj in actual_trajectories]
 
     process_names = list(target.keys())
 
@@ -118,12 +152,7 @@ def plot_trajectory_comparison(target_trajectory, baseline_trajectory,
         n_outputs = proc_info['n_outputs']
 
         target_inputs = target[process_name]['inputs']  # shape: (n_samples, input_dim)
-        baseline_inputs = baseline[process_name]['inputs']
-        actual_inputs = actual[process_name]['inputs']
-
         target_outputs = target[process_name]['outputs_mean']  # shape: (n_samples, output_dim)
-        baseline_outputs = baseline[process_name]['outputs_mean']
-        actual_outputs = actual[process_name]['outputs_mean']
 
         n_samples = target_inputs.shape[0]
         x = np.arange(n_samples)
@@ -134,9 +163,23 @@ def plot_trajectory_comparison(target_trajectory, baseline_trajectory,
 
             input_label = process_config['input_labels'][i] if i < len(process_config['input_labels']) else f'Input {i}'
 
-            ax.plot(x, target_inputs[:, i], 'o-', color='green', label='Target (a*)', linewidth=2, markersize=4)
-            ax.plot(x, baseline_inputs[:, i], 's--', color='red', label='Baseline (a\')', linewidth=2, alpha=0.7, markersize=4)
-            ax.plot(x, actual_inputs[:, i], '^-', color='blue', label='Controller (a)', linewidth=2, alpha=0.7, markersize=4)
+            # Plot target (single trajectory, solid line)
+            ax.plot(x, target_inputs[:, i], 'o-', color='green', label='Target (a*)',
+                   linewidth=2.5, markersize=5, zorder=10)
+
+            # Plot multiple baseline trajectories (semi-transparent)
+            for j, baseline in enumerate(baselines):
+                baseline_inputs = baseline[process_name]['inputs']
+                label = 'Baseline (a\')' if j == 0 else None  # Only label first one
+                ax.plot(x, baseline_inputs[:, i], 's--', color='red',
+                       linewidth=1.5, alpha=0.4, markersize=3, label=label, zorder=5)
+
+            # Plot multiple actual trajectories (semi-transparent)
+            for j, actual in enumerate(actuals):
+                actual_inputs = actual[process_name]['inputs']
+                label = 'Controller (a)' if j == 0 else None  # Only label first one
+                ax.plot(x, actual_inputs[:, i], '^-', color='blue',
+                       linewidth=1.5, alpha=0.4, markersize=3, label=label, zorder=5)
 
             ax.set_title(f'{process_name.capitalize()} - {input_label}', fontsize=12, fontweight='bold')
             ax.set_xlabel('Sample Index')
@@ -152,9 +195,23 @@ def plot_trajectory_comparison(target_trajectory, baseline_trajectory,
 
             output_label = process_config['output_labels'][i] if i < len(process_config['output_labels']) else f'Output {i}'
 
-            ax.plot(x, target_outputs[:, i], 'o-', color='green', label='Target (a*)', linewidth=2, markersize=4)
-            ax.plot(x, baseline_outputs[:, i], 's--', color='red', label='Baseline (a\')', linewidth=2, alpha=0.7, markersize=4)
-            ax.plot(x, actual_outputs[:, i], '^-', color='blue', label='Controller (a)', linewidth=2, alpha=0.7, markersize=4)
+            # Plot target (single trajectory, solid line)
+            ax.plot(x, target_outputs[:, i], 'o-', color='green', label='Target (a*)',
+                   linewidth=2.5, markersize=5, zorder=10)
+
+            # Plot multiple baseline trajectories (semi-transparent)
+            for j, baseline in enumerate(baselines):
+                baseline_outputs = baseline[process_name]['outputs_mean']
+                label = 'Baseline (a\')' if j == 0 else None  # Only label first one
+                ax.plot(x, baseline_outputs[:, i], 's--', color='red',
+                       linewidth=1.5, alpha=0.4, markersize=3, label=label, zorder=5)
+
+            # Plot multiple actual trajectories (semi-transparent)
+            for j, actual in enumerate(actuals):
+                actual_outputs = actual[process_name]['outputs_mean']
+                label = 'Controller (a)' if j == 0 else None  # Only label first one
+                ax.plot(x, actual_outputs[:, i], '^-', color='blue',
+                       linewidth=1.5, alpha=0.4, markersize=3, label=label, zorder=5)
 
             ax.set_title(f'{process_name.capitalize()} - {output_label}', fontsize=12, fontweight='bold')
             ax.set_xlabel('Sample Index')

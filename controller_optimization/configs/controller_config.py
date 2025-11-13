@@ -70,6 +70,7 @@ CONTROLLER_CONFIG = {
         'weight_decay': 0.001,
         'lambda_bc': 0.01,  # Behavior cloning weight
         'patience': 50,
+        'validation_split': 0.2,  # Fraction of scenarios to use for validation
         'device': 'auto',
         'checkpoint_dir': 'controller_optimization/checkpoints/controller',
 
@@ -117,6 +118,11 @@ CONTROLLER_CONFIG = {
     'report': {
         'generate_pdf': True,
         'include_plots': True,
+    },
+
+    # Visualization
+    'visualization': {
+        'n_trajectories_plot': 5,  # Number of baseline/actual trajectories to show in trajectory comparison plot
     },
 
     # Miscellaneous

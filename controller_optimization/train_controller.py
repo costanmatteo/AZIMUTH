@@ -20,6 +20,7 @@ import json
 from datetime import datetime
 import torch
 import numpy as np
+from sklearn.model_selection import train_test_split
 
 # Add controller_optimization to path
 REPO_ROOT = Path(__file__).parent.parent
@@ -154,6 +155,30 @@ def main():
     print(f"    F* (mean): {F_star_mean:.6f} ± {F_star_std:.6f}")
     print(f"    F* (range): [{F_star_array.min():.6f}, {F_star_array.max():.6f}]")
 
+    # 4b. Train/Validation split
+    print("\n[4b/9] Splitting scenarios into train/validation sets...")
+    validation_split = CONTROLLER_CONFIG['training']['validation_split']
+    all_scenario_indices = np.arange(n_scenarios)
+
+    if validation_split > 0 and n_scenarios > 1:
+        train_indices, val_indices = train_test_split(
+            all_scenario_indices,
+            test_size=validation_split,
+            random_state=CONTROLLER_CONFIG['misc']['random_seed']
+        )
+        train_indices = sorted(train_indices.tolist())
+        val_indices = sorted(val_indices.tolist())
+    else:
+        # No validation split
+        train_indices = all_scenario_indices.tolist()
+        val_indices = []
+
+    print(f"  Training scenarios: {len(train_indices)} - indices: {train_indices}")
+    print(f"  Validation scenarios: {len(val_indices)} - indices: {val_indices}")
+    if len(val_indices) > 0:
+        print(f"  F* (training): {np.mean(F_star_array[train_indices]):.6f}")
+        print(f"  F* (validation): {np.mean(F_star_array[val_indices]):.6f}")
+
     # 5. Create Trainer
     print("\n[5/9] Creating controller trainer...")
     trainer = ControllerTrainer(
@@ -162,7 +187,9 @@ def main():
         lambda_bc=CONTROLLER_CONFIG['training']['lambda_bc'],
         learning_rate=CONTROLLER_CONFIG['training']['learning_rate'],
         weight_decay=CONTROLLER_CONFIG['training']['weight_decay'],
-        device=device
+        device=device,
+        train_scenario_indices=train_indices,
+        val_scenario_indices=val_indices
     )
 
     # 6. Training
@@ -177,23 +204,43 @@ def main():
         verbose=True
     )
 
-    # 7. FINAL EVALUATION ACROSS ALL SCENARIOS
-    print("\n[7/9] Final evaluation across all scenarios...")
+    # 7. FINAL EVALUATION ON VALIDATION SCENARIOS
+    print("\n[7/9] Final evaluation on validation scenarios...")
     print("-"*70)
 
-    # Evaluate controller on all scenarios
-    print(f"  Evaluating controller on {n_scenarios} scenarios...")
-    eval_results = trainer.evaluate_all_scenarios()
+    # Determine which scenarios to evaluate (validation if available, otherwise all)
+    eval_scenario_indices = val_indices if len(val_indices) > 0 else list(range(n_scenarios))
+    n_eval_scenarios = len(eval_scenario_indices)
+    eval_type = "validation" if len(val_indices) > 0 else "all"
 
-    F_actual_per_scenario = eval_results['F_actual_per_scenario']
-    F_actual_mean = eval_results['F_actual_mean']
-    F_actual_std = eval_results['F_actual_std']
+    # Evaluate controller on evaluation scenarios
+    print(f"  Evaluating controller on {n_eval_scenarios} {eval_type} scenarios...")
+    F_actual_values = []
+    actual_trajectories = []
 
-    # Compute baseline reliability for all scenarios
-    print(f"  Computing baseline reliability for {n_scenarios} scenarios...")
+    process_chain.eval()
+    with torch.no_grad():
+        for scenario_idx in eval_scenario_indices:
+            # Run forward pass for this scenario
+            trajectory = process_chain.forward(
+                batch_size=1,
+                scenario_idx=scenario_idx
+            )
+
+            # Compute reliability
+            F_actual = surrogate.compute_reliability(trajectory).item()
+            F_actual_values.append(F_actual)
+            actual_trajectories.append(trajectory)
+
+    F_actual_array = np.array(F_actual_values)
+    F_actual_mean = np.mean(F_actual_array)
+    F_actual_std = np.std(F_actual_array)
+
+    # Compute baseline reliability for evaluation scenarios
+    print(f"  Computing baseline reliability for {n_eval_scenarios} {eval_type} scenarios...")
     F_baseline_values = []
     with torch.no_grad():
-        for scenario_idx in range(n_scenarios):
+        for scenario_idx in eval_scenario_indices:
             # Extract scenario from baseline trajectory
             baseline_scenario = {}
             for process_name, data in baseline_trajectory.items():
@@ -213,24 +260,29 @@ def main():
     F_baseline_mean = np.mean(F_baseline_array)
     F_baseline_std = np.std(F_baseline_array)
 
+    # Get F_star for evaluation scenarios
+    F_star_eval = F_star_array[eval_scenario_indices]
+    F_star_eval_mean = np.mean(F_star_eval)
+    F_star_eval_std = np.std(F_star_eval)
+
     # Aggregate final metrics
     improvement = (F_actual_mean - F_baseline_mean) / abs(F_baseline_mean) * 100 if F_baseline_mean != 0 else 0
-    target_gap = abs(F_star_mean - F_actual_mean) / F_star_mean * 100 if F_star_mean != 0 else 0
+    target_gap = abs(F_star_eval_mean - F_actual_mean) / F_star_eval_mean * 100 if F_star_eval_mean != 0 else 0
 
     # Print summary
     print("\n" + "="*70)
-    print("FINAL RESULTS - AGGREGATED OVER ALL SCENARIOS")
+    print(f"FINAL RESULTS - {eval_type.upper()} SCENARIOS")
     print("="*70)
-    print(f"Number of scenarios:           {n_scenarios}")
+    print(f"Number of {eval_type} scenarios: {n_eval_scenarios}")
     print(f"\nF* (target, optimal):")
-    print(f"  Mean:  {F_star_mean:.6f} ± {F_star_std:.6f}")
-    print(f"  Range: [{F_star_array.min():.6f}, {F_star_array.max():.6f}]")
+    print(f"  Mean:  {F_star_eval_mean:.6f} ± {F_star_eval_std:.6f}")
+    print(f"  Range: [{F_star_eval.min():.6f}, {F_star_eval.max():.6f}]")
     print(f"\nF' (baseline, no controller):")
     print(f"  Mean:  {F_baseline_mean:.6f} ± {F_baseline_std:.6f}")
     print(f"  Range: [{F_baseline_array.min():.6f}, {F_baseline_array.max():.6f}]")
     print(f"\nF  (actual, with controller):")
     print(f"  Mean:  {F_actual_mean:.6f} ± {F_actual_std:.6f}")
-    print(f"  Range: [{F_actual_per_scenario.min():.6f}, {F_actual_per_scenario.max():.6f}]")
+    print(f"  Range: [{F_actual_array.min():.6f}, {F_actual_array.max():.6f}]")
     print(f"\nImprovement over baseline:     {improvement:+.2f}%")
     print(f"Gap from optimal:              {target_gap:.2f}%")
     print(f"Robustness (std of F):         {F_actual_std:.6f}  (lower = more robust)")
@@ -240,7 +292,7 @@ def main():
     print("\n[8/9] Generating visualizations...")
 
     # Add F_star mean to history for plotting
-    history['F_star'] = F_star_mean
+    history['F_star'] = F_star_eval_mean
 
     # Plot training history
     plot_training_history(
@@ -248,46 +300,62 @@ def main():
         save_path=str(checkpoint_dir / 'training_history.png')
     )
 
-    # Plot reliability comparison (using mean values)
+    # Plot reliability comparison (using mean values from evaluation set)
     plot_reliability_comparison(
-        F_star=F_star_mean,
+        F_star=F_star_eval_mean,
         F_baseline=F_baseline_mean,
         F_actual=F_actual_mean,
         save_path=str(checkpoint_dir / 'reliability_comparison.png')
     )
 
-    # Plot trajectory comparison for representative scenario
+    # Plot trajectory comparison for representative validation scenario
     print("  Generating trajectory comparison plot...")
 
-    # Select representative scenario (closest to mean F_actual)
-    actual_trajectories = eval_results['trajectories']
-    representative_idx = np.argmin(np.abs(F_actual_per_scenario - F_actual_mean))
+    # Select representative scenario from evaluation set (closest to mean F_actual)
+    representative_eval_idx = np.argmin(np.abs(F_actual_array - F_actual_mean))
+    representative_scenario_idx = eval_scenario_indices[representative_eval_idx]
 
-    print(f"    Using scenario {representative_idx} (F={F_actual_per_scenario[representative_idx]:.6f}, close to mean {F_actual_mean:.6f})")
+    print(f"    Using {eval_type} scenario {representative_scenario_idx} (F={F_actual_array[representative_eval_idx]:.6f}, close to mean {F_actual_mean:.6f})")
 
-    # Extract representative scenario from target and baseline trajectories
+    # Extract representative scenario from target
     target_scenario = {}
-    baseline_scenario = {}
     for process_name, data in target_trajectory.items():
         target_scenario[process_name] = {
-            'inputs': data['inputs'][representative_idx:representative_idx+1],
-            'outputs': data['outputs'][representative_idx:representative_idx+1]
+            'inputs': data['inputs'][representative_scenario_idx:representative_scenario_idx+1],
+            'outputs': data['outputs'][representative_scenario_idx:representative_scenario_idx+1]
         }
 
-    for process_name, data in baseline_trajectory.items():
-        baseline_scenario[process_name] = {
-            'inputs': data['inputs'][representative_idx:representative_idx+1],
-            'outputs': data['outputs'][representative_idx:representative_idx+1]
-        }
+    # Generate multiple baseline trajectories for this scenario
+    n_trajectories = CONTROLLER_CONFIG['visualization']['n_trajectories_plot']
+    print(f"    Generating {n_trajectories} baseline and actual trajectories...")
 
-    # Get actual trajectory for representative scenario (already a dict of tensors)
-    actual_scenario = actual_trajectories[representative_idx]
+    baseline_trajectories = []
+    actual_trajectories_plot = []
+
+    for i in range(n_trajectories):
+        # Generate baseline trajectory (with process noise)
+        baseline_traj_i = generate_baseline_trajectory(
+            process_configs=PROCESSES,
+            target_trajectory=target_scenario,  # Use single scenario as reference
+            n_samples=1,
+            seed=CONTROLLER_CONFIG['baseline']['seed'] + i + 1000  # Different seed for each
+        )
+        baseline_trajectories.append(baseline_traj_i)
+
+        # Generate actual trajectory with controller
+        with torch.no_grad():
+            process_chain.eval()
+            actual_traj_i = process_chain.forward(
+                batch_size=1,
+                scenario_idx=representative_scenario_idx
+            )
+            actual_trajectories_plot.append(actual_traj_i)
 
     # Plot comparison
     plot_trajectory_comparison(
         target_trajectory=target_scenario,
-        baseline_trajectory=baseline_scenario,
-        actual_trajectory=actual_scenario,
+        baseline_trajectories=baseline_trajectories,
+        actual_trajectories=actual_trajectories_plot,
         save_path=str(checkpoint_dir / 'trajectory_comparison.png')
     )
 
@@ -297,12 +365,12 @@ def main():
     if CONTROLLER_CONFIG['report']['generate_pdf']:
         print("\n  Generating PDF report...")
 
-        # Prepare F values in dict format for multi-scenario
+        # Prepare F values in dict format for evaluation scenarios
         F_star_dict = {
-            'mean': float(F_star_mean),
-            'std': float(F_star_std),
-            'min': float(F_star_array.min()),
-            'max': float(F_star_array.max())
+            'mean': float(F_star_eval_mean),
+            'std': float(F_star_eval_std),
+            'min': float(F_star_eval.min()),
+            'max': float(F_star_eval.max())
         }
 
         F_baseline_dict = {
@@ -315,8 +383,8 @@ def main():
         F_actual_dict = {
             'mean': float(F_actual_mean),
             'std': float(F_actual_std),
-            'min': float(F_actual_per_scenario.min()),
-            'max': float(F_actual_per_scenario.max())
+            'min': float(F_actual_array.min()),
+            'max': float(F_actual_array.max())
         }
 
         # Prepare final metrics for report
@@ -340,7 +408,7 @@ def main():
                 F_actual=F_actual_dict,
                 checkpoint_dir=checkpoint_dir,
                 timestamp=datetime.now(),
-                n_scenarios=n_scenarios
+                n_scenarios=n_eval_scenarios
             )
             print(f"  ✓ PDF report generated: {report_path}")
         except Exception as e:
@@ -352,25 +420,33 @@ def main():
 
     # Convert history values to lists for JSON serialization
     history_serializable = {k: [float(v) for v in vals] for k, vals in history.items() if isinstance(vals, list)}
-    history_serializable['F_star'] = float(F_star_mean)
+    history_serializable['F_star'] = float(F_star_eval_mean)
 
     final_results = {
         'timestamp': datetime.now().isoformat(),
         'config': CONTROLLER_CONFIG,
-        'n_scenarios': int(n_scenarios),
+        'n_scenarios_total': int(n_scenarios),
+        'n_scenarios_train': int(len(train_indices)),
+        'n_scenarios_val': int(len(val_indices)),
 
-        # Aggregated metrics
-        'F_star_mean': float(F_star_mean),
-        'F_star_std': float(F_star_std),
+        # Train/Val split
+        'train_scenario_indices': train_indices,
+        'val_scenario_indices': val_indices,
+
+        # Evaluation metrics (on validation set if available)
+        'evaluation_type': eval_type,
+        'F_star_mean': float(F_star_eval_mean),
+        'F_star_std': float(F_star_eval_std),
         'F_baseline_mean': float(F_baseline_mean),
         'F_baseline_std': float(F_baseline_std),
         'F_actual_mean': float(F_actual_mean),
         'F_actual_std': float(F_actual_std),
 
-        # Per-scenario metrics
-        'F_star_per_scenario': F_star_array.tolist(),
-        'F_baseline_per_scenario': F_baseline_array.tolist(),
-        'F_actual_per_scenario': F_actual_per_scenario.tolist(),
+        # Per-scenario metrics (evaluation set)
+        'F_star_per_eval_scenario': F_star_eval.tolist(),
+        'F_baseline_per_eval_scenario': F_baseline_array.tolist(),
+        'F_actual_per_eval_scenario': F_actual_array.tolist(),
+        'eval_scenario_indices': eval_scenario_indices,
 
         # Summary metrics
         'improvement_pct': float(improvement),
@@ -395,10 +471,10 @@ def main():
     print("  - training_history.json            : Training history")
     print("  - final_results.json               : All metrics (with per-scenario data)")
     print("  - *.png                            : Visualization plots")
-    print(f"\nController trained on {n_scenarios} diverse scenarios")
+    print(f"\nController trained on {len(train_indices)} scenarios, validated on {len(val_indices)} scenarios")
     print(f"  → Generalizes across varying structural conditions")
-    print(f"  → Robustness: {F_actual_std:.6f} (std across scenarios)")
-    print(f"  → Mean improvement: {improvement:+.2f}%")
+    print(f"  → Robustness ({eval_type}): {F_actual_std:.6f} (std across scenarios)")
+    print(f"  → Mean improvement ({eval_type}): {improvement:+.2f}%")
     print("\n" + "="*70)
 
 

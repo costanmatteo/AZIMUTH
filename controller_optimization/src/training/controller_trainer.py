@@ -25,12 +25,23 @@ class ControllerTrainer:
     """
 
     def __init__(self, process_chain, surrogate, lambda_bc=0.1,
-                 learning_rate=0.001, weight_decay=0.01, device='cpu'):
+                 learning_rate=0.001, weight_decay=0.01, device='cpu',
+                 train_scenario_indices=None, val_scenario_indices=None):
 
         self.process_chain = process_chain
         self.surrogate = surrogate
         self.lambda_bc = lambda_bc
         self.device = device
+
+        # Train/validation split
+        n_scenarios = len(self.surrogate.F_star)
+        if train_scenario_indices is None:
+            # Use all scenarios for training (backward compatibility)
+            self.train_scenario_indices = list(range(n_scenarios))
+            self.val_scenario_indices = []
+        else:
+            self.train_scenario_indices = train_scenario_indices
+            self.val_scenario_indices = val_scenario_indices if val_scenario_indices is not None else []
 
         # Optimizer SOLO per policy generators (uncertainty predictors sono frozen)
         trainable_params = [p for p in process_chain.parameters() if p.requires_grad]
@@ -46,15 +57,19 @@ class ControllerTrainer:
 
         # Tracking
         self.history = {
-            'total_loss': [],
-            'reliability_loss': [],
-            'bc_loss': [],
-            'F_values': [],  # Reliability values durante training
+            'train_total_loss': [],
+            'train_reliability_loss': [],
+            'train_bc_loss': [],
+            'train_F_values': [],
+            'val_total_loss': [],
+            'val_reliability_loss': [],
+            'val_bc_loss': [],
+            'val_F_values': [],
         }
 
         # Best model tracking
-        self.best_loss = float('inf')
-        self.best_F = -float('inf')
+        self.best_val_loss = float('inf')
+        self.best_val_F = -float('inf')
         self.epochs_without_improvement = 0
 
         # Compute normalization statistics from target trajectories
@@ -65,6 +80,8 @@ class ControllerTrainer:
         print(f"  Learning rate: {learning_rate}")
         print(f"  Lambda BC: {lambda_bc}")
         print(f"  Device: {device}")
+        print(f"  Training scenarios: {len(self.train_scenario_indices)}")
+        print(f"  Validation scenarios: {len(self.val_scenario_indices)}")
 
     def _compute_normalization_stats(self):
         """
@@ -137,11 +154,11 @@ class ControllerTrainer:
 
     def train_epoch(self, batch_size=32):
         """
-        Training per un epoch ACROSS ALL SCENARIOS.
+        Training per un epoch usando solo i TRAINING SCENARIOS.
 
-        Each epoch cycles through ALL scenarios exactly once in shuffled order.
+        Each epoch cycles through all TRAINING scenarios exactly once in shuffled order.
         This ensures:
-        - Equal coverage: every scenario trained once per epoch
+        - Equal coverage: every training scenario trained once per epoch
         - Diversity: shuffled order prevents overfitting patterns
         - Balanced generalization: no scenario over/under-represented
 
@@ -164,13 +181,14 @@ class ControllerTrainer:
         epoch_bc_loss = 0.0
         epoch_F_values = []
 
-        n_scenarios = len(self.surrogate.F_star)
+        # Use only training scenarios
+        n_train_scenarios = len(self.train_scenario_indices)
 
-        # Shuffle scenario order each epoch for diversity
-        scenario_order = np.random.permutation(n_scenarios)
+        # Shuffle training scenario order each epoch for diversity
+        train_scenario_order = np.random.permutation(self.train_scenario_indices)
 
-        # Cycle through all scenarios exactly once
-        for scenario_idx in scenario_order:
+        # Cycle through all training scenarios exactly once
+        for scenario_idx in train_scenario_order:
             # Forward pass through process chain for this scenario
             trajectory = self.process_chain.forward(
                 batch_size=batch_size,
@@ -191,10 +209,62 @@ class ControllerTrainer:
             epoch_bc_loss += bc_loss
             epoch_F_values.append(F)
 
-        # Average over all scenarios
-        avg_total_loss = epoch_total_loss / n_scenarios
-        avg_reliability_loss = epoch_reliability_loss / n_scenarios
-        avg_bc_loss = epoch_bc_loss / n_scenarios
+        # Average over all training scenarios
+        avg_total_loss = epoch_total_loss / n_train_scenarios
+        avg_reliability_loss = epoch_reliability_loss / n_train_scenarios
+        avg_bc_loss = epoch_bc_loss / n_train_scenarios
+        avg_F = np.mean(epoch_F_values)
+
+        return avg_total_loss, avg_reliability_loss, avg_bc_loss, avg_F
+
+    def validate_epoch(self, batch_size=32):
+        """
+        Validation per un epoch usando solo i VALIDATION SCENARIOS.
+
+        Evaluates the model on validation scenarios without updating weights.
+
+        Args:
+            batch_size: Number of samples per scenario (default 32)
+
+        Returns:
+            Tuple of (avg_total_loss, avg_reliability_loss, avg_bc_loss, avg_F)
+        """
+        self.process_chain.eval()
+
+        epoch_total_loss = 0.0
+        epoch_reliability_loss = 0.0
+        epoch_bc_loss = 0.0
+        epoch_F_values = []
+
+        # Use only validation scenarios
+        n_val_scenarios = len(self.val_scenario_indices)
+
+        if n_val_scenarios == 0:
+            # No validation set, return zeros
+            return 0.0, 0.0, 0.0, 0.0
+
+        with torch.no_grad():
+            # No shuffling for validation - consistent order
+            for scenario_idx in self.val_scenario_indices:
+                # Forward pass through process chain for this scenario
+                trajectory = self.process_chain.forward(
+                    batch_size=batch_size,
+                    scenario_idx=scenario_idx
+                )
+
+                # Compute loss using scenario-specific F_star
+                total_loss, rel_loss, bc_loss, F = self.compute_loss(trajectory, scenario_idx)
+
+                # Track metrics
+                epoch_total_loss += total_loss.item()
+                epoch_reliability_loss += rel_loss
+                epoch_bc_loss += bc_loss
+                epoch_F_values.append(F)
+
+        # Average over all validation scenarios
+        avg_total_loss = epoch_total_loss / n_val_scenarios
+        avg_reliability_loss = epoch_reliability_loss / n_val_scenarios
+        avg_bc_loss = epoch_bc_loss / n_val_scenarios
         avg_F = np.mean(epoch_F_values)
 
         return avg_total_loss, avg_reliability_loss, avg_bc_loss, avg_F
@@ -202,9 +272,13 @@ class ControllerTrainer:
     def train(self, epochs=100, batch_size=32,
               patience=20, save_dir='checkpoints/controller', verbose=True):
         """
-        Training loop completo con early stopping.
+        Training loop completo con early stopping basato su validation set.
 
-        Each epoch cycles through all scenarios exactly once in shuffled order.
+        Each epoch:
+        - Cycles through all TRAINING scenarios once in shuffled order
+        - Evaluates on VALIDATION scenarios (no weight updates)
+
+        Early stopping is based on validation loss (or validation F if no validation set).
 
         Args:
             epochs: Number of training epochs
@@ -219,52 +293,78 @@ class ControllerTrainer:
         save_dir = Path(save_dir)
         save_dir.mkdir(parents=True, exist_ok=True)
 
-        n_scenarios = len(self.surrogate.F_star)
+        n_train_scenarios = len(self.train_scenario_indices)
+        n_val_scenarios = len(self.val_scenario_indices)
+        has_validation = n_val_scenarios > 0
 
         if verbose:
             print(f"\n{'='*70}")
             print("STARTING CONTROLLER TRAINING")
             print(f"{'='*70}")
             print(f"  Epochs: {epochs}")
-            print(f"  Scenarios per epoch: {n_scenarios} (all scenarios)")
+            print(f"  Training scenarios: {n_train_scenarios}")
+            print(f"  Validation scenarios: {n_val_scenarios}")
             print(f"  Batch size per scenario: {batch_size}")
-            print(f"  Total batches: {epochs * n_scenarios}")
+            print(f"  Total training batches per epoch: {n_train_scenarios}")
             print(f"  Patience: {patience}")
             print(f"  Save dir: {save_dir}")
-            print(f"  F* (target, mean): {np.mean(self.surrogate.F_star):.6f} ± {np.std(self.surrogate.F_star):.6f}")
+            F_star_train_mean = np.mean(self.surrogate.F_star[self.train_scenario_indices])
+            print(f"  F* (training scenarios, mean): {F_star_train_mean:.6f}")
+            if has_validation:
+                F_star_val_mean = np.mean(self.surrogate.F_star[self.val_scenario_indices])
+                print(f"  F* (validation scenarios, mean): {F_star_val_mean:.6f}")
 
         for epoch in range(1, epochs + 1):
-            # Train epoch (cycles through all scenarios once)
-            avg_total_loss, avg_rel_loss, avg_bc_loss, avg_F = self.train_epoch(
+            # Train epoch (cycles through all training scenarios once)
+            train_total_loss, train_rel_loss, train_bc_loss, train_F = self.train_epoch(
                 batch_size=batch_size
             )
 
-            # Track history
-            self.history['total_loss'].append(avg_total_loss)
-            self.history['reliability_loss'].append(avg_rel_loss)
-            self.history['bc_loss'].append(avg_bc_loss)
-            self.history['F_values'].append(avg_F)
+            # Track training history
+            self.history['train_total_loss'].append(train_total_loss)
+            self.history['train_reliability_loss'].append(train_rel_loss)
+            self.history['train_bc_loss'].append(train_bc_loss)
+            self.history['train_F_values'].append(train_F)
+
+            # Validation epoch (if validation set exists)
+            if has_validation:
+                val_total_loss, val_rel_loss, val_bc_loss, val_F = self.validate_epoch(
+                    batch_size=batch_size
+                )
+
+                # Track validation history
+                self.history['val_total_loss'].append(val_total_loss)
+                self.history['val_reliability_loss'].append(val_rel_loss)
+                self.history['val_bc_loss'].append(val_bc_loss)
+                self.history['val_F_values'].append(val_F)
 
             # Print progress
             if verbose and (epoch % 10 == 0 or epoch == 1):
                 print(f"\nEpoch {epoch}/{epochs}:")
-                print(f"  Total Loss:       {avg_total_loss:.6f}")
-                print(f"  Reliability Loss: {avg_rel_loss:.6f}")
-                print(f"  BC Loss:          {avg_bc_loss:.6f}")
-                print(f"  F (actual):       {avg_F:.6f}")
-                print(f"  F* (target, mean):{np.mean(self.surrogate.F_star):.6f}")
+                print(f"  Train - Total Loss: {train_total_loss:.6f} | Rel Loss: {train_rel_loss:.6f} | BC Loss: {train_bc_loss:.6f} | F: {train_F:.6f}")
+                if has_validation:
+                    print(f"  Val   - Total Loss: {val_total_loss:.6f} | Rel Loss: {val_rel_loss:.6f} | BC Loss: {val_bc_loss:.6f} | F: {val_F:.6f}")
 
-            # Check for improvement
-            if avg_F > self.best_F:
-                self.best_F = avg_F
-                self.best_loss = avg_total_loss
+            # Check for improvement (use validation metrics if available, otherwise training metrics)
+            if has_validation:
+                current_loss = val_total_loss
+                current_F = val_F
+            else:
+                current_loss = train_total_loss
+                current_F = train_F
+
+            # Early stopping based on validation F (higher is better)
+            if current_F > self.best_val_F:
+                self.best_val_F = current_F
+                self.best_val_loss = current_loss
                 self.epochs_without_improvement = 0
 
                 # Save best model
                 self.save_checkpoint(save_dir / 'best_model.pt', epoch)
 
                 if verbose:
-                    print(f"  ✓ New best F: {self.best_F:.6f}")
+                    metric_type = "Val" if has_validation else "Train"
+                    print(f"  ✓ New best {metric_type} F: {self.best_val_F:.6f}")
 
             else:
                 self.epochs_without_improvement += 1
@@ -285,9 +385,12 @@ class ControllerTrainer:
             print(f"\n{'='*70}")
             print("TRAINING COMPLETED")
             print(f"{'='*70}")
-            print(f"  Best F: {self.best_F:.6f}")
-            print(f"  Final F: {self.history['F_values'][-1]:.6f}")
-            print(f"  Target F* (mean): {np.mean(self.surrogate.F_star):.6f}")
+            print(f"  Best Val F: {self.best_val_F:.6f}")
+            if has_validation:
+                print(f"  Final Train F: {self.history['train_F_values'][-1]:.6f}")
+                print(f"  Final Val F: {self.history['val_F_values'][-1]:.6f}")
+            else:
+                print(f"  Final Train F: {self.history['train_F_values'][-1]:.6f}")
 
         return self.history
 
@@ -347,9 +450,11 @@ class ControllerTrainer:
         # Save training state
         state = {
             'epoch': epoch,
-            'best_F': self.best_F,
-            'best_loss': self.best_loss,
+            'best_val_F': self.best_val_F,
+            'best_val_loss': self.best_val_loss,
             'history': self.history,
+            'train_scenario_indices': self.train_scenario_indices,
+            'val_scenario_indices': self.val_scenario_indices,
         }
 
         state_path = path.parent / 'training_state.json'
