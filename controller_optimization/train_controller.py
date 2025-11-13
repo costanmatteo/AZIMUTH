@@ -256,6 +256,41 @@ def main():
         save_path=str(checkpoint_dir / 'reliability_comparison.png')
     )
 
+    # Plot trajectory comparison for representative scenario
+    print("  Generating trajectory comparison plot...")
+
+    # Select representative scenario (closest to mean F_actual)
+    actual_trajectories = eval_results['trajectories']
+    representative_idx = np.argmin(np.abs(F_actual_per_scenario - F_actual_mean))
+
+    print(f"    Using scenario {representative_idx} (F={F_actual_per_scenario[representative_idx]:.6f}, close to mean {F_actual_mean:.6f})")
+
+    # Extract representative scenario from target and baseline trajectories
+    target_scenario = {}
+    baseline_scenario = {}
+    for process_name, data in target_trajectory.items():
+        target_scenario[process_name] = {
+            'inputs': data['inputs'][representative_idx:representative_idx+1],
+            'outputs': data['outputs'][representative_idx:representative_idx+1]
+        }
+
+    for process_name, data in baseline_trajectory.items():
+        baseline_scenario[process_name] = {
+            'inputs': data['inputs'][representative_idx:representative_idx+1],
+            'outputs': data['outputs'][representative_idx:representative_idx+1]
+        }
+
+    # Get actual trajectory for representative scenario (already a dict of tensors)
+    actual_scenario = actual_trajectories[representative_idx]
+
+    # Plot comparison
+    plot_trajectory_comparison(
+        target_trajectory=target_scenario,
+        baseline_trajectory=baseline_scenario,
+        actual_trajectory=actual_scenario,
+        save_path=str(checkpoint_dir / 'trajectory_comparison.png')
+    )
+
     print("  ✓ Basic visualizations generated")
 
     # 8b. Generate PDF report (if enabled)
