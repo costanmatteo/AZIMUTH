@@ -222,7 +222,7 @@ class ProcessChain(nn.Module):
         from controller_optimization.configs.processes_config import get_controllable_inputs
 
         process_name = self.process_names[process_idx]
-        process_config = self.process_configs[process_idx]
+        process_config = self.processes_config[process_idx]
         input_labels = process_config['input_labels']
         controllable = get_controllable_inputs(process_config)
 
