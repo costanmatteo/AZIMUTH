@@ -5,8 +5,10 @@ Key Parameters Guide:
 ===================
 
 TRAINING:
-- epochs: Number of training epochs (each epoch cycles through all scenarios once)
-- batch_size: Number of samples per scenario (different process noise realizations)
+- epochs: Number of training epochs (each epoch cycles through all training scenarios once)
+- batch_size: Number of replicas per scenario in each forward pass
+              (each replica has same inputs but different network dropout/stochasticity)
+              Higher values = smoother gradients but more memory
 - learning_rate: Initial learning rate for optimizer
 - lambda_bc: Behavior cloning weight (balances reliability vs target-following)
 - patience: Early stopping patience (epochs without improvement)
