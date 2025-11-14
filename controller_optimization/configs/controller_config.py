@@ -28,9 +28,11 @@ POLICY GENERATOR:
 - dropout: Dropout rate for regularization
 - use_batchnorm: Enable batch normalization
 
-TARGET/BASELINE:
-- n_samples: Number of scenarios (50 = diverse operating conditions)
-- seed: Random seed for reproducibility
+SCENARIOS:
+- n_train: Number of scenarios for training (diverse operating conditions)
+- n_test: Number of scenarios for final evaluation (never seen during training)
+- seed_target: Seed for target trajectory generation (structural diversity)
+- seed_baseline: Seed for baseline process noise (same inputs as target, different noise realization)
 
 MULTI-SCENARIO:
 - shuffle_order: Shuffle scenario order each epoch (recommended: True)
@@ -48,7 +50,8 @@ Typical Modifications:
 - Increase batch_size (64, 128) for smoother gradients (needs more GPU memory)
 - Add gradient clipping (1.0) if training is unstable
 - Enable lr_scheduler for longer training (e.g., {'type': 'step', 'step_size': 50, 'gamma': 0.5})
-- Increase n_samples (100, 200) for even more diverse scenarios
+- Increase n_train (80, 100) for even more diverse training scenarios
+- Adjust n_test (20, 30) for more robust final evaluation
 - Enable eval_all_scenarios_every (10) to monitor per-scenario progress during training
 """
 
@@ -66,7 +69,7 @@ CONTROLLER_CONFIG = {
 
     # Training parameters
     'training': {
-        'epochs': 200,  # Increased from 100 to maintain total batches (200 epochs × 50 scenarios = 10,000 batches)
+        'epochs': 200,  # Each epoch cycles through all training scenarios once
         'batch_size': 64,
         'learning_rate': 0.0001,
         'weight_decay': 0.001,
@@ -96,16 +99,12 @@ CONTROLLER_CONFIG = {
         'eval_all_scenarios_every': None,  # None = only at end, or int (e.g., 10 = every 10 epochs)
     },
 
-    # Target trajectory
-    'target': {
-        'n_samples': 3,  # Multi-scenario training for generalization
-        'seed': 42,
-    },
-
-    # Baseline trajectory (per comparison)
-    'baseline': {
-        'n_samples': 3,  # Must match target for structural alignment
-        'seed': 43,  # Diverso seed per noise diverso
+    # Scenario generation (train/test split)
+    'scenarios': {
+        'n_train': 40,        # Training scenarios (diverse operating conditions)
+        'n_test': 10,         # Test scenarios (final evaluation, never seen during training)
+        'seed_target': 42,    # Seed for target trajectory generation
+        'seed_baseline': 43,  # Seed for baseline process noise (same inputs, different noise)
     },
 
     # Multi-scenario training
