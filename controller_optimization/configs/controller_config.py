@@ -5,8 +5,10 @@ Key Parameters Guide:
 ===================
 
 TRAINING:
-- epochs: Number of training epochs (each epoch cycles through all scenarios once)
-- batch_size: Number of samples per scenario (different process noise realizations)
+- epochs: Number of training epochs (each epoch cycles through all training scenarios once)
+- batch_size: Number of replicas per scenario in each forward pass
+              (each replica has same inputs but different network dropout/stochasticity)
+              Higher values = smoother gradients but more memory
 - learning_rate: Initial learning rate for optimizer
 - lambda_bc: Behavior cloning weight (balances reliability vs target-following)
 - patience: Early stopping patience (epochs without improvement)
@@ -26,9 +28,12 @@ POLICY GENERATOR:
 - dropout: Dropout rate for regularization
 - use_batchnorm: Enable batch normalization
 
-TARGET/BASELINE:
-- n_samples: Number of scenarios (50 = diverse operating conditions)
-- seed: Random seed for reproducibility
+SCENARIOS:
+- n_train: Number of scenarios for training (diverse operating conditions)
+- n_test: Number of scenarios for final evaluation (never seen during training)
+- seed_target: Seed for target trajectory generation (train scenarios)
+- seed_baseline: Seed for baseline process noise (same inputs as target, different noise realization)
+- test_seed_offset: Offset added to seeds for test scenarios (default 1000, ensures test != train)
 
 MULTI-SCENARIO:
 - shuffle_order: Shuffle scenario order each epoch (recommended: True)
@@ -46,7 +51,8 @@ Typical Modifications:
 - Increase batch_size (64, 128) for smoother gradients (needs more GPU memory)
 - Add gradient clipping (1.0) if training is unstable
 - Enable lr_scheduler for longer training (e.g., {'type': 'step', 'step_size': 50, 'gamma': 0.5})
-- Increase n_samples (100, 200) for even more diverse scenarios
+- Increase n_train (80, 100) for even more diverse training scenarios
+- Adjust n_test (20, 30) for more robust final evaluation
 - Enable eval_all_scenarios_every (10) to monitor per-scenario progress during training
 """
 
@@ -57,18 +63,18 @@ CONTROLLER_CONFIG = {
     # Policy generator architecture
     'policy_generator': {
         'architecture': 'custom',  # 'small', 'medium', 'large', 'custom'
-        'hidden_sizes': [16, 8],  # Usato solo se 'custom'
+        'hidden_sizes': [64, 32],  # Usato solo se 'custom'
         'dropout': 0.1,
         'use_batchnorm': False,
     },
 
     # Training parameters
     'training': {
-        'epochs': 200,  # Increased from 100 to maintain total batches (200 epochs × 50 scenarios = 10,000 batches)
-        'batch_size': 64,
+        'epochs': 200,  # Each epoch cycles through all training scenarios once
+        'batch_size': 128,  # Replicas per scenario (same inputs, different dropout/stochasticity)
         'learning_rate': 0.0001,
         'weight_decay': 0.001,
-        'lambda_bc': 0.01,  # Behavior cloning weight
+        'lambda_bc': 0.00001,  # Behavior cloning weight
         'patience': 50,
         'device': 'auto',
         'checkpoint_dir': 'controller_optimization/checkpoints/controller',
@@ -94,16 +100,13 @@ CONTROLLER_CONFIG = {
         'eval_all_scenarios_every': None,  # None = only at end, or int (e.g., 10 = every 10 epochs)
     },
 
-    # Target trajectory
-    'target': {
-        'n_samples': 3,  # Multi-scenario training for generalization
-        'seed': 42,
-    },
-
-    # Baseline trajectory (per comparison)
-    'baseline': {
-        'n_samples': 3,  # Must match target for structural alignment
-        'seed': 43,  # Diverso seed per noise diverso
+    # Scenario generation (train/test split)
+    'scenarios': {
+        'n_train': 1,         # Training scenarios (diverse operating conditions)
+        'n_test': 10,          # Test scenarios (final evaluation, never seen during training)
+        'seed_target': 42,     # Seed for target trajectory generation (train)
+        'seed_baseline': 43,   # Seed for baseline process noise (same inputs, different noise)
+        'test_seed_offset': 1000,  # Offset added to seeds for test scenarios (ensures different from train)
     },
 
     # Multi-scenario training

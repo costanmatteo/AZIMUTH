@@ -171,17 +171,18 @@ def generate_target_trajectory(process_configs, n_samples=50, seed=42):
 
 def generate_baseline_trajectory(process_configs, target_trajectory, n_samples=50, seed=43):
     """
-    Generate baseline trajectories aligned with target structural conditions.
+    Generate baseline trajectories with SAME inputs as target but with process noise.
 
     For each scenario in target_trajectory:
+    - Use EXACT SAME input values (all input variables fixed to target values)
     - Use SAME structural conditions (temperature, humidity, etc.)
     - Use ACTIVE process noise (realistic equipment variability)
 
-    This represents: "What happens in reality WITHOUT the controller"
+    This represents: "What happens in reality WITHOUT the controller, with same inputs"
 
     Args:
         process_configs (list): Process configuration list
-        target_trajectory (dict): Output from generate_target_trajectory() - used for structural alignment
+        target_trajectory (dict): Output from generate_target_trajectory() - inputs and structural conditions are copied
         n_samples (int): Must match target trajectory n_samples
         seed (int): Different from target seed to get different process noise
 
@@ -203,39 +204,42 @@ def generate_baseline_trajectory(process_configs, target_trajectory, n_samples=5
         # Get SCM dataset
         ds_scm = get_scm_dataset(process_config)
 
-        # Get structural conditions from target
+        # Get inputs and structural conditions from target
+        target_inputs = target_trajectory[process_name]['inputs']
         target_structural = target_trajectory[process_name]['structural_conditions']
 
-        if not target_structural:
-            # No structural noise in this process - just sample normally
-            df = ds_scm.sample(n=n_samples, seed=seed)
-        else:
-            # Strategy: Override structural noise samplers to return target values
-            # This ensures the SAME structural conditions while allowing process noise
+        # Backup original noise model
+        original_singles = ds_scm.noise_model.singles.copy()
 
-            # Backup original noise model
-            original_singles = ds_scm.noise_model.singles.copy()
+        try:
+            modified_singles = original_singles.copy()
 
-            try:
-                modified_singles = original_singles.copy()
+            # CRITICAL: Fix ALL input variables to target values
+            # This ensures exact same inputs between target and baseline
+            for i, input_label in enumerate(input_labels):
+                target_values = target_inputs[:, i]
+                # Create a closure to capture target_values
+                def make_input_sampler(values):
+                    return lambda rng, n: values[:n]
+                modified_singles[input_label] = make_input_sampler(target_values)
 
-                # For each structural variable, replace sampler with target values
-                for var_name, var_values in target_structural.items():
+            # Also fix structural variables (if not already in inputs)
+            for var_name, var_values in target_structural.items():
+                if var_name not in input_labels:  # Only if not already fixed as input
                     # Create a closure to capture var_values
                     def make_structural_sampler(values):
                         return lambda rng, n: values[:n]
-
                     modified_singles[var_name] = make_structural_sampler(var_values)
 
-                # Apply modified noise model
-                ds_scm.noise_model.singles = modified_singles
+            # Apply modified noise model
+            ds_scm.noise_model.singles = modified_singles
 
-                # Generate samples with aligned structural conditions
-                df = ds_scm.sample(n=n_samples, seed=seed)
+            # Generate samples with fixed inputs and active process noise
+            df = ds_scm.sample(n=n_samples, seed=seed)
 
-            finally:
-                # Restore original noise model
-                ds_scm.noise_model.singles = original_singles
+        finally:
+            # Restore original noise model
+            ds_scm.noise_model.singles = original_singles
 
         # Extract inputs and outputs
         inputs = df[input_labels].values  # Shape: (n_samples, input_dim)
@@ -248,6 +252,7 @@ def generate_baseline_trajectory(process_configs, target_trajectory, n_samples=5
 
         print(f"Generated baseline trajectory for {process_name}:")
         print(f"  - Shape: {inputs.shape}")
+        print(f"  - All inputs FIXED to target values")
         if target_structural:
             print(f"  - Aligned structural vars: {list(target_structural.keys())}")
 
@@ -335,21 +340,18 @@ if __name__ == '__main__':
         print(f"  Baseline output std: {np.std(baseline_outputs):.6f}")
         print(f"  Std ratio (baseline/target): {np.std(baseline_outputs) / np.std(target_outputs):.3f}")
 
-        # Check structural alignment for processes with structural noise
-        struct_conds = target_traj[process_name]['structural_conditions']
-        if struct_conds:
-            target_inputs = target_traj[process_name]['inputs']
-            baseline_inputs = baseline_traj[process_name]['inputs']
+        # CRITICAL CHECK: Verify that ALL inputs are identical
+        target_inputs = target_traj[process_name]['inputs']
+        baseline_inputs = baseline_traj[process_name]['inputs']
 
-            # For each structural variable that's also an input, check alignment
-            input_labels = PROCESSES[[p['name'] for p in PROCESSES].index(process_name)]['input_labels']
-            for var_name in struct_conds.keys():
-                if var_name in input_labels:
-                    idx = input_labels.index(var_name)
-                    target_vals = target_inputs[:, idx]
-                    baseline_vals = baseline_inputs[:, idx]
-                    max_diff = np.max(np.abs(target_vals - baseline_vals))
-                    print(f"  Structural alignment ({var_name}): max_diff={max_diff:.10f} (should be ~0)")
+        input_labels = PROCESSES[[p['name'] for p in PROCESSES].index(process_name)]['input_labels']
+        print(f"\n  INPUT ALIGNMENT CHECK (should be exactly 0.0):")
+        for i, input_label in enumerate(input_labels):
+            target_vals = target_inputs[:, i]
+            baseline_vals = baseline_inputs[:, i]
+            max_diff = np.max(np.abs(target_vals - baseline_vals))
+            mean_diff = np.mean(np.abs(target_vals - baseline_vals))
+            print(f"    {input_label}: max_diff={max_diff:.10f}, mean_diff={mean_diff:.10f}")
 
     print("\n" + "="*70)
     print("TEST COMPLETE")

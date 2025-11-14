@@ -91,39 +91,89 @@ def main():
     checkpoint_dir = Path(CONTROLLER_CONFIG['training']['checkpoint_dir'])
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Generate target trajectory (MULTI-SCENARIO: n_samples=50)
-    print("\n[1/9] Generating target trajectory (a*, diverse structural + zero process noise)...")
-    n_scenarios = CONTROLLER_CONFIG['target']['n_samples']
-    print(f"  Generating {n_scenarios} scenarios with diverse structural conditions...")
+    # 1. Generate TRAINING scenarios (diverse structural + zero process noise)
+    print("\n[1/9] Generating training scenarios...")
+    n_train = CONTROLLER_CONFIG['scenarios']['n_train']
+    n_test = CONTROLLER_CONFIG['scenarios']['n_test']
+    print(f"  Training scenarios: {n_train}")
+    print(f"  Test scenarios: {n_test} (for future evaluation)")
 
-    target_trajectory = generate_target_trajectory(
+    # Generate TRAIN target trajectory
+    print("\n  Generating TRAIN target trajectory (a*)...")
+    target_trajectory_train = generate_target_trajectory(
         process_configs=PROCESSES,
-        n_samples=n_scenarios,
-        seed=CONTROLLER_CONFIG['target']['seed']
+        n_samples=n_train,
+        seed=CONTROLLER_CONFIG['scenarios']['seed_target']
     )
 
-    print("  Target trajectory generated:")
-    for process_name, data in target_trajectory.items():
+    print("  Train target trajectory generated:")
+    for process_name, data in target_trajectory_train.items():
         print(f"    {process_name}: inputs={data['inputs'].shape}, outputs={data['outputs'].shape}")
         if 'structural_conditions' in data and data['structural_conditions']:
             for var, vals in data['structural_conditions'].items():
                 print(f"      {var}: [{vals.min():.2f}, {vals.max():.2f}] (range)")
 
-
-    # 2. Generate baseline trajectory (ALIGNED with target structural conditions)
-    print("\n[2/9] Generating baseline trajectory (a', same structural + active process noise)...")
-    print(f"  Aligning structural conditions with {n_scenarios} target scenarios...")
-
-    baseline_trajectory = generate_baseline_trajectory(
+    # Generate TRAIN baseline trajectory
+    print("\n  Generating TRAIN baseline trajectory (a')...")
+    baseline_trajectory_train = generate_baseline_trajectory(
         process_configs=PROCESSES,
-        target_trajectory=target_trajectory,  # For structural alignment
-        n_samples=n_scenarios,
-        seed=CONTROLLER_CONFIG['baseline']['seed']
+        target_trajectory=target_trajectory_train,
+        n_samples=n_train,
+        seed=CONTROLLER_CONFIG['scenarios']['seed_baseline']
     )
 
-    print("  Baseline trajectory generated:")
-    for process_name, data in baseline_trajectory.items():
+    print("  Train baseline trajectory generated:")
+    for process_name, data in baseline_trajectory_train.items():
         print(f"    {process_name}: inputs={data['inputs'].shape}, outputs={data['outputs'].shape}")
+
+    # 2. Generate TEST scenarios (for future evaluation, not used yet)
+    print("\n[2/9] Generating test scenarios (not used in training)...")
+
+    # Use seed offset from config to ensure test scenarios are truly unseen
+    test_seed_offset = CONTROLLER_CONFIG['scenarios']['test_seed_offset']
+
+    print(f"  Test seed offset: {test_seed_offset}")
+    print(f"  Generating TEST target trajectory (a*)...")
+    target_trajectory_test = generate_target_trajectory(
+        process_configs=PROCESSES,
+        n_samples=n_test,
+        seed=CONTROLLER_CONFIG['scenarios']['seed_target'] + test_seed_offset
+    )
+
+    print("  Test target trajectory generated:")
+    for process_name, data in target_trajectory_test.items():
+        print(f"    {process_name}: inputs={data['inputs'].shape}, outputs={data['outputs'].shape}")
+
+    print(f"  Generating TEST baseline trajectory (a')...")
+    baseline_trajectory_test = generate_baseline_trajectory(
+        process_configs=PROCESSES,
+        target_trajectory=target_trajectory_test,
+        n_samples=n_test,
+        seed=CONTROLLER_CONFIG['scenarios']['seed_baseline'] + test_seed_offset
+    )
+
+    print("  Test baseline trajectory generated:")
+    for process_name, data in baseline_trajectory_test.items():
+        print(f"    {process_name}: inputs={data['inputs'].shape}, outputs={data['outputs'].shape}")
+
+    # Use ONLY training trajectories for now
+    target_trajectory = target_trajectory_train
+    baseline_trajectory = baseline_trajectory_train
+    n_scenarios = n_train
+
+    # Save test scenarios for future evaluation
+    test_scenarios_path = checkpoint_dir / 'test_scenarios.npz'
+    test_data_to_save = {}
+    for process_name in target_trajectory_test.keys():
+        test_data_to_save[f'target_{process_name}_inputs'] = target_trajectory_test[process_name]['inputs']
+        test_data_to_save[f'target_{process_name}_outputs'] = target_trajectory_test[process_name]['outputs']
+        test_data_to_save[f'baseline_{process_name}_inputs'] = baseline_trajectory_test[process_name]['inputs']
+        test_data_to_save[f'baseline_{process_name}_outputs'] = baseline_trajectory_test[process_name]['outputs']
+
+    np.savez(test_scenarios_path, **test_data_to_save)
+
+    print(f"\n  Using {n_scenarios} TRAIN scenarios for controller training")
+    print(f"  Test scenarios saved: {test_scenarios_path}")
 
     # 3. Create ProcessChain (uses multi-scenario trajectory)
     print("\n[3/9] Building process chain...")
