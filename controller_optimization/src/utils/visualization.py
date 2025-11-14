@@ -392,6 +392,8 @@ def plot_gap_distribution(F_star_per_scenario, F_actual_per_scenario, save_path=
     for patch, bin_left in zip(patches, bins[:-1]):
         # Normalize bin position to [0, 1]
         normalized_pos = (bin_left - gap_min) / gap_range if gap_range > 0 else 0
+        normalized_pos = np.clip(normalized_pos, 0, 1)  # Ensure in [0, 1] range
+
         # Green (0) -> Yellow (0.5) -> Red (1)
         if normalized_pos < 0.5:
             # Green to yellow
@@ -401,6 +403,10 @@ def plot_gap_distribution(F_star_per_scenario, F_actual_per_scenario, save_path=
             # Yellow to red
             r = 1.0
             g = 2 * (1 - normalized_pos)
+
+        # Ensure RGB values are in [0, 1] range
+        r = np.clip(r, 0, 1)
+        g = np.clip(g, 0, 1)
         color = (r, g, 0.0)
         patch.set_facecolor(color)
 
