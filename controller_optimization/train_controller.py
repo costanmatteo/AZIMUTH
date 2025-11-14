@@ -47,6 +47,7 @@ from controller_optimization.src.utils.visualization import (
 )
 from controller_optimization.src.utils.report_generator import generate_controller_report
 from controller_optimization.src.utils.model_utils import convert_numpy_to_tensor
+from controller_optimization.src.utils.scm_validation import validate_all_processes
 
 
 def main():
@@ -78,6 +79,14 @@ def main():
     if device == 'auto':
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"\nDevice: {device}")
+
+    # =========================================================================
+    # SCM VALIDATION: Check causal consistency
+    # =========================================================================
+    print("\n" + "="*70)
+    print("STEP 0: SCM VALIDATION")
+    print("="*70)
+    validate_all_processes(PROCESSES)
 
     checkpoint_dir = Path(CONTROLLER_CONFIG['training']['checkpoint_dir'])
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
