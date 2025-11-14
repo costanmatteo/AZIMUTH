@@ -569,6 +569,17 @@ def main():
         # Process-wise metrics not available for multi-scenario (optional)
         process_metrics = {}
 
+        # Prepare advanced metrics for report
+        advanced_metrics_for_report = {
+            'worst_case_gap_train': worst_case_train,
+            'worst_case_gap_test': worst_case_test,
+            'success_rate_train': success_rate_train,
+            'success_rate_test': success_rate_test,
+            'train_test_gap': train_test_gap_metrics,
+            'diversity_train': diversity_train,
+            'diversity_test': diversity_test,
+        }
+
         # Generate report
         try:
             report_path = generate_controller_report(
@@ -581,7 +592,8 @@ def main():
                 F_actual=F_actual_dict,
                 checkpoint_dir=checkpoint_dir,
                 timestamp=datetime.now(),
-                n_scenarios=n_scenarios
+                n_scenarios=n_scenarios,
+                advanced_metrics=advanced_metrics_for_report
             )
             print(f"  ✓ PDF report generated: {report_path}")
         except Exception as e:
