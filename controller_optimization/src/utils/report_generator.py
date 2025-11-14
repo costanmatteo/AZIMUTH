@@ -363,38 +363,6 @@ class ControllerReportGenerator:
             self.story.append(caption_table)
             self.story.append(Spacer(1, 0.15*cm))
 
-        # Reliability comparison plot
-        reliability_plot = checkpoint_dir / 'reliability_comparison.png'
-        if reliability_plot.exists():
-            img = Image(str(reliability_plot))
-            img_width, img_height = img.imageWidth, img.imageHeight
-            aspect_ratio = img_height / img_width
-
-            new_width = 16*cm
-            new_height = new_width * aspect_ratio
-
-            if new_height > 10*cm:
-                new_height = 10*cm
-                new_width = new_height / aspect_ratio
-
-            img.drawWidth = new_width
-            img.drawHeight = new_height
-
-            img_table = Table([[img]], colWidths=[18*cm])
-            img_table.setStyle(TableStyle([
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ]))
-            self.story.append(img_table)
-
-            caption = Paragraph("<i>Reliability Comparison - System Performance</i>", self.styles['Normal'])
-            caption_table = Table([[caption]], colWidths=[18*cm])
-            caption_table.setStyle(TableStyle([
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ]))
-            self.story.append(caption_table)
-            self.story.append(Spacer(1, 0.15*cm))
-
         # Target vs Actual scatter plots
         self.add_section_title("Advanced Analysis")
 
@@ -422,7 +390,7 @@ class ControllerReportGenerator:
             ]))
             self.story.append(img_table)
 
-            caption = Paragraph("<i>Target vs Actual Reliability - Training Scenarios</i>", self.styles['Normal'])
+            caption = Paragraph("<i>Target vs Baseline & Controller - Training Scenarios</i>", self.styles['Normal'])
             caption_table = Table([[caption]], colWidths=[18*cm])
             caption_table.setStyle(TableStyle([
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
@@ -454,7 +422,7 @@ class ControllerReportGenerator:
             ]))
             self.story.append(img_table)
 
-            caption = Paragraph("<i>Target vs Actual Reliability - Test Scenarios</i>", self.styles['Normal'])
+            caption = Paragraph("<i>Target vs Baseline & Controller - Test Scenarios</i>", self.styles['Normal'])
             caption_table = Table([[caption]], colWidths=[18*cm])
             caption_table.setStyle(TableStyle([
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),

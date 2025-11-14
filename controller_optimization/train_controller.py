@@ -504,16 +504,18 @@ def main():
     # 8a. Generate NEW advanced plots
     print("\n  Generating advanced plots...")
 
-    # Scatter plot: Target vs Actual (train)
+    # Scatter plot: Target vs Baseline & Actual (train)
     plot_target_vs_actual_scatter(
         F_star_per_scenario=F_star_array,
+        F_baseline_per_scenario=F_baseline_array,
         F_actual_per_scenario=F_actual_per_scenario,
         save_path=str(checkpoint_dir / 'target_vs_actual_scatter_train.png')
     )
 
-    # Scatter plot: Target vs Actual (test)
+    # Scatter plot: Target vs Baseline & Actual (test)
     plot_target_vs_actual_scatter(
         F_star_per_scenario=F_star_test_array,
+        F_baseline_per_scenario=F_baseline_test_array,
         F_actual_per_scenario=F_actual_test_array,
         save_path=str(checkpoint_dir / 'target_vs_actual_scatter_test.png')
     )

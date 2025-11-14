@@ -263,75 +263,88 @@ def plot_process_improvements(process_metrics, save_path=None):
     plt.close()
 
 
-def plot_target_vs_actual_scatter(F_star_per_scenario, F_actual_per_scenario, save_path=None):
+def plot_target_vs_actual_scatter(F_star_per_scenario, F_baseline_per_scenario, F_actual_per_scenario, save_path=None):
     """
-    Scatter plot: F_star (target) vs F_actual (controller).
+    Scatter plot: F_star (target) vs F_baseline and F_actual.
 
-    Shows how well the controller matches the target for each scenario.
-    Points on the diagonal line (y=x) indicate perfect matching.
-    Color indicates the gap (F_star - F_actual).
+    Y-axis: F_star (target reliability)
+    X-axis: F_baseline (red) and F_actual (blue)
+    Shows how well both baseline and controller match the target.
 
     Works with both single and multiple scenarios.
 
     Args:
         F_star_per_scenario (array-like): Target reliability for each scenario
+        F_baseline_per_scenario (array-like): Baseline reliability for each scenario
         F_actual_per_scenario (array-like): Actual reliability for each scenario
         save_path (str): Path to save figure
     """
     F_star_arr = np.atleast_1d(F_star_per_scenario)
+    F_baseline_arr = np.atleast_1d(F_baseline_per_scenario)
     F_actual_arr = np.atleast_1d(F_actual_per_scenario)
 
-    # Compute gaps for colormap
-    gaps = F_star_arr - F_actual_arr
+    fig, ax = plt.subplots(figsize=(12, 8))
 
-    fig, ax = plt.subplots(figsize=(10, 8))
+    # Scatter plots
+    # Baseline points (red)
+    ax.scatter(F_baseline_arr, F_star_arr,
+               c='red',
+               s=120,
+               alpha=0.6,
+               edgecolors='darkred',
+               linewidths=2,
+               label='Baseline (no controller)',
+               marker='s')  # square
 
-    # Scatter plot with colormap (green -> yellow -> red)
-    scatter = ax.scatter(F_star_arr, F_actual_arr,
-                        c=gaps,
-                        cmap='RdYlGn_r',  # Reverse: green (small gap) -> red (large gap)
-                        s=100,
-                        alpha=0.7,
-                        edgecolors='black',
-                        linewidths=1.5)
+    # Actual points (blue)
+    ax.scatter(F_actual_arr, F_star_arr,
+               c='blue',
+               s=120,
+               alpha=0.6,
+               edgecolors='darkblue',
+               linewidths=2,
+               label='Controller',
+               marker='o')  # circle
 
-    # Diagonal line (perfect match: F_actual = F_star)
-    min_val = min(F_star_arr.min(), F_actual_arr.min())
-    max_val = max(F_star_arr.max(), F_actual_arr.max())
+    # Diagonal line (perfect match)
+    all_values = np.concatenate([F_star_arr, F_baseline_arr, F_actual_arr])
+    min_val = all_values.min()
+    max_val = all_values.max()
     margin = (max_val - min_val) * 0.1
+
     ax.plot([min_val - margin, max_val + margin],
             [min_val - margin, max_val + margin],
-            'k--', linewidth=2, label='Perfect Match (F_actual = F_star)', alpha=0.5)
-
-    # Colorbar
-    cbar = plt.colorbar(scatter, ax=ax)
-    cbar.set_label('Gap (F_star - F_actual)', fontsize=12, fontweight='bold')
+            'k--', linewidth=2, label='Perfect Match (y = x)', alpha=0.5)
 
     # Axis labels and title
-    ax.set_xlabel('F_star (Target Reliability)', fontsize=14, fontweight='bold')
-    ax.set_ylabel('F_actual (Controller Reliability)', fontsize=14, fontweight='bold')
-    ax.set_title('Target vs Actual Reliability', fontsize=16, fontweight='bold')
+    ax.set_xlabel('F (Reliability)', fontsize=14, fontweight='bold')
+    ax.set_ylabel('F_star (Target Reliability)', fontsize=14, fontweight='bold')
+    ax.set_title('Target vs Baseline & Controller Reliability', fontsize=16, fontweight='bold')
 
-    # Equal aspect ratio and grid
-    ax.set_aspect('equal', adjustable='box')
+    # Grid and legend
     ax.grid(True, alpha=0.3)
-    ax.legend(loc='lower right', fontsize=11)
+    ax.legend(loc='lower right', fontsize=11, framealpha=0.9)
 
     # Set limits with margin
     ax.set_xlim(min_val - margin, max_val + margin)
     ax.set_ylim(min_val - margin, max_val + margin)
 
     # Add statistics annotation
-    mean_gap = np.mean(gaps)
-    worst_gap = np.max(gaps)
     n_scenarios = len(F_star_arr)
+    gap_baseline = np.mean(F_star_arr - F_baseline_arr)
+    gap_actual = np.mean(F_star_arr - F_actual_arr)
+    improvement = ((gap_baseline - gap_actual) / abs(gap_baseline)) * 100 if gap_baseline != 0 else 0
 
-    stats_text = f'Scenarios: {n_scenarios}\nMean Gap: {mean_gap:.6f}\nWorst Gap: {worst_gap:.6f}'
+    stats_text = (f'Scenarios: {n_scenarios}\n'
+                 f'Mean Gap (Baseline): {gap_baseline:.6f}\n'
+                 f'Mean Gap (Controller): {gap_actual:.6f}\n'
+                 f'Improvement: {improvement:.1f}%')
+
     ax.text(0.02, 0.98, stats_text,
             transform=ax.transAxes,
             fontsize=10,
             verticalalignment='top',
-            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.7))
 
     plt.tight_layout()
 
