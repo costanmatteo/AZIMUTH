@@ -227,6 +227,7 @@ def main():
         lambda_bc=CONTROLLER_CONFIG['training']['lambda_bc'],
         learning_rate=CONTROLLER_CONFIG['training']['learning_rate'],
         weight_decay=CONTROLLER_CONFIG['training']['weight_decay'],
+        reliability_loss_scale=CONTROLLER_CONFIG['training']['reliability_loss_scale'],
         device=device
     )
 

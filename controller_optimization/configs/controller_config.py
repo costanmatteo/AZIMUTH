@@ -11,6 +11,9 @@ TRAINING:
               Higher values = smoother gradients but more memory
 - learning_rate: Initial learning rate for optimizer
 - lambda_bc: Behavior cloning weight (balances reliability vs target-following)
+- reliability_loss_scale: Scale factor for reliability loss (F - F*)^2
+                         Prevents vanishing gradients when delta F is small (~0.1)
+                         Typical values: 100.0 (default), 1000.0 for very small deltas
 - patience: Early stopping patience (epochs without improvement)
 - gradient_clip_norm: Max gradient norm (None=no clipping, 1.0=typical value)
 - lr_scheduler: Learning rate decay schedule (None or dict with 'type', 'step_size', 'gamma')
@@ -79,6 +82,7 @@ CONTROLLER_CONFIG = {
         'learning_rate': 0.0001,
         'weight_decay': 0.001,
         'lambda_bc': 0.001,  # Behavior cloning weight
+        'reliability_loss_scale': 100.0,  # Scale factor for reliability loss (F - F*)^2
         'patience': 30,
         'device': 'auto',
         'checkpoint_dir': 'controller_optimization/checkpoints/controller',

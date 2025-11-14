@@ -1,7 +1,13 @@
 """
 Trainer per policy generators.
 
-Loss: L = (F - F*)^2 + λ_BC * Σ ||a_t - a_t*||^2
+Loss: L = scale * (F - F*)^2 + λ_BC * Σ ||a_t - a_t*||^2
+
+Where:
+- scale: Reliability loss scale factor (prevents vanishing gradients)
+- F: Actual reliability
+- F*: Target reliability
+- λ_BC: Behavior cloning weight
 """
 
 import torch
@@ -21,15 +27,19 @@ class ControllerTrainer:
         surrogate (ProTSurrogate): Surrogate model
         lambda_bc (float): Behavior cloning weight
         learning_rate (float): Learning rate
+        weight_decay (float): L2 regularization weight
+        reliability_loss_scale (float): Scale factor for reliability loss (default: 100.0)
         device (str): Device
     """
 
     def __init__(self, process_chain, surrogate, lambda_bc=0.1,
-                 learning_rate=0.001, weight_decay=0.01, device='cpu'):
+                 learning_rate=0.001, weight_decay=0.01,
+                 reliability_loss_scale=100.0, device='cpu'):
 
         self.process_chain = process_chain
         self.surrogate = surrogate
         self.lambda_bc = lambda_bc
+        self.reliability_loss_scale = reliability_loss_scale
         self.device = device
 
         # Optimizer SOLO per policy generators (uncertainty predictors sono frozen)
@@ -64,6 +74,7 @@ class ControllerTrainer:
         print(f"  Trainable parameters: {sum(p.numel() for p in trainable_params):,}")
         print(f"  Learning rate: {learning_rate}")
         print(f"  Lambda BC: {lambda_bc}")
+        print(f"  Reliability loss scale: {reliability_loss_scale}")
         print(f"  Device: {device}")
 
     def _compute_normalization_stats(self):
@@ -100,13 +111,14 @@ class ControllerTrainer:
         Returns:
             total_loss, reliability_loss, bc_loss, F
         """
-        # Reliability loss: (F - F*)^2
+        # Reliability loss: scale * (F - F*)^2
+        # Scale prevents vanishing gradients when delta F is small (~0.1)
         F = self.surrogate.compute_reliability(trajectory)
 
         # Get F_star for this specific scenario
         F_star_value = self.surrogate.F_star[scenario_idx]
         F_star_tensor = torch.tensor(F_star_value, dtype=torch.float32, device=self.device)
-        reliability_loss = (F - F_star_tensor) ** 2
+        reliability_loss = self.reliability_loss_scale * (F - F_star_tensor) ** 2
 
         # Behavior cloning loss: mean( ||a_t - a_t*||^2 ) across all processes
         # Compare to the specific scenario's target inputs
