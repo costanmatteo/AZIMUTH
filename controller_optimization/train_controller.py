@@ -129,9 +129,10 @@ def main():
     # 2. Generate TEST scenarios (for future evaluation, not used yet)
     print("\n[2/9] Generating test scenarios (not used in training)...")
 
-    # Use different seed to ensure test scenarios are truly unseen
-    test_seed_offset = 1000
+    # Use seed offset from config to ensure test scenarios are truly unseen
+    test_seed_offset = CONTROLLER_CONFIG['scenarios']['test_seed_offset']
 
+    print(f"  Test seed offset: {test_seed_offset}")
     print(f"  Generating TEST target trajectory (a*)...")
     target_trajectory_test = generate_target_trajectory(
         process_configs=PROCESSES,

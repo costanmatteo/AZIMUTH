@@ -31,8 +31,9 @@ POLICY GENERATOR:
 SCENARIOS:
 - n_train: Number of scenarios for training (diverse operating conditions)
 - n_test: Number of scenarios for final evaluation (never seen during training)
-- seed_target: Seed for target trajectory generation (structural diversity)
+- seed_target: Seed for target trajectory generation (train scenarios)
 - seed_baseline: Seed for baseline process noise (same inputs as target, different noise realization)
+- test_seed_offset: Offset added to seeds for test scenarios (default 1000, ensures test != train)
 
 MULTI-SCENARIO:
 - shuffle_order: Shuffle scenario order each epoch (recommended: True)
@@ -101,10 +102,11 @@ CONTROLLER_CONFIG = {
 
     # Scenario generation (train/test split)
     'scenarios': {
-        'n_train': 40,        # Training scenarios (diverse operating conditions)
-        'n_test': 10,         # Test scenarios (final evaluation, never seen during training)
-        'seed_target': 42,    # Seed for target trajectory generation
-        'seed_baseline': 43,  # Seed for baseline process noise (same inputs, different noise)
+        'n_train': 40,         # Training scenarios (diverse operating conditions)
+        'n_test': 10,          # Test scenarios (final evaluation, never seen during training)
+        'seed_target': 42,     # Seed for target trajectory generation (train)
+        'seed_baseline': 43,   # Seed for baseline process noise (same inputs, different noise)
+        'test_seed_offset': 1000,  # Offset added to seeds for test scenarios (ensures different from train)
     },
 
     # Multi-scenario training
