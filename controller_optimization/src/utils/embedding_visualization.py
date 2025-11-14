@@ -43,11 +43,11 @@ def plot_embedding_tsne(embeddings, structural_params, scenario_indices, save_pa
     tsne = TSNE(n_components=2, perplexity=perplexity, random_state=42, max_iter=1000)
     embeddings_2d = tsne.fit_transform(embeddings)
 
-    # Create figure with subplots for each structural parameter
+    # Create figure with subplots for each structural parameter (larger for better visibility)
     n_cols = min(3, n_params + 1)  # Max 3 columns
     n_rows = (n_params + 1 + n_cols - 1) // n_cols  # Ceiling division
 
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(5*n_cols, 4*n_rows))
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(6*n_cols, 5*n_rows))  # Increased from (5, 4)
     if n_rows == 1 and n_cols == 1:
         axes = np.array([[axes]])
     elif n_rows == 1:
@@ -81,7 +81,7 @@ def plot_embedding_tsne(embeddings, structural_params, scenario_indices, save_pa
         axes[i].axis('off')
 
     plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.savefig(save_path, dpi=200, bbox_inches='tight')  # Increased DPI from 150 to 200
     plt.close()
     print(f"  ✓ t-SNE plot saved: {save_path}")
 
@@ -109,11 +109,11 @@ def plot_embedding_pca(embeddings, structural_params, scenario_indices, save_pat
 
     explained_var = pca.explained_variance_ratio_
 
-    # Create figure with subplots
+    # Create figure with subplots (larger for better visibility)
     n_cols = min(3, n_params + 1)
     n_rows = (n_params + 1 + n_cols - 1) // n_cols
 
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(5*n_cols, 4*n_rows))
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(6*n_cols, 5*n_rows))  # Increased from (5, 4)
     if n_rows == 1 and n_cols == 1:
         axes = np.array([[axes]])
     elif n_rows == 1:
@@ -147,7 +147,7 @@ def plot_embedding_pca(embeddings, structural_params, scenario_indices, save_pat
         axes[i].axis('off')
 
     plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.savefig(save_path, dpi=200, bbox_inches='tight')  # Increased DPI from 150 to 200
     plt.close()
     print(f"  ✓ PCA plot saved: {save_path}")
 
@@ -175,8 +175,8 @@ def plot_embedding_distances(embeddings, structural_params, scenario_indices, sa
     # Compute pairwise embedding distances
     embedding_dists = pdist(embeddings, metric='euclidean')
 
-    # Create figure
-    fig, axes = plt.subplots(1, n_params + 1, figsize=(5*(n_params+1), 4))
+    # Create figure (larger for better visibility)
+    fig, axes = plt.subplots(1, n_params + 1, figsize=(6*(n_params+1), 5))  # Increased from (5, 4)
     if n_params == 0:
         axes = [axes]
 
@@ -220,7 +220,7 @@ def plot_embedding_distances(embeddings, structural_params, scenario_indices, sa
         axes[i+1].grid(alpha=0.3)
 
     plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.savefig(save_path, dpi=200, bbox_inches='tight')  # Increased DPI from 150 to 200
     plt.close()
     print(f"  ✓ Distance correlation plot saved: {save_path}")
 
@@ -252,8 +252,8 @@ def plot_embedding_correlation_heatmap(embeddings, structural_params, save_path,
             corr, _ = pearsonr(embeddings[:, i], structural_params[:, j])
             corr_matrix[i, j] = corr
 
-    # Create heatmap
-    fig, ax = plt.subplots(figsize=(max(6, n_params*1.5), max(4, embedding_dim*0.3)))
+    # Create heatmap (larger for better visibility)
+    fig, ax = plt.subplots(figsize=(max(8, n_params*2), max(6, embedding_dim*0.4)))  # Increased dimensions
 
     sns.heatmap(corr_matrix,
                 xticklabels=param_names,
@@ -269,7 +269,7 @@ def plot_embedding_correlation_heatmap(embeddings, structural_params, save_path,
     ax.set_ylabel('Embedding Dimensions', fontsize=10)
 
     plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.savefig(save_path, dpi=200, bbox_inches='tight')  # Increased DPI from 150 to 200
     plt.close()
     print(f"  ✓ Correlation heatmap saved: {save_path}")
 
@@ -329,8 +329,8 @@ def plot_embedding_evolution(embedding_history, scenario_indices_sample, save_pa
         embeddings_2d_by_epoch[epoch] = all_embeddings_2d[start_idx:start_idx+n_per_epoch]
         start_idx += n_per_epoch
 
-    # Create figure
-    fig, ax = plt.subplots(figsize=(10, 8))
+    # Create figure (larger for better visibility)
+    fig, ax = plt.subplots(figsize=(12, 10))  # Increased from (10, 8)
 
     # Plot trajectories for each selected scenario
     colors = plt.cm.tab10(np.linspace(0, 1, len(scenario_indices_sample)))
@@ -369,7 +369,7 @@ def plot_embedding_evolution(embedding_history, scenario_indices_sample, save_pa
     ax.legend(handles=legend_elements, loc='upper right', fontsize=8)
 
     plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.savefig(save_path, dpi=200, bbox_inches='tight')  # Increased DPI from 150 to 200
     plt.close()
     print(f"  ✓ Embedding evolution plot saved: {save_path}")
 

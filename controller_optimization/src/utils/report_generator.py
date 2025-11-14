@@ -342,10 +342,10 @@ class ControllerReportGenerator:
 
         self.add_section_title("Scenario Encoder Analysis")
 
-        # Create 2x2 grid for first 4 plots
+        # Create 2x2 grid for first 4 plots (larger size for better visibility)
         plots_to_grid = available_plots[:4]
-        cell_width = 8*cm
-        cell_height = 6*cm
+        cell_width = 9*cm  # Increased from 8cm
+        cell_height = 7*cm  # Increased from 6cm
 
         grid_data = []
         row = []
@@ -401,14 +401,14 @@ class ControllerReportGenerator:
             evol_path = checkpoint_dir / 'embedding_evolution.png'
             img_evol = Image(str(evol_path))
 
-            # Larger width for evolution plot
-            new_width = 16*cm
+            # Larger width for evolution plot (increased for better visibility)
+            new_width = 17*cm  # Increased from 16cm
             img_width, img_height = img_evol.imageWidth, img_evol.imageHeight
             aspect_ratio = img_height / img_width
             new_height = new_width * aspect_ratio
 
-            if new_height > 10*cm:
-                new_height = 10*cm
+            if new_height > 12*cm:  # Increased from 10cm
+                new_height = 12*cm
                 new_width = new_height / aspect_ratio
 
             img_evol.drawWidth = new_width
