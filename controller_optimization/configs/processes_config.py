@@ -17,6 +17,7 @@ PROCESSES = [
         'output_dim': 1,
         'input_labels': ['PowerTarget', 'AmbientTemp'],
         'output_labels': ['ActualPower'],
+        'controllable_inputs': ['PowerTarget'],  # AmbientTemp is environmental (non-controllable)
 
         'uncertainty_predictor': {
             'model': {
@@ -47,6 +48,7 @@ PROCESSES = [
         'output_dim': 1,
         'input_labels': ['RF_Power', 'Duration'],
         'output_labels': ['RemovalRate'],
+        'controllable_inputs': ['RF_Power', 'Duration'],  # All inputs controllable
 
         'uncertainty_predictor': {
             'model': {
@@ -77,6 +79,7 @@ PROCESSES = [
         'output_dim': 1,
         'input_labels': ['CurrentDensity', 'Duration'],
         'output_labels': ['Thickness'],
+        'controllable_inputs': ['CurrentDensity', 'Duration'],  # All inputs controllable
 
         'uncertainty_predictor': {
             'model': {
@@ -107,6 +110,7 @@ PROCESSES = [
         'output_dim': 1,
         'input_labels': ['Temperature', 'Concentration', 'Duration'],
         'output_labels': ['RemovalDepth'],
+        'controllable_inputs': ['Concentration', 'Duration'],  # Temperature is environmental (non-controllable)
 
         'uncertainty_predictor': {
             'model': {
@@ -144,3 +148,19 @@ def get_process_by_name(name):
 def get_process_sequence():
     """Ritorna lista ordinata dei nomi dei processi"""
     return [p['name'] for p in PROCESSES]
+
+
+def get_controllable_inputs(process_config):
+    """
+    Ritorna lista degli input controllabili dal controller.
+
+    Default: se 'controllable_inputs' non è specificato,
+    assume tutti gli input come controllabili.
+
+    Args:
+        process_config: Dizionario di configurazione del processo
+
+    Returns:
+        list: Lista di nomi delle variabili controllabili
+    """
+    return process_config.get('controllable_inputs', process_config['input_labels'])
