@@ -267,60 +267,60 @@ class ControllerReportGenerator:
         if not advanced_metrics:
             return
 
-        self.add_section_title("Advanced Metrics")
+        self.add_section_title("Performance Analysis")
 
-        # Worst-case gap
-        if 'worst_case_gap_train' in advanced_metrics and 'worst_case_gap_test' in advanced_metrics:
-            worst_train = advanced_metrics['worst_case_gap_train']
-            worst_test = advanced_metrics['worst_case_gap_test']
-
-            worst_text = f"""
-<b>Worst-Case Gap (F_star - F_actual):</b><br/>
-• <b>Train:</b> {worst_train['worst_case_gap']:.6f} (scenario {worst_train['worst_case_scenario_idx']})<br/>
-• <b>Test:</b> {worst_test['worst_case_gap']:.6f} (scenario {worst_test['worst_case_scenario_idx']})
-"""
-            self.story.append(Paragraph(worst_text, self.styles['BodyText']))
-            self.story.append(Spacer(1, 0.1*cm))
-
-        # Success rate
+        # 1. Success Rate - Overall performance metric
         if 'success_rate_train' in advanced_metrics and 'success_rate_test' in advanced_metrics:
             success_train = advanced_metrics['success_rate_train']
             success_test = advanced_metrics['success_rate_test']
 
             success_text = f"""
-<b>Success Rate (threshold: {success_train['threshold']*100:.0f}% of F_star):</b><br/>
+<b>1. Success Rate</b> (threshold: {success_train['threshold']*100:.0f}% of F_star)<br/>
 • <b>Train:</b> {success_train['success_rate_pct']:.1f}% ({success_train['n_successful']}/{success_train['n_total']} scenarios)<br/>
 • <b>Test:</b> {success_test['success_rate_pct']:.1f}% ({success_test['n_successful']}/{success_test['n_total']} scenarios)
 """
             self.story.append(Paragraph(success_text, self.styles['BodyText']))
-            self.story.append(Spacer(1, 0.1*cm))
+            self.story.append(Spacer(1, 0.15*cm))
 
-        # Train-test gap
+        # 2. Worst-Case Performance - Critical scenarios
+        if 'worst_case_gap_train' in advanced_metrics and 'worst_case_gap_test' in advanced_metrics:
+            worst_train = advanced_metrics['worst_case_gap_train']
+            worst_test = advanced_metrics['worst_case_gap_test']
+
+            worst_text = f"""
+<b>2. Worst-Case Gap</b> (F_star - F_actual)<br/>
+• <b>Train:</b> {worst_train['worst_case_gap']:.6f} at scenario {worst_train['worst_case_scenario_idx']} (F*={worst_train['worst_case_F_star']:.6f}, F={worst_train['worst_case_F_actual']:.6f})<br/>
+• <b>Test:</b> {worst_test['worst_case_gap']:.6f} at scenario {worst_test['worst_case_scenario_idx']} (F*={worst_test['worst_case_F_star']:.6f}, F={worst_test['worst_case_F_actual']:.6f})
+"""
+            self.story.append(Paragraph(worst_text, self.styles['BodyText']))
+            self.story.append(Spacer(1, 0.15*cm))
+
+        # 3. Generalization - Train vs Test comparison
         if 'train_test_gap' in advanced_metrics:
             tt_gap = advanced_metrics['train_test_gap']
-            interpretation = "better" if tt_gap['train_test_gap'] > 0 else "worse"
+            interpretation = "better (good generalization)" if tt_gap['train_test_gap'] > 0 else "worse (possible overfitting)"
 
             tt_text = f"""
-<b>Train-Test Gap Analysis:</b><br/>
+<b>3. Generalization Analysis</b> (Train-Test Gap)<br/>
 • <b>Mean gap (train):</b> {tt_gap['mean_gap_train']:.6f}<br/>
 • <b>Mean gap (test):</b> {tt_gap['mean_gap_test']:.6f}<br/>
-• <b>Difference:</b> {tt_gap['train_test_gap']:.6f} → Controller performs {interpretation} on test
+• <b>Difference:</b> {tt_gap['train_test_gap']:.6f} → Controller performs {interpretation}
 """
             self.story.append(Paragraph(tt_text, self.styles['BodyText']))
-            self.story.append(Spacer(1, 0.1*cm))
+            self.story.append(Spacer(1, 0.15*cm))
 
-        # Scenario diversity
+        # 4. Dataset Characteristics - Scenario diversity
         if 'diversity_train' in advanced_metrics and 'diversity_test' in advanced_metrics:
             div_train = advanced_metrics['diversity_train']
             div_test = advanced_metrics['diversity_test']
 
             div_text = f"""
-<b>Scenario Diversity Score (CV across structural conditions):</b><br/>
-• <b>Train:</b> {div_train['diversity_score']:.4f}<br/>
-• <b>Test:</b> {div_test['diversity_score']:.4f}
+<b>4. Dataset Diversity</b> (Coefficient of Variation across structural conditions)<br/>
+• <b>Train scenarios:</b> {div_train['diversity_score']:.4f}<br/>
+• <b>Test scenarios:</b> {div_test['diversity_score']:.4f}
 """
             self.story.append(Paragraph(div_text, self.styles['BodyText']))
-            self.story.append(Spacer(1, 0.1*cm))
+            self.story.append(Spacer(1, 0.15*cm))
 
     def add_plots_stacked(self, checkpoint_dir):
         """Add controller optimization plots stacked vertically"""
@@ -363,39 +363,6 @@ class ControllerReportGenerator:
             self.story.append(caption_table)
             self.story.append(Spacer(1, 0.15*cm))
 
-        # Trajectory comparison plot (larger)
-        trajectory_plot = checkpoint_dir / 'trajectory_comparison.png'
-        if trajectory_plot.exists():
-            img = Image(str(trajectory_plot))
-            img_width, img_height = img.imageWidth, img.imageHeight
-            aspect_ratio = img_height / img_width
-
-            # Larger dimensions for trajectory plot
-            new_width = 18*cm
-            new_height = new_width * aspect_ratio
-
-            if new_height > 14*cm:
-                new_height = 14*cm
-                new_width = new_height / aspect_ratio
-
-            img.drawWidth = new_width
-            img.drawHeight = new_height
-
-            img_table = Table([[img]], colWidths=[18*cm])
-            img_table.setStyle(TableStyle([
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ]))
-            self.story.append(img_table)
-
-            caption = Paragraph("<i>Trajectory Comparison - Target vs Baseline vs Controller</i>", self.styles['Normal'])
-            caption_table = Table([[caption]], colWidths=[18*cm])
-            caption_table.setStyle(TableStyle([
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ]))
-            self.story.append(caption_table)
-            self.story.append(Spacer(1, 0.15*cm))
-
         # Reliability comparison plot
         reliability_plot = checkpoint_dir / 'reliability_comparison.png'
         if reliability_plot.exists():
@@ -428,39 +395,7 @@ class ControllerReportGenerator:
             self.story.append(caption_table)
             self.story.append(Spacer(1, 0.15*cm))
 
-        # Process improvements plot
-        improvements_plot = checkpoint_dir / 'process_improvements.png'
-        if improvements_plot.exists():
-            img = Image(str(improvements_plot))
-            img_width, img_height = img.imageWidth, img.imageHeight
-            aspect_ratio = img_height / img_width
-
-            new_width = 16*cm
-            new_height = new_width * aspect_ratio
-
-            if new_height > 10*cm:
-                new_height = 10*cm
-                new_width = new_height / aspect_ratio
-
-            img.drawWidth = new_width
-            img.drawHeight = new_height
-
-            img_table = Table([[img]], colWidths=[18*cm])
-            img_table.setStyle(TableStyle([
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ]))
-            self.story.append(img_table)
-
-            caption = Paragraph("<i>Process-wise Improvements</i>", self.styles['Normal'])
-            caption_table = Table([[caption]], colWidths=[18*cm])
-            caption_table.setStyle(TableStyle([
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ]))
-            self.story.append(caption_table)
-            self.story.append(Spacer(1, 0.15*cm))
-
-        # NEW: Target vs Actual scatter plots
+        # Target vs Actual scatter plots
         self.add_section_title("Advanced Analysis")
 
         # Train scatter plot
@@ -600,13 +535,18 @@ class ControllerReportGenerator:
             advanced_metrics: Advanced metrics dictionary (optional)
         """
 
-        # Add all sections
+        # Add all sections in logical order
         self.add_title(timestamp)
+
+        # Configuration and basic metrics
         self.create_two_column_section(config, training_history, F_star, F_baseline, F_actual,
                                       final_metrics, n_scenarios=n_scenarios)
-        self.add_process_metrics_table(process_metrics)
+
+        # Advanced metrics (if available)
         if advanced_metrics:
             self.add_advanced_metrics_section(advanced_metrics)
+
+        # Visualizations
         self.add_plots_stacked(Path(config['training']['checkpoint_dir']))
 
         # Build PDF
