@@ -30,6 +30,11 @@ POLICY GENERATOR:
 - hidden_sizes: Layer sizes for 'custom' architecture
 - dropout: Dropout rate for regularization
 - use_batchnorm: Enable batch normalization
+- use_scenario_encoder: Enable scenario context encoding (structural parameters → embedding)
+                       Allows policy to adapt to different operating conditions
+                       Recommended: True (default)
+- scenario_embedding_dim: Dimension of scenario embedding vector (default: 16)
+                         Higher = more expressive but more parameters
 
 SCENARIOS:
 - n_train: Number of scenarios for training (diverse operating conditions)
@@ -73,6 +78,8 @@ CONTROLLER_CONFIG = {
         'hidden_sizes': [64, 32],  # Usato solo se 'custom'
         'dropout': 0.1,
         'use_batchnorm': False,
+        'use_scenario_encoder': True,  # Enable scenario context encoding
+        'scenario_embedding_dim': 16,  # Dimension of scenario embedding vector
     },
 
     # Training parameters

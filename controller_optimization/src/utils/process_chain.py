@@ -27,6 +27,7 @@ from controller_optimization.src.models.policy_generator import (
     create_medium_policy_generator,
     create_large_policy_generator
 )
+from controller_optimization.src.models.scenario_encoder import ScenarioEncoder
 
 
 class ProcessChain(nn.Module):
@@ -36,6 +37,62 @@ class ProcessChain(nn.Module):
     Sequenza:
     a1 (fisso) → UncertPred1 → (o1, σ1²) → Policy1 → a2 → UncertPred2 → (o2, σ2²) → ...
     """
+
+    @staticmethod
+    def _count_structural_params(processes_config):
+        """
+        Conta il numero totale di parametri strutturali (non-controllabili) in tutti i processi.
+
+        Args:
+            processes_config (list): Lista di configurazioni dei processi
+
+        Returns:
+            int: Numero totale di parametri strutturali
+        """
+        from controller_optimization.configs.processes_config import get_controllable_inputs
+
+        total = 0
+        for process_config in processes_config:
+            input_labels = process_config['input_labels']
+            controllable = get_controllable_inputs(process_config)
+            # Count non-controllable inputs
+            n_non_controllable = len([label for label in input_labels if label not in controllable])
+            total += n_non_controllable
+
+        return total
+
+    def _extract_structural_params(self, scenario_idx):
+        """
+        Estrae parametri strutturali (non-controllabili) per uno scenario specifico.
+
+        Args:
+            scenario_idx (int): Index dello scenario
+
+        Returns:
+            torch.Tensor: Parametri strutturali, shape (n_structural_params,)
+        """
+        from controller_optimization.configs.processes_config import get_controllable_inputs
+
+        structural_values = []
+
+        for i, process_config in enumerate(self.processes_config):
+            process_name = process_config['name']
+            input_labels = process_config['input_labels']
+            controllable = get_controllable_inputs(process_config)
+
+            # Get target inputs for this scenario
+            target_inputs = self.target_trajectory[process_name]['inputs'][scenario_idx]
+
+            # Extract non-controllable values
+            for idx, label in enumerate(input_labels):
+                if label not in controllable:
+                    structural_values.append(target_inputs[idx])
+
+        if len(structural_values) == 0:
+            # No structural params → return dummy zero tensor
+            return torch.tensor([0.0], dtype=torch.float32, device=self.device)
+
+        return torch.tensor(structural_values, dtype=torch.float32, device=self.device)
 
     def __init__(self, processes_config, target_trajectory, policy_config=None, device='cpu'):
         """
@@ -62,9 +119,15 @@ class ProcessChain(nn.Module):
                 'architecture': 'medium',
                 'hidden_sizes': [64, 32],
                 'dropout': 0.1,
-                'use_batchnorm': False
+                'use_batchnorm': False,
+                'use_scenario_encoder': True,  # Enable scenario encoding
+                'scenario_embedding_dim': 16,  # Dimension of scenario embedding
             }
         self.policy_config = policy_config
+
+        # Use scenario encoder if enabled
+        self.use_scenario_encoder = policy_config.get('use_scenario_encoder', True)
+        self.scenario_embedding_dim = policy_config.get('scenario_embedding_dim', 16)
 
         # Load uncertainty predictors (frozen)
         self.uncertainty_predictors = nn.ModuleList()
@@ -95,15 +158,35 @@ class ProcessChain(nn.Module):
             preprocessor = load_preprocessor(scaler_path)
             self.preprocessors.append(preprocessor)
 
+        # Create scenario encoder (if enabled)
+        if self.use_scenario_encoder:
+            n_structural_params = self._count_structural_params(processes_config)
+            self.scenario_encoder = ScenarioEncoder(
+                n_structural_params=max(n_structural_params, 1),  # At least 1 for dummy case
+                embedding_dim=self.scenario_embedding_dim,
+                hidden_dim=32
+            ).to(device)
+            print(f"  Scenario encoder created:")
+            print(f"    Structural params: {n_structural_params}")
+            print(f"    Embedding dim: {self.scenario_embedding_dim}")
+            print(f"    Parameters: {sum(p.numel() for p in self.scenario_encoder.parameters()):,}")
+        else:
+            self.scenario_encoder = None
+            print(f"  Scenario encoder: disabled")
+
         # Create policy generators (trainable)
         # Policy i generates inputs for process i+1 based on outputs of process i
         self.policy_generators = nn.ModuleList()
 
         for i in range(len(processes_config) - 1):
-            # Input to policy: [prev_inputs, prev_outputs_mean, prev_outputs_var]
+            # Input to policy: [prev_inputs, prev_outputs_mean, prev_outputs_var, scenario_embedding]
             prev_input_dim = processes_config[i]['input_dim']
             prev_output_dim = processes_config[i]['output_dim']
             policy_input_size = prev_input_dim + prev_output_dim + prev_output_dim
+
+            # Add scenario embedding dimension if encoder is enabled
+            if self.use_scenario_encoder:
+                policy_input_size += self.scenario_embedding_dim
 
             # Output from policy: next process inputs
             next_input_dim = processes_config[i + 1]['input_dim']
@@ -274,15 +357,31 @@ class ProcessChain(nn.Module):
         # a1 è fisso dalla target trajectory (per lo scenario specifico)
         current_inputs = self.get_initial_inputs(batch_size, scenario_idx)
 
+        # Extract and encode scenario structural parameters (if encoder is enabled)
+        if self.use_scenario_encoder:
+            structural_params = self._extract_structural_params(scenario_idx)  # Shape: (n_params,)
+            # Add batch dimension and replicate for batch
+            structural_params = structural_params.unsqueeze(0).repeat(batch_size, 1)  # (batch_size, n_params)
+            # Encode to embedding
+            scenario_embedding = self.scenario_encoder(structural_params)  # (batch_size, embedding_dim)
+        else:
+            scenario_embedding = None
+
         for i, process_name in enumerate(self.process_names):
             # 1. Se i > 0: policy generator produce inputs
             if i > 0:
-                # Concatenate: [prev_inputs, prev_outputs_mean, prev_outputs_var]
-                policy_input = torch.cat([
+                # Concatenate: [prev_inputs, prev_outputs_mean, prev_outputs_var, scenario_embedding]
+                policy_input_parts = [
                     prev_inputs,
                     prev_outputs_mean,
                     prev_outputs_var
-                ], dim=1)
+                ]
+
+                # Add scenario embedding if encoder is enabled
+                if self.use_scenario_encoder:
+                    policy_input_parts.append(scenario_embedding)
+
+                policy_input = torch.cat(policy_input_parts, dim=1)
 
                 generated_inputs = self.policy_generators[i - 1](policy_input)
 
