@@ -315,7 +315,7 @@ def main():
     )
 
     # Load trained policy generators into test chain
-    for process_idx, process_name in enumerate(process_names):
+    for process_idx in range(len(process_chain.policy_generators)):
         process_chain_test.policy_generators[process_idx].load_state_dict(
             process_chain.policy_generators[process_idx].state_dict()
         )
