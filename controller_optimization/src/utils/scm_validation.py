@@ -33,10 +33,8 @@ def find_node_in_scm(scm_dataset, var_name):
     Returns:
         NodeSpec if found, None otherwise
     """
-    for spec in scm_dataset.specs:
-        if spec.name == var_name:
-            return spec
-    return None
+    # SCMDataset.scm.specs is a Dict[str, NodeSpec]
+    return scm_dataset.scm.specs.get(var_name, None)
 
 
 def get_node_parents(scm_dataset, var_name):
