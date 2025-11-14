@@ -63,7 +63,7 @@ CONTROLLER_CONFIG = {
     # Policy generator architecture
     'policy_generator': {
         'architecture': 'custom',  # 'small', 'medium', 'large', 'custom'
-        'hidden_sizes': [16, 8],  # Usato solo se 'custom'
+        'hidden_sizes': [64, 32],  # Usato solo se 'custom'
         'dropout': 0.1,
         'use_batchnorm': False,
     },
@@ -71,10 +71,10 @@ CONTROLLER_CONFIG = {
     # Training parameters
     'training': {
         'epochs': 200,  # Each epoch cycles through all training scenarios once
-        'batch_size': 64,
+        'batch_size': 128,  # Replicas per scenario (same inputs, different dropout/stochasticity)
         'learning_rate': 0.0001,
         'weight_decay': 0.001,
-        'lambda_bc': 0.01,  # Behavior cloning weight
+        'lambda_bc': 0.00001,  # Behavior cloning weight
         'patience': 50,
         'device': 'auto',
         'checkpoint_dir': 'controller_optimization/checkpoints/controller',
@@ -102,7 +102,7 @@ CONTROLLER_CONFIG = {
 
     # Scenario generation (train/test split)
     'scenarios': {
-        'n_train': 40,         # Training scenarios (diverse operating conditions)
+        'n_train': 1,         # Training scenarios (diverse operating conditions)
         'n_test': 10,          # Test scenarios (final evaluation, never seen during training)
         'seed_target': 42,     # Seed for target trajectory generation (train)
         'seed_baseline': 43,   # Seed for baseline process noise (same inputs, different noise)
