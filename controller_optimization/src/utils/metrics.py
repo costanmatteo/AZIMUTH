@@ -185,6 +185,177 @@ def create_metrics_summary(F_star, F_baseline, F_actual, trajectory_metrics):
     return summary
 
 
+def compute_worst_case_gap(F_star_per_scenario, F_actual_per_scenario):
+    """
+    Compute worst-case gap between target and actual reliability.
+
+    Args:
+        F_star_per_scenario (array-like): Target reliability for each scenario
+        F_actual_per_scenario (array-like): Actual reliability for each scenario
+
+    Returns:
+        dict: {
+            'worst_case_gap': Maximum gap (F_star - F_actual),
+            'worst_case_scenario_idx': Index of worst scenario,
+            'worst_case_F_star': F_star of worst scenario,
+            'worst_case_F_actual': F_actual of worst scenario,
+        }
+    """
+    F_star_arr = np.atleast_1d(F_star_per_scenario)
+    F_actual_arr = np.atleast_1d(F_actual_per_scenario)
+
+    gaps = F_star_arr - F_actual_arr
+    worst_idx = int(np.argmax(gaps))
+    worst_gap = float(gaps[worst_idx])
+
+    return {
+        'worst_case_gap': worst_gap,
+        'worst_case_scenario_idx': worst_idx,
+        'worst_case_F_star': float(F_star_arr[worst_idx]),
+        'worst_case_F_actual': float(F_actual_arr[worst_idx]),
+    }
+
+
+def compute_success_rate(F_star_per_scenario, F_actual_per_scenario, threshold=0.95):
+    """
+    Compute success rate: percentage of scenarios where F_actual >= threshold * F_star.
+
+    Args:
+        F_star_per_scenario (array-like): Target reliability for each scenario
+        F_actual_per_scenario (array-like): Actual reliability for each scenario
+        threshold (float): Success threshold (default: 0.95 = 95%)
+
+    Returns:
+        dict: {
+            'success_rate': Success rate (0.0 to 1.0),
+            'success_rate_pct': Success rate as percentage,
+            'n_successful': Number of successful scenarios,
+            'n_total': Total number of scenarios,
+            'threshold': Threshold used,
+        }
+    """
+    F_star_arr = np.atleast_1d(F_star_per_scenario)
+    F_actual_arr = np.atleast_1d(F_actual_per_scenario)
+
+    success_mask = F_actual_arr >= (threshold * F_star_arr)
+    n_successful = int(np.sum(success_mask))
+    n_total = len(F_star_arr)
+    success_rate = n_successful / n_total if n_total > 0 else 0.0
+
+    return {
+        'success_rate': float(success_rate),
+        'success_rate_pct': float(success_rate * 100),
+        'n_successful': n_successful,
+        'n_total': n_total,
+        'threshold': float(threshold),
+    }
+
+
+def compute_train_test_gap(F_star_train, F_actual_train, F_star_test, F_actual_test):
+    """
+    Compute train-test gap: difference between mean gaps on train and test sets.
+    Gap = F_star - F_actual
+    Train-test gap = mean(gap_train) - mean(gap_test)
+
+    Positive value means the controller performs better on test (smaller gap).
+    Negative value means the controller performs worse on test (larger gap).
+
+    Args:
+        F_star_train (array-like): Target reliability for train scenarios
+        F_actual_train (array-like): Actual reliability for train scenarios
+        F_star_test (array-like): Target reliability for test scenarios
+        F_actual_test (array-like): Actual reliability for test scenarios
+
+    Returns:
+        dict: {
+            'train_test_gap': mean(gap_train) - mean(gap_test),
+            'mean_gap_train': Mean gap on train set,
+            'mean_gap_test': Mean gap on test set,
+        }
+    """
+    # Convert to arrays
+    F_star_train_arr = np.atleast_1d(F_star_train)
+    F_actual_train_arr = np.atleast_1d(F_actual_train)
+    F_star_test_arr = np.atleast_1d(F_star_test)
+    F_actual_test_arr = np.atleast_1d(F_actual_test)
+
+    # Compute gaps
+    gaps_train = F_star_train_arr - F_actual_train_arr
+    gaps_test = F_star_test_arr - F_actual_test_arr
+
+    # Compute means
+    mean_gap_train = float(np.mean(gaps_train))
+    mean_gap_test = float(np.mean(gaps_test))
+
+    # Train-test gap
+    train_test_gap = mean_gap_train - mean_gap_test
+
+    return {
+        'train_test_gap': float(train_test_gap),
+        'mean_gap_train': mean_gap_train,
+        'mean_gap_test': mean_gap_test,
+    }
+
+
+def compute_scenario_diversity(structural_conditions):
+    """
+    Compute scenario diversity score based on structural conditions variation.
+
+    Uses coefficient of variation (CV = std/mean) averaged across all conditions.
+    Higher CV means more diverse scenarios.
+
+    Args:
+        structural_conditions (dict): Dictionary mapping condition names to arrays
+                                     e.g., {'AmbientTemp': [20, 25, 30], 'Humidity': [0.4, 0.5, 0.6]}
+
+    Returns:
+        dict: {
+            'diversity_score': Overall diversity score (mean CV across all conditions),
+            'per_condition_cv': CV for each condition,
+            'per_condition_stats': {mean, std, min, max} for each condition,
+        }
+    """
+    if not structural_conditions:
+        return {
+            'diversity_score': 0.0,
+            'per_condition_cv': {},
+            'per_condition_stats': {},
+        }
+
+    cvs = []
+    per_condition_cv = {}
+    per_condition_stats = {}
+
+    for condition_name, values in structural_conditions.items():
+        values_arr = np.atleast_1d(values)
+
+        mean_val = float(np.mean(values_arr))
+        std_val = float(np.std(values_arr))
+        min_val = float(np.min(values_arr))
+        max_val = float(np.max(values_arr))
+
+        # Coefficient of variation (avoid division by zero)
+        cv = (std_val / abs(mean_val)) if abs(mean_val) > 1e-10 else 0.0
+
+        cvs.append(cv)
+        per_condition_cv[condition_name] = float(cv)
+        per_condition_stats[condition_name] = {
+            'mean': mean_val,
+            'std': std_val,
+            'min': min_val,
+            'max': max_val,
+            'range': max_val - min_val,
+        }
+
+    diversity_score = float(np.mean(cvs)) if cvs else 0.0
+
+    return {
+        'diversity_score': diversity_score,
+        'per_condition_cv': per_condition_cv,
+        'per_condition_stats': per_condition_stats,
+    }
+
+
 def compute_final_metrics(target_trajectory, baseline_trajectory, actual_trajectory, F_star, F_baseline, F_actual):
     """
     Compute comprehensive final metrics.

@@ -262,6 +262,66 @@ class ControllerReportGenerator:
         self.story.append(table)
         self.story.append(Spacer(1, 0.1*cm))
 
+    def add_advanced_metrics_section(self, advanced_metrics):
+        """Add advanced metrics section with train/test comparison"""
+        if not advanced_metrics:
+            return
+
+        self.add_section_title("Performance Analysis")
+
+        # 1. Success Rate - Overall performance metric
+        if 'success_rate_train' in advanced_metrics and 'success_rate_test' in advanced_metrics:
+            success_train = advanced_metrics['success_rate_train']
+            success_test = advanced_metrics['success_rate_test']
+
+            success_text = f"""
+<b>1. Success Rate</b> (threshold: {success_train['threshold']*100:.0f}% of F_star)<br/>
+• <b>Train:</b> {success_train['success_rate_pct']:.1f}% ({success_train['n_successful']}/{success_train['n_total']} scenarios)<br/>
+• <b>Test:</b> {success_test['success_rate_pct']:.1f}% ({success_test['n_successful']}/{success_test['n_total']} scenarios)
+"""
+            self.story.append(Paragraph(success_text, self.styles['BodyText']))
+            self.story.append(Spacer(1, 0.15*cm))
+
+        # 2. Worst-Case Performance - Critical scenarios
+        if 'worst_case_gap_train' in advanced_metrics and 'worst_case_gap_test' in advanced_metrics:
+            worst_train = advanced_metrics['worst_case_gap_train']
+            worst_test = advanced_metrics['worst_case_gap_test']
+
+            worst_text = f"""
+<b>2. Worst-Case Gap</b> (F_star - F_actual)<br/>
+• <b>Train:</b> {worst_train['worst_case_gap']:.6f} at scenario {worst_train['worst_case_scenario_idx']} (F*={worst_train['worst_case_F_star']:.6f}, F={worst_train['worst_case_F_actual']:.6f})<br/>
+• <b>Test:</b> {worst_test['worst_case_gap']:.6f} at scenario {worst_test['worst_case_scenario_idx']} (F*={worst_test['worst_case_F_star']:.6f}, F={worst_test['worst_case_F_actual']:.6f})
+"""
+            self.story.append(Paragraph(worst_text, self.styles['BodyText']))
+            self.story.append(Spacer(1, 0.15*cm))
+
+        # 3. Generalization - Train vs Test comparison
+        if 'train_test_gap' in advanced_metrics:
+            tt_gap = advanced_metrics['train_test_gap']
+            interpretation = "better (good generalization)" if tt_gap['train_test_gap'] > 0 else "worse (possible overfitting)"
+
+            tt_text = f"""
+<b>3. Generalization Analysis</b> (Train-Test Gap)<br/>
+• <b>Mean gap (train):</b> {tt_gap['mean_gap_train']:.6f}<br/>
+• <b>Mean gap (test):</b> {tt_gap['mean_gap_test']:.6f}<br/>
+• <b>Difference:</b> {tt_gap['train_test_gap']:.6f} → Controller performs {interpretation}
+"""
+            self.story.append(Paragraph(tt_text, self.styles['BodyText']))
+            self.story.append(Spacer(1, 0.15*cm))
+
+        # 4. Dataset Characteristics - Scenario diversity
+        if 'diversity_train' in advanced_metrics and 'diversity_test' in advanced_metrics:
+            div_train = advanced_metrics['diversity_train']
+            div_test = advanced_metrics['diversity_test']
+
+            div_text = f"""
+<b>4. Dataset Diversity</b> (Coefficient of Variation across structural conditions)<br/>
+• <b>Train scenarios:</b> {div_train['diversity_score']:.4f}<br/>
+• <b>Test scenarios:</b> {div_test['diversity_score']:.4f}
+"""
+            self.story.append(Paragraph(div_text, self.styles['BodyText']))
+            self.story.append(Spacer(1, 0.15*cm))
+
     def add_plots_stacked(self, checkpoint_dir):
         """Add controller optimization plots stacked vertically"""
         self.add_section_title("Training Visualization")
@@ -303,116 +363,120 @@ class ControllerReportGenerator:
             self.story.append(caption_table)
             self.story.append(Spacer(1, 0.15*cm))
 
-        # Trajectory comparison plot (larger)
-        trajectory_plot = checkpoint_dir / 'trajectory_comparison.png'
-        if trajectory_plot.exists():
-            img = Image(str(trajectory_plot))
-            img_width, img_height = img.imageWidth, img.imageHeight
-            aspect_ratio = img_height / img_width
+        # Advanced Analysis - 2x2 grid
+        self.add_section_title("Advanced Analysis")
 
-            # Larger dimensions for trajectory plot
-            new_width = 18*cm
-            new_height = new_width * aspect_ratio
+        # Load all 4 plots
+        scatter_train_plot = checkpoint_dir / 'target_vs_actual_scatter_train.png'
+        scatter_test_plot = checkpoint_dir / 'target_vs_actual_scatter_test.png'
+        gap_train_plot = checkpoint_dir / 'gap_distribution_train.png'
+        gap_test_plot = checkpoint_dir / 'gap_distribution_test.png'
 
-            if new_height > 14*cm:
-                new_height = 14*cm
-                new_width = new_height / aspect_ratio
+        # Check if all plots exist
+        if all(p.exists() for p in [scatter_train_plot, scatter_test_plot, gap_train_plot, gap_test_plot]):
+            # Create 2x2 grid
+            # Target size for each cell
+            cell_width = 8*cm
+            cell_height = 6*cm
 
-            img.drawWidth = new_width
-            img.drawHeight = new_height
+            # Row 1: Train scenarios
+            # Scatter train
+            img_scatter_train = Image(str(scatter_train_plot))
+            img_scatter_train.drawWidth = cell_width
+            img_scatter_train.drawHeight = cell_height
 
-            img_table = Table([[img]], colWidths=[18*cm])
-            img_table.setStyle(TableStyle([
+            caption_scatter_train = Paragraph("<i>Target vs Baseline & Controller<br/>Training Scenarios</i>",
+                                             self.styles['Normal'])
+
+            # Gap train
+            img_gap_train = Image(str(gap_train_plot))
+            img_gap_train.drawWidth = cell_width
+            img_gap_train.drawHeight = cell_height
+
+            caption_gap_train = Paragraph("<i>Gap Distribution<br/>Training Scenarios</i>",
+                                         self.styles['Normal'])
+
+            # Row 2: Test scenarios
+            # Scatter test
+            img_scatter_test = Image(str(scatter_test_plot))
+            img_scatter_test.drawWidth = cell_width
+            img_scatter_test.drawHeight = cell_height
+
+            caption_scatter_test = Paragraph("<i>Target vs Baseline & Controller<br/>Test Scenarios</i>",
+                                            self.styles['Normal'])
+
+            # Gap test
+            img_gap_test = Image(str(gap_test_plot))
+            img_gap_test.drawWidth = cell_width
+            img_gap_test.drawHeight = cell_height
+
+            caption_gap_test = Paragraph("<i>Gap Distribution<br/>Test Scenarios</i>",
+                                        self.styles['Normal'])
+
+            # Create grid structure
+            # Each cell contains: [[image], [caption]]
+            data = [
+                # Row 1: Training scenarios
+                [
+                    [[img_scatter_train], [caption_scatter_train]],  # Left: scatter train
+                    [[img_gap_train], [caption_gap_train]]          # Right: gap train
+                ],
+                # Row 2: Test scenarios
+                [
+                    [[img_scatter_test], [caption_scatter_test]],   # Left: scatter test
+                    [[img_gap_test], [caption_gap_test]]            # Right: gap test
+                ]
+            ]
+
+            # Create nested tables for each cell
+            cell_tables = []
+            for row in data:
+                cell_row = []
+                for cell_content in row:
+                    cell_table = Table(cell_content, colWidths=[cell_width])
+                    cell_table.setStyle(TableStyle([
+                        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                    ]))
+                    cell_row.append(cell_table)
+                cell_tables.append(cell_row)
+
+            # Create main grid table
+            grid_table = Table(cell_tables, colWidths=[cell_width, cell_width],
+                             rowHeights=[cell_height + 1*cm, cell_height + 1*cm])
+            grid_table.setStyle(TableStyle([
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                ('LEFTPADDING', (0, 0), (-1, -1), 5),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 5),
+                ('TOPPADDING', (0, 0), (-1, -1), 5),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
             ]))
-            self.story.append(img_table)
 
-            caption = Paragraph("<i>Trajectory Comparison - Target vs Baseline vs Controller</i>", self.styles['Normal'])
-            caption_table = Table([[caption]], colWidths=[18*cm])
-            caption_table.setStyle(TableStyle([
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ]))
-            self.story.append(caption_table)
-            self.story.append(Spacer(1, 0.15*cm))
-
-        # Reliability comparison plot
-        reliability_plot = checkpoint_dir / 'reliability_comparison.png'
-        if reliability_plot.exists():
-            img = Image(str(reliability_plot))
-            img_width, img_height = img.imageWidth, img.imageHeight
-            aspect_ratio = img_height / img_width
-
-            new_width = 16*cm
-            new_height = new_width * aspect_ratio
-
-            if new_height > 10*cm:
-                new_height = 10*cm
-                new_width = new_height / aspect_ratio
-
-            img.drawWidth = new_width
-            img.drawHeight = new_height
-
-            img_table = Table([[img]], colWidths=[18*cm])
-            img_table.setStyle(TableStyle([
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ]))
-            self.story.append(img_table)
-
-            caption = Paragraph("<i>Reliability Comparison - System Performance</i>", self.styles['Normal'])
-            caption_table = Table([[caption]], colWidths=[18*cm])
-            caption_table.setStyle(TableStyle([
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ]))
-            self.story.append(caption_table)
-            self.story.append(Spacer(1, 0.15*cm))
-
-        # Process improvements plot
-        improvements_plot = checkpoint_dir / 'process_improvements.png'
-        if improvements_plot.exists():
-            img = Image(str(improvements_plot))
-            img_width, img_height = img.imageWidth, img.imageHeight
-            aspect_ratio = img_height / img_width
-
-            new_width = 16*cm
-            new_height = new_width * aspect_ratio
-
-            if new_height > 10*cm:
-                new_height = 10*cm
-                new_width = new_height / aspect_ratio
-
-            img.drawWidth = new_width
-            img.drawHeight = new_height
-
-            img_table = Table([[img]], colWidths=[18*cm])
-            img_table.setStyle(TableStyle([
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ]))
-            self.story.append(img_table)
-
-            caption = Paragraph("<i>Process-wise Improvements</i>", self.styles['Normal'])
-            caption_table = Table([[caption]], colWidths=[18*cm])
-            caption_table.setStyle(TableStyle([
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ]))
-            self.story.append(caption_table)
+            self.story.append(grid_table)
             self.story.append(Spacer(1, 0.15*cm))
 
     def generate(self, config, training_history, final_metrics, process_metrics,
-                 F_star, F_baseline, F_actual, timestamp, n_scenarios=None):
+                 F_star, F_baseline, F_actual, timestamp, n_scenarios=None, advanced_metrics=None):
         """Generate the complete PDF
 
         Args:
             n_scenarios: Number of scenarios (for multi-scenario training)
+            advanced_metrics: Advanced metrics dictionary (optional)
         """
 
-        # Add all sections
+        # Add all sections in logical order
         self.add_title(timestamp)
+
+        # Configuration and basic metrics
         self.create_two_column_section(config, training_history, F_star, F_baseline, F_actual,
                                       final_metrics, n_scenarios=n_scenarios)
-        self.add_process_metrics_table(process_metrics)
+
+        # Advanced metrics (if available)
+        if advanced_metrics:
+            self.add_advanced_metrics_section(advanced_metrics)
+
+        # Visualizations
         self.add_plots_stacked(Path(config['training']['checkpoint_dir']))
 
         # Build PDF
@@ -501,7 +565,8 @@ def generate_controller_report(
     F_actual,
     checkpoint_dir,
     timestamp=None,
-    n_scenarios=None
+    n_scenarios=None,
+    advanced_metrics=None
 ):
     """
     Generate a LaTeX-style controller optimization training report
@@ -517,6 +582,7 @@ def generate_controller_report(
         checkpoint_dir: Directory to save the report
         timestamp: Training timestamp (optional)
         n_scenarios: Number of scenarios (for multi-scenario training)
+        advanced_metrics: Advanced metrics dictionary (optional)
 
     Returns:
         Path to the generated PDF report
@@ -534,7 +600,8 @@ def generate_controller_report(
         # Generate the original PDF
         generator = ControllerReportGenerator(temp_report_path)
         generator.generate(config, training_history, final_metrics, process_metrics,
-                          F_star, F_baseline, F_actual, timestamp, n_scenarios=n_scenarios)
+                          F_star, F_baseline, F_actual, timestamp, n_scenarios=n_scenarios,
+                          advanced_metrics=advanced_metrics)
 
         # Convert to 2-up format
         try:
@@ -552,7 +619,8 @@ def generate_controller_report(
         print("Note: pypdf not available, generating standard layout (install pypdf for 2-up layout)")
         generator = ControllerReportGenerator(final_report_path)
         generator.generate(config, training_history, final_metrics, process_metrics,
-                          F_star, F_baseline, F_actual, timestamp, n_scenarios=n_scenarios)
+                          F_star, F_baseline, F_actual, timestamp, n_scenarios=n_scenarios,
+                          advanced_metrics=advanced_metrics)
 
     return final_report_path
 

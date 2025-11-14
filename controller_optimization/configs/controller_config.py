@@ -40,6 +40,10 @@ MULTI-SCENARIO:
 - warmup_epochs: Train on single scenario first (0 = disabled)
 - scenario_weights: Custom weights per scenario (None = equal coverage)
 
+METRICS:
+- success_rate_threshold: Threshold for success rate metric (0.95 = 95% of F_star)
+                          Success means F_actual >= threshold * F_star
+
 MISC:
 - random_seed: Global random seed
 - verbose: Print training progress
@@ -114,6 +118,11 @@ CONTROLLER_CONFIG = {
         'shuffle_order': True,  # Shuffle scenario order each epoch (recommended)
         'warmup_epochs': 0,  # Train on single scenario for first N epochs (0 = disabled)
         'scenario_weights': None,  # None = equal weights, or dict {scenario_idx: weight} for weighted sampling
+    },
+
+    # Metrics
+    'metrics': {
+        'success_rate_threshold': 0.95,  # Threshold for success rate (F_actual >= threshold * F_star)
     },
 
     # Report generation
