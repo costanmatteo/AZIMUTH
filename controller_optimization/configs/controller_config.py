@@ -75,11 +75,11 @@ CONTROLLER_CONFIG = {
     # Training parameters
     'training': {
         'epochs': 200,  # Each epoch cycles through all training scenarios once
-        'batch_size': 128,  # Replicas per scenario (same inputs, different dropout/stochasticity)
+        'batch_size': 64,  # Replicas per scenario (same inputs, different dropout/stochasticity)
         'learning_rate': 0.0001,
         'weight_decay': 0.001,
-        'lambda_bc': 0.00001,  # Behavior cloning weight
-        'patience': 50,
+        'lambda_bc': 0.001,  # Behavior cloning weight
+        'patience': 30,
         'device': 'auto',
         'checkpoint_dir': 'controller_optimization/checkpoints/controller',
 
@@ -106,8 +106,8 @@ CONTROLLER_CONFIG = {
 
     # Scenario generation (train/test split)
     'scenarios': {
-        'n_train': 1,         # Training scenarios (diverse operating conditions)
-        'n_test': 10,          # Test scenarios (final evaluation, never seen during training)
+        'n_train': 200,         # Training scenarios (diverse operating conditions)
+        'n_test': 50,          # Test scenarios (final evaluation, never seen during training)
         'seed_target': 42,     # Seed for target trajectory generation (train)
         'seed_baseline': 43,   # Seed for baseline process noise (same inputs, different noise)
         'test_seed_offset': 1000,  # Offset added to seeds for test scenarios (ensures different from train)
