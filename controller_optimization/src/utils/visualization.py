@@ -261,3 +261,194 @@ def plot_process_improvements(process_metrics, save_path=None):
         plt.show()
 
     plt.close()
+
+
+def plot_target_vs_actual_scatter(F_star_per_scenario, F_actual_per_scenario, save_path=None):
+    """
+    Scatter plot: F_star (target) vs F_actual (controller).
+
+    Shows how well the controller matches the target for each scenario.
+    Points on the diagonal line (y=x) indicate perfect matching.
+    Color indicates the gap (F_star - F_actual).
+
+    Works with both single and multiple scenarios.
+
+    Args:
+        F_star_per_scenario (array-like): Target reliability for each scenario
+        F_actual_per_scenario (array-like): Actual reliability for each scenario
+        save_path (str): Path to save figure
+    """
+    F_star_arr = np.atleast_1d(F_star_per_scenario)
+    F_actual_arr = np.atleast_1d(F_actual_per_scenario)
+
+    # Compute gaps for colormap
+    gaps = F_star_arr - F_actual_arr
+
+    fig, ax = plt.subplots(figsize=(10, 8))
+
+    # Scatter plot with colormap (green -> yellow -> red)
+    scatter = ax.scatter(F_star_arr, F_actual_arr,
+                        c=gaps,
+                        cmap='RdYlGn_r',  # Reverse: green (small gap) -> red (large gap)
+                        s=100,
+                        alpha=0.7,
+                        edgecolors='black',
+                        linewidths=1.5)
+
+    # Diagonal line (perfect match: F_actual = F_star)
+    min_val = min(F_star_arr.min(), F_actual_arr.min())
+    max_val = max(F_star_arr.max(), F_actual_arr.max())
+    margin = (max_val - min_val) * 0.1
+    ax.plot([min_val - margin, max_val + margin],
+            [min_val - margin, max_val + margin],
+            'k--', linewidth=2, label='Perfect Match (F_actual = F_star)', alpha=0.5)
+
+    # Colorbar
+    cbar = plt.colorbar(scatter, ax=ax)
+    cbar.set_label('Gap (F_star - F_actual)', fontsize=12, fontweight='bold')
+
+    # Axis labels and title
+    ax.set_xlabel('F_star (Target Reliability)', fontsize=14, fontweight='bold')
+    ax.set_ylabel('F_actual (Controller Reliability)', fontsize=14, fontweight='bold')
+    ax.set_title('Target vs Actual Reliability', fontsize=16, fontweight='bold')
+
+    # Equal aspect ratio and grid
+    ax.set_aspect('equal', adjustable='box')
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc='lower right', fontsize=11)
+
+    # Set limits with margin
+    ax.set_xlim(min_val - margin, max_val + margin)
+    ax.set_ylim(min_val - margin, max_val + margin)
+
+    # Add statistics annotation
+    mean_gap = np.mean(gaps)
+    worst_gap = np.max(gaps)
+    n_scenarios = len(F_star_arr)
+
+    stats_text = f'Scenarios: {n_scenarios}\nMean Gap: {mean_gap:.6f}\nWorst Gap: {worst_gap:.6f}'
+    ax.text(0.02, 0.98, stats_text,
+            transform=ax.transAxes,
+            fontsize=10,
+            verticalalignment='top',
+            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"  Plot saved: {save_path}")
+    else:
+        plt.show()
+
+    plt.close()
+
+
+def plot_gap_distribution(F_star_per_scenario, F_actual_per_scenario, save_path=None):
+    """
+    Histogram of gap distribution: F_star - F_actual.
+
+    Shows the distribution of gaps between target and actual reliability.
+    Includes mean, median, and worst-case annotations.
+
+    Works with both single and multiple scenarios.
+
+    Args:
+        F_star_per_scenario (array-like): Target reliability for each scenario
+        F_actual_per_scenario (array-like): Actual reliability for each scenario
+        save_path (str): Path to save figure
+    """
+    F_star_arr = np.atleast_1d(F_star_per_scenario)
+    F_actual_arr = np.atleast_1d(F_actual_per_scenario)
+
+    # Compute gaps
+    gaps = F_star_arr - F_actual_arr
+
+    fig, ax = plt.subplots(figsize=(12, 7))
+
+    # Histogram
+    n_scenarios = len(gaps)
+
+    # Determine number of bins (adaptive)
+    if n_scenarios == 1:
+        # Single scenario: show as single bar
+        n_bins = 1
+    elif n_scenarios < 10:
+        n_bins = n_scenarios
+    else:
+        n_bins = min(20, n_scenarios // 2)
+
+    counts, bins, patches = ax.hist(gaps, bins=n_bins,
+                                     color='steelblue',
+                                     alpha=0.7,
+                                     edgecolor='black',
+                                     linewidth=1.5)
+
+    # Color bars based on gap value (green = small, red = large)
+    gap_max = gaps.max()
+    gap_min = gaps.min()
+    gap_range = gap_max - gap_min if gap_max > gap_min else 1.0
+
+    for patch, bin_left in zip(patches, bins[:-1]):
+        # Normalize bin position to [0, 1]
+        normalized_pos = (bin_left - gap_min) / gap_range if gap_range > 0 else 0
+        # Green (0) -> Yellow (0.5) -> Red (1)
+        if normalized_pos < 0.5:
+            # Green to yellow
+            r = 2 * normalized_pos
+            g = 1.0
+        else:
+            # Yellow to red
+            r = 1.0
+            g = 2 * (1 - normalized_pos)
+        color = (r, g, 0.0)
+        patch.set_facecolor(color)
+
+    # Statistics
+    mean_gap = np.mean(gaps)
+    median_gap = np.median(gaps)
+    worst_gap = np.max(gaps)
+    best_gap = np.min(gaps)
+    std_gap = np.std(gaps)
+
+    # Add vertical lines for statistics
+    y_max = ax.get_ylim()[1]
+
+    ax.axvline(mean_gap, color='darkblue', linestyle='--', linewidth=2,
+               label=f'Mean: {mean_gap:.6f}')
+    ax.axvline(median_gap, color='purple', linestyle='--', linewidth=2,
+               label=f'Median: {median_gap:.6f}')
+    ax.axvline(worst_gap, color='darkred', linestyle='--', linewidth=2,
+               label=f'Worst: {worst_gap:.6f}')
+
+    # Labels and title
+    ax.set_xlabel('Gap (F_star - F_actual)', fontsize=14, fontweight='bold')
+    ax.set_ylabel('Number of Scenarios', fontsize=14, fontweight='bold')
+    ax.set_title('Distribution of Target-Actual Gap', fontsize=16, fontweight='bold')
+    ax.legend(loc='upper right', fontsize=11)
+    ax.grid(True, axis='y', alpha=0.3)
+
+    # Add statistics box
+    stats_text = (f'Scenarios: {n_scenarios}\n'
+                 f'Mean: {mean_gap:.6f}\n'
+                 f'Std: {std_gap:.6f}\n'
+                 f'Median: {median_gap:.6f}\n'
+                 f'Best: {best_gap:.6f}\n'
+                 f'Worst: {worst_gap:.6f}')
+
+    ax.text(0.98, 0.98, stats_text,
+            transform=ax.transAxes,
+            fontsize=10,
+            verticalalignment='top',
+            horizontalalignment='right',
+            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.7))
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"  Plot saved: {save_path}")
+    else:
+        plt.show()
+
+    plt.close()

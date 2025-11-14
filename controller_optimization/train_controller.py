@@ -37,13 +37,19 @@ from controller_optimization.src.training.controller_trainer import ControllerTr
 from controller_optimization.src.utils.metrics import (
     compute_final_metrics,
     compute_process_wise_metrics,
-    convert_trajectory_to_numpy
+    convert_trajectory_to_numpy,
+    compute_worst_case_gap,
+    compute_success_rate,
+    compute_train_test_gap,
+    compute_scenario_diversity
 )
 from controller_optimization.src.utils.visualization import (
     plot_training_history,
     plot_trajectory_comparison,
     plot_reliability_comparison,
-    plot_process_improvements
+    plot_process_improvements,
+    plot_target_vs_actual_scatter,
+    plot_gap_distribution
 )
 from controller_optimization.src.utils.report_generator import generate_controller_report
 from controller_optimization.src.utils.model_utils import convert_numpy_to_tensor
@@ -295,6 +301,149 @@ def main():
     print(f"Robustness (std of F):         {F_actual_std:.6f}  (lower = more robust)")
     print("="*70)
 
+    # 7b. Evaluate on TEST scenarios
+    print("\n[7b/9] Evaluating on TEST scenarios...")
+    print("-"*70)
+
+    # Create temporary ProcessChain for test scenarios
+    print(f"  Creating process chain for test scenarios...")
+    process_chain_test = ProcessChain(
+        processes_config=PROCESSES,
+        target_trajectory=target_trajectory_test,
+        policy_config=CONTROLLER_CONFIG['policy_generator'],
+        device=device
+    )
+
+    # Load trained policy generators into test chain
+    for process_idx, process_name in enumerate(process_names):
+        process_chain_test.policy_generators[process_idx].load_state_dict(
+            process_chain.policy_generators[process_idx].state_dict()
+        )
+
+    # Evaluate test scenarios
+    F_star_test_values = []
+    F_baseline_test_values = []
+    F_actual_test_values = []
+
+    print(f"  Evaluating on {n_test} test scenarios (never seen during training)...")
+
+    with torch.no_grad():
+        for scenario_idx in range(n_test):
+            # Extract scenario from test trajectories
+            target_test_scenario = {}
+            baseline_test_scenario = {}
+
+            for process_name, data in target_trajectory_test.items():
+                target_test_scenario[process_name] = {
+                    'inputs': data['inputs'][scenario_idx:scenario_idx+1],
+                    'outputs': data['outputs'][scenario_idx:scenario_idx+1]
+                }
+                baseline_test_scenario[process_name] = {
+                    'inputs': baseline_trajectory_test[process_name]['inputs'][scenario_idx:scenario_idx+1],
+                    'outputs': baseline_trajectory_test[process_name]['outputs'][scenario_idx:scenario_idx+1]
+                }
+
+            # Convert to tensors
+            target_test_tensor = convert_numpy_to_tensor(target_test_scenario, device=device)
+            baseline_test_tensor = convert_numpy_to_tensor(baseline_test_scenario, device=device)
+
+            # Compute F_star and F_baseline for this test scenario
+            F_star_test_i = surrogate.compute_reliability(target_test_tensor).item()
+            F_baseline_test_i = surrogate.compute_reliability(baseline_test_tensor).item()
+
+            F_star_test_values.append(F_star_test_i)
+            F_baseline_test_values.append(F_baseline_test_i)
+
+            # Run controller on test scenario
+            actual_test_trajectory = process_chain_test.forward(batch_size=1, scenario_idx=scenario_idx)
+            F_actual_test_i = surrogate.compute_reliability(actual_test_trajectory).item()
+            F_actual_test_values.append(F_actual_test_i)
+
+    F_star_test_array = np.array(F_star_test_values)
+    F_baseline_test_array = np.array(F_baseline_test_values)
+    F_actual_test_array = np.array(F_actual_test_values)
+
+    F_star_test_mean = np.mean(F_star_test_array)
+    F_baseline_test_mean = np.mean(F_baseline_test_array)
+    F_actual_test_mean = np.mean(F_actual_test_array)
+
+    improvement_test = (F_actual_test_mean - F_baseline_test_mean) / abs(F_baseline_test_mean) * 100 if F_baseline_test_mean != 0 else 0
+
+    print(f"\nTest Results:")
+    print(f"  F* (test):        {F_star_test_mean:.6f}")
+    print(f"  F' (test):        {F_baseline_test_mean:.6f}")
+    print(f"  F  (test):        {F_actual_test_mean:.6f}")
+    print(f"  Improvement:      {improvement_test:+.2f}%")
+
+    # 7c. Compute advanced metrics
+    print("\n[7c/9] Computing advanced metrics...")
+    print("-"*70)
+
+    # Get success rate threshold from config
+    success_threshold = CONTROLLER_CONFIG['metrics']['success_rate_threshold']
+
+    # Worst-case gap (train and test)
+    worst_case_train = compute_worst_case_gap(F_star_array, F_actual_per_scenario)
+    worst_case_test = compute_worst_case_gap(F_star_test_array, F_actual_test_array)
+
+    print(f"\nWorst-Case Gap:")
+    print(f"  Train: {worst_case_train['worst_case_gap']:.6f} (scenario {worst_case_train['worst_case_scenario_idx']})")
+    print(f"  Test:  {worst_case_test['worst_case_gap']:.6f} (scenario {worst_case_test['worst_case_scenario_idx']})")
+
+    # Success rate (train and test)
+    success_rate_train = compute_success_rate(F_star_array, F_actual_per_scenario, threshold=success_threshold)
+    success_rate_test = compute_success_rate(F_star_test_array, F_actual_test_array, threshold=success_threshold)
+
+    print(f"\nSuccess Rate (threshold: {success_threshold*100:.0f}% of F_star):")
+    print(f"  Train: {success_rate_train['success_rate_pct']:.1f}% ({success_rate_train['n_successful']}/{success_rate_train['n_total']} scenarios)")
+    print(f"  Test:  {success_rate_test['success_rate_pct']:.1f}% ({success_rate_test['n_successful']}/{success_rate_test['n_total']} scenarios)")
+
+    # Train-test gap
+    train_test_gap_metrics = compute_train_test_gap(F_star_array, F_actual_per_scenario,
+                                                     F_star_test_array, F_actual_test_array)
+
+    print(f"\nTrain-Test Gap:")
+    print(f"  Mean gap (train): {train_test_gap_metrics['mean_gap_train']:.6f}")
+    print(f"  Mean gap (test):  {train_test_gap_metrics['mean_gap_test']:.6f}")
+    print(f"  Difference:       {train_test_gap_metrics['train_test_gap']:.6f}")
+    if train_test_gap_metrics['train_test_gap'] > 0:
+        print(f"    → Controller performs BETTER on test (generalizes well)")
+    else:
+        print(f"    → Controller performs WORSE on test (overfitting concern)")
+
+    # Scenario diversity (train only, test separately)
+    train_structural_conditions = {}
+    test_structural_conditions = {}
+
+    # Extract structural conditions from train scenarios
+    for process_name, data in target_trajectory_train.items():
+        if 'structural_conditions' in data and data['structural_conditions']:
+            for var, vals in data['structural_conditions'].items():
+                if var not in train_structural_conditions:
+                    train_structural_conditions[var] = vals
+                else:
+                    train_structural_conditions[var] = np.concatenate([train_structural_conditions[var], vals])
+
+    # Extract structural conditions from test scenarios
+    for process_name, data in target_trajectory_test.items():
+        if 'structural_conditions' in data and data['structural_conditions']:
+            for var, vals in data['structural_conditions'].items():
+                if var not in test_structural_conditions:
+                    test_structural_conditions[var] = vals
+                else:
+                    test_structural_conditions[var] = np.concatenate([test_structural_conditions[var], vals])
+
+    diversity_train = compute_scenario_diversity(train_structural_conditions)
+    diversity_test = compute_scenario_diversity(test_structural_conditions)
+
+    print(f"\nScenario Diversity Score:")
+    print(f"  Train: {diversity_train['diversity_score']:.4f}")
+    print(f"  Test:  {diversity_test['diversity_score']:.4f}")
+    print(f"  Per-condition CV (train):")
+    for var, cv in diversity_train['per_condition_cv'].items():
+        stats = diversity_train['per_condition_stats'][var]
+        print(f"    {var}: CV={cv:.4f}, mean={stats['mean']:.2f}, std={stats['std']:.2f}")
+
     # 8. Generate visualizations
     print("\n[8/9] Generating visualizations...")
 
@@ -351,6 +500,39 @@ def main():
     )
 
     print("  ✓ Basic visualizations generated")
+
+    # 8a. Generate NEW advanced plots
+    print("\n  Generating advanced plots...")
+
+    # Scatter plot: Target vs Actual (train)
+    plot_target_vs_actual_scatter(
+        F_star_per_scenario=F_star_array,
+        F_actual_per_scenario=F_actual_per_scenario,
+        save_path=str(checkpoint_dir / 'target_vs_actual_scatter_train.png')
+    )
+
+    # Scatter plot: Target vs Actual (test)
+    plot_target_vs_actual_scatter(
+        F_star_per_scenario=F_star_test_array,
+        F_actual_per_scenario=F_actual_test_array,
+        save_path=str(checkpoint_dir / 'target_vs_actual_scatter_test.png')
+    )
+
+    # Gap distribution (train)
+    plot_gap_distribution(
+        F_star_per_scenario=F_star_array,
+        F_actual_per_scenario=F_actual_per_scenario,
+        save_path=str(checkpoint_dir / 'gap_distribution_train.png')
+    )
+
+    # Gap distribution (test)
+    plot_gap_distribution(
+        F_star_per_scenario=F_star_test_array,
+        F_actual_per_scenario=F_actual_test_array,
+        save_path=str(checkpoint_dir / 'gap_distribution_test.png')
+    )
+
+    print("  ✓ Advanced visualizations generated")
 
     # 8b. Generate PDF report (if enabled)
     if CONTROLLER_CONFIG['report']['generate_pdf']:
@@ -416,25 +598,61 @@ def main():
     final_results = {
         'timestamp': datetime.now().isoformat(),
         'config': CONTROLLER_CONFIG,
-        'n_scenarios': int(n_scenarios),
+        'n_train_scenarios': int(n_scenarios),
+        'n_test_scenarios': int(n_test),
 
-        # Aggregated metrics
-        'F_star_mean': float(F_star_mean),
-        'F_star_std': float(F_star_std),
-        'F_baseline_mean': float(F_baseline_mean),
-        'F_baseline_std': float(F_baseline_std),
-        'F_actual_mean': float(F_actual_mean),
-        'F_actual_std': float(F_actual_std),
+        # TRAIN metrics - Aggregated
+        'train': {
+            'F_star_mean': float(F_star_mean),
+            'F_star_std': float(F_star_std),
+            'F_baseline_mean': float(F_baseline_mean),
+            'F_baseline_std': float(F_baseline_std),
+            'F_actual_mean': float(F_actual_mean),
+            'F_actual_std': float(F_actual_std),
+            'improvement_pct': float(improvement),
+            'target_gap_pct': float(target_gap),
+            'robustness_std': float(F_actual_std),
+        },
 
-        # Per-scenario metrics
-        'F_star_per_scenario': F_star_array.tolist(),
-        'F_baseline_per_scenario': F_baseline_array.tolist(),
-        'F_actual_per_scenario': F_actual_per_scenario.tolist(),
+        # TRAIN metrics - Per scenario
+        'train_per_scenario': {
+            'F_star': F_star_array.tolist(),
+            'F_baseline': F_baseline_array.tolist(),
+            'F_actual': F_actual_per_scenario.tolist(),
+        },
 
-        # Summary metrics
-        'improvement_pct': float(improvement),
-        'target_gap_pct': float(target_gap),
-        'robustness_std': float(F_actual_std),
+        # TEST metrics - Aggregated
+        'test': {
+            'F_star_mean': float(F_star_test_mean),
+            'F_baseline_mean': float(F_baseline_test_mean),
+            'F_actual_mean': float(F_actual_test_mean),
+            'improvement_pct': float(improvement_test),
+        },
+
+        # TEST metrics - Per scenario
+        'test_per_scenario': {
+            'F_star': F_star_test_array.tolist(),
+            'F_baseline': F_baseline_test_array.tolist(),
+            'F_actual': F_actual_test_array.tolist(),
+        },
+
+        # ADVANCED metrics
+        'advanced_metrics': {
+            # Worst-case gap
+            'worst_case_gap_train': worst_case_train,
+            'worst_case_gap_test': worst_case_test,
+
+            # Success rate
+            'success_rate_train': success_rate_train,
+            'success_rate_test': success_rate_test,
+
+            # Train-test gap
+            'train_test_gap': train_test_gap_metrics,
+
+            # Scenario diversity
+            'diversity_train': diversity_train,
+            'diversity_test': diversity_test,
+        },
 
         # Training history
         'history': history_serializable,
