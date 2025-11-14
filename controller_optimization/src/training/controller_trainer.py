@@ -62,6 +62,9 @@ class ControllerTrainer:
             'F_values': [],  # Reliability values durante training
         }
 
+        # Embedding tracking (if scenario encoder is enabled)
+        self.embedding_history = {}  # Dict: {epoch: embeddings_array}
+
         # Best model tracking
         self.best_loss = float('inf')
         self.best_F = -float('inf')
@@ -99,6 +102,56 @@ class ControllerTrainer:
             }
 
         print(f"  Input normalization stats computed for {len(self.input_stats)} processes")
+
+    def _extract_all_embeddings(self):
+        """
+        Extract embeddings for all scenarios using the scenario encoder.
+
+        Returns:
+            tuple: (embeddings, structural_params, scenario_indices)
+                - embeddings: np.array of shape (n_scenarios, embedding_dim)
+                - structural_params: np.array of shape (n_scenarios, n_structural_params)
+                - scenario_indices: np.array of scenario indices
+        """
+        if not hasattr(self.process_chain, 'scenario_encoder') or self.process_chain.scenario_encoder is None:
+            return None, None, None
+
+        n_scenarios = len(self.surrogate.F_star)
+        embedding_dim = self.process_chain.scenario_embedding_dim
+
+        embeddings_list = []
+        structural_params_list = []
+
+        with torch.no_grad():
+            for scenario_idx in range(n_scenarios):
+                # Extract structural params
+                structural_params = self.process_chain._extract_structural_params(scenario_idx)
+                structural_params_list.append(structural_params.cpu().numpy())
+
+                # Encode to embedding
+                structural_params_batch = structural_params.unsqueeze(0)  # Add batch dim
+                embedding = self.process_chain.scenario_encoder(structural_params_batch)
+                embeddings_list.append(embedding.squeeze(0).cpu().numpy())
+
+        embeddings = np.array(embeddings_list)  # Shape: (n_scenarios, embedding_dim)
+        structural_params = np.array(structural_params_list)  # Shape: (n_scenarios, n_params)
+        scenario_indices = np.arange(n_scenarios)
+
+        return embeddings, structural_params, scenario_indices
+
+    def _save_embedding_snapshot(self, epoch):
+        """
+        Save embedding snapshot for a specific epoch.
+
+        Args:
+            epoch (int): Current epoch number
+        """
+        if not hasattr(self.process_chain, 'scenario_encoder') or self.process_chain.scenario_encoder is None:
+            return
+
+        embeddings, _, _ = self._extract_all_embeddings()
+        if embeddings is not None:
+            self.embedding_history[epoch] = embeddings
 
     def compute_loss(self, trajectory, scenario_idx):
         """
@@ -245,6 +298,12 @@ class ControllerTrainer:
             print(f"  Save dir: {save_dir}")
             print(f"  F* (target, mean): {np.mean(self.surrogate.F_star):.6f} ± {np.std(self.surrogate.F_star):.6f}")
 
+        # Save embedding snapshot at epoch 1 (initial state)
+        if hasattr(self.process_chain, 'scenario_encoder') and self.process_chain.scenario_encoder is not None:
+            self._save_embedding_snapshot(epoch=1)
+            if verbose:
+                print(f"  Saved initial embedding snapshot")
+
         for epoch in range(1, epochs + 1):
             # Train epoch (cycles through all scenarios once)
             avg_total_loss, avg_rel_loss, avg_bc_loss, avg_F = self.train_epoch(
@@ -256,6 +315,11 @@ class ControllerTrainer:
             self.history['reliability_loss'].append(avg_rel_loss)
             self.history['bc_loss'].append(avg_bc_loss)
             self.history['F_values'].append(avg_F)
+
+            # Save embedding snapshot periodically
+            if hasattr(self.process_chain, 'scenario_encoder') and self.process_chain.scenario_encoder is not None:
+                if epoch % 20 == 0 or epoch == 1:  # Save every 20 epochs and at epoch 1
+                    self._save_embedding_snapshot(epoch)
 
             # Print progress
             if verbose and (epoch % 10 == 0 or epoch == 1):
@@ -287,6 +351,31 @@ class ControllerTrainer:
 
         # Save final model
         self.save_checkpoint(save_dir / 'final_model.pt', epochs)
+
+        # Save final embedding snapshot
+        if hasattr(self.process_chain, 'scenario_encoder') and self.process_chain.scenario_encoder is not None:
+            final_epoch = epoch  # Use actual final epoch (may have stopped early)
+            self._save_embedding_snapshot(final_epoch)
+
+            # Save embedding data
+            embeddings, structural_params, scenario_indices = self._extract_all_embeddings()
+            if embeddings is not None:
+                embedding_data = {
+                    'embeddings': embeddings.tolist(),
+                    'structural_params': structural_params.tolist(),
+                    'scenario_indices': scenario_indices.tolist(),
+                    'embedding_history_epochs': list(self.embedding_history.keys()),
+                }
+                embedding_path = save_dir / 'embeddings.json'
+                with open(embedding_path, 'w') as f:
+                    json.dump(embedding_data, f, indent=2)
+
+                # Save embedding history as numpy
+                embedding_history_path = save_dir / 'embedding_history.npz'
+                np.savez(embedding_history_path, **{f'epoch_{k}': v for k, v in self.embedding_history.items()})
+
+                if verbose:
+                    print(f"  Saved embedding data to {save_dir}")
 
         # Save training history
         history_path = save_dir / 'training_history.json'

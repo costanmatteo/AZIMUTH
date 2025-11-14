@@ -583,6 +583,60 @@ def main():
             'diversity_test': diversity_test,
         }
 
+        # Generate embedding visualization plots (if scenario encoder is enabled)
+        print("\n[8.5/9] Generating embedding visualizations...")
+        embedding_plots = {}
+        try:
+            from controller_optimization.src.utils.embedding_visualization import generate_all_embedding_plots
+            import json
+
+            # Load embedding data
+            embedding_path = checkpoint_dir / 'embeddings.json'
+            embedding_history_path = checkpoint_dir / 'embedding_history.npz'
+
+            if embedding_path.exists():
+                with open(embedding_path, 'r') as f:
+                    embedding_data = json.load(f)
+
+                embeddings = np.array(embedding_data['embeddings'])
+                structural_params = np.array(embedding_data['structural_params'])
+                scenario_indices = np.array(embedding_data['scenario_indices'])
+
+                # Load embedding history if available
+                embedding_history = {}
+                if embedding_history_path.exists():
+                    history_data = np.load(embedding_history_path)
+                    for key in history_data.files:
+                        epoch_num = int(key.split('_')[1])
+                        embedding_history[epoch_num] = history_data[key]
+
+                # Determine parameter names from processes_config
+                param_names = []
+                for process_config in PROCESSES:
+                    from controller_optimization.configs.processes_config import get_controllable_inputs
+                    input_labels = process_config['input_labels']
+                    controllable = get_controllable_inputs(process_config)
+                    for label in input_labels:
+                        if label not in controllable:
+                            param_names.append(f"{process_config['name']}.{label}")
+
+                # Generate all embedding plots
+                embedding_plots = generate_all_embedding_plots(
+                    embeddings=embeddings,
+                    structural_params=structural_params,
+                    scenario_indices=scenario_indices,
+                    checkpoint_dir=checkpoint_dir,
+                    embedding_history=embedding_history if len(embedding_history) > 0 else None,
+                    param_names=param_names if len(param_names) > 0 else None
+                )
+                print(f"  ✓ Generated {len(embedding_plots)} embedding plots")
+            else:
+                print("  ⚠ No embedding data found (scenario encoder may be disabled)")
+        except Exception as e:
+            print(f"  ✗ Warning: Failed to generate embedding plots: {e}")
+            import traceback
+            traceback.print_exc()
+
         # Generate report
         try:
             report_path = generate_controller_report(
