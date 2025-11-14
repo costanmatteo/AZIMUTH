@@ -40,7 +40,7 @@ def plot_embedding_tsne(embeddings, structural_params, scenario_indices, save_pa
     if n_scenarios < perplexity:
         perplexity = max(5, n_scenarios // 2)
 
-    tsne = TSNE(n_components=2, perplexity=perplexity, random_state=42, n_iter=1000)
+    tsne = TSNE(n_components=2, perplexity=perplexity, random_state=42, max_iter=1000)
     embeddings_2d = tsne.fit_transform(embeddings)
 
     # Create figure with subplots for each structural parameter
