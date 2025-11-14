@@ -11,6 +11,9 @@ TRAINING:
               Higher values = smoother gradients but more memory
 - learning_rate: Initial learning rate for optimizer
 - lambda_bc: Behavior cloning weight (balances reliability vs target-following)
+- reliability_loss_scale: Scale factor for reliability loss (F - F*)^2
+                         Prevents vanishing gradients when delta F is small (~0.1)
+                         Typical values: 100.0 (default), 1000.0 for very small deltas
 - patience: Early stopping patience (epochs without improvement)
 - gradient_clip_norm: Max gradient norm (None=no clipping, 1.0=typical value)
 - lr_scheduler: Learning rate decay schedule (None or dict with 'type', 'step_size', 'gamma')
@@ -27,6 +30,11 @@ POLICY GENERATOR:
 - hidden_sizes: Layer sizes for 'custom' architecture
 - dropout: Dropout rate for regularization
 - use_batchnorm: Enable batch normalization
+- use_scenario_encoder: Enable scenario context encoding (structural parameters → embedding)
+                       Allows policy to adapt to different operating conditions
+                       Recommended: True (default)
+- scenario_embedding_dim: Dimension of scenario embedding vector (default: 16)
+                         Higher = more expressive but more parameters
 
 SCENARIOS:
 - n_train: Number of scenarios for training (diverse operating conditions)
@@ -70,6 +78,8 @@ CONTROLLER_CONFIG = {
         'hidden_sizes': [64, 32],  # Usato solo se 'custom'
         'dropout': 0.1,
         'use_batchnorm': False,
+        'use_scenario_encoder': True,  # Enable scenario context encoding
+        'scenario_embedding_dim': 16,  # Dimension of scenario embedding vector
     },
 
     # Training parameters
@@ -79,6 +89,7 @@ CONTROLLER_CONFIG = {
         'learning_rate': 0.0001,
         'weight_decay': 0.001,
         'lambda_bc': 0.001,  # Behavior cloning weight
+        'reliability_loss_scale': 100.0,  # Scale factor for reliability loss (F - F*)^2
         'patience': 30,
         'device': 'auto',
         'checkpoint_dir': 'controller_optimization/checkpoints/controller',

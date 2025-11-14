@@ -322,6 +322,114 @@ class ControllerReportGenerator:
             self.story.append(Paragraph(div_text, self.styles['BodyText']))
             self.story.append(Spacer(1, 0.15*cm))
 
+    def add_embedding_plots(self, checkpoint_dir):
+        """Add scenario embedding visualization plots"""
+        checkpoint_dir = Path(checkpoint_dir)
+
+        # Check if any embedding plots exist
+        embedding_plots = [
+            'embedding_tsne.png',
+            'embedding_pca.png',
+            'embedding_distances.png',
+            'embedding_correlations.png',
+            'embedding_evolution.png'
+        ]
+
+        available_plots = [p for p in embedding_plots if (checkpoint_dir / p).exists()]
+
+        if len(available_plots) == 0:
+            return  # No embedding plots to add
+
+        self.add_section_title("Scenario Encoder Analysis")
+
+        # Create 2x2 grid for first 4 plots (larger size for better visibility)
+        plots_to_grid = available_plots[:4]
+        cell_width = 9*cm  # Increased from 8cm
+        cell_height = 7*cm  # Increased from 6cm
+
+        grid_data = []
+        row = []
+
+        for i, plot_name in enumerate(plots_to_grid):
+            plot_path = checkpoint_dir / plot_name
+
+            # Create image
+            img = Image(str(plot_path))
+            img.drawWidth = cell_width
+            img.drawHeight = cell_height
+
+            # Create caption
+            caption_text = plot_name.replace('embedding_', '').replace('.png', '').replace('_', ' ').title()
+            caption = Paragraph(f"<i>{caption_text}</i>", self.styles['Normal'])
+
+            # Add to row
+            cell_table = Table([[img], [caption]], colWidths=[cell_width])
+            cell_table.setStyle(TableStyle([
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ]))
+            row.append(cell_table)
+
+            # Every 2 plots, start new row
+            if len(row) == 2:
+                grid_data.append(row)
+                row = []
+
+        # Add remaining plot if odd number
+        if len(row) > 0:
+            # Pad with empty cell
+            while len(row) < 2:
+                row.append("")
+            grid_data.append(row)
+
+        # Create grid table
+        if len(grid_data) > 0:
+            grid_table = Table(grid_data, colWidths=[cell_width, cell_width])
+            grid_table.setStyle(TableStyle([
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                ('LEFTPADDING', (0, 0), (-1, -1), 5),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 5),
+                ('TOPPADDING', (0, 0), (-1, -1), 5),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+            ]))
+            self.story.append(grid_table)
+            self.story.append(Spacer(1, 0.15*cm))
+
+        # Add evolution plot separately if it exists (usually wider)
+        if 'embedding_evolution.png' in available_plots:
+            evol_path = checkpoint_dir / 'embedding_evolution.png'
+            img_evol = Image(str(evol_path))
+
+            # Larger width for evolution plot (increased for better visibility)
+            new_width = 17*cm  # Increased from 16cm
+            img_width, img_height = img_evol.imageWidth, img_evol.imageHeight
+            aspect_ratio = img_height / img_width
+            new_height = new_width * aspect_ratio
+
+            if new_height > 12*cm:  # Increased from 10cm
+                new_height = 12*cm
+                new_width = new_height / aspect_ratio
+
+            img_evol.drawWidth = new_width
+            img_evol.drawHeight = new_height
+
+            # Center the image
+            img_table = Table([[img_evol]], colWidths=[18*cm])
+            img_table.setStyle(TableStyle([
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ]))
+            self.story.append(img_table)
+
+            caption = Paragraph("<i>Embedding Evolution During Training</i>", self.styles['Normal'])
+            caption_table = Table([[caption]], colWidths=[18*cm])
+            caption_table.setStyle(TableStyle([
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ]))
+            self.story.append(caption_table)
+            self.story.append(Spacer(1, 0.15*cm))
+
     def add_plots_stacked(self, checkpoint_dir):
         """Add controller optimization plots stacked vertically"""
         self.add_section_title("Training Visualization")
@@ -478,6 +586,9 @@ class ControllerReportGenerator:
 
         # Visualizations
         self.add_plots_stacked(Path(config['training']['checkpoint_dir']))
+
+        # Embedding visualizations (if scenario encoder is enabled)
+        self.add_embedding_plots(Path(config['training']['checkpoint_dir']))
 
         # Build PDF
         doc = SimpleDocTemplate(
