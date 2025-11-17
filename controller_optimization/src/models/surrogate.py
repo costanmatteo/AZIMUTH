@@ -79,8 +79,9 @@ class ProTSurrogate:
 
             sampled_outputs[process_name] = sample
 
-        # Formula fisica inventata per reliability
+        # Formula fisica inventata per reliability CON RELAZIONI TRA PROCESSI
         # F combina gli outputs di tutti i processi in una metrica di qualità
+        # con target adattivi basati sui processi precedenti
 
         # Estrai i valori (assumo 1 output per processo come da config)
         laser_power = sampled_outputs['laser'].squeeze()      # ActualPower
@@ -88,27 +89,36 @@ class ProTSurrogate:
         galvanic_thick = sampled_outputs['galvanic'].squeeze() # Thickness
         microetch_depth = sampled_outputs['microetch'].squeeze() # Depth
 
-        # Formula inventata: F = weighted combination di qualità processo
-        # Normalizzazione basata su valori tipici:
-        # - Laser ActualPower: ~0.4-0.6 → target 0.5
-        # - Plasma RemovalRate: ~3-7 → target 5.0
-        # - Galvanic Thickness: ~8-12 μm → target 10.0
+        # TARGET ADATTIVI: i processi successivi dipendono dai precedenti
+        # Valori base:
+        # - Laser ActualPower: ~0.4-0.6 → target base 0.5
+        # - Plasma RemovalRate: ~3-7 → target base 5.0
+        # - Galvanic Thickness: ~8-12 μm → target base 10.0
+        # - Microetch Depth: ~15-25 → target base 20.0
 
-        # Ogni componente: quanto è vicino al valore ottimale
-        laser_quality = torch.exp(-((laser_power - 0.5) ** 2) / 0.1)
-        plasma_quality = torch.exp(-((plasma_rate - 5.0) ** 2) / 2.0)
-        galvanic_quality = torch.exp(-((galvanic_thick - 10.0) ** 2) / 4.0)
-        microetch_quality = torch.exp(-((microetch_depth - 20.0) ** 2) / 4.0)
+        # Laser ha target fisso (è il primo processo)
+        laser_target = 0.5
 
+        # Plasma target dipende da Laser
+        # Se laser è troppo forte → plasma deve compensare aumentando removal rate
+        plasma_target = 5.0 + 3.0 * (laser_power - 0.5)
 
-       # print(f"microetch_depth: {microetch_depth}")
-       # print(f"  is_nan: {torch.isnan(microetch_depth).any()}")
-       # print(f"  is_inf: {torch.isinf(microetch_depth).any()}")
-       # print(f"  value: {microetch_depth.item() if microetch_depth.numel() == 1 else microetch_depth}")
+        # Galvanic target dipende da Plasma
+        # Se plasma ha rimosso troppo → galvanic deve depositare più spessore
+        galvanic_target = 10.0 + 2.0 * (plasma_rate - 5.0)
 
+        # Microetch target dipende da Laser
+        # Se laser è troppo forte → microetch deve essere più profondo per compensare
+        microetch_target = 20.0 + 10.0 * (laser_power - 0.5)
+
+        # Ogni componente: quanto è vicino al valore ottimale ADATTIVO
+        laser_quality = torch.exp(-((laser_power - laser_target) ** 2) / 0.1)
+        plasma_quality = torch.exp(-((plasma_rate - plasma_target) ** 2) / 2.0)
+        galvanic_quality = torch.exp(-((galvanic_thick - galvanic_target) ** 2) / 4.0)
+        microetch_quality = torch.exp(-((microetch_depth - microetch_target) ** 2) / 4.0)
 
         # Combinazione pesata (galvanic più importante = prodotto finale)
-        F = 0.2 * laser_quality + 0.15 * plasma_quality + 0.5 * galvanic_quality +0.15 * microetch_quality
+        F = 0.2 * laser_quality + 0.15 * plasma_quality + 0.5 * galvanic_quality + 0.15 * microetch_quality
 
         return F
 
