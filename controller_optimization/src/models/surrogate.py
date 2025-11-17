@@ -93,22 +93,65 @@ class ProTSurrogate:
         # - Laser ActualPower: ~0.4-0.6 → target 0.5
         # - Plasma RemovalRate: ~3-7 → target 5.0
         # - Galvanic Thickness: ~8-12 μm → target 10.0
+        # - Microetch Depth: ~18-22 → target 20.0
 
+        # ==========================================
+        # 1. QUALITY METRICS INDIVIDUALI
+        # ==========================================
         # Ogni componente: quanto è vicino al valore ottimale
         laser_quality = torch.exp(-((laser_power - 0.5) ** 2) / 0.1)
         plasma_quality = torch.exp(-((plasma_rate - 5.0) ** 2) / 2.0)
         galvanic_quality = torch.exp(-((galvanic_thick - 10.0) ** 2) / 4.0)
         microetch_quality = torch.exp(-((microetch_depth - 20.0) ** 2) / 4.0)
 
+        # ==========================================
+        # 2. TERMINI DI INTERAZIONE TRA PROCESSI
+        # ==========================================
+        # Modellano come i processi si compensano a vicenda
 
-       # print(f"microetch_depth: {microetch_depth}")
-       # print(f"  is_nan: {torch.isnan(microetch_depth).any()}")
-       # print(f"  is_inf: {torch.isinf(microetch_depth).any()}")
-       # print(f"  value: {microetch_depth.item() if microetch_depth.numel() == 1 else microetch_depth}")
+        # Deviazioni dai target (valori positivi = sopra target, negativi = sotto)
+        laser_dev = laser_power - 0.5
+        plasma_dev = plasma_rate - 5.0
+        galvanic_dev = galvanic_thick - 10.0
+        microetch_dev = microetch_depth - 20.0
 
+        # Interazione 1: Laser → Plasma
+        # Se laser troppo forte (+), plasma deve essere delicato (-)
+        # Premiamo quando laser_dev + plasma_dev ≈ 0 (si compensano)
+        laser_plasma_interaction = torch.exp(-((laser_dev + plasma_dev) ** 2) / 1.0)
 
-        # Combinazione pesata (galvanic più importante = prodotto finale)
-        F = 0.2 * laser_quality + 0.15 * plasma_quality + 0.5 * galvanic_quality +0.15 * microetch_quality
+        # Interazione 2: Plasma → Galvanic
+        # Se plasma ha rimosso molto (+), galvanic deve depositare di più (+)
+        # Premiamo quando plasma_dev ≈ galvanic_dev (correlazione positiva)
+        plasma_galvanic_interaction = torch.exp(-((plasma_dev - galvanic_dev) ** 2) / 2.0)
+
+        # Interazione 3: Galvanic → Microetch
+        # Se galvanic troppo spesso (+), microetch deve rimuovere di più (+)
+        # Premiamo quando galvanic_dev ≈ microetch_dev (correlazione positiva)
+        galvanic_microetch_interaction = torch.exp(-((galvanic_dev - microetch_dev) ** 2) / 4.0)
+
+        # Interazione 4: Laser → Microetch
+        # Se laser troppo forte (+), crea imperfezioni → microetch deve pulire di più (+)
+        # Premiamo quando laser_dev ≈ microetch_dev (correlazione positiva)
+        laser_microetch_interaction = torch.exp(-((laser_dev - microetch_dev) ** 2) / 2.0)
+
+        # ==========================================
+        # 3. COMBINAZIONE FINALE
+        # ==========================================
+        # Pesi: 0.75 per quality individuali, 0.25 per interazioni
+        # Galvanic rimane il più importante (prodotto finale)
+        F = (
+            # Quality individuali (75%)
+            0.15 * laser_quality +
+            0.10 * plasma_quality +
+            0.40 * galvanic_quality +
+            0.10 * microetch_quality +
+            # Interazioni tra processi (25%)
+            0.10 * laser_plasma_interaction +
+            0.05 * plasma_galvanic_interaction +
+            0.05 * galvanic_microetch_interaction +
+            0.05 * laser_microetch_interaction
+        )
 
         return F
 
