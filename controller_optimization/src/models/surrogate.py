@@ -89,7 +89,7 @@ class ProTSurrogate:
         galvanic_thick = sampled_outputs['galvanic'].squeeze() # Thickness
         microetch_depth = sampled_outputs['microetch'].squeeze() # Depth
 
-        # TARGET ADATTIVI: i processi successivi dipendono dai precedenti
+        # TARGET ADATTIVI: i processi si influenzano fortemente tra loro
         # Valori base:
         # - Laser ActualPower: ~0.4-0.6 → target base 0.5
         # - Plasma RemovalRate: ~3-7 → target base 5.0
@@ -99,17 +99,20 @@ class ProTSurrogate:
         # Laser ha target fisso (è il primo processo)
         laser_target = 0.5
 
-        # Plasma target dipende da Laser
-        # Se laser è troppo forte → plasma deve compensare aumentando removal rate
-        plasma_target = 5.0 + 3.0 * (laser_power - 0.5)
+        # Plasma target dipende FORTEMENTE da Laser
+        # Se laser è troppo forte → plasma deve compensare molto aumentando removal rate
+        plasma_target = 5.0 + 8.0 * (laser_power - 0.5)
 
-        # Galvanic target dipende da Plasma
+        # Galvanic target dipende da ENTRAMBI Plasma E Laser
         # Se plasma ha rimosso troppo → galvanic deve depositare più spessore
-        galvanic_target = 10.0 + 2.0 * (plasma_rate - 5.0)
+        # Se laser era forte → galvanic deve compensare ulteriormente
+        galvanic_target = 10.0 + 5.0 * (plasma_rate - 5.0) + 4.0 * (laser_power - 0.5)
 
-        # Microetch target dipende da Laser
-        # Se laser è troppo forte → microetch deve essere più profondo per compensare
-        microetch_target = 20.0 + 10.0 * (laser_power - 0.5)
+        # Microetch target dipende da TUTTI i processi precedenti
+        # Se laser è troppo forte → microetch deve essere più profondo
+        # Se plasma è aggressivo → microetch deve compensare
+        # Se galvanic ha depositato troppo → microetch deve rimuovere di più
+        microetch_target = 20.0 + 15.0 * (laser_power - 0.5) + 3.0 * (plasma_rate - 5.0) - 1.5 * (galvanic_thick - 10.0)
 
         # Ogni componente: quanto è vicino al valore ottimale ADATTIVO
         laser_quality = torch.exp(-((laser_power - laser_target) ** 2) / 0.1)
