@@ -342,58 +342,50 @@ class ControllerReportGenerator:
 
         self.add_section_title("Scenario Encoder Analysis")
 
-        # Create 2x2 grid for first 4 plots (larger size for better visibility)
-        plots_to_grid = available_plots[:4]
-        cell_width = 9*cm  # Increased from 8cm
-        cell_height = 7*cm  # Increased from 6cm
+        # Stack plots vertically for better visibility (not 2x2 grid)
+        # Exclude evolution plot as it's added separately at the end
+        plots_to_stack = [p for p in available_plots if p != 'embedding_evolution.png']
 
-        grid_data = []
-        row = []
+        # Larger dimensions for stacked layout
+        plot_width = 16*cm  # Much larger than 2x2 grid (was 9cm)
+        plot_height = 11*cm  # Much taller than 2x2 grid (was 7cm)
 
-        for i, plot_name in enumerate(plots_to_grid):
+        for plot_name in plots_to_stack:
             plot_path = checkpoint_dir / plot_name
 
             # Create image
             img = Image(str(plot_path))
-            img.drawWidth = cell_width
-            img.drawHeight = cell_height
+            img_width, img_height = img.imageWidth, img.imageHeight
+            aspect_ratio = img_height / img_width
+
+            # Calculate dimensions maintaining aspect ratio
+            new_width = plot_width
+            new_height = new_width * aspect_ratio
+
+            # Limit height if too tall
+            if new_height > plot_height:
+                new_height = plot_height
+                new_width = new_height / aspect_ratio
+
+            img.drawWidth = new_width
+            img.drawHeight = new_height
+
+            # Center the image
+            img_table = Table([[img]], colWidths=[18*cm])
+            img_table.setStyle(TableStyle([
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ]))
+            self.story.append(img_table)
 
             # Create caption
             caption_text = plot_name.replace('embedding_', '').replace('.png', '').replace('_', ' ').title()
             caption = Paragraph(f"<i>{caption_text}</i>", self.styles['Normal'])
-
-            # Add to row
-            cell_table = Table([[img], [caption]], colWidths=[cell_width])
-            cell_table.setStyle(TableStyle([
+            caption_table = Table([[caption]], colWidths=[18*cm])
+            caption_table.setStyle(TableStyle([
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
             ]))
-            row.append(cell_table)
-
-            # Every 2 plots, start new row
-            if len(row) == 2:
-                grid_data.append(row)
-                row = []
-
-        # Add remaining plot if odd number
-        if len(row) > 0:
-            # Pad with empty cell
-            while len(row) < 2:
-                row.append("")
-            grid_data.append(row)
-
-        # Create grid table
-        if len(grid_data) > 0:
-            grid_table = Table(grid_data, colWidths=[cell_width, cell_width])
-            grid_table.setStyle(TableStyle([
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-                ('LEFTPADDING', (0, 0), (-1, -1), 5),
-                ('RIGHTPADDING', (0, 0), (-1, -1), 5),
-                ('TOPPADDING', (0, 0), (-1, -1), 5),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
-            ]))
-            self.story.append(grid_table)
+            self.story.append(caption_table)
             self.story.append(Spacer(1, 0.15*cm))
 
         # Add evolution plot separately if it exists (usually wider)
@@ -401,13 +393,13 @@ class ControllerReportGenerator:
             evol_path = checkpoint_dir / 'embedding_evolution.png'
             img_evol = Image(str(evol_path))
 
-            # Larger width for evolution plot (increased for better visibility)
-            new_width = 17*cm  # Increased from 16cm
+            # Larger width for evolution plot
+            new_width = 17*cm
             img_width, img_height = img_evol.imageWidth, img_evol.imageHeight
             aspect_ratio = img_height / img_width
             new_height = new_width * aspect_ratio
 
-            if new_height > 12*cm:  # Increased from 10cm
+            if new_height > 12*cm:
                 new_height = 12*cm
                 new_width = new_height / aspect_ratio
 
