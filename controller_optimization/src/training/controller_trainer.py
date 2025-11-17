@@ -330,23 +330,25 @@ class ControllerTrainer:
                 print(f"  F (actual):       {avg_F:.6f}")
                 print(f"  F* (target, mean):{np.mean(self.surrogate.F_star):.6f}")
 
-            # Check for improvement
-            if avg_F > self.best_F:
-                self.best_F = avg_F
+            # Check for improvement (based on LOSS, not F value)
+            # We want F to become more similar to F*, i.e., loss to decrease
+            if avg_total_loss < self.best_loss:
                 self.best_loss = avg_total_loss
+                self.best_F = avg_F  # Track best F for information
                 self.epochs_without_improvement = 0
 
                 # Save best model
                 self.save_checkpoint(save_dir / 'best_model.pt', epoch)
 
                 if verbose:
-                    print(f"  ✓ New best F: {self.best_F:.6f}")
+                    print(f"  ✓ New best loss: {self.best_loss:.6f} (F: {self.best_F:.6f})")
 
             else:
                 self.epochs_without_improvement += 1
 
                 if verbose and self.epochs_without_improvement >= patience:
                     print(f"\n  Early stopping triggered (patience={patience})")
+                    print(f"  Loss has not improved for {patience} epochs")
                     break
 
         # Save final model
