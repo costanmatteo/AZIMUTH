@@ -247,37 +247,73 @@ def main():
     print("\n[7/9] Final evaluation across all scenarios...")
     print("-"*70)
 
-    # Evaluate controller on all scenarios
-    print(f"  Evaluating controller on {n_scenarios} scenarios...")
-    eval_results = trainer.evaluate_all_scenarios()
+    # Load best model before evaluation
+    print("  Loading best model...")
+    trainer.load_checkpoint(checkpoint_dir)
 
-    F_actual_per_scenario = eval_results['F_actual_per_scenario']
+    # Determine batch size for evaluation (use same as training)
+    eval_batch_size = CONTROLLER_CONFIG['training']['batch_size']
+
+    # Evaluate controller on all scenarios with per-sample F values
+    print(f"  Evaluating controller on {n_scenarios} scenarios × {eval_batch_size} samples...")
+    eval_results = trainer.evaluate_all_scenarios(
+        batch_size=eval_batch_size,
+        per_sample=True
+    )
+
+    F_actual_per_sample = eval_results['F_actual_per_sample']
     F_actual_mean = eval_results['F_actual_mean']
     F_actual_std = eval_results['F_actual_std']
 
-    # Compute baseline reliability for all scenarios
-    print(f"  Computing baseline reliability for {n_scenarios} scenarios...")
+    print(f"  Total samples evaluated: {len(F_actual_per_sample)}")
+
+    # Compute baseline reliability for all scenarios × samples
+    print(f"  Computing baseline reliability for {n_scenarios} scenarios × {eval_batch_size} samples...")
     F_baseline_values = []
+    F_star_values = []
+
     with torch.no_grad():
         for scenario_idx in range(n_scenarios):
-            # Extract scenario from baseline trajectory
-            baseline_scenario = {}
-            for process_name, data in baseline_trajectory.items():
-                baseline_scenario[process_name] = {
-                    'inputs': data['inputs'][scenario_idx:scenario_idx+1],
-                    'outputs': data['outputs'][scenario_idx:scenario_idx+1]
-                }
+            # For each scenario, we need to replicate it eval_batch_size times
+            # (since baseline has 1 sample per scenario, but we want to match controller's samples)
+            for sample_idx in range(eval_batch_size):
+                # Extract scenario from baseline trajectory
+                baseline_scenario = {}
+                target_scenario = {}
 
-            # Convert to tensor
-            baseline_scenario_tensor = convert_numpy_to_tensor(baseline_scenario, device=device)
+                for process_name, data in baseline_trajectory.items():
+                    baseline_scenario[process_name] = {
+                        'inputs': data['inputs'][scenario_idx:scenario_idx+1],
+                        'outputs': data['outputs'][scenario_idx:scenario_idx+1]
+                    }
 
-            # Compute reliability
-            F_baseline_i = surrogate.compute_reliability(baseline_scenario_tensor).item()
-            F_baseline_values.append(F_baseline_i)
+                for process_name, data in target_trajectory.items():
+                    target_scenario[process_name] = {
+                        'inputs': data['inputs'][scenario_idx:scenario_idx+1],
+                        'outputs': data['outputs'][scenario_idx:scenario_idx+1]
+                    }
+
+                # Convert to tensors
+                baseline_scenario_tensor = convert_numpy_to_tensor(baseline_scenario, device=device)
+                target_scenario_tensor = convert_numpy_to_tensor(target_scenario, device=device)
+
+                # Compute reliability for baseline and target
+                F_baseline_i = surrogate.compute_reliability(baseline_scenario_tensor).item()
+                F_star_i = surrogate.compute_reliability(target_scenario_tensor).item()
+
+                F_baseline_values.append(F_baseline_i)
+                F_star_values.append(F_star_i)
 
     F_baseline_array = np.array(F_baseline_values)
     F_baseline_mean = np.mean(F_baseline_array)
     F_baseline_std = np.std(F_baseline_array)
+
+    F_star_array = np.array(F_star_values)
+    F_star_mean = np.mean(F_star_array)
+    F_star_std = np.std(F_star_array)
+
+    print(f"  Total baseline samples: {len(F_baseline_array)}")
+    print(f"  Total target samples: {len(F_star_array)}")
 
     # Aggregate final metrics
     improvement = (F_actual_mean - F_baseline_mean) / abs(F_baseline_mean) * 100 if F_baseline_mean != 0 else 0
@@ -285,9 +321,11 @@ def main():
 
     # Print summary
     print("\n" + "="*70)
-    print("FINAL RESULTS - AGGREGATED OVER ALL SCENARIOS")
+    print("FINAL RESULTS - AGGREGATED OVER ALL SAMPLES")
     print("="*70)
     print(f"Number of scenarios:           {n_scenarios}")
+    print(f"Samples per scenario:          {eval_batch_size}")
+    print(f"Total samples:                 {len(F_actual_per_sample)}")
     print(f"\nF* (target, optimal):")
     print(f"  Mean:  {F_star_mean:.6f} ± {F_star_std:.6f}")
     print(f"  Range: [{F_star_array.min():.6f}, {F_star_array.max():.6f}]")
@@ -296,7 +334,7 @@ def main():
     print(f"  Range: [{F_baseline_array.min():.6f}, {F_baseline_array.max():.6f}]")
     print(f"\nF  (actual, with controller):")
     print(f"  Mean:  {F_actual_mean:.6f} ± {F_actual_std:.6f}")
-    print(f"  Range: [{F_actual_per_scenario.min():.6f}, {F_actual_per_scenario.max():.6f}]")
+    print(f"  Range: [{F_actual_per_sample.min():.6f}, {F_actual_per_sample.max():.6f}]")
     print(f"\nImprovement over baseline:     {improvement:+.2f}%")
     print(f"Gap from optimal:              {target_gap:.2f}%")
     print(f"Robustness (std of F):         {F_actual_std:.6f}  (lower = more robust)")
@@ -380,27 +418,32 @@ def main():
     print("\n[7c/9] Computing advanced metrics...")
     print("-"*70)
 
+    # Compute per-scenario means for metrics (aggregate samples within each scenario)
+    F_star_per_scenario_mean = F_star_array.reshape(n_scenarios, eval_batch_size).mean(axis=1)
+    F_baseline_per_scenario_mean = F_baseline_array.reshape(n_scenarios, eval_batch_size).mean(axis=1)
+    # F_actual_per_scenario_mean already computed above
+
     # Get success rate threshold from config
     success_threshold = CONTROLLER_CONFIG['metrics']['success_rate_threshold']
 
-    # Worst-case gap (train and test)
-    worst_case_train = compute_worst_case_gap(F_star_array, F_actual_per_scenario)
+    # Worst-case gap (train and test) - using scenario-level aggregates
+    worst_case_train = compute_worst_case_gap(F_star_per_scenario_mean, F_actual_per_scenario_mean)
     worst_case_test = compute_worst_case_gap(F_star_test_array, F_actual_test_array)
 
     print(f"\nWorst-Case Gap:")
     print(f"  Train: {worst_case_train['worst_case_gap']:.6f} (scenario {worst_case_train['worst_case_scenario_idx']})")
     print(f"  Test:  {worst_case_test['worst_case_gap']:.6f} (scenario {worst_case_test['worst_case_scenario_idx']})")
 
-    # Success rate (train and test)
-    success_rate_train = compute_success_rate(F_star_array, F_actual_per_scenario, threshold=success_threshold)
+    # Success rate (train and test) - using scenario-level aggregates
+    success_rate_train = compute_success_rate(F_star_per_scenario_mean, F_actual_per_scenario_mean, threshold=success_threshold)
     success_rate_test = compute_success_rate(F_star_test_array, F_actual_test_array, threshold=success_threshold)
 
     print(f"\nSuccess Rate (threshold: {success_threshold*100:.0f}% of F_star):")
     print(f"  Train: {success_rate_train['success_rate_pct']:.1f}% ({success_rate_train['n_successful']}/{success_rate_train['n_total']} scenarios)")
     print(f"  Test:  {success_rate_test['success_rate_pct']:.1f}% ({success_rate_test['n_successful']}/{success_rate_test['n_total']} scenarios)")
 
-    # Train-test gap
-    train_test_gap_metrics = compute_train_test_gap(F_star_array, F_actual_per_scenario,
+    # Train-test gap - using scenario-level aggregates
+    train_test_gap_metrics = compute_train_test_gap(F_star_per_scenario_mean, F_actual_per_scenario_mean,
                                                      F_star_test_array, F_actual_test_array)
 
     print(f"\nTrain-Test Gap:")
@@ -468,11 +511,16 @@ def main():
     # Plot trajectory comparison for representative scenario
     print("  Generating trajectory comparison plot...")
 
+    # Compute mean F per scenario (aggregate samples from each scenario)
+    # F_actual_per_sample has shape (n_scenarios * batch_size,)
+    # Reshape to (n_scenarios, batch_size) and take mean along batch dimension
+    F_actual_per_scenario_mean = F_actual_per_sample.reshape(n_scenarios, eval_batch_size).mean(axis=1)
+
     # Select representative scenario (closest to mean F_actual)
     actual_trajectories = eval_results['trajectories']
-    representative_idx = np.argmin(np.abs(F_actual_per_scenario - F_actual_mean))
+    representative_idx = np.argmin(np.abs(F_actual_per_scenario_mean - F_actual_mean))
 
-    print(f"    Using scenario {representative_idx} (F={F_actual_per_scenario[representative_idx]:.6f}, close to mean {F_actual_mean:.6f})")
+    print(f"    Using scenario {representative_idx} (F_mean={F_actual_per_scenario_mean[representative_idx]:.6f}, close to global mean {F_actual_mean:.6f})")
 
     # Extract representative scenario from target and baseline trajectories
     target_scenario = {}
@@ -505,11 +553,11 @@ def main():
     # 8a. Generate NEW advanced plots
     print("\n  Generating advanced plots...")
 
-    # Scatter plot: Target vs Baseline & Actual (train)
+    # Scatter plot: Target vs Baseline & Actual (train) - ALL SAMPLES
     plot_target_vs_actual_scatter(
         F_star_per_scenario=F_star_array,
         F_baseline_per_scenario=F_baseline_array,
-        F_actual_per_scenario=F_actual_per_scenario,
+        F_actual_per_scenario=F_actual_per_sample,
         save_path=str(checkpoint_dir / 'target_vs_actual_scatter_train.png')
     )
 
@@ -521,10 +569,10 @@ def main():
         save_path=str(checkpoint_dir / 'target_vs_actual_scatter_test.png')
     )
 
-    # Gap distribution (train)
+    # Gap distribution (train) - ALL SAMPLES
     plot_gap_distribution(
         F_star_per_scenario=F_star_array,
-        F_actual_per_scenario=F_actual_per_scenario,
+        F_actual_per_scenario=F_actual_per_sample,
         save_path=str(checkpoint_dir / 'gap_distribution_train.png')
     )
 
@@ -559,8 +607,8 @@ def main():
         F_actual_dict = {
             'mean': float(F_actual_mean),
             'std': float(F_actual_std),
-            'min': float(F_actual_per_scenario.min()),
-            'max': float(F_actual_per_scenario.max())
+            'min': float(F_actual_per_sample.min()),
+            'max': float(F_actual_per_sample.max())
         }
 
         # Prepare final metrics for report
@@ -683,11 +731,19 @@ def main():
             'robustness_std': float(F_actual_std),
         },
 
-        # TRAIN metrics - Per scenario
-        'train_per_scenario': {
+        # TRAIN metrics - Per sample (n_scenarios × batch_size)
+        'train_per_sample': {
             'F_star': F_star_array.tolist(),
             'F_baseline': F_baseline_array.tolist(),
-            'F_actual': F_actual_per_scenario.tolist(),
+            'F_actual': F_actual_per_sample.tolist(),
+            'batch_size': int(eval_batch_size),
+        },
+
+        # TRAIN metrics - Per scenario (aggregated means)
+        'train_per_scenario_mean': {
+            'F_star': F_star_per_scenario_mean.tolist(),
+            'F_baseline': F_baseline_per_scenario_mean.tolist(),
+            'F_actual': F_actual_per_scenario_mean.tolist(),
         },
 
         # TEST metrics - Aggregated
