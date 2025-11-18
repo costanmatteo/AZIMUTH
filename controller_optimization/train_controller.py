@@ -647,6 +647,18 @@ def main():
 
         if not use_scenario_encoder:
             print("  ⚠ Scenario encoder is disabled in config. Skipping embedding plots.")
+
+            # Remove old embedding plots if they exist (to prevent them from appearing in report)
+            old_embedding_plots = [
+                checkpoint_dir / 'embedding_tsne_2d.png',
+                checkpoint_dir / 'embedding_pca_2d.png',
+                checkpoint_dir / 'embedding_evolution.png',
+                checkpoint_dir / 'embedding_param_correlation.png',
+            ]
+            for plot_path in old_embedding_plots:
+                if plot_path.exists():
+                    plot_path.unlink()
+                    print(f"    Removed old embedding plot: {plot_path.name}")
         else:
             try:
                 from controller_optimization.src.utils.embedding_visualization import generate_all_embedding_plots
