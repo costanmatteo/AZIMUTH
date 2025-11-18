@@ -444,8 +444,9 @@ class ControllerTrainer:
                         F_actual = self.surrogate.compute_reliability(sample_trajectory).item()
                         F_actual_values.append(F_actual)
                 else:
-                    # Compute reliability for aggregated batch (old behavior)
-                    F_actual = self.surrogate.compute_reliability(trajectory).item()
+                    # Compute reliability for aggregated batch (take mean across batch)
+                    F_actual_batch = self.surrogate.compute_reliability(trajectory)
+                    F_actual = F_actual_batch.mean().item()
                     F_actual_values.append(F_actual)
 
                 # Save representative trajectory (first scenario only, for plotting)
