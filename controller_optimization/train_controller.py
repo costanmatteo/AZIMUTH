@@ -650,7 +650,6 @@ def main():
         else:
             try:
                 from controller_optimization.src.utils.embedding_visualization import generate_all_embedding_plots
-                import json
 
                 # Load embedding data
                 embedding_path = checkpoint_dir / 'embeddings.json'
