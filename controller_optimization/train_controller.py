@@ -536,7 +536,16 @@ def main():
         }
 
     # Get actual trajectory for representative scenario (already a dict of tensors)
-    actual_scenario = actual_trajectories[representative_idx]
+    # Note: actual_trajectories contains batches of eval_batch_size samples
+    # Extract only the first sample for plotting (to match target and baseline)
+    actual_scenario_batch = actual_trajectories[representative_idx]
+    actual_scenario = {}
+    for process_name, data in actual_scenario_batch.items():
+        actual_scenario[process_name] = {
+            'inputs': data['inputs'][0:1],
+            'outputs_mean': data['outputs_mean'][0:1],
+            'outputs_var': data['outputs_var'][0:1]
+        }
 
     # Plot comparison
     plot_trajectory_comparison(
