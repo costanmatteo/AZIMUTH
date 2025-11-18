@@ -75,7 +75,7 @@ CONTROLLER_CONFIG = {
     # Policy generator architecture
     'policy_generator': {
         'architecture': 'custom',  # 'small', 'medium', 'large', 'custom'
-        'hidden_sizes': [64, 32],  # Usato solo se 'custom'
+        'hidden_sizes': [256, 256, 256, 256, 256, 128, 64, 32],  # Usato solo se 'custom'
         'dropout': 0.1,
         'use_batchnorm': False,
         'use_scenario_encoder': True,  # Enable scenario context encoding
@@ -117,8 +117,8 @@ CONTROLLER_CONFIG = {
 
     # Scenario generation (train/test split)
     'scenarios': {
-        'n_train': 200,         # Training scenarios (diverse operating conditions)
-        'n_test': 50,          # Test scenarios (final evaluation, never seen during training)
+        'n_train': 1,         # Training scenarios (diverse operating conditions)
+        'n_test': 1,          # Test scenarios (final evaluation, never seen during training)
         'seed_target': 42,     # Seed for target trajectory generation (train)
         'seed_baseline': 43,   # Seed for baseline process noise (same inputs, different noise)
         'test_seed_offset': 1000,  # Offset added to seeds for test scenarios (ensures different from train)
