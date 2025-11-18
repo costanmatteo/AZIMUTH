@@ -254,11 +254,15 @@ def main():
     # Determine batch size for evaluation (use same as training)
     eval_batch_size = CONTROLLER_CONFIG['training']['batch_size']
 
-    # Evaluate controller on all scenarios with per-sample F values
-    print(f"  Evaluating controller on {n_scenarios} scenarios × {eval_batch_size} samples...")
+    # Get plotting option from config
+    plot_all_samples = CONTROLLER_CONFIG['report'].get('plot_all_batch_samples', True)
+
+    # Evaluate controller on all scenarios
+    mode_str = f"{n_scenarios} scenarios × {eval_batch_size} samples" if plot_all_samples else f"{n_scenarios} scenarios (aggregated)"
+    print(f"  Evaluating controller on {mode_str}...")
     eval_results = trainer.evaluate_all_scenarios(
         batch_size=eval_batch_size,
-        per_sample=True
+        per_sample=plot_all_samples
     )
 
     F_actual_per_sample = eval_results['F_actual_per_sample']
@@ -267,40 +271,42 @@ def main():
 
     print(f"  Total samples evaluated: {len(F_actual_per_sample)}")
 
-    # Compute baseline reliability for all scenarios × samples
-    print(f"  Computing baseline reliability for {n_scenarios} scenarios × {eval_batch_size} samples...")
+    # Compute baseline reliability for all scenarios (× samples if plotting all)
+    mode_str = f"{n_scenarios} scenarios × {eval_batch_size} samples" if plot_all_samples else f"{n_scenarios} scenarios"
+    print(f"  Computing baseline reliability for {mode_str}...")
     F_baseline_values = []
     F_star_values = []
 
     with torch.no_grad():
         for scenario_idx in range(n_scenarios):
-            # For each scenario, we need to replicate it eval_batch_size times
-            # (since baseline has 1 sample per scenario, but we want to match controller's samples)
-            for sample_idx in range(eval_batch_size):
-                # Extract scenario from baseline trajectory
-                baseline_scenario = {}
-                target_scenario = {}
+            # Extract scenario from baseline and target trajectories
+            baseline_scenario = {}
+            target_scenario = {}
 
-                for process_name, data in baseline_trajectory.items():
-                    baseline_scenario[process_name] = {
-                        'inputs': data['inputs'][scenario_idx:scenario_idx+1],
-                        'outputs': data['outputs'][scenario_idx:scenario_idx+1]
-                    }
+            for process_name, data in baseline_trajectory.items():
+                baseline_scenario[process_name] = {
+                    'inputs': data['inputs'][scenario_idx:scenario_idx+1],
+                    'outputs': data['outputs'][scenario_idx:scenario_idx+1]
+                }
 
-                for process_name, data in target_trajectory.items():
-                    target_scenario[process_name] = {
-                        'inputs': data['inputs'][scenario_idx:scenario_idx+1],
-                        'outputs': data['outputs'][scenario_idx:scenario_idx+1]
-                    }
+            for process_name, data in target_trajectory.items():
+                target_scenario[process_name] = {
+                    'inputs': data['inputs'][scenario_idx:scenario_idx+1],
+                    'outputs': data['outputs'][scenario_idx:scenario_idx+1]
+                }
 
-                # Convert to tensors
-                baseline_scenario_tensor = convert_numpy_to_tensor(baseline_scenario, device=device)
-                target_scenario_tensor = convert_numpy_to_tensor(target_scenario, device=device)
+            # Convert to tensors
+            baseline_scenario_tensor = convert_numpy_to_tensor(baseline_scenario, device=device)
+            target_scenario_tensor = convert_numpy_to_tensor(target_scenario, device=device)
 
-                # Compute reliability for baseline and target
-                F_baseline_i = surrogate.compute_reliability(baseline_scenario_tensor).item()
-                F_star_i = surrogate.compute_reliability(target_scenario_tensor).item()
+            # Compute reliability for baseline and target
+            F_baseline_i = surrogate.compute_reliability(baseline_scenario_tensor).item()
+            F_star_i = surrogate.compute_reliability(target_scenario_tensor).item()
 
+            # If plotting all samples, replicate for each sample in the batch
+            # Otherwise, just add once per scenario
+            n_replicas = eval_batch_size if plot_all_samples else 1
+            for _ in range(n_replicas):
                 F_baseline_values.append(F_baseline_i)
                 F_star_values.append(F_star_i)
 
@@ -650,15 +656,19 @@ def main():
 
             # Remove old embedding plots if they exist (to prevent them from appearing in report)
             old_embedding_plots = [
-                checkpoint_dir / 'embedding_tsne_2d.png',
-                checkpoint_dir / 'embedding_pca_2d.png',
+                checkpoint_dir / 'embedding_tsne.png',
+                checkpoint_dir / 'embedding_pca.png',
+                checkpoint_dir / 'embedding_distances.png',
+                checkpoint_dir / 'embedding_correlations.png',
                 checkpoint_dir / 'embedding_evolution.png',
-                checkpoint_dir / 'embedding_param_correlation.png',
             ]
             for plot_path in old_embedding_plots:
                 if plot_path.exists():
-                    plot_path.unlink()
-                    print(f"    Removed old embedding plot: {plot_path.name}")
+                    try:
+                        plot_path.unlink()
+                        print(f"    Removed old embedding plot: {plot_path.name}")
+                    except Exception as e:
+                        print(f"    Warning: Could not remove {plot_path.name}: {e}")
         else:
             try:
                 from controller_optimization.src.utils.embedding_visualization import generate_all_embedding_plots
