@@ -419,9 +419,11 @@ def main():
     print("-"*70)
 
     # Compute per-scenario means for metrics (aggregate samples within each scenario)
+    # F_actual_per_sample has shape (n_scenarios * batch_size,)
+    # Reshape to (n_scenarios, batch_size) and take mean along batch dimension
+    F_actual_per_scenario_mean = F_actual_per_sample.reshape(n_scenarios, eval_batch_size).mean(axis=1)
     F_star_per_scenario_mean = F_star_array.reshape(n_scenarios, eval_batch_size).mean(axis=1)
     F_baseline_per_scenario_mean = F_baseline_array.reshape(n_scenarios, eval_batch_size).mean(axis=1)
-    # F_actual_per_scenario_mean already computed above
 
     # Get success rate threshold from config
     success_threshold = CONTROLLER_CONFIG['metrics']['success_rate_threshold']
@@ -511,12 +513,8 @@ def main():
     # Plot trajectory comparison for representative scenario
     print("  Generating trajectory comparison plot...")
 
-    # Compute mean F per scenario (aggregate samples from each scenario)
-    # F_actual_per_sample has shape (n_scenarios * batch_size,)
-    # Reshape to (n_scenarios, batch_size) and take mean along batch dimension
-    F_actual_per_scenario_mean = F_actual_per_sample.reshape(n_scenarios, eval_batch_size).mean(axis=1)
-
     # Select representative scenario (closest to mean F_actual)
+    # F_actual_per_scenario_mean was already computed above for advanced metrics
     actual_trajectories = eval_results['trajectories']
     representative_idx = np.argmin(np.abs(F_actual_per_scenario_mean - F_actual_mean))
 
