@@ -437,7 +437,7 @@ class ControllerTrainer:
                             sample_trajectory[process_name] = {
                                 'inputs': data['inputs'][sample_idx:sample_idx+1],
                                 'outputs_mean': data['outputs_mean'][sample_idx:sample_idx+1],
-                                'outputs_variance': data['outputs_variance'][sample_idx:sample_idx+1]
+                                'outputs_var': data['outputs_var'][sample_idx:sample_idx+1]
                             }
 
                         # Compute reliability for this single sample
