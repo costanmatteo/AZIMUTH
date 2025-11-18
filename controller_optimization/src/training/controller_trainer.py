@@ -449,9 +449,8 @@ class ControllerTrainer:
                     F_actual = F_actual_batch.mean().item()
                     F_actual_values.append(F_actual)
 
-                # Save representative trajectory (first scenario only, for plotting)
-                if scenario_idx == 0 or not per_sample:
-                    trajectories.append(trajectory)
+                # Save trajectory for each scenario (needed for representative trajectory selection)
+                trajectories.append(trajectory)
 
         F_actual_array = np.array(F_actual_values)
 
