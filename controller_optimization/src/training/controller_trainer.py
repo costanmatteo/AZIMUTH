@@ -394,18 +394,24 @@ class ControllerTrainer:
 
         return self.history
 
-    def evaluate_all_scenarios(self):
+    def evaluate_all_scenarios(self, batch_size=32, per_sample=False):
         """
         Evaluate controller performance on ALL scenarios.
 
+        Args:
+            batch_size (int): Number of samples per scenario
+            per_sample (bool): If True, compute F for each sample individually.
+                              If False, compute F for aggregated batch (old behavior).
+
         Returns:
             dict: {
-                'F_actual_per_scenario': np.array of shape (n_scenarios,),
+                'F_actual_per_sample': np.array of shape (n_scenarios * batch_size,) if per_sample=True
+                                       or (n_scenarios,) if per_sample=False,
                 'F_actual_mean': float,
                 'F_actual_std': float,
                 'F_star_mean': float,
                 'F_star_std': float,
-                'trajectories': list of trajectories for each scenario
+                'trajectories': list of trajectories (representative, one per scenario)
             }
         """
         self.process_chain.eval()
@@ -418,19 +424,38 @@ class ControllerTrainer:
             for scenario_idx in range(n_scenarios):
                 # Run forward pass for this scenario
                 trajectory = self.process_chain.forward(
-                    batch_size=1,
+                    batch_size=batch_size,
                     scenario_idx=scenario_idx
                 )
 
-                # Compute reliability
-                F_actual = self.surrogate.compute_reliability(trajectory).item()
-                F_actual_values.append(F_actual)
+                if per_sample:
+                    # Compute reliability for each sample individually
+                    for sample_idx in range(batch_size):
+                        # Extract single sample from trajectory
+                        sample_trajectory = {}
+                        for process_name, data in trajectory.items():
+                            sample_trajectory[process_name] = {
+                                'inputs': data['inputs'][sample_idx:sample_idx+1],
+                                'outputs_mean': data['outputs_mean'][sample_idx:sample_idx+1],
+                                'outputs_var': data['outputs_var'][sample_idx:sample_idx+1]
+                            }
+
+                        # Compute reliability for this single sample
+                        F_actual = self.surrogate.compute_reliability(sample_trajectory).item()
+                        F_actual_values.append(F_actual)
+                else:
+                    # Compute reliability for aggregated batch (take mean across batch)
+                    F_actual_batch = self.surrogate.compute_reliability(trajectory)
+                    F_actual = F_actual_batch.mean().item()
+                    F_actual_values.append(F_actual)
+
+                # Save trajectory for each scenario (needed for representative trajectory selection)
                 trajectories.append(trajectory)
 
         F_actual_array = np.array(F_actual_values)
 
         return {
-            'F_actual_per_scenario': F_actual_array,
+            'F_actual_per_sample': F_actual_array,
             'F_actual_mean': np.mean(F_actual_array),
             'F_actual_std': np.std(F_actual_array),
             'F_star_mean': np.mean(self.surrogate.F_star),
@@ -458,6 +483,25 @@ class ControllerTrainer:
         state_path = path.parent / 'training_state.json'
         with open(state_path, 'w') as f:
             json.dump(state, f, indent=2)
+
+    def load_checkpoint(self, checkpoint_dir):
+        """
+        Load best model checkpoint.
+
+        Args:
+            checkpoint_dir (Path or str): Directory containing policy checkpoints
+        """
+        checkpoint_dir = Path(checkpoint_dir)
+
+        # Load each policy generator
+        for i, policy in enumerate(self.process_chain.policy_generators):
+            policy_path = checkpoint_dir / f'policy_{i}.pth'
+            if not policy_path.exists():
+                raise FileNotFoundError(f"Policy checkpoint not found: {policy_path}")
+
+            policy.load_state_dict(torch.load(policy_path, map_location=self.device))
+
+        print(f"  ✓ Loaded best model from {checkpoint_dir}")
 
     def compute_final_metrics(self, baseline_trajectory):
         """

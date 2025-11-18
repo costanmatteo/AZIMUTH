@@ -247,37 +247,79 @@ def main():
     print("\n[7/9] Final evaluation across all scenarios...")
     print("-"*70)
 
-    # Evaluate controller on all scenarios
-    print(f"  Evaluating controller on {n_scenarios} scenarios...")
-    eval_results = trainer.evaluate_all_scenarios()
+    # Load best model before evaluation
+    print("  Loading best model...")
+    trainer.load_checkpoint(checkpoint_dir)
 
-    F_actual_per_scenario = eval_results['F_actual_per_scenario']
+    # Determine batch size for evaluation (use same as training)
+    eval_batch_size = CONTROLLER_CONFIG['training']['batch_size']
+
+    # Get plotting option from config
+    plot_all_samples = CONTROLLER_CONFIG['report'].get('plot_all_batch_samples', True)
+
+    # Evaluate controller on all scenarios
+    mode_str = f"{n_scenarios} scenarios × {eval_batch_size} samples" if plot_all_samples else f"{n_scenarios} scenarios (aggregated)"
+    print(f"  Evaluating controller on {mode_str}...")
+    eval_results = trainer.evaluate_all_scenarios(
+        batch_size=eval_batch_size,
+        per_sample=plot_all_samples
+    )
+
+    F_actual_per_sample = eval_results['F_actual_per_sample']
     F_actual_mean = eval_results['F_actual_mean']
     F_actual_std = eval_results['F_actual_std']
 
-    # Compute baseline reliability for all scenarios
-    print(f"  Computing baseline reliability for {n_scenarios} scenarios...")
+    print(f"  Total samples evaluated: {len(F_actual_per_sample)}")
+
+    # Compute baseline reliability for all scenarios (× samples if plotting all)
+    mode_str = f"{n_scenarios} scenarios × {eval_batch_size} samples" if plot_all_samples else f"{n_scenarios} scenarios"
+    print(f"  Computing baseline reliability for {mode_str}...")
     F_baseline_values = []
+    F_star_values = []
+
     with torch.no_grad():
         for scenario_idx in range(n_scenarios):
-            # Extract scenario from baseline trajectory
+            # Extract scenario from baseline and target trajectories
             baseline_scenario = {}
+            target_scenario = {}
+
             for process_name, data in baseline_trajectory.items():
                 baseline_scenario[process_name] = {
                     'inputs': data['inputs'][scenario_idx:scenario_idx+1],
                     'outputs': data['outputs'][scenario_idx:scenario_idx+1]
                 }
 
-            # Convert to tensor
-            baseline_scenario_tensor = convert_numpy_to_tensor(baseline_scenario, device=device)
+            for process_name, data in target_trajectory.items():
+                target_scenario[process_name] = {
+                    'inputs': data['inputs'][scenario_idx:scenario_idx+1],
+                    'outputs': data['outputs'][scenario_idx:scenario_idx+1]
+                }
 
-            # Compute reliability
+            # Convert to tensors
+            baseline_scenario_tensor = convert_numpy_to_tensor(baseline_scenario, device=device)
+            target_scenario_tensor = convert_numpy_to_tensor(target_scenario, device=device)
+
+            # Compute reliability for baseline and target
             F_baseline_i = surrogate.compute_reliability(baseline_scenario_tensor).item()
-            F_baseline_values.append(F_baseline_i)
+            F_star_i = surrogate.compute_reliability(target_scenario_tensor).item()
+
+            # If plotting all samples, replicate for each sample in the batch
+            # Otherwise, just add once per scenario
+            n_replicas = eval_batch_size if plot_all_samples else 1
+            for _ in range(n_replicas):
+                F_baseline_values.append(F_baseline_i)
+                F_star_values.append(F_star_i)
 
     F_baseline_array = np.array(F_baseline_values)
     F_baseline_mean = np.mean(F_baseline_array)
     F_baseline_std = np.std(F_baseline_array)
+
+    F_star_array = np.array(F_star_values)
+    F_star_mean = np.mean(F_star_array)
+    F_star_std = np.std(F_star_array)
+
+    print(f"  Total baseline samples: {len(F_baseline_array)}")
+    print(f"  Total target samples: {len(F_star_array)}")
 
     # Aggregate final metrics
     improvement = (F_actual_mean - F_baseline_mean) / abs(F_baseline_mean) * 100 if F_baseline_mean != 0 else 0
@@ -285,9 +327,11 @@ def main():
 
     # Print summary
     print("\n" + "="*70)
-    print("FINAL RESULTS - AGGREGATED OVER ALL SCENARIOS")
+    print("FINAL RESULTS - AGGREGATED OVER ALL SAMPLES")
     print("="*70)
     print(f"Number of scenarios:           {n_scenarios}")
+    print(f"Samples per scenario:          {eval_batch_size}")
+    print(f"Total samples:                 {len(F_actual_per_sample)}")
     print(f"\nF* (target, optimal):")
     print(f"  Mean:  {F_star_mean:.6f} ± {F_star_std:.6f}")
     print(f"  Range: [{F_star_array.min():.6f}, {F_star_array.max():.6f}]")
@@ -296,7 +340,7 @@ def main():
     print(f"  Range: [{F_baseline_array.min():.6f}, {F_baseline_array.max():.6f}]")
     print(f"\nF  (actual, with controller):")
     print(f"  Mean:  {F_actual_mean:.6f} ± {F_actual_std:.6f}")
-    print(f"  Range: [{F_actual_per_scenario.min():.6f}, {F_actual_per_scenario.max():.6f}]")
+    print(f"  Range: [{F_actual_per_sample.min():.6f}, {F_actual_per_sample.max():.6f}]")
     print(f"\nImprovement over baseline:     {improvement:+.2f}%")
     print(f"Gap from optimal:              {target_gap:.2f}%")
     print(f"Robustness (std of F):         {F_actual_std:.6f}  (lower = more robust)")
@@ -380,27 +424,40 @@ def main():
     print("\n[7c/9] Computing advanced metrics...")
     print("-"*70)
 
+    # Compute per-scenario means for metrics
+    if plot_all_samples:
+        # If plotting all samples: F_actual_per_sample has shape (n_scenarios * batch_size,)
+        # Reshape to (n_scenarios, batch_size) and take mean along batch dimension
+        F_actual_per_scenario_mean = F_actual_per_sample.reshape(n_scenarios, eval_batch_size).mean(axis=1)
+        F_star_per_scenario_mean = F_star_array.reshape(n_scenarios, eval_batch_size).mean(axis=1)
+        F_baseline_per_scenario_mean = F_baseline_array.reshape(n_scenarios, eval_batch_size).mean(axis=1)
+    else:
+        # If using aggregated values: arrays already have shape (n_scenarios,)
+        F_actual_per_scenario_mean = F_actual_per_sample
+        F_star_per_scenario_mean = F_star_array
+        F_baseline_per_scenario_mean = F_baseline_array
+
     # Get success rate threshold from config
     success_threshold = CONTROLLER_CONFIG['metrics']['success_rate_threshold']
 
-    # Worst-case gap (train and test)
-    worst_case_train = compute_worst_case_gap(F_star_array, F_actual_per_scenario)
+    # Worst-case gap (train and test) - using scenario-level aggregates
+    worst_case_train = compute_worst_case_gap(F_star_per_scenario_mean, F_actual_per_scenario_mean)
     worst_case_test = compute_worst_case_gap(F_star_test_array, F_actual_test_array)
 
     print(f"\nWorst-Case Gap:")
     print(f"  Train: {worst_case_train['worst_case_gap']:.6f} (scenario {worst_case_train['worst_case_scenario_idx']})")
     print(f"  Test:  {worst_case_test['worst_case_gap']:.6f} (scenario {worst_case_test['worst_case_scenario_idx']})")
 
-    # Success rate (train and test)
-    success_rate_train = compute_success_rate(F_star_array, F_actual_per_scenario, threshold=success_threshold)
+    # Success rate (train and test) - using scenario-level aggregates
+    success_rate_train = compute_success_rate(F_star_per_scenario_mean, F_actual_per_scenario_mean, threshold=success_threshold)
     success_rate_test = compute_success_rate(F_star_test_array, F_actual_test_array, threshold=success_threshold)
 
     print(f"\nSuccess Rate (threshold: {success_threshold*100:.0f}% of F_star):")
     print(f"  Train: {success_rate_train['success_rate_pct']:.1f}% ({success_rate_train['n_successful']}/{success_rate_train['n_total']} scenarios)")
     print(f"  Test:  {success_rate_test['success_rate_pct']:.1f}% ({success_rate_test['n_successful']}/{success_rate_test['n_total']} scenarios)")
 
-    # Train-test gap
-    train_test_gap_metrics = compute_train_test_gap(F_star_array, F_actual_per_scenario,
+    # Train-test gap - using scenario-level aggregates
+    train_test_gap_metrics = compute_train_test_gap(F_star_per_scenario_mean, F_actual_per_scenario_mean,
                                                      F_star_test_array, F_actual_test_array)
 
     print(f"\nTrain-Test Gap:")
@@ -469,10 +526,11 @@ def main():
     print("  Generating trajectory comparison plot...")
 
     # Select representative scenario (closest to mean F_actual)
+    # F_actual_per_scenario_mean was already computed above for advanced metrics
     actual_trajectories = eval_results['trajectories']
-    representative_idx = np.argmin(np.abs(F_actual_per_scenario - F_actual_mean))
+    representative_idx = np.argmin(np.abs(F_actual_per_scenario_mean - F_actual_mean))
 
-    print(f"    Using scenario {representative_idx} (F={F_actual_per_scenario[representative_idx]:.6f}, close to mean {F_actual_mean:.6f})")
+    print(f"    Using scenario {representative_idx} (F_mean={F_actual_per_scenario_mean[representative_idx]:.6f}, close to global mean {F_actual_mean:.6f})")
 
     # Extract representative scenario from target and baseline trajectories
     target_scenario = {}
@@ -490,7 +548,16 @@ def main():
         }
 
     # Get actual trajectory for representative scenario (already a dict of tensors)
-    actual_scenario = actual_trajectories[representative_idx]
+    # Note: actual_trajectories contains batches of eval_batch_size samples
+    # Extract only the first sample for plotting (to match target and baseline)
+    actual_scenario_batch = actual_trajectories[representative_idx]
+    actual_scenario = {}
+    for process_name, data in actual_scenario_batch.items():
+        actual_scenario[process_name] = {
+            'inputs': data['inputs'][0:1],
+            'outputs_mean': data['outputs_mean'][0:1],
+            'outputs_var': data['outputs_var'][0:1]
+        }
 
     # Plot comparison
     plot_trajectory_comparison(
@@ -505,11 +572,11 @@ def main():
     # 8a. Generate NEW advanced plots
     print("\n  Generating advanced plots...")
 
-    # Scatter plot: Target vs Baseline & Actual (train)
+    # Scatter plot: Target vs Baseline & Actual (train) - ALL SAMPLES
     plot_target_vs_actual_scatter(
         F_star_per_scenario=F_star_array,
         F_baseline_per_scenario=F_baseline_array,
-        F_actual_per_scenario=F_actual_per_scenario,
+        F_actual_per_scenario=F_actual_per_sample,
         save_path=str(checkpoint_dir / 'target_vs_actual_scatter_train.png')
     )
 
@@ -521,10 +588,10 @@ def main():
         save_path=str(checkpoint_dir / 'target_vs_actual_scatter_test.png')
     )
 
-    # Gap distribution (train)
+    # Gap distribution (train) - ALL SAMPLES
     plot_gap_distribution(
         F_star_per_scenario=F_star_array,
-        F_actual_per_scenario=F_actual_per_scenario,
+        F_actual_per_scenario=F_actual_per_sample,
         save_path=str(checkpoint_dir / 'gap_distribution_train.png')
     )
 
@@ -559,8 +626,8 @@ def main():
         F_actual_dict = {
             'mean': float(F_actual_mean),
             'std': float(F_actual_std),
-            'min': float(F_actual_per_scenario.min()),
-            'max': float(F_actual_per_scenario.max())
+            'min': float(F_actual_per_sample.min()),
+            'max': float(F_actual_per_sample.max())
         }
 
         # Prepare final metrics for report
@@ -586,56 +653,83 @@ def main():
         # Generate embedding visualization plots (if scenario encoder is enabled)
         print("\n[8.5/9] Generating embedding visualizations...")
         embedding_plots = {}
-        try:
-            from controller_optimization.src.utils.embedding_visualization import generate_all_embedding_plots
-            import json
 
-            # Load embedding data
-            embedding_path = checkpoint_dir / 'embeddings.json'
-            embedding_history_path = checkpoint_dir / 'embedding_history.npz'
+        # Check if scenario encoder is enabled in config
+        use_scenario_encoder = CONTROLLER_CONFIG['policy_generator'].get('use_scenario_encoder', False)
 
-            if embedding_path.exists():
-                with open(embedding_path, 'r') as f:
-                    embedding_data = json.load(f)
+        if not use_scenario_encoder:
+            print("  ⚠ Scenario encoder is disabled in config. Skipping embedding plots.")
 
-                embeddings = np.array(embedding_data['embeddings'])
-                structural_params = np.array(embedding_data['structural_params'])
-                scenario_indices = np.array(embedding_data['scenario_indices'])
+            # Remove old embedding plots if they exist (to prevent them from appearing in report)
+            old_embedding_plots = [
+                checkpoint_dir / 'embedding_tsne.png',
+                checkpoint_dir / 'embedding_pca.png',
+                checkpoint_dir / 'embedding_distances.png',
+                checkpoint_dir / 'embedding_correlations.png',
+                checkpoint_dir / 'embedding_evolution.png',
+            ]
+            for plot_path in old_embedding_plots:
+                if plot_path.exists():
+                    try:
+                        plot_path.unlink()
+                        print(f"    Removed old embedding plot: {plot_path.name}")
+                    except Exception as e:
+                        print(f"    Warning: Could not remove {plot_path.name}: {e}")
+        else:
+            try:
+                from controller_optimization.src.utils.embedding_visualization import generate_all_embedding_plots
 
-                # Load embedding history if available
-                embedding_history = {}
-                if embedding_history_path.exists():
-                    history_data = np.load(embedding_history_path)
-                    for key in history_data.files:
-                        epoch_num = int(key.split('_')[1])
-                        embedding_history[epoch_num] = history_data[key]
+                # Load embedding data
+                embedding_path = checkpoint_dir / 'embeddings.json'
+                embedding_history_path = checkpoint_dir / 'embedding_history.npz'
 
-                # Determine parameter names from processes_config
-                param_names = []
-                for process_config in PROCESSES:
-                    from controller_optimization.configs.processes_config import get_controllable_inputs
-                    input_labels = process_config['input_labels']
-                    controllable = get_controllable_inputs(process_config)
-                    for label in input_labels:
-                        if label not in controllable:
-                            param_names.append(f"{process_config['name']}.{label}")
+                if embedding_path.exists():
+                    with open(embedding_path, 'r') as f:
+                        embedding_data = json.load(f)
 
-                # Generate all embedding plots
-                embedding_plots = generate_all_embedding_plots(
-                    embeddings=embeddings,
-                    structural_params=structural_params,
-                    scenario_indices=scenario_indices,
-                    checkpoint_dir=checkpoint_dir,
-                    embedding_history=embedding_history if len(embedding_history) > 0 else None,
-                    param_names=param_names if len(param_names) > 0 else None
-                )
-                print(f"  ✓ Generated {len(embedding_plots)} embedding plots")
-            else:
-                print("  ⚠ No embedding data found (scenario encoder may be disabled)")
-        except Exception as e:
-            print(f"  ✗ Warning: Failed to generate embedding plots: {e}")
-            import traceback
-            traceback.print_exc()
+                    embeddings = np.array(embedding_data['embeddings'])
+                    structural_params = np.array(embedding_data['structural_params'])
+                    scenario_indices = np.array(embedding_data['scenario_indices'])
+
+                    # Check if we have enough scenarios for visualization
+                    # t-SNE requires n_samples > perplexity (default perplexity=5)
+                    if len(scenario_indices) < 2:
+                        print(f"  ⚠ Not enough scenarios ({len(scenario_indices)}) for embedding visualization (need at least 2)")
+                    else:
+                        # Load embedding history if available
+                        embedding_history = {}
+                        if embedding_history_path.exists():
+                            history_data = np.load(embedding_history_path)
+                            for key in history_data.files:
+                                epoch_num = int(key.split('_')[1])
+                                embedding_history[epoch_num] = history_data[key]
+
+                        # Determine parameter names from processes_config
+                        param_names = []
+                        for process_config in PROCESSES:
+                            from controller_optimization.configs.processes_config import get_controllable_inputs
+                            input_labels = process_config['input_labels']
+                            controllable = get_controllable_inputs(process_config)
+                            for label in input_labels:
+                                if label not in controllable:
+                                    param_names.append(f"{process_config['name']}.{label}")
+
+                        # Generate all embedding plots
+                        embedding_plots = generate_all_embedding_plots(
+                            embeddings=embeddings,
+                            structural_params=structural_params,
+                            scenario_indices=scenario_indices,
+                            checkpoint_dir=checkpoint_dir,
+                            embedding_history=embedding_history if len(embedding_history) > 0 else None,
+                            param_names=param_names if len(param_names) > 0 else None
+                        )
+                        print(f"  ✓ Generated {len(embedding_plots)} embedding plots")
+                else:
+                    print("  ⚠ No embedding data found (scenario encoder may be disabled)")
+            except Exception as e:
+                print(f"  ✗ Warning: Failed to generate embedding plots: {e}")
+                import traceback
+                traceback.print_exc()
 
         # Generate report
         try:
@@ -683,11 +777,19 @@ def main():
             'robustness_std': float(F_actual_std),
         },
 
-        # TRAIN metrics - Per scenario
-        'train_per_scenario': {
+        # TRAIN metrics - Per sample (n_scenarios × batch_size)
+        'train_per_sample': {
             'F_star': F_star_array.tolist(),
             'F_baseline': F_baseline_array.tolist(),
-            'F_actual': F_actual_per_scenario.tolist(),
+            'F_actual': F_actual_per_sample.tolist(),
+            'batch_size': int(eval_batch_size),
+        },
+
+        # TRAIN metrics - Per scenario (aggregated means)
+        'train_per_scenario_mean': {
+            'F_star': F_star_per_scenario_mean.tolist(),
+            'F_baseline': F_baseline_per_scenario_mean.tolist(),
+            'F_actual': F_actual_per_scenario_mean.tolist(),
         },
 
         # TEST metrics - Aggregated

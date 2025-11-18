@@ -140,6 +140,7 @@ CONTROLLER_CONFIG = {
     'report': {
         'generate_pdf': True,
         'include_plots': True,
+        'plot_all_batch_samples': True,  # If True, plot all individual batch samples; if False, plot only aggregated values per scenario
     },
 
     # Miscellaneous
