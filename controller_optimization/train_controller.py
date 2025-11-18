@@ -424,12 +424,18 @@ def main():
     print("\n[7c/9] Computing advanced metrics...")
     print("-"*70)
 
-    # Compute per-scenario means for metrics (aggregate samples within each scenario)
-    # F_actual_per_sample has shape (n_scenarios * batch_size,)
-    # Reshape to (n_scenarios, batch_size) and take mean along batch dimension
-    F_actual_per_scenario_mean = F_actual_per_sample.reshape(n_scenarios, eval_batch_size).mean(axis=1)
-    F_star_per_scenario_mean = F_star_array.reshape(n_scenarios, eval_batch_size).mean(axis=1)
-    F_baseline_per_scenario_mean = F_baseline_array.reshape(n_scenarios, eval_batch_size).mean(axis=1)
+    # Compute per-scenario means for metrics
+    if plot_all_samples:
+        # If plotting all samples: F_actual_per_sample has shape (n_scenarios * batch_size,)
+        # Reshape to (n_scenarios, batch_size) and take mean along batch dimension
+        F_actual_per_scenario_mean = F_actual_per_sample.reshape(n_scenarios, eval_batch_size).mean(axis=1)
+        F_star_per_scenario_mean = F_star_array.reshape(n_scenarios, eval_batch_size).mean(axis=1)
+        F_baseline_per_scenario_mean = F_baseline_array.reshape(n_scenarios, eval_batch_size).mean(axis=1)
+    else:
+        # If using aggregated values: arrays already have shape (n_scenarios,)
+        F_actual_per_scenario_mean = F_actual_per_sample
+        F_star_per_scenario_mean = F_star_array
+        F_baseline_per_scenario_mean = F_baseline_array
 
     # Get success rate threshold from config
     success_threshold = CONTROLLER_CONFIG['metrics']['success_rate_threshold']
