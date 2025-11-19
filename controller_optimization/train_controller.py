@@ -207,10 +207,13 @@ def main():
 
     # 4. Create Surrogate (computes F* for all scenarios)
     print("\n[4/9] Initializing surrogate model...")
+    use_deterministic_sampling = CONTROLLER_CONFIG.get('surrogate', {}).get('use_deterministic_sampling', True)
     surrogate = ProTSurrogate(
         target_trajectory=target_trajectory,
-        device=device
+        device=device,
+        use_deterministic_sampling=use_deterministic_sampling
     )
+    print(f"  Sampling mode: {'DETERMINISTIC (mean)' if use_deterministic_sampling else 'STOCHASTIC (reparameterization trick)'}")
     F_star_array = surrogate.F_star  # Now an array of (n_scenarios,)
     F_star_mean = np.mean(F_star_array)
     F_star_std = np.std(F_star_array)

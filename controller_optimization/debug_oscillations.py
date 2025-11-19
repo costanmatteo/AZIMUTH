@@ -49,7 +49,8 @@ chain = ProcessChain(
     device=device
 )
 
-surrogate = ProTSurrogate(target_trajectory, device=device)
+# Test with stochastic sampling to see the oscillations
+surrogate = ProTSurrogate(target_trajectory, device=device, use_deterministic_sampling=False)
 
 print(f"\nPolicy networks: {len(chain.policy_generators)}")
 print(f"F_star: {surrogate.F_star[0]:.6f}")
@@ -215,28 +216,8 @@ print("\n" + "="*70)
 print("TEST 5: Loss con Sampling vs Senza Sampling")
 print("="*70)
 
-# Crea versione modificata del surrogate che NON fa sampling
-class DeterministicSurrogate(ProTSurrogate):
-    def compute_reliability(self, trajectory):
-        # USA MEDIE, NO SAMPLING
-        sampled_outputs = {}
-        for process_name, data in trajectory.items():
-            sampled_outputs[process_name] = data['outputs_mean']
-
-        # Stesso calcolo di reliability
-        laser_power = sampled_outputs['laser'].squeeze()
-        plasma_rate = sampled_outputs['plasma'].squeeze()
-
-        laser_target = 0.5
-        plasma_target = 5.0 + 8.0 * (laser_power - 0.5)
-
-        laser_quality = torch.exp(-((laser_power - laser_target) ** 2) / 0.1)
-        plasma_quality = torch.exp(-((plasma_rate - plasma_target) ** 2) / 2.0)
-
-        F = 0.5 * laser_quality + 0.5 * plasma_quality
-        return F
-
-surrogate_det = DeterministicSurrogate(target_trajectory, device=device)
+# Create deterministic surrogate using the new parameter
+surrogate_det = ProTSurrogate(target_trajectory, device=device, use_deterministic_sampling=True)
 
 print("\nCon sampling (10 runs):")
 losses_sampling = []
