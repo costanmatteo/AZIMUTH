@@ -115,39 +115,113 @@ class ProTSurrogate:
 
             sampled_outputs[process_name] = sample
 
-        # DYNAMIC RELIABILITY COMPUTATION
-        # Works with any subset of processes present in sampled_outputs
-        # Each process contributes a quality score based on how close it is to its target
+        # ADAPTIVE RELIABILITY COMPUTATION WITH EXPLICIT PROCESS DEPENDENCIES
+        # Formula adapted based on which processes are present
+        # Processes influence each other through adaptive targets
 
+        # Extract available process outputs (assume 1 output per process)
+        outputs = {}
+        for process_name, sample in sampled_outputs.items():
+            outputs[process_name] = sample.squeeze()
+
+        # Compute ADAPTIVE TARGETS based on previous processes in chain
+        # Each process target adapts based on outputs of processes that came before
+
+        adaptive_targets = {}
         quality_scores = {}
+
+        # LASER: First process, fixed target
+        if 'laser' in outputs:
+            laser_power = outputs['laser']
+            adaptive_targets['laser'] = 0.5  # Fixed target
+
+            laser_quality = torch.exp(-((laser_power - adaptive_targets['laser']) ** 2) / 0.1)
+            quality_scores['laser'] = laser_quality
+
+        # PLASMA: Target depends on Laser
+        if 'plasma' in outputs:
+            plasma_rate = outputs['plasma']
+
+            # Base target
+            plasma_target = 5.0
+
+            # Adapt based on Laser (if available)
+            # If laser is too strong → plasma must compensate by increasing removal rate
+            if 'laser' in outputs:
+                plasma_target = plasma_target + 20.0 * (outputs['laser'] - 0.5)
+
+            adaptive_targets['plasma'] = plasma_target
+
+            plasma_quality = torch.exp(-((plasma_rate - plasma_target) ** 2) / 2.0)
+            quality_scores['plasma'] = plasma_quality
+
+        # GALVANIC: Target depends on Laser AND Plasma
+        if 'galvanic' in outputs:
+            galvanic_thick = outputs['galvanic']
+
+            # Base target
+            galvanic_target = 10.0
+
+            # Adapt based on previous processes
+            # If plasma removed too much → galvanic must deposit more thickness
+            if 'plasma' in outputs:
+                galvanic_target = galvanic_target + 5.0 * (outputs['plasma'] - 5.0)
+
+            # If laser was strong → galvanic must compensate further
+            if 'laser' in outputs:
+                galvanic_target = galvanic_target + 4.0 * (outputs['laser'] - 0.5)
+
+            adaptive_targets['galvanic'] = galvanic_target
+
+            galvanic_quality = torch.exp(-((galvanic_thick - galvanic_target) ** 2) / 4.0)
+            quality_scores['galvanic'] = galvanic_quality
+
+        # MICROETCH: Target depends on ALL previous processes
+        if 'microetch' in outputs:
+            microetch_depth = outputs['microetch']
+
+            # Base target
+            microetch_target = 20.0
+
+            # Adapt based on all previous processes
+            # If laser was too strong → microetch must be deeper
+            if 'laser' in outputs:
+                microetch_target = microetch_target + 15.0 * (outputs['laser'] - 0.5)
+
+            # If plasma was aggressive → microetch must compensate
+            if 'plasma' in outputs:
+                microetch_target = microetch_target + 3.0 * (outputs['plasma'] - 5.0)
+
+            # If galvanic deposited too much → microetch must remove more
+            if 'galvanic' in outputs:
+                microetch_target = microetch_target - 1.5 * (outputs['galvanic'] - 10.0)
+
+            adaptive_targets['microetch'] = microetch_target
+
+            microetch_quality = torch.exp(-((microetch_depth - microetch_target) ** 2) / 4.0)
+            quality_scores['microetch'] = microetch_quality
+
+        # COMBINE QUALITY SCORES WITH WEIGHTED AVERAGE
+        # Weights reflect relative importance of each process
+        weights = {
+            'laser': 0.2,
+            'plasma': 0.15,
+            'galvanic': 0.5,    # Most important (final product quality)
+            'microetch': 0.15
+        }
+
+        # Only use weights for processes that are actually present
+        total_weighted_quality = 0.0
         total_weight = 0.0
 
-        for process_name, sample in sampled_outputs.items():
-            # Get process configuration (if not configured, use default values)
-            if process_name in self.PROCESS_CONFIGS:
-                config = self.PROCESS_CONFIGS[process_name]
-                target = config['target']
-                scale = config['scale']
-                weight = config['weight']
-            else:
-                # Default values for unknown processes
-                target = 0.0
-                scale = 1.0
-                weight = 1.0
-
-            # Extract output value (assume 1 output per process)
-            output_value = sample.squeeze()
-
-            # Compute quality: exponential decay from target
-            # Quality is 1.0 when output = target, decreases as output moves away
-            quality = torch.exp(-((output_value - target) ** 2) / scale)
-
-            quality_scores[process_name] = quality * weight
+        for process_name, quality in quality_scores.items():
+            weight = weights.get(process_name, 1.0)
+            total_weighted_quality += quality * weight
             total_weight += weight
 
-        # Combine quality scores with weighted average
+        # Normalize by total weight
         if total_weight > 0:
-            F = sum(quality_scores.values()) / total_weight
+            F = total_weighted_quality / total_weight
         else:
             # Fallback (should never happen)
             F = torch.tensor(0.0, device=self.device)
