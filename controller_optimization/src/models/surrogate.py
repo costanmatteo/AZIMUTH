@@ -131,21 +131,17 @@ class ProTSurrogate:
         return F
 
     def _compute_reliability_2_processes(self, sampled_outputs):
-        """Simplified formula for laser + plasma only."""
-        laser_power = sampled_outputs['laser'].squeeze()
+        """Simplified formula for laser + plasma only - ONLY PLASMA QUALITY."""
         plasma_rate = sampled_outputs['plasma'].squeeze()
 
-        # TARGET ADATTIVI (simplified)
-        laser_target = 0.5
-        # Plasma target dipende da laser
-        plasma_target = 5.0 + 20.0 * (laser_power - 0.5)
+        # Fixed target (non-adaptive)
+        plasma_target = 5.0
 
-        # Quality metrics
-        laser_quality = torch.exp(-((laser_power - laser_target) ** 2) / 0.1)
+        # Quality metric: exp-based, returns value in [0, 1]
         plasma_quality = torch.exp(-((plasma_rate - plasma_target) ** 2) / 2.0)
 
-        # Weighted combination (equal weights for simplicity)
-        F = 0.5 * laser_quality + 0.5 * plasma_quality
+        # Reliability is ONLY plasma quality
+        F = plasma_quality
         return F
 
     def _compute_reliability_generic(self, sampled_outputs):
