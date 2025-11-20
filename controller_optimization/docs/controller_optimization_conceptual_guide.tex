@@ -1,0 +1,797 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[english]{babel}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{geometry}
+\usepackage{fancyhdr}
+\usepackage{booktabs}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+
+\geometry{margin=1in}
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{Controller Optimization - Conceptual Guide}
+\lhead{AZIMUTH Framework}
+\cfoot{\thepage}
+
+\title{\textbf{Controller Optimization for Sequential Manufacturing Processes} \\
+\large A Conceptual and Architectural Overview}
+\author{AZIMUTH Framework}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This document provides a comprehensive conceptual explanation of the controller optimization system within the AZIMUTH framework. The system addresses the challenge of optimizing sequential manufacturing processes by learning adaptive control policies that maximize product reliability across varying environmental conditions. We describe the architectural components, training methodology, optimization algorithms, and evaluation metrics that enable robust, data-driven manufacturing process control.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\section{Introduction}
+
+\subsection{Motivation and Problem Statement}
+
+Modern manufacturing involves complex sequences of interdependent processes where the output of one stage becomes the input to the next. Each process introduces uncertainty due to equipment variability, measurement noise, and environmental factors. Traditional control strategies often operate each process independently, failing to account for:
+
+\begin{itemize}
+    \item \textbf{Process interdependencies}: Outputs from earlier stages affect the optimal inputs for later stages
+    \item \textbf{Uncertainty propagation}: Measurement errors and equipment variability compound across the chain
+    \item \textbf{Environmental variations}: Operating conditions (temperature, material properties) change over time
+    \item \textbf{Multi-objective optimization}: Balancing quality metrics across multiple stages
+\end{itemize}
+
+The controller optimization system addresses these challenges by learning end-to-end control policies that adapt to uncertainty and environmental variations while maximizing overall product reliability.
+
+\subsection{System Overview}
+
+The controller optimization framework consists of four key components:
+
+\begin{enumerate}
+    \item \textbf{Uncertainty Predictors}: Pre-trained neural networks that model each manufacturing process, predicting both mean outputs and associated uncertainties
+    \item \textbf{Policy Generators}: Trainable neural networks that determine optimal input parameters for each process based on previous states
+    \item \textbf{Scenario Encoder}: A network that encodes environmental and structural parameters into dense representations
+    \item \textbf{Surrogate Model}: An evaluator that computes end-to-end product reliability from complete trajectories
+\end{enumerate}
+
+These components work together to optimize a four-stage manufacturing chain: \textbf{Laser → Plasma → Galvanic → Microetch}.
+
+\section{Architecture and Components}
+
+\subsection{Process Chain Structure}
+
+The manufacturing chain consists of four sequential processes, each with specific controllable inputs and observable outputs:
+
+\begin{table}[h!]
+\centering
+\begin{tabular}{@{}llll@{}}
+\toprule
+\textbf{Process} & \textbf{Controllable Inputs} & \textbf{Environmental Inputs} & \textbf{Outputs} \\ \midrule
+Laser & PowerTarget & AmbientTemp & ActualPower \\
+Plasma & RF\_Power, Duration & -- & RemovalRate \\
+Galvanic & CurrentDensity, Duration & -- & Thickness \\
+Microetch & Concentration, Duration & Temperature & RemovalDepth \\ \bottomrule
+\end{tabular}
+\caption{Process chain specification}
+\end{table}
+
+Environmental inputs represent uncontrollable operating conditions that vary across manufacturing scenarios, while controllable inputs are determined by the policy generators.
+
+\subsection{Uncertainty Predictors}
+
+Uncertainty predictors are pre-trained neural networks that model the input-output relationship for each manufacturing process. Unlike traditional deterministic models, these predictors output both:
+
+\begin{itemize}
+    \item \textbf{Mean prediction} $\mu(x)$: Expected output given inputs $x$
+    \item \textbf{Variance prediction} $\sigma^2(x)$: Uncertainty in the output
+\end{itemize}
+
+\textbf{Architecture}: Each predictor is a feedforward neural network with the following structure:
+\begin{itemize}
+    \item Input layer: Process input parameters
+    \item Hidden layers: [128, 64, 32] neurons with ReLU activation
+    \item Two output heads:
+    \begin{itemize}
+        \item Mean head: Linear layer to output dimension
+        \item Variance head: Linear layer with softplus activation (ensures $\sigma^2 > 0$)
+    \end{itemize}
+\end{itemize}
+
+\textbf{Training}: Uncertainty predictors are trained independently on Structural Causal Model (SCM) datasets using heteroscedastic loss:
+$$
+\mathcal{L}_{UP} = \frac{1}{N} \sum_{i=1}^{N} \left[ \frac{(y_i - \mu(x_i))^2}{\sigma^2(x_i)} + \log \sigma^2(x_i) \right]
+$$
+
+This loss function balances prediction accuracy with uncertainty calibration. Once trained, uncertainty predictors are frozen during controller optimization.
+
+\subsection{Policy Generators}
+
+Policy generators are the core trainable components that determine optimal process inputs. Each process (except the first) has a dedicated policy generator.
+
+\textbf{Input State Representation}: For process $i$, the policy generator receives:
+\begin{align*}
+s_i = [&u_{i-1}, && \text{(previous controllable inputs)} \\
+       &y_{i-1}, && \text{(previous outputs mean)} \\
+       &\sigma^2_{i-1}, && \text{(previous output variance)} \\
+       &e] && \text{(scenario embedding)}
+\end{align*}
+
+\textbf{Architecture}: Configurable feedforward networks with options:
+\begin{itemize}
+    \item Small: [32, 16] hidden layers
+    \item Medium: [64, 32] hidden layers
+    \item Large: [128, 64, 32] hidden layers
+    \item Custom: User-defined (default: [256, 256, 256, 256, 256, 128, 64, 32])
+\end{itemize}
+
+\textbf{Output}: Controllable input parameters for process $i$, normalized to $[0,1]$ range via sigmoid activation.
+
+\textbf{Key Design Principle}: By conditioning on both outputs and uncertainties from previous processes, policy generators can adapt their decisions based on equipment confidence, implementing risk-aware control strategies.
+
+\subsection{Scenario Encoder}
+
+The scenario encoder addresses the challenge of generalizing across varying environmental conditions.
+
+\textbf{Purpose}: Encode structural (environmental) parameters into dense vector representations that capture operating condition characteristics.
+
+\textbf{Architecture}:
+\begin{itemize}
+    \item Input: Environmental parameters (e.g., AmbientTemp, bath Temperature)
+    \item Hidden layer: 32 neurons with ReLU activation
+    \item Output: 16-dimensional embedding vector $e$
+\end{itemize}
+
+\textbf{Training}: The encoder is trained jointly with policy generators through end-to-end optimization. This allows it to learn representations that are specifically useful for control decisions.
+
+\textbf{Benefits}:
+\begin{enumerate}
+    \item Enables policy adaptation to different operating conditions
+    \item Reduces dimensionality of environmental state space
+    \item Learns task-relevant features automatically
+\end{enumerate}
+
+\subsection{Surrogate Model}
+
+The surrogate model evaluates end-to-end product reliability from complete manufacturing trajectories.
+
+\textbf{Current Implementation}: Physics-inspired formula that combines quality metrics across all processes:
+$$
+F = 0.2 \cdot Q_{\text{laser}} + 0.15 \cdot Q_{\text{plasma}} + 0.5 \cdot Q_{\text{galvanic}} + 0.15 \cdot Q_{\text{microetch}}
+$$
+
+where each $Q_i$ represents a process-specific quality metric computed from outputs and variances.
+
+\textbf{Key Features}:
+\begin{itemize}
+    \item Inter-process dependencies: Earlier outputs influence later quality targets
+    \item Adaptive thresholding: Quality criteria adjust based on actual process outcomes
+    \item Differentiable: Enables gradient-based optimization
+\end{itemize}
+
+\textbf{Future Enhancement}: The placeholder will be replaced with a Process Transformer (ProT) model trained on real manufacturing data to capture complex non-linear relationships.
+
+\section{Training Methodology}
+
+\subsection{Two-Phase Training Strategy}
+
+The system employs a two-phase training approach that separates process modeling from policy learning.
+
+\subsubsection{Phase 1: Train Uncertainty Predictors}
+
+\begin{enumerate}
+    \item \textbf{Data Generation}: Sample synthetic manufacturing data from SCM datasets (2000 samples per process)
+    \item \textbf{Independent Training}: Train each uncertainty predictor separately to model its specific process
+    \item \textbf{Validation}: Evaluate calibration metrics to ensure uncertainty estimates are reliable
+    \item \textbf{Checkpoint}: Save trained models for use in Phase 2
+\end{enumerate}
+
+\textbf{Rationale}: Separating process modeling from control learning simplifies training and allows uncertainty predictors to be reused across different control objectives.
+
+\subsubsection{Phase 2: Train Controller}
+
+\begin{enumerate}
+    \item \textbf{Initialization}: Load frozen uncertainty predictors and initialize policy generators
+    \item \textbf{Trajectory Generation}: Create target and baseline trajectories for training scenarios
+    \item \textbf{Policy Optimization}: Train policy generators to maximize reliability while mimicking target behavior
+    \item \textbf{Evaluation}: Test controller performance on held-out scenarios
+    \item \textbf{Reporting}: Generate comprehensive performance analysis
+\end{enumerate}
+
+\subsection{Multi-Scenario Training}
+
+A key innovation is training on multiple diverse operating scenarios simultaneously rather than a single fixed condition.
+
+\subsubsection{Scenario Definition}
+
+Each scenario represents a unique combination of environmental conditions:
+\begin{itemize}
+    \item Laser AmbientTemp: Varies across scenarios
+    \item Microetch Temperature: Varies independently
+    \item Material properties: Can vary (if included in structural parameters)
+\end{itemize}
+
+\textbf{Default Configuration}: 50 training scenarios + 1 test scenario
+
+\subsubsection{Trajectory Types}
+
+For each scenario, three trajectories are generated:
+
+\begin{enumerate}
+    \item \textbf{Target Trajectory ($a^*$)}: "Ideal Performance"
+    \begin{itemize}
+        \item Structural noise: ACTIVE (realistic environmental variations)
+        \item Process noise: ZERO (ideal equipment behavior)
+        \item Represents best achievable performance under varying conditions
+        \item Generated by sampling from SCM with process noise disabled
+    \end{itemize}
+
+    \item \textbf{Baseline Trajectory ($a'$)}: "Performance Without Controller"
+    \begin{itemize}
+        \item Structural noise: SAME as target (fair comparison)
+        \item Process noise: ACTIVE (realistic equipment variability)
+        \item Represents current manufacturing without optimization
+        \item Uses same controllable inputs as target
+    \end{itemize}
+
+    \item \textbf{Actual Trajectory ($a$)}: "Performance With Controller"
+    \begin{itemize}
+        \item Generated by trained policy generators
+        \item First process uses target inputs, subsequent processes use policy outputs
+        \item Goal: Match target performance while beating baseline
+    \end{itemize}
+\end{enumerate}
+
+\textbf{Reliability Scores}:
+\begin{itemize}
+    \item $F^*$: Reliability of target trajectory
+    \item $F'$: Reliability of baseline trajectory
+    \item $F$: Reliability of actual trajectory
+    \item \textbf{Objective}: $F \approx F^*$ and $F > F'$
+\end{itemize}
+
+\subsection{Noise Classification}
+
+A critical conceptual distinction is made between two types of noise:
+
+\begin{table}[h!]
+\centering
+\begin{tabular}{@{}lp{5cm}p{5cm}@{}}
+\toprule
+\textbf{Type} & \textbf{Description} & \textbf{Examples} \\ \midrule
+Structural Noise & Uncontrollable environmental variations that define operating conditions & AmbientTemp, bath Temperature, material properties \\
+Process Noise & Measurement errors and equipment imperfections & Sensor noise, quantum shot noise, plasma instability, spatial variations \\ \bottomrule
+\end{tabular}
+\caption{Noise taxonomy}
+\end{table}
+
+\textbf{Key Insight}: By zeroing process noise in target trajectories while keeping structural noise active, we create training targets that represent optimal performance under diverse conditions without confounding from measurement errors.
+
+\section{Optimization Algorithms}
+
+\subsection{Loss Function}
+
+The controller is trained using a composite loss function that balances reliability optimization with behavioral regularization:
+
+$$
+\mathcal{L}_{\text{total}} = \alpha \cdot \mathcal{L}_{\text{reliability}} + \lambda_{BC} \cdot \mathcal{L}_{\text{BC}}
+$$
+
+\subsubsection{Reliability Loss}
+
+$$
+\mathcal{L}_{\text{reliability}} = (F - F^*)^2
+$$
+
+This term penalizes deviation from optimal reliability. The squared error encourages the controller to match target performance exactly.
+
+\textbf{Scaling}: The loss is multiplied by $\alpha = 100.0$ to prevent vanishing gradients, as reliability scores are typically in $[0,1]$.
+
+\subsubsection{Behavior Cloning Loss}
+
+$$
+\mathcal{L}_{\text{BC}} = \frac{1}{P} \sum_{i=1}^{P} \| a_i - a_i^* \|_2^2
+$$
+
+where $P$ is the number of processes and $a_i$ represents the input vector for process $i$.
+
+\textbf{Purpose}: Regularize policy learning by keeping actions close to the target trajectory. This prevents wild exploration and provides a warm start.
+
+\textbf{Weight}: $\lambda_{BC} = 0.001$ (very small regularization)
+
+\textbf{Normalization}: Inputs are normalized to $[0,1]$ range before computing the loss, ensuring all processes contribute equally regardless of their natural scales.
+
+\subsection{Training Algorithm}
+
+\begin{algorithm}
+\caption{Controller Training Loop}
+\begin{algorithmic}[1]
+\State Load frozen uncertainty predictors $\{P_1, P_2, P_3, P_4\}$
+\State Initialize policy generators $\{\pi_1, \pi_2, \pi_3\}$
+\State Initialize scenario encoder $E$
+\State Generate target trajectories $\{(a^*_j, F^*_j)\}_{j=1}^{N_{train}}$
+\For{epoch $= 1$ to $N_{epochs}$}
+    \State Shuffle scenario indices
+    \For{each scenario $j$ in shuffled order}
+        \State $e_j \gets E(\text{structural\_params}_j)$ \Comment{Encode scenario}
+        \State $a_j \gets$ ForwardChain($\pi$, $P$, $a^*_{j,1}$, $e_j$) \Comment{Generate trajectory}
+        \State $F_j \gets$ Surrogate($a_j$) \Comment{Evaluate reliability}
+        \State $\mathcal{L} \gets \alpha (F_j - F^*_j)^2 + \lambda_{BC} \| a_j - a^*_j \|^2$
+        \State Update $\pi$ and $E$ using Adam optimizer
+    \EndFor
+    \If{validation $F$ improved}
+        \State Save checkpoint
+        \State Reset patience counter
+    \Else
+        \State Increment patience counter
+    \EndIf
+    \If{patience $\geq 30$}
+        \State \textbf{break} \Comment{Early stopping}
+    \EndIf
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Forward Chain Execution}
+
+The forward chain executes the complete manufacturing sequence for a given scenario:
+
+\begin{algorithm}
+\caption{ForwardChain($\pi$, $P$, $u_1$, $e$)}
+\begin{algorithmic}[1]
+\State $a \gets []$ \Comment{Initialize trajectory}
+\For{process $i = 1$ to $4$}
+    \If{$i = 1$}
+        \State $u_i \gets u_1$ \Comment{First process uses target inputs}
+    \Else
+        \State $s_i \gets [u_{i-1}, y_{i-1}, \sigma^2_{i-1}, e]$ \Comment{Build state}
+        \State $u_i \gets \pi_{i-1}(s_i)$ \Comment{Policy generates inputs}
+    \EndIf
+    \State $y_i, \sigma^2_i \gets P_i(u_i)$ \Comment{Uncertainty predictor}
+    \State Append $(u_i, y_i, \sigma^2_i)$ to $a$
+\EndFor
+\State \Return $a$
+\end{algorithmic}
+\end{algorithm}
+
+\textbf{Key Features}:
+\begin{itemize}
+    \item First process inputs are fixed from target trajectory (focuses learning on subsequent stages)
+    \item State includes uncertainties from previous stage (enables risk-aware decisions)
+    \item Scenario embedding is constant across all processes (provides environmental context)
+\end{itemize}
+
+\subsection{Optimizer Configuration}
+
+\begin{itemize}
+    \item \textbf{Algorithm}: Adam optimizer
+    \item \textbf{Learning rate}: $1 \times 10^{-4}$
+    \item \textbf{Weight decay}: $1 \times 10^{-3}$ (L2 regularization)
+    \item \textbf{Batch size}: 64 replicas per scenario (same inputs, different dropout masks)
+    \item \textbf{Epochs}: 200 maximum
+    \item \textbf{Early stopping}: Patience of 30 epochs
+\end{itemize}
+
+\section{Evaluation Metrics}
+
+\subsection{Primary Metrics}
+
+\subsubsection{Reliability Improvement}
+
+$$
+\text{Improvement}_{\%} = \frac{F - F'}{F'} \times 100\%
+$$
+
+Measures how much the controller improves over baseline performance.
+
+\subsubsection{Target Gap}
+
+$$
+\text{TargetGap}_{\%} = \frac{|F^* - F|}{F^*} \times 100\%
+$$
+
+Measures how close the controller comes to ideal performance.
+
+\subsubsection{Robustness}
+
+$$
+\text{Robustness} = \text{std}(F_{\text{actual}})
+$$
+
+Lower standard deviation indicates more consistent performance across scenarios.
+
+\subsection{Advanced Metrics}
+
+\subsubsection{Worst-Case Gap}
+
+$$
+\text{WorstCaseGap} = \max_{j} |F^*_j - F_j|
+$$
+
+Identifies the most challenging scenario where controller struggles.
+
+\subsubsection{Success Rate}
+
+$$
+\text{SuccessRate} = \frac{1}{N} \sum_{j=1}^{N} \mathbb{1}[F_j \geq 0.95 \cdot F^*_j]
+$$
+
+Percentage of scenarios achieving near-optimal performance (within 5\%).
+
+\subsubsection{Train-Test Generalization Gap}
+
+$$
+\text{GenGap} = \text{MeanGap}_{\text{test}} - \text{MeanGap}_{\text{train}}
+$$
+
+where $\text{MeanGap} = \text{mean}(|F^* - F|)$.
+
+\begin{itemize}
+    \item Positive gap: Controller generalizes well to unseen scenarios
+    \item Negative gap: Potential overfitting to training scenarios
+\end{itemize}
+
+\subsubsection{Scenario Diversity Score}
+
+$$
+\text{Diversity} = \frac{\text{std}(\text{structural\_params})}{\text{mean}(\text{structural\_params})}
+$$
+
+Coefficient of variation for environmental parameters, quantifying scenario heterogeneity.
+
+\subsection{Process-Wise Metrics}
+
+For each process $i$:
+
+\begin{align*}
+\text{InputMSE}_i &= \frac{1}{N} \sum_{j=1}^{N} \| a_{i,j} - a^*_{i,j} \|^2 \\
+\text{OutputMSE}_i &= \frac{1}{N} \sum_{j=1}^{N} \| y_{i,j} - y^*_{i,j} \|^2 \\
+\text{CombinedMSE}_i &= \frac{\text{InputMSE}_i + \text{OutputMSE}_i}{2}
+\end{align*}
+
+These metrics help diagnose which process stages are performing well or need improvement.
+
+\section{Conceptual Innovations}
+
+\subsection{Uncertainty-Aware Control}
+
+Traditional controllers operate on point estimates of system state. This controller explicitly models and conditions on uncertainty:
+
+\begin{itemize}
+    \item \textbf{Input}: Includes variance predictions from previous processes
+    \item \textbf{Decision-making}: Policies can adapt based on confidence levels
+    \item \textbf{Risk management}: High uncertainty can trigger conservative strategies
+\end{itemize}
+
+\textbf{Example}: If the laser output has high variance, the plasma policy might choose longer durations to ensure adequate material removal despite input uncertainty.
+
+\subsection{Scenario-Based Learning}
+
+Rather than training on average conditions, the system learns to handle diverse operating environments:
+
+\begin{itemize}
+    \item \textbf{Robustness}: Exposed to temperature variations, material differences during training
+    \item \textbf{Adaptation}: Scenario encoder learns to recognize and adapt to conditions
+    \item \textbf{Generalization}: Performance on unseen test scenarios validates robustness
+\end{itemize}
+
+\subsection{Noise Separation}
+
+The distinction between structural and process noise enables:
+
+\begin{itemize}
+    \item \textbf{Fair comparisons}: Baseline uses same environmental conditions as actual
+    \item \textbf{Realistic targets}: Target trajectories reflect diverse operating conditions
+    \item \textbf{Proper attribution}: Performance gaps due to control strategy, not environmental luck
+\end{itemize}
+
+\subsection{Behavior Cloning Regularization}
+
+The weak behavior cloning loss provides:
+
+\begin{itemize}
+    \item \textbf{Warm start}: Policies begin near known-good solutions
+    \item \textbf{Exploration bounds}: Prevents catastrophic deviations
+    \item \textbf{Training stability}: Reduces variance in early training
+\end{itemize}
+
+Unlike pure imitation learning, the small weight ($\lambda_{BC} = 0.001$) allows significant deviation when reliability improves.
+
+\section{Visualization and Reporting}
+
+\subsection{Training Visualizations}
+
+\subsubsection{Training History}
+
+Time-series plots showing:
+\begin{itemize}
+    \item Total loss per epoch
+    \item Reliability loss per epoch
+    \item Behavior cloning loss per epoch
+    \item Mean $F$ (actual) vs $F^*$ (target) vs $F'$ (baseline)
+\end{itemize}
+
+\subsubsection{Trajectory Comparison}
+
+Side-by-side visualization for a representative scenario showing:
+\begin{itemize}
+    \item Process inputs: $a^*$ (target), $a'$ (baseline), $a$ (actual)
+    \item Process outputs: $y^*$, $y'$, $y$
+    \item Color-coded by process stage
+\end{itemize}
+
+\subsubsection{Reliability Comparison}
+
+Bar chart comparing $F^*$, $F'$, and $F$ averaged across scenarios, with error bars showing standard deviation.
+
+\subsection{Evaluation Visualizations}
+
+\subsubsection{Target vs Actual Scatter}
+
+Scatter plot of $F^*$ vs $F$ for all scenarios:
+\begin{itemize}
+    \item Each point represents a scenario
+    \item Different colors for train vs test
+    \item Diagonal line represents perfect matching
+    \item Points above diagonal: controller exceeds target (rare)
+    \item Points below diagonal: gap to target
+\end{itemize}
+
+\subsubsection{Gap Distribution}
+
+Histogram of $(F^* - F)$ values showing:
+\begin{itemize}
+    \item Distribution shape (normal, skewed, multimodal)
+    \item Presence of outliers
+    \item Mean and standard deviation
+\end{itemize}
+
+\subsubsection{Embedding Analysis}
+
+When scenario encoder is enabled:
+\begin{itemize}
+    \item \textbf{t-SNE projection}: 2D visualization of scenario embeddings
+    \item \textbf{PCA projection}: Principal components of embeddings
+    \item \textbf{Distance matrix}: Heatmap of pairwise scenario similarities
+    \item \textbf{Correlation}: Embedding dimensions vs structural parameters
+    \item \textbf{Evolution}: Embedding changes during training epochs
+\end{itemize}
+
+\subsection{PDF Report}
+
+Automatically generated comprehensive report including:
+\begin{enumerate}
+    \item \textbf{Configuration Summary}: All hyperparameters and settings
+    \item \textbf{Training Summary}: Convergence statistics, final losses
+    \item \textbf{Performance Metrics}: Tables of all primary and advanced metrics
+    \item \textbf{Statistical Analysis}: Mean, std, min, max for key metrics
+    \item \textbf{Visualization Gallery}: All plots with captions
+    \item \textbf{Process-Wise Analysis}: Breakdown by manufacturing stage
+    \item \textbf{Generalization Assessment}: Train vs test comparison
+\end{enumerate}
+
+\section{Implementation Considerations}
+
+\subsection{Computational Efficiency}
+
+\subsubsection{Memory Management}
+
+\begin{itemize}
+    \item \textbf{Frozen predictors}: Only policy parameters require gradients
+    \item \textbf{Batch processing}: Single scenario per batch reduces memory
+    \item \textbf{Sequential optimization}: One scenario at a time prevents OOM errors
+\end{itemize}
+
+\subsubsection{Training Time}
+
+Typical training times (single GPU):
+\begin{itemize}
+    \item Phase 1 (uncertainty predictors): 5-10 minutes per process
+    \item Phase 2 (controller): 20-30 minutes for 50 scenarios, 200 epochs
+\end{itemize}
+
+\subsection{Numerical Stability}
+
+\subsubsection{Variance Prediction}
+
+Using softplus activation ensures $\sigma^2 > 0$:
+$$
+\sigma^2 = \log(1 + \exp(x))
+$$
+
+\subsubsection{Loss Scaling}
+
+Reliability loss scaling prevents gradient vanishing when $F \approx F^*$ (both near 1.0).
+
+\subsubsection{Input Normalization}
+
+All process inputs are normalized to $[0,1]$ using min-max scaling based on dataset statistics.
+
+\subsection{Hyperparameter Sensitivity}
+
+\subsubsection{Critical Parameters}
+
+\begin{itemize}
+    \item \textbf{$\lambda_{BC}$}: Too high → imitation learning (no improvement), too low → unstable exploration
+    \item \textbf{Learning rate}: Too high → instability, too low → slow convergence
+    \item \textbf{Embedding dimension}: Too small → information loss, too large → overfitting
+\end{itemize}
+
+\subsubsection{Robust Defaults}
+
+The system provides carefully tuned defaults validated across multiple process chains.
+
+\section{Future Directions}
+
+\subsection{Enhanced Surrogate Model}
+
+Replace physics-inspired placeholder with Process Transformer (ProT):
+\begin{itemize}
+    \item Trained on real manufacturing data
+    \item Captures complex non-linear interactions
+    \item Better prediction of final product quality
+\end{itemize}
+
+\subsection{Adaptive Scenario Sampling}
+
+Instead of uniform sampling across scenario space:
+\begin{itemize}
+    \item Identify challenging scenarios (large target gaps)
+    \item Oversample difficult conditions during training
+    \item Curriculum learning: easy to hard progression
+\end{itemize}
+
+\subsection{Multi-Objective Optimization}
+
+Extend beyond single reliability score to:
+\begin{itemize}
+    \item Multiple quality metrics (reliability, throughput, cost)
+    \item Pareto-optimal solution sets
+    \item User-specified trade-offs
+\end{itemize}
+
+\subsection{Online Adaptation}
+
+Enable controller to adapt during deployment:
+\begin{itemize}
+    \item Real-time learning from manufacturing outcomes
+    \item Adaptation to distribution shift
+    \item Anomaly detection and safe fallback
+\end{itemize}
+
+\subsection{Transfer Learning}
+
+Leverage learned policies across different:
+\begin{itemize}
+    \item Process sequences (e.g., 3-stage vs 4-stage)
+    \item Manufacturing facilities (different equipment)
+    \item Product lines (similar processes, different specifications)
+\end{itemize}
+
+\section{Conclusion}
+
+The controller optimization system represents a sophisticated approach to sequential manufacturing process control that addresses key limitations of traditional methods:
+
+\begin{enumerate}
+    \item \textbf{Uncertainty quantification}: Explicit modeling of process variability enables risk-aware decisions
+    \item \textbf{End-to-end optimization}: Policies account for inter-process dependencies
+    \item \textbf{Environmental adaptation}: Scenario-based learning ensures robustness to varying conditions
+    \item \textbf{Data efficiency}: Behavior cloning provides warm start and exploration bounds
+\end{enumerate}
+
+The system successfully separates process modeling (Phase 1) from control learning (Phase 2), enabling flexible reuse of components and clear separation of concerns. The multi-scenario training methodology with careful noise classification ensures that learned policies generalize to unseen operating conditions while maintaining high reliability.
+
+By combining uncertainty-aware control, scenario-based learning, and end-to-end differentiable optimization, the controller optimization framework provides a principled and effective approach to modern manufacturing process control.
+
+\appendix
+
+\section{Mathematical Notation}
+
+\begin{table}[h!]
+\centering
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Symbol} & \textbf{Meaning} \\ \midrule
+$u_i$ & Controllable inputs for process $i$ \\
+$y_i$ & Outputs from process $i$ \\
+$\sigma^2_i$ & Variance of outputs from process $i$ \\
+$a_i$ & Complete state for process $i$: $(u_i, y_i, \sigma^2_i)$ \\
+$a$ & Full trajectory: $[a_1, a_2, a_3, a_4]$ \\
+$a^*$ & Target trajectory \\
+$a'$ & Baseline trajectory \\
+$e$ & Scenario embedding \\
+$F$ & Reliability score \\
+$F^*$ & Target reliability score \\
+$F'$ & Baseline reliability score \\
+$P_i$ & Uncertainty predictor for process $i$ \\
+$\pi_i$ & Policy generator for process $i$ \\
+$E$ & Scenario encoder \\
+$N$ & Number of scenarios \\
+$\lambda_{BC}$ & Behavior cloning weight \\
+$\alpha$ & Reliability loss scale factor \\ \bottomrule
+\end{tabular}
+\caption{Mathematical notation reference}
+\end{table}
+
+\section{Configuration File Examples}
+
+\subsection{Process Configuration}
+
+\begin{verbatim}
+processes_config = {
+    'laser': {
+        'controllable_inputs': ['PowerTarget'],
+        'environmental_inputs': ['AmbientTemp'],
+        'outputs': ['ActualPower']
+    },
+    'plasma': {
+        'controllable_inputs': ['RF_Power', 'Duration'],
+        'environmental_inputs': [],
+        'outputs': ['RemovalRate']
+    },
+    ...
+}
+\end{verbatim}
+
+\subsection{Controller Configuration}
+
+\begin{verbatim}
+controller_config = {
+    'n_train': 50,
+    'n_test': 1,
+    'epochs': 200,
+    'batch_size': 64,
+    'learning_rate': 1e-4,
+    'lambda_bc': 0.001,
+    'reliability_loss_scale': 100.0,
+    'use_scenario_encoder': True,
+    'scenario_embedding_dim': 16,
+    'policy_size': 'custom',
+    'custom_hidden_layers': [256, 256, 256, 256, 256, 128, 64, 32]
+}
+\end{verbatim}
+
+\section{Key File Locations}
+
+\begin{itemize}
+    \item Main scripts:
+    \begin{itemize}
+        \item \texttt{train\_processes.py}: Train uncertainty predictors
+        \item \texttt{train\_controller.py}: Train policy generators
+    \end{itemize}
+
+    \item Configuration:
+    \begin{itemize}
+        \item \texttt{configs/processes\_config.py}: Process definitions
+        \item \texttt{configs/controller\_config.py}: Training hyperparameters
+    \end{itemize}
+
+    \item Models:
+    \begin{itemize}
+        \item \texttt{src/models/policy\_generator.py}: Policy networks
+        \item \texttt{src/models/scenario\_encoder.py}: Scenario encoder
+        \item \texttt{src/models/surrogate.py}: Reliability evaluator
+    \end{itemize}
+
+    \item Training:
+    \begin{itemize}
+        \item \texttt{src/training/controller\_trainer.py}: Training loop
+        \item \texttt{src/utils/process\_chain.py}: Chain orchestration
+    \end{itemize}
+
+    \item Documentation:
+    \begin{itemize}
+        \item \texttt{README.md}: User guide
+        \item \texttt{IMPLEMENTATION\_SUMMARY.md}: Technical details
+        \item \texttt{NOISE\_CLASSIFICATION\_ANALYSIS.md}: Noise taxonomy
+    \end{itemize}
+\end{itemize}
+
+\end{document}
