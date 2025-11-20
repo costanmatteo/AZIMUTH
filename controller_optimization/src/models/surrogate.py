@@ -18,14 +18,18 @@ class ProTSurrogate:
     Supporta multi-scenario training con F_star calcolato per ogni scenario.
     """
 
-    def __init__(self, target_trajectory, device='cpu'):
+    def __init__(self, target_trajectory, device='cpu', use_deterministic_sampling=True):
         """
         Args:
             target_trajectory (dict): Target trajectory da target_generation
                                      Ora contiene n_samples scenarios
             device (str): Device for computations
+            use_deterministic_sampling (bool): If True, use mean values directly (deterministic).
+                                               If False, use reparameterization trick (stochastic).
+                                               Default: True for stable training.
         """
         self.device = device
+        self.use_deterministic_sampling = use_deterministic_sampling
         self.n_scenarios = None  # Will be inferred from data
 
         # Convert target trajectory to tensors (all scenarios)
@@ -71,11 +75,18 @@ class ProTSurrogate:
             mean = data['outputs_mean']
             var = data['outputs_var']
 
-            # Sample: x ~ N(mean, var)
-            # Usa reparameterization trick per differenziabilità
-            std = torch.sqrt(var + 1e-8)
-            epsilon = torch.randn_like(mean)
-            sample = mean + epsilon * std
+            if self.use_deterministic_sampling:
+                # DETERMINISTIC: Use mean directly (no sampling)
+                # Pros: Stable gradients, consistent loss
+                # Cons: Doesn't capture uncertainty
+                sample = mean
+            else:
+                # STOCHASTIC: Sample using reparameterization trick
+                # Pros: Captures uncertainty, differentiable
+                # Cons: High gradient variance, loss oscillates
+                std = torch.sqrt(var + 1e-8)
+                epsilon = torch.randn_like(mean)
+                sample = mean + epsilon * std
 
             sampled_outputs[process_name] = sample
 

@@ -52,6 +52,11 @@ METRICS:
 - success_rate_threshold: Threshold for success rate metric (0.95 = 95% of F_star)
                           Success means F_actual >= threshold * F_star
 
+SURROGATE:
+- use_deterministic_sampling: If True, uses mean values directly (deterministic)
+                              If False, uses reparameterization trick (stochastic)
+                              Recommended: True for stable training, False for uncertainty estimation
+
 MISC:
 - random_seed: Global random seed
 - verbose: Print training progress
@@ -134,6 +139,11 @@ CONTROLLER_CONFIG = {
     # Metrics
     'metrics': {
         'success_rate_threshold': 0.95,  # Threshold for success rate (F_actual >= threshold * F_star)
+    },
+
+    # Surrogate model
+    'surrogate': {
+        'use_deterministic_sampling': True,  # True = use mean (stable), False = use sampling (stochastic)
     },
 
     # Report generation
