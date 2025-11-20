@@ -93,8 +93,8 @@ CONTROLLER_CONFIG = {
         'batch_size': 32,  # Reduced from 64 - more reasonable for small n_scenarios
         'learning_rate': 0.001,  # Increased from 1e-6 to 1e-3 for faster convergence
         'weight_decay': 0.0001,  # Reduced to avoid over-regularization
-        'lambda_bc': 0.0,  # DISABLED - pure reliability optimization
-        'reliability_loss_scale': 10000.0,  # Increased from 100 for small F values (1e-4 range)
+        'lambda_bc': 0.1,  # Small BC component for regularization (prevents extreme inputs)
+        'reliability_loss_scale': 100.0,  # Re-enabled with conservative scale (F ~ 0.1-1.0 range)
         'patience': 100,  # Reduced from 300 for faster early stopping
         'device': 'auto',
         'checkpoint_dir': 'controller_optimization/checkpoints/controller',
