@@ -19,7 +19,8 @@ from datetime import datetime
 REPO_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from controller_optimization.configs.processes_config import PROCESSES, get_process_by_name
+from controller_optimization.configs.processes_config import PROCESSES, get_process_by_name, filter_processes_by_names
+from controller_optimization.configs.controller_config import CONTROLLER_CONFIG
 from controller_optimization.src.training.process_trainer import train_single_process
 
 # Import report combining function
@@ -71,8 +72,16 @@ def main():
 
     # Determine which processes to train
     if args.processes is None:
-        processes_to_train = PROCESSES
-        process_names = [p['name'] for p in PROCESSES]
+        # Use processes from CONTROLLER_CONFIG if available, otherwise all PROCESSES
+        config_process_names = CONTROLLER_CONFIG.get('process_names')
+        if config_process_names:
+            print(f"\nUsing processes from CONTROLLER_CONFIG: {config_process_names}")
+            processes_to_train = filter_processes_by_names(config_process_names)
+            process_names = config_process_names
+        else:
+            print(f"\nNo process_names in config, using all processes")
+            processes_to_train = PROCESSES
+            process_names = [p['name'] for p in PROCESSES]
     else:
         process_names = args.processes
         processes_to_train = [get_process_by_name(name) for name in process_names]

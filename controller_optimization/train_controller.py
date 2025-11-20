@@ -25,7 +25,7 @@ import numpy as np
 REPO_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from controller_optimization.configs.processes_config import PROCESSES
+from controller_optimization.configs.processes_config import PROCESSES, filter_processes_by_names
 from controller_optimization.configs.controller_config import CONTROLLER_CONFIG
 from controller_optimization.src.utils.target_generation import (
     generate_target_trajectory,
@@ -86,13 +86,23 @@ def main():
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"\nDevice: {device}")
 
+    # Filter processes based on config
+    process_names = CONTROLLER_CONFIG.get('process_names')
+    if process_names:
+        print(f"\nFiltering processes: {process_names}")
+        PROCESSES_FILTERED = filter_processes_by_names(process_names)
+        print(f"  Using {len(PROCESSES_FILTERED)} processes: {[p['name'] for p in PROCESSES_FILTERED]}")
+    else:
+        print(f"\nUsing all {len(PROCESSES)} processes")
+        PROCESSES_FILTERED = PROCESSES
+
     # =========================================================================
     # SCM VALIDATION: Check causal consistency
     # =========================================================================
     print("\n" + "="*70)
     print("STEP 0: SCM VALIDATION")
     print("="*70)
-    validate_all_processes(PROCESSES)
+    validate_all_processes(PROCESSES_FILTERED)
 
     checkpoint_dir = Path(CONTROLLER_CONFIG['training']['checkpoint_dir'])
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -107,7 +117,7 @@ def main():
     # Generate TRAIN target trajectory
     print("\n  Generating TRAIN target trajectory (a*)...")
     target_trajectory_train = generate_target_trajectory(
-        process_configs=PROCESSES,
+        process_configs=PROCESSES_FILTERED,
         n_samples=n_train,
         seed=CONTROLLER_CONFIG['scenarios']['seed_target']
     )
@@ -122,7 +132,7 @@ def main():
     # Generate TRAIN baseline trajectory
     print("\n  Generating TRAIN baseline trajectory (a')...")
     baseline_trajectory_train = generate_baseline_trajectory(
-        process_configs=PROCESSES,
+        process_configs=PROCESSES_FILTERED,
         target_trajectory=target_trajectory_train,
         n_samples=n_train,
         seed=CONTROLLER_CONFIG['scenarios']['seed_baseline']
@@ -141,7 +151,7 @@ def main():
     print(f"  Test seed offset: {test_seed_offset}")
     print(f"  Generating TEST target trajectory (a*)...")
     target_trajectory_test = generate_target_trajectory(
-        process_configs=PROCESSES,
+        process_configs=PROCESSES_FILTERED,
         n_samples=n_test,
         seed=CONTROLLER_CONFIG['scenarios']['seed_target'] + test_seed_offset
     )
@@ -152,7 +162,7 @@ def main():
 
     print(f"  Generating TEST baseline trajectory (a')...")
     baseline_trajectory_test = generate_baseline_trajectory(
-        process_configs=PROCESSES,
+        process_configs=PROCESSES_FILTERED,
         target_trajectory=target_trajectory_test,
         n_samples=n_test,
         seed=CONTROLLER_CONFIG['scenarios']['seed_baseline'] + test_seed_offset
@@ -185,7 +195,7 @@ def main():
     print("\n[3/9] Building process chain...")
     try:
         process_chain = ProcessChain(
-            processes_config=PROCESSES,
+            processes_config=PROCESSES_FILTERED,
             target_trajectory=target_trajectory,
             policy_config=CONTROLLER_CONFIG['policy_generator'],
             device=device
@@ -356,7 +366,7 @@ def main():
     # Create temporary ProcessChain for test scenarios
     print(f"  Creating process chain for test scenarios...")
     process_chain_test = ProcessChain(
-        processes_config=PROCESSES,
+        processes_config=PROCESSES_FILTERED,
         target_trajectory=target_trajectory_test,
         policy_config=CONTROLLER_CONFIG['policy_generator'],
         device=device
@@ -709,7 +719,7 @@ def main():
 
                         # Determine parameter names from processes_config
                         param_names = []
-                        for process_config in PROCESSES:
+                        for process_config in PROCESSES_FILTERED:
                             from controller_optimization.configs.processes_config import get_controllable_inputs
                             input_labels = process_config['input_labels']
                             controllable = get_controllable_inputs(process_config)

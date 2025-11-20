@@ -164,3 +164,23 @@ def get_controllable_inputs(process_config):
         list: Lista di nomi delle variabili controllabili
     """
     return process_config.get('controllable_inputs', process_config['input_labels'])
+
+
+def filter_processes_by_names(process_names):
+    """
+    Filtra PROCESSES per includere solo i processi specificati nei nomi.
+
+    Args:
+        process_names (list): Lista di nomi di processi da includere
+
+    Returns:
+        list: Lista filtrata di configurazioni di processo
+
+    Raises:
+        ValueError: Se un nome di processo non esiste in PROCESSES
+    """
+    filtered = []
+    for name in process_names:
+        process = get_process_by_name(name)
+        filtered.append(process)
+    return filtered
