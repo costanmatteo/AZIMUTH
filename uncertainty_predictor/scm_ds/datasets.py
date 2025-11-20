@@ -284,29 +284,32 @@ ds_scm_laser.process_noise_vars = ['Zln', 'NoiseShot', 'NoiseMeas', 'NoiseDrift'
 #   k0   = base removal rate coefficient (0.5)
 #
 # -------------------------
-# NOISE MODEL (Eq. 9-10):
+# NOISE MODEL (Eq. 9-10) - DISABLED (all parameters set to 0):
 #   Ractual = Rclean * Zln + εa + J
 #
-# Components:
-#   1. Zln ~ LogNormal(-σ²m/2, σ²m)              [plasma instability]
-#   2. εa ~ N(0, σ²a)                            [additive measurement noise]
-#   3. J = Σ(k=1..K) Ak, K ~ Poisson(λJ), Ak ~ Exp(θJ)  [micro-arcing jumps]
+# Components (all zero for deterministic behavior):
+#   1. Zln = 1.0 (LogNormal with σm=0)          [plasma instability - DISABLED]
+#   2. εa = 0.0 (N(0, 0))                       [additive noise - DISABLED]
+#   3. J = 0.0 (Poisson(0) = no events)         [micro-arcing jumps - DISABLED]
 #
-# Heteroscedastic noise scale (Eq. 10):
-#   σm = σm0 + cP*(P/Pmax) + cp*|p - p0|
-#   (where p is pressure, simplified here)
+# Result: RemovalRate = Rclean (fully deterministic)
+#
+# Heteroscedastic noise scale (Eq. 10) - now always 0:
+#   σm = 0.0 + 0.0*(P/Pmax) = 0.0
 #
 # -------------------------
 # PARAMETERS:
 #   k0   = 0.5          # base removal rate coefficient
-#   σm0  = 0.03         # base multiplicative noise
-#   cP   = 0.02         # power-dependent noise
-#   σa   = 0.01         # additive noise
-#   λJ   = 0.1          # Poisson rate for arcing events
-#   θJ   = 0.05         # Exponential scale for arc amplitude
 #   Pmax = 500          # max RF power [W] (for noise scaling)
 #
-# REMOVED (simplification):
+# NOISE PARAMETERS (ALL SET TO ZERO FOR DETERMINISTIC BEHAVIOR):
+#   σm0  = 0.0          # base multiplicative noise (was 0.03)
+#   cP   = 0.0          # power-dependent noise (was 0.02)
+#   σa   = 0.0          # additive noise (was 0.01)
+#   λJ   = 0.0          # Poisson rate for arcing events (was 0.1)
+#   θJ   = 0.0          # Exponential scale for arc amplitude (was 0.05)
+#
+# REMOVED (equation simplification):
 #   λp   = 0.02         # power decay coefficient (was in exponential)
 #   β    = 0.8          # power exponent (was in exponential)
 # =============================================================================
@@ -362,11 +365,11 @@ ds_scm_plasma = SCMDataset(
 
         # ==================== CONSTANTS ====================
         "K0":       lambda rng, n: np.full(n, 0.5),
-        "SIGMA_M0": lambda rng, n: np.full(n, 0.03),
-        "C_P":      lambda rng, n: np.full(n, 0.02),
-        "SIGMA_A":  lambda rng, n: np.full(n, 0.01),
-        "LAMBDA_J": lambda rng, n: np.full(n, 0.1),
-        "THETA_J":  lambda rng, n: np.full(n, 0.05),
+        "SIGMA_M0": lambda rng, n: np.full(n, 0.0),  # Set to 0 (was 0.03)
+        "C_P":      lambda rng, n: np.full(n, 0.0),  # Set to 0 (was 0.02)
+        "SIGMA_A":  lambda rng, n: np.full(n, 0.0),  # Set to 0 (was 0.01)
+        "LAMBDA_J": lambda rng, n: np.full(n, 0.0),  # Set to 0 (was 0.1)
+        "THETA_J":  lambda rng, n: np.full(n, 0.0),  # Set to 0 (was 0.05)
         "PMAX":     lambda rng, n: np.full(n, 500.0),
 
         # ==================== INTERMEDIATE NODES ====================
