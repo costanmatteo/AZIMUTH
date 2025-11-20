@@ -90,8 +90,8 @@ CONTROLLER_CONFIG = {
     # Training parameters
     'training': {
         'epochs': 800,  # Each epoch cycles through all training scenarios once
-        'batch_size': 2000,  # Replicas per scenario (same inputs, different dropout/stochasticity)
-        'learning_rate': 0.0001,
+        'batch_size': 64,  # Replicas per scenario (same inputs, different dropout/stochasticity)
+        'learning_rate': 0.000001,
         'weight_decay': 0.001,
         'lambda_bc': 0.001,  # Behavior cloning weight
         'reliability_loss_scale': 100.0,  # Scale factor for reliability loss (F - F*)^2
@@ -106,7 +106,7 @@ CONTROLLER_CONFIG = {
         'beta2': 0.999,  # For Adam/AdamW
 
         # Gradient clipping (helps with training stability)
-        'gradient_clip_norm': 30.0,  # None = no clipping, or float (e.g., 1.0)
+        'gradient_clip_norm': 3.0,  # None = no clipping, or float (e.g., 1.0)
 
         # Learning rate scheduler
         'lr_scheduler': None,  # None, or {'type': 'step', 'step_size': 30, 'gamma': 0.1}

@@ -112,7 +112,7 @@ class ProTSurrogate:
 
         # Plasma target dipende FORTEMENTE da Laser
         # Se laser è troppo forte → plasma deve compensare molto aumentando removal rate
-        plasma_target = 5.0 + 8.0 * (laser_power - 0.5)
+        plasma_target = 5.0 + 20.0 * (laser_power - 0.5)
 
         # Galvanic target dipende da ENTRAMBI Plasma E Laser
         # Se plasma ha rimosso troppo → galvanic deve depositare più spessore
