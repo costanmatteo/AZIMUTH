@@ -18,6 +18,31 @@ class ProTSurrogate:
     Supporta multi-scenario training con F_star calcolato per ogni scenario.
     """
 
+    # Configuration for process-specific targets and quality scales
+    # These values are based on typical ranges from the SCM models
+    PROCESS_CONFIGS = {
+        'laser': {
+            'target': 0.5,      # ActualPower target
+            'scale': 0.1,       # Quality scale (smaller = more sensitive)
+            'weight': 1.0       # Relative importance
+        },
+        'plasma': {
+            'target': 5.0,      # RemovalRate target
+            'scale': 2.0,
+            'weight': 1.0
+        },
+        'galvanic': {
+            'target': 10.0,     # Thickness target (μm)
+            'scale': 4.0,
+            'weight': 1.5       # More important (final product quality)
+        },
+        'microetch': {
+            'target': 20.0,     # Depth target
+            'scale': 4.0,
+            'weight': 1.0
+        }
+    }
+
     def __init__(self, target_trajectory, device='cpu', use_deterministic_sampling=True):
         """
         Args:
@@ -90,49 +115,116 @@ class ProTSurrogate:
 
             sampled_outputs[process_name] = sample
 
-        # Formula fisica inventata per reliability CON RELAZIONI TRA PROCESSI
-        # F combina gli outputs di tutti i processi in una metrica di qualità
-        # con target adattivi basati sui processi precedenti
+        # ADAPTIVE RELIABILITY COMPUTATION WITH EXPLICIT PROCESS DEPENDENCIES
+        # Formula adapted based on which processes are present
+        # Processes influence each other through adaptive targets
 
-        # Estrai i valori (assumo 1 output per processo come da config)
-        laser_power = sampled_outputs['laser'].squeeze()      # ActualPower
-        plasma_rate = sampled_outputs['plasma'].squeeze()     # RemovalRate
-        galvanic_thick = sampled_outputs['galvanic'].squeeze() # Thickness
-        microetch_depth = sampled_outputs['microetch'].squeeze() # Depth
+        # Extract available process outputs (assume 1 output per process)
+        outputs = {}
+        for process_name, sample in sampled_outputs.items():
+            outputs[process_name] = sample.squeeze()
 
-        # TARGET ADATTIVI: i processi si influenzano fortemente tra loro
-        # Valori base:
-        # - Laser ActualPower: ~0.4-0.6 → target base 0.5
-        # - Plasma RemovalRate: ~3-7 → target base 5.0
-        # - Galvanic Thickness: ~8-12 μm → target base 10.0
-        # - Microetch Depth: ~15-25 → target base 20.0
+        # Compute ADAPTIVE TARGETS based on previous processes in chain
+        # Each process target adapts based on outputs of processes that came before
 
-        # Laser ha target fisso (è il primo processo)
-        laser_target = 0.5
+        adaptive_targets = {}
+        quality_scores = {}
 
-        # Plasma target dipende FORTEMENTE da Laser
-        # Se laser è troppo forte → plasma deve compensare molto aumentando removal rate
-        plasma_target = 5.0 + 20.0 * (laser_power - 0.5)
+        # LASER: First process, fixed target
+        if 'laser' in outputs:
+            laser_power = outputs['laser']
+            adaptive_targets['laser'] = 0.5  # Fixed target
 
-        # Galvanic target dipende da ENTRAMBI Plasma E Laser
-        # Se plasma ha rimosso troppo → galvanic deve depositare più spessore
-        # Se laser era forte → galvanic deve compensare ulteriormente
-        galvanic_target = 10.0 + 5.0 * (plasma_rate - 5.0) + 4.0 * (laser_power - 0.5)
+            laser_quality = torch.exp(-((laser_power - adaptive_targets['laser']) ** 2) / 0.1)
+            quality_scores['laser'] = laser_quality
 
-        # Microetch target dipende da TUTTI i processi precedenti
-        # Se laser è troppo forte → microetch deve essere più profondo
-        # Se plasma è aggressivo → microetch deve compensare
-        # Se galvanic ha depositato troppo → microetch deve rimuovere di più
-        microetch_target = 20.0 + 15.0 * (laser_power - 0.5) + 3.0 * (plasma_rate - 5.0) - 1.5 * (galvanic_thick - 10.0)
+        # PLASMA: Target depends on Laser
+        if 'plasma' in outputs:
+            plasma_rate = outputs['plasma']
 
-        # Ogni componente: quanto è vicino al valore ottimale ADATTIVO
-        laser_quality = torch.exp(-((laser_power - laser_target) ** 2) / 0.1)
-        plasma_quality = torch.exp(-((plasma_rate - plasma_target) ** 2) / 2.0)
-        galvanic_quality = torch.exp(-((galvanic_thick - galvanic_target) ** 2) / 4.0)
-        microetch_quality = torch.exp(-((microetch_depth - microetch_target) ** 2) / 4.0)
+            # Base target
+            plasma_target = 5.0
 
-        # Combinazione pesata (galvanic più importante = prodotto finale)
-        F = 0.2 * laser_quality + 0.15 * plasma_quality + 0.5 * galvanic_quality + 0.15 * microetch_quality
+            # Adapt based on Laser (if available)
+            # If laser is too strong → plasma must compensate by increasing removal rate
+            if 'laser' in outputs:
+                plasma_target = plasma_target + 20.0 * (outputs['laser'] - 0.5)
+
+            adaptive_targets['plasma'] = plasma_target
+
+            plasma_quality = torch.exp(-((plasma_rate - plasma_target) ** 2) / 2.0)
+            quality_scores['plasma'] = plasma_quality
+
+        # GALVANIC: Target depends on Laser AND Plasma
+        if 'galvanic' in outputs:
+            galvanic_thick = outputs['galvanic']
+
+            # Base target
+            galvanic_target = 10.0
+
+            # Adapt based on previous processes
+            # If plasma removed too much → galvanic must deposit more thickness
+            if 'plasma' in outputs:
+                galvanic_target = galvanic_target + 5.0 * (outputs['plasma'] - 5.0)
+
+            # If laser was strong → galvanic must compensate further
+            if 'laser' in outputs:
+                galvanic_target = galvanic_target + 4.0 * (outputs['laser'] - 0.5)
+
+            adaptive_targets['galvanic'] = galvanic_target
+
+            galvanic_quality = torch.exp(-((galvanic_thick - galvanic_target) ** 2) / 4.0)
+            quality_scores['galvanic'] = galvanic_quality
+
+        # MICROETCH: Target depends on ALL previous processes
+        if 'microetch' in outputs:
+            microetch_depth = outputs['microetch']
+
+            # Base target
+            microetch_target = 20.0
+
+            # Adapt based on all previous processes
+            # If laser was too strong → microetch must be deeper
+            if 'laser' in outputs:
+                microetch_target = microetch_target + 15.0 * (outputs['laser'] - 0.5)
+
+            # If plasma was aggressive → microetch must compensate
+            if 'plasma' in outputs:
+                microetch_target = microetch_target + 3.0 * (outputs['plasma'] - 5.0)
+
+            # If galvanic deposited too much → microetch must remove more
+            if 'galvanic' in outputs:
+                microetch_target = microetch_target - 1.5 * (outputs['galvanic'] - 10.0)
+
+            adaptive_targets['microetch'] = microetch_target
+
+            microetch_quality = torch.exp(-((microetch_depth - microetch_target) ** 2) / 4.0)
+            quality_scores['microetch'] = microetch_quality
+
+        # COMBINE QUALITY SCORES WITH WEIGHTED AVERAGE
+        # Weights reflect relative importance of each process
+        weights = {
+            'laser': 0.2,
+            'plasma': 0.15,
+            'galvanic': 0.5,    # Most important (final product quality)
+            'microetch': 0.15
+        }
+
+        # Only use weights for processes that are actually present
+        total_weighted_quality = 0.0
+        total_weight = 0.0
+
+        for process_name, quality in quality_scores.items():
+            weight = weights.get(process_name, 1.0)
+            total_weighted_quality += quality * weight
+            total_weight += weight
+
+        # Normalize by total weight
+        if total_weight > 0:
+            F = total_weighted_quality / total_weight
+        else:
+            # Fallback (should never happen)
+            F = torch.tensor(0.0, device=self.device)
 
         return F
 

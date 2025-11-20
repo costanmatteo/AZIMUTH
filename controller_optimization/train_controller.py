@@ -56,6 +56,35 @@ from controller_optimization.src.utils.model_utils import convert_numpy_to_tenso
 from controller_optimization.src.utils.scm_validation import validate_all_processes
 
 
+def filter_processes_by_config(all_processes, config):
+    """
+    Filter PROCESSES list based on process_names in config.
+
+    Args:
+        all_processes (list): Complete list of process configurations
+        config (dict): Controller configuration with 'process_names' key
+
+    Returns:
+        list: Filtered list containing only selected processes
+    """
+    process_names = config.get('process_names', None)
+
+    # If no process_names specified, use all processes
+    if process_names is None:
+        return all_processes
+
+    # Filter processes by name
+    filtered = [p for p in all_processes if p['name'] in process_names]
+
+    # Validate that all requested processes were found
+    found_names = [p['name'] for p in filtered]
+    missing = set(process_names) - set(found_names)
+    if missing:
+        raise ValueError(f"Requested processes not found in PROCESSES: {missing}")
+
+    return filtered
+
+
 def main():
     """
     Pipeline completo:
@@ -80,6 +109,10 @@ def main():
     print("CONTROLLER OPTIMIZATION - POLICY GENERATOR TRAINING")
     print("="*70)
 
+    # Filter processes based on configuration
+    selected_processes = filter_processes_by_config(PROCESSES, CONTROLLER_CONFIG)
+    print(f"\nSelected processes: {[p['name'] for p in selected_processes]}")
+
     # Device setup
     device = CONTROLLER_CONFIG['training']['device']
     if device == 'auto':
@@ -92,7 +125,7 @@ def main():
     print("\n" + "="*70)
     print("STEP 0: SCM VALIDATION")
     print("="*70)
-    validate_all_processes(PROCESSES)
+    validate_all_processes(selected_processes)
 
     checkpoint_dir = Path(CONTROLLER_CONFIG['training']['checkpoint_dir'])
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -107,7 +140,7 @@ def main():
     # Generate TRAIN target trajectory
     print("\n  Generating TRAIN target trajectory (a*)...")
     target_trajectory_train = generate_target_trajectory(
-        process_configs=PROCESSES,
+        process_configs=selected_processes,
         n_samples=n_train,
         seed=CONTROLLER_CONFIG['scenarios']['seed_target']
     )
@@ -122,7 +155,7 @@ def main():
     # Generate TRAIN baseline trajectory
     print("\n  Generating TRAIN baseline trajectory (a')...")
     baseline_trajectory_train = generate_baseline_trajectory(
-        process_configs=PROCESSES,
+        process_configs=selected_processes,
         target_trajectory=target_trajectory_train,
         n_samples=n_train,
         seed=CONTROLLER_CONFIG['scenarios']['seed_baseline']
@@ -141,7 +174,7 @@ def main():
     print(f"  Test seed offset: {test_seed_offset}")
     print(f"  Generating TEST target trajectory (a*)...")
     target_trajectory_test = generate_target_trajectory(
-        process_configs=PROCESSES,
+        process_configs=selected_processes,
         n_samples=n_test,
         seed=CONTROLLER_CONFIG['scenarios']['seed_target'] + test_seed_offset
     )
@@ -152,7 +185,7 @@ def main():
 
     print(f"  Generating TEST baseline trajectory (a')...")
     baseline_trajectory_test = generate_baseline_trajectory(
-        process_configs=PROCESSES,
+        process_configs=selected_processes,
         target_trajectory=target_trajectory_test,
         n_samples=n_test,
         seed=CONTROLLER_CONFIG['scenarios']['seed_baseline'] + test_seed_offset
@@ -185,7 +218,7 @@ def main():
     print("\n[3/9] Building process chain...")
     try:
         process_chain = ProcessChain(
-            processes_config=PROCESSES,
+            processes_config=selected_processes,
             target_trajectory=target_trajectory,
             policy_config=CONTROLLER_CONFIG['policy_generator'],
             device=device
@@ -356,7 +389,7 @@ def main():
     # Create temporary ProcessChain for test scenarios
     print(f"  Creating process chain for test scenarios...")
     process_chain_test = ProcessChain(
-        processes_config=PROCESSES,
+        processes_config=selected_processes,
         target_trajectory=target_trajectory_test,
         policy_config=CONTROLLER_CONFIG['policy_generator'],
         device=device
@@ -709,7 +742,7 @@ def main():
 
                         # Determine parameter names from processes_config
                         param_names = []
-                        for process_config in PROCESSES:
+                        for process_config in selected_processes:
                             from controller_optimization.configs.processes_config import get_controllable_inputs
                             input_labels = process_config['input_labels']
                             controllable = get_controllable_inputs(process_config)
