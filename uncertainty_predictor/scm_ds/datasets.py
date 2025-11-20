@@ -271,19 +271,17 @@ ds_scm_laser.process_noise_vars = ['Zln', 'NoiseShot', 'NoiseMeas', 'NoiseDrift'
 # with multiplicative variability and rare micro-arcing jump events.
 #
 # -------------------------
-# DETERMINISTIC COMPONENT (Eq. 8):
-#   Rclean = γ(gas, k0, e^(-λp * P^β), τ)
+# DETERMINISTIC COMPONENT (SIMPLIFIED):
+#   Original (Eq. 8): Rclean = k0 * exp(-λp * P^β) * τ
+#   Simplified to: Rclean = k0 * P * τ / 1000
 #
-# Simplified as:
-#   Rclean = k0 * exp(-λp * P^β) * τ
+# This linearization removes two non-linearities (exponential decay + power function)
+# to simplify controller optimization while maintaining input-output relationships.
 #
 # Where:
-#   P    = RF_Power (RF power in W)
-#   τ    = Duration (process time in s)
-#   k0   = base removal rate
-#   λp   = power decay coefficient
-#   β    = power exponent
-#   (gas type encoded in k0 for simplicity)
+#   P    = RF_Power (RF power in W, range: 100-400)
+#   τ    = Duration (process time in s, range: 10-60)
+#   k0   = base removal rate coefficient (0.5)
 #
 # -------------------------
 # NOISE MODEL (Eq. 9-10):
@@ -300,15 +298,17 @@ ds_scm_laser.process_noise_vars = ['Zln', 'NoiseShot', 'NoiseMeas', 'NoiseDrift'
 #
 # -------------------------
 # PARAMETERS:
-#   k0   = 0.5          # base removal rate [μm/s]
-#   λp   = 0.02         # power decay coefficient
-#   β    = 0.8          # power exponent
+#   k0   = 0.5          # base removal rate coefficient
 #   σm0  = 0.03         # base multiplicative noise
 #   cP   = 0.02         # power-dependent noise
 #   σa   = 0.01         # additive noise
 #   λJ   = 0.1          # Poisson rate for arcing events
 #   θJ   = 0.05         # Exponential scale for arc amplitude
-#   Pmax = 500          # max RF power [W]
+#   Pmax = 500          # max RF power [W] (for noise scaling)
+#
+# REMOVED (simplification):
+#   λp   = 0.02         # power decay coefficient (was in exponential)
+#   β    = 0.8          # power exponent (was in exponential)
 # =============================================================================
 
 ds_scm_plasma = SCMDataset(
@@ -322,8 +322,6 @@ ds_scm_plasma = SCMDataset(
 
         # ==================== PHYSICAL CONSTANTS ====================
         NodeSpec("K0",       [], "eps_K0"),
-        NodeSpec("LAMBDA_P", [], "eps_LAMBDA_P"),
-        NodeSpec("BETA",     [], "eps_BETA"),
         NodeSpec("SIGMA_M0", [], "eps_SIGMA_M0"),
         NodeSpec("C_P",      [], "eps_C_P"),
         NodeSpec("SIGMA_A",  [], "eps_SIGMA_A"),
@@ -331,10 +329,10 @@ ds_scm_plasma = SCMDataset(
         NodeSpec("THETA_J",  [], "eps_THETA_J"),
         NodeSpec("PMAX",     [], "eps_PMAX"),
 
-        # ==================== DETERMINISTIC EQUATION (Eq. 8) ====================
-        # Rclean = k0 * exp(-λp * P^β) * τ
-        NodeSpec("Rclean", ["K0", "LAMBDA_P", "RF_Power", "BETA", "Duration"],
-                 "K0 * exp(-LAMBDA_P * RF_Power**BETA) * Duration + 0*eps_Rclean"),
+        # ==================== DETERMINISTIC EQUATION (SIMPLIFIED) ====================
+        # Rclean = k0 * P * τ / 1000  (simplified from exponential to linear)
+        NodeSpec("Rclean", ["K0", "RF_Power", "Duration"],
+                 "K0 * RF_Power * Duration / 1000.0 + 0*eps_Rclean"),
 
         # ==================== HETEROSCEDASTIC NOISE SCALE (Eq. 10) ====================
         NodeSpec("SigmaM", ["SIGMA_M0", "C_P", "RF_Power", "PMAX"],
@@ -364,8 +362,6 @@ ds_scm_plasma = SCMDataset(
 
         # ==================== CONSTANTS ====================
         "K0":       lambda rng, n: np.full(n, 0.5),
-        "LAMBDA_P": lambda rng, n: np.full(n, 0.02),
-        "BETA":     lambda rng, n: np.full(n, 0.8),
         "SIGMA_M0": lambda rng, n: np.full(n, 0.03),
         "C_P":      lambda rng, n: np.full(n, 0.02),
         "SIGMA_A":  lambda rng, n: np.full(n, 0.01),
