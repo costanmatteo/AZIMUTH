@@ -44,6 +44,9 @@ class ProTSurrogate:
             if self.n_scenarios is None:
                 self.n_scenarios = data['inputs'].shape[0]
 
+        # Store process names for flexible computation
+        self.process_names = list(target_trajectory.keys())
+
         # Compute F_star for each scenario
         self.F_star = self.compute_all_target_reliabilities()
 
@@ -62,7 +65,7 @@ class ProTSurrogate:
                     'outputs_var': tensor (batch, output_dim)
                 },
                 'plasma': {...},
-                'galvanic': {...}
+                ...
             }
 
         Returns:
@@ -90,50 +93,81 @@ class ProTSurrogate:
 
             sampled_outputs[process_name] = sample
 
-        # Formula fisica inventata per reliability CON RELAZIONI TRA PROCESSI
-        # F combina gli outputs di tutti i processi in una metrica di qualità
-        # con target adattivi basati sui processi precedenti
+        # Get available processes
+        available_processes = set(sampled_outputs.keys())
 
-        # Estrai i valori (assumo 1 output per processo come da config)
-        laser_power = sampled_outputs['laser'].squeeze()      # ActualPower
-        plasma_rate = sampled_outputs['plasma'].squeeze()     # RemovalRate
-        galvanic_thick = sampled_outputs['galvanic'].squeeze() # Thickness
-        microetch_depth = sampled_outputs['microetch'].squeeze() # Depth
+        # Compute reliability based on available processes
+        if available_processes == {'laser', 'plasma', 'galvanic', 'microetch'}:
+            # Full 4-process formula (original)
+            return self._compute_reliability_4_processes(sampled_outputs)
+        elif available_processes == {'laser', 'plasma'}:
+            # Simplified 2-process formula
+            return self._compute_reliability_2_processes(sampled_outputs)
+        else:
+            # Generic formula for any subset of processes
+            return self._compute_reliability_generic(sampled_outputs)
 
-        # TARGET ADATTIVI: i processi si influenzano fortemente tra loro
-        # Valori base:
-        # - Laser ActualPower: ~0.4-0.6 → target base 0.5
-        # - Plasma RemovalRate: ~3-7 → target base 5.0
-        # - Galvanic Thickness: ~8-12 μm → target base 10.0
-        # - Microetch Depth: ~15-25 → target base 20.0
+    def _compute_reliability_4_processes(self, sampled_outputs):
+        """Original formula for 4 processes with adaptive targets."""
+        laser_power = sampled_outputs['laser'].squeeze()
+        plasma_rate = sampled_outputs['plasma'].squeeze()
+        galvanic_thick = sampled_outputs['galvanic'].squeeze()
+        microetch_depth = sampled_outputs['microetch'].squeeze()
 
-        # Laser ha target fisso (è il primo processo)
+        # TARGET ADATTIVI
         laser_target = 0.5
-
-        # Plasma target dipende FORTEMENTE da Laser
-        # Se laser è troppo forte → plasma deve compensare molto aumentando removal rate
         plasma_target = 5.0 + 20.0 * (laser_power - 0.5)
-
-        # Galvanic target dipende da ENTRAMBI Plasma E Laser
-        # Se plasma ha rimosso troppo → galvanic deve depositare più spessore
-        # Se laser era forte → galvanic deve compensare ulteriormente
         galvanic_target = 10.0 + 5.0 * (plasma_rate - 5.0) + 4.0 * (laser_power - 0.5)
-
-        # Microetch target dipende da TUTTI i processi precedenti
-        # Se laser è troppo forte → microetch deve essere più profondo
-        # Se plasma è aggressivo → microetch deve compensare
-        # Se galvanic ha depositato troppo → microetch deve rimuovere di più
         microetch_target = 20.0 + 15.0 * (laser_power - 0.5) + 3.0 * (plasma_rate - 5.0) - 1.5 * (galvanic_thick - 10.0)
 
-        # Ogni componente: quanto è vicino al valore ottimale ADATTIVO
+        # Quality metrics
         laser_quality = torch.exp(-((laser_power - laser_target) ** 2) / 0.1)
         plasma_quality = torch.exp(-((plasma_rate - plasma_target) ** 2) / 2.0)
         galvanic_quality = torch.exp(-((galvanic_thick - galvanic_target) ** 2) / 4.0)
         microetch_quality = torch.exp(-((microetch_depth - microetch_target) ** 2) / 4.0)
 
-        # Combinazione pesata (galvanic più importante = prodotto finale)
+        # Weighted combination
         F = 0.2 * laser_quality + 0.15 * plasma_quality + 0.5 * galvanic_quality + 0.15 * microetch_quality
+        return F
 
+    def _compute_reliability_2_processes(self, sampled_outputs):
+        """Simplified formula for laser + plasma only."""
+        laser_power = sampled_outputs['laser'].squeeze()
+        plasma_rate = sampled_outputs['plasma'].squeeze()
+
+        # TARGET ADATTIVI (simplified)
+        laser_target = 0.5
+        # Plasma target dipende da laser
+        plasma_target = 5.0 + 20.0 * (laser_power - 0.5)
+
+        # Quality metrics
+        laser_quality = torch.exp(-((laser_power - laser_target) ** 2) / 0.1)
+        plasma_quality = torch.exp(-((plasma_rate - plasma_target) ** 2) / 2.0)
+
+        # Weighted combination (equal weights for simplicity)
+        F = 0.5 * laser_quality + 0.5 * plasma_quality
+        return F
+
+    def _compute_reliability_generic(self, sampled_outputs):
+        """Generic formula for any subset of processes."""
+        # Simple approach: average quality across all processes
+        # Each process has a nominal target based on typical ranges
+        process_targets = {
+            'laser': (0.5, 0.1),      # (target, variance)
+            'plasma': (5.0, 2.0),
+            'galvanic': (10.0, 4.0),
+            'microetch': (20.0, 4.0),
+        }
+
+        qualities = []
+        for process_name, sample in sampled_outputs.items():
+            if process_name in process_targets:
+                target, var = process_targets[process_name]
+                quality = torch.exp(-((sample.squeeze() - target) ** 2) / var)
+                qualities.append(quality)
+
+        # Average quality
+        F = torch.mean(torch.stack(qualities))
         return F
 
     def compute_all_target_reliabilities(self):
