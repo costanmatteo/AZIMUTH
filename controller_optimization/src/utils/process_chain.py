@@ -182,7 +182,7 @@ class ProcessChain(nn.Module):
             # Input to policy: [prev_inputs, prev_outputs_mean, prev_outputs_var, scenario_embedding]
             prev_input_dim = processes_config[i]['input_dim']
             prev_output_dim = processes_config[i]['output_dim']
-            policy_input_size = prev_input_dim + prev_output_dim + prev_output_dim
+            policy_input_size = prev_output_dim + prev_output_dim #+ prev_input_dim
 
             # Add scenario embedding dimension if encoder is enabled
             if self.use_scenario_encoder:
@@ -372,7 +372,7 @@ class ProcessChain(nn.Module):
             if i > 0:
                 # Concatenate: [prev_inputs, prev_outputs_mean, prev_outputs_var, scenario_embedding]
                 policy_input_parts = [
-                    prev_inputs,
+                   # prev_inputs,
                     prev_outputs_mean,
                     prev_outputs_var
                 ]

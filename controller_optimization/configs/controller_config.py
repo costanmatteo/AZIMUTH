@@ -70,27 +70,27 @@ Typical Modifications:
 
 CONTROLLER_CONFIG = {
     # Processi da includere (presi da PROCESSES)
-    'process_names': ['laser', 'plasma', 'galvanic', 'microetch'],
+    'process_names': ['laser', 'plasma'],
 
     # Policy generator architecture
     'policy_generator': {
         'architecture': 'custom',  # 'small', 'medium', 'large', 'custom'
-        'hidden_sizes': [256, 256, 256, 256, 256, 128, 64, 32],  # Usato solo se 'custom'
+        'hidden_sizes': [256, 128, 64, 32],  # Usato solo se 'custom'
         'dropout': 0.1,
         'use_batchnorm': False,
-        'use_scenario_encoder': True,  # Enable scenario context encoding
+        'use_scenario_encoder': False,  # Enable scenario context encoding
         'scenario_embedding_dim': 16,  # Dimension of scenario embedding vector
     },
 
     # Training parameters
     'training': {
-        'epochs': 200,  # Each epoch cycles through all training scenarios once
-        'batch_size': 64,  # Replicas per scenario (same inputs, different dropout/stochasticity)
+        'epochs': 800,  # Each epoch cycles through all training scenarios once
+        'batch_size': 2000,  # Replicas per scenario (same inputs, different dropout/stochasticity)
         'learning_rate': 0.0001,
         'weight_decay': 0.001,
         'lambda_bc': 0.001,  # Behavior cloning weight
         'reliability_loss_scale': 100.0,  # Scale factor for reliability loss (F - F*)^2
-        'patience': 30,
+        'patience': 300,
         'device': 'auto',
         'checkpoint_dir': 'controller_optimization/checkpoints/controller',
 
@@ -101,7 +101,7 @@ CONTROLLER_CONFIG = {
         'beta2': 0.999,  # For Adam/AdamW
 
         # Gradient clipping (helps with training stability)
-        'gradient_clip_norm': None,  # None = no clipping, or float (e.g., 1.0)
+        'gradient_clip_norm': 30.0,  # None = no clipping, or float (e.g., 1.0)
 
         # Learning rate scheduler
         'lr_scheduler': None,  # None, or {'type': 'step', 'step_size': 30, 'gamma': 0.1}
