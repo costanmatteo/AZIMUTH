@@ -159,7 +159,7 @@ CONTROLLER_CONFIG = {
 
     # Surrogate model
     'surrogate': {
-        'use_scm_surrogate': False,  # True = SCM functions (perfect), False = uncertainty predictors (realistic)
+        'use_scm_surrogate': True,  # True = SCM functions (perfect), False = uncertainty predictors (realistic)
         'use_deterministic_sampling': True,  # True = use mean (stable), False = use sampling (stochastic)
     },
 

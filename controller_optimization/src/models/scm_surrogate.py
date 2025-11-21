@@ -52,6 +52,7 @@ class SCMProcessSurrogate(nn.Module):
         node_specs: List[NodeSpec],
         input_labels: List[str],
         output_labels: List[str],
+        noise_samplers: Dict[str, Callable] = None,
         min_variance: float = 1e-6,
         device: str = 'cpu'
     ):
@@ -64,6 +65,9 @@ class SCMProcessSurrogate(nn.Module):
 
         # Build node specs dictionary
         self.specs: Dict[str, NodeSpec] = {s.name: s for s in node_specs}
+
+        # Store noise samplers for constant nodes
+        self.noise_samplers = noise_samplers or {}
 
         # Compute topological order
         self.order = self._topo_order()
@@ -173,10 +177,23 @@ class SCMProcessSurrogate(nn.Module):
         # Check if it's a symbol (variable)
         if isinstance(expr, sp.Symbol):
             var_name = str(expr)
-            # Handle noise terms (set to zero for deterministic evaluation)
+            # Handle noise terms
             if var_name.startswith('eps_'):
+                # Extract node name from eps_<name>
+                node_from_eps = var_name[4:]  # Remove 'eps_' prefix
                 batch_size = next(iter(context.values())).shape[0]
-                return torch.zeros(batch_size, device=self.device)
+
+                # Check if we have a sampler for this node (constant nodes)
+                if node_from_eps in self.noise_samplers:
+                    # Use the sampler to generate constant values
+                    # Create a dummy RNG (values are deterministic anyway)
+                    import numpy as np
+                    dummy_rng = np.random.default_rng(42)
+                    values = self.noise_samplers[node_from_eps](dummy_rng, batch_size)
+                    return torch.tensor(values, dtype=torch.float32, device=self.device)
+                else:
+                    # Regular noise term: set to zero for deterministic evaluation
+                    return torch.zeros(batch_size, device=self.device)
             # Return variable from context
             if var_name in context:
                 return context[var_name]
@@ -335,11 +352,20 @@ def create_scm_surrogate_for_process(process_config: dict, device: str = 'cpu') 
     # Extract node specs from the dataset
     node_specs = list(dataset.scm.specs.values())
 
+    # Extract noise samplers for constant nodes
+    # The noise_model contains singles (individual samplers) and groups (correlated samplers)
+    noise_samplers = {}
+    if hasattr(dataset, 'noise_model') and dataset.noise_model is not None:
+        # Get singles samplers
+        if hasattr(dataset.noise_model, 'singles'):
+            noise_samplers.update(dataset.noise_model.singles)
+
     # Create surrogate
     surrogate = SCMProcessSurrogate(
         node_specs=node_specs,
         input_labels=process_config['input_labels'],
         output_labels=process_config['output_labels'],
+        noise_samplers=noise_samplers,
         device=device
     )
 
