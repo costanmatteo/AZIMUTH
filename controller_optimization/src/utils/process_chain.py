@@ -2,7 +2,7 @@
 Process Chain: orchestrazione della sequenza di processi.
 
 Gestisce:
-- Uncertainty predictors (frozen)
+- Funzioni SCM deterministiche (per calcolare output esatti)
 - Policy generators (trainable)
 - Preprocessors (scaling/unscaling)
 - Forward pass attraverso tutta la catena
@@ -19,7 +19,7 @@ REPO_ROOT = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from controller_optimization.src.utils.model_utils import (
-    load_uncertainty_predictor,
+    load_scm,
     load_preprocessor
 )
 from controller_optimization.src.models.policy_generator import (
@@ -32,10 +32,12 @@ from controller_optimization.src.models.scenario_encoder import ScenarioEncoder
 
 class ProcessChain(nn.Module):
     """
-    Catena di processi con uncertainty predictors frozen e policy generators trainable.
+    Catena di processi con funzioni SCM deterministiche e policy generators trainable.
 
     Sequenza:
-    a1 (fisso) → UncertPred1 → (o1, σ1²) → Policy1 → a2 → UncertPred2 → (o2, σ2²) → ...
+    a1 (fisso) → SCM1 → o1 → Policy1 → a2 → SCM2 → o2 → ...
+
+    Nota: Le funzioni SCM calcolano output deterministici esatti (niente incertezza).
     """
 
     @staticmethod
@@ -129,30 +131,27 @@ class ProcessChain(nn.Module):
         self.use_scenario_encoder = policy_config.get('use_scenario_encoder', True)
         self.scenario_embedding_dim = policy_config.get('scenario_embedding_dim', 16)
 
-        # Load uncertainty predictors (frozen)
-        self.uncertainty_predictors = nn.ModuleList()
+        # Load SCM functions (deterministic)
+        self.scm_functions = []
+        self.scm_input_labels = []
+        self.scm_output_labels = []
         self.preprocessors = []
 
         for process_config in processes_config:
             checkpoint_dir = Path(process_config['checkpoint_dir'])
-            model_path = checkpoint_dir / 'uncertainty_predictor.pth'
             scaler_path = checkpoint_dir / 'scalers.pkl'
 
-            if not model_path.exists():
+            if not scaler_path.exists():
                 raise FileNotFoundError(
-                    f"Uncertainty predictor not found for process '{process_config['name']}'. "
-                    f"Run train_processes.py first."
+                    f"Preprocessor not found for process '{process_config['name']}'. "
+                    f"Run train_processes.py first to generate scalers."
                 )
 
-            # Load model
-            model = load_uncertainty_predictor(
-                checkpoint_path=model_path,
-                input_dim=process_config['input_dim'],
-                output_dim=process_config['output_dim'],
-                model_config=process_config['uncertainty_predictor']['model'],
-                device=device
-            )
-            self.uncertainty_predictors.append(model)
+            # Load SCM
+            scm, input_labels, output_labels = load_scm(process_config)
+            self.scm_functions.append(scm)
+            self.scm_input_labels.append(input_labels)
+            self.scm_output_labels.append(output_labels)
 
             # Load preprocessor
             preprocessor = load_preprocessor(scaler_path)
@@ -179,10 +178,10 @@ class ProcessChain(nn.Module):
         self.policy_generators = nn.ModuleList()
 
         for i in range(len(processes_config) - 1):
-            # Input to policy: [prev_inputs, prev_outputs_mean, prev_outputs_var, scenario_embedding]
-            prev_input_dim = processes_config[i]['input_dim']
+            # Input to policy: [prev_outputs, scenario_embedding]
+            # Note: No uncertainty/variance, just deterministic outputs
             prev_output_dim = processes_config[i]['output_dim']
-            policy_input_size = prev_output_dim + prev_output_dim #+ prev_input_dim
+            policy_input_size = prev_output_dim
 
             # Add scenario embedding dimension if encoder is enabled
             if self.use_scenario_encoder:
@@ -277,11 +276,46 @@ class ProcessChain(nn.Module):
 
         return torch.tensor(outputs_unscaled, dtype=torch.float32, device=self.device)
 
-    def unscale_variance(self, variance, process_idx):
-        """Unscale variance (variance scales with scale^2)."""
-        output_scale = self.preprocessors[process_idx].output_scaler.scale_
-        scale_squared = torch.tensor(output_scale ** 2, dtype=torch.float32, device=self.device)
-        return variance * scale_squared
+    def compute_scm_outputs(self, inputs, process_idx):
+        """
+        Calcola output deterministici usando le funzioni SCM.
+
+        Args:
+            inputs (torch.Tensor): Input tensor, shape (batch_size, input_dim)
+            process_idx (int): Index del processo
+
+        Returns:
+            torch.Tensor: Output deterministici, shape (batch_size, output_dim)
+        """
+        batch_size = inputs.shape[0]
+        scm = self.scm_functions[process_idx]
+        input_labels = self.scm_input_labels[process_idx]
+        output_labels = self.scm_output_labels[process_idx]
+
+        # Convert to numpy for SCM evaluation
+        inputs_np = inputs.detach().cpu().numpy()
+
+        # Evaluate SCM for each sample in batch
+        outputs_list = []
+        for i in range(batch_size):
+            # Create context with input values
+            context = {}
+            for j, label in enumerate(input_labels):
+                context[label] = np.array([inputs_np[i, j]])
+
+            # Create zero noise (deterministic)
+            eps_draws = {node: np.zeros(1) for node in scm.specs.keys()}
+
+            # Forward pass through SCM
+            scm.forward(context, eps_draws)
+
+            # Extract outputs
+            outputs = np.array([context[label][0] for label in output_labels])
+            outputs_list.append(outputs)
+
+        # Convert back to torch tensor
+        outputs_np = np.array(outputs_list)  # Shape: (batch_size, output_dim)
+        return torch.tensor(outputs_np, dtype=torch.float32, device=self.device)
 
     def _apply_non_controllable_constraints(self, generated_inputs, process_idx, scenario_idx, batch_size):
         """
@@ -341,18 +375,12 @@ class ProcessChain(nn.Module):
             trajectory (dict): {
                 'laser': {
                     'inputs': tensor,
-                    'outputs_mean': tensor (predicted mean),
-                    'outputs_var': tensor (predicted variance),
-                    'outputs_sampled': tensor (sampled from N(mean, var))
+                    'outputs': tensor (deterministic outputs from SCM)
                 },
                 'plasma': {...},
                 ...
             }
         """
-
-
-
-
         trajectory = {}
 
         # a1 è fisso dalla target trajectory (per lo scenario specifico)
@@ -371,12 +399,8 @@ class ProcessChain(nn.Module):
         for i, process_name in enumerate(self.process_names):
             # 1. Se i > 0: policy generator produce inputs
             if i > 0:
-                # Concatenate: [prev_inputs, prev_outputs_mean, prev_outputs_var, scenario_embedding]
-                policy_input_parts = [
-                   # prev_inputs,
-                    prev_outputs_mean,
-                    prev_outputs_var
-                ]
+                # Concatenate: [prev_outputs, scenario_embedding]
+                policy_input_parts = [prev_outputs]
 
                 # Add scenario embedding if encoder is enabled
                 if self.use_scenario_encoder:
@@ -395,33 +419,20 @@ class ProcessChain(nn.Module):
             # 2. Scale inputs
             scaled_inputs = self.scale_inputs(current_inputs, i)
 
-            # 3. Uncertainty predictor (frozen)
-            outputs_mean_scaled, outputs_var_scaled = self.uncertainty_predictors[i](scaled_inputs)
+            # 3. Compute deterministic outputs using SCM
+            outputs_scaled = self.compute_scm_outputs(scaled_inputs, i)
 
             # 4. Unscale outputs
-            outputs_mean = self.unscale_outputs(outputs_mean_scaled, i)
-            outputs_var = self.unscale_variance(outputs_var_scaled, i)
+            outputs = self.unscale_outputs(outputs_scaled, i)
 
-            # 5. Sample from distribution using reparameterization trick
-            # This makes the actual trajectory stochastic based on predicted uncertainty
-            std = torch.sqrt(outputs_var + 1e-8)
-            epsilon = torch.randn_like(outputs_mean)
-            outputs_sampled = outputs_mean + epsilon * std
-
-            # 6. Store in trajectory
+            # 5. Store in trajectory
             trajectory[process_name] = {
                 'inputs': current_inputs,
-                'outputs_mean': outputs_mean,
-                'outputs_var': outputs_var,
-                'outputs_sampled': outputs_sampled  # Actual sampled outputs
+                'outputs': outputs
             }
 
-            # 7. Update per prossima iterazione
-            # Use sampled outputs as feedback for next policy generator
-            # This propagates uncertainty through the chain
-            prev_inputs = current_inputs
-            prev_outputs_mean = outputs_sampled  # Use sampled outputs instead of mean
-            prev_outputs_var = outputs_var
+            # 6. Update per prossima iterazione
+            prev_outputs = outputs
 
         return trajectory
 
@@ -430,7 +441,7 @@ class ProcessChain(nn.Module):
         Genera trajectory senza training (per evaluation).
 
         Args:
-            trajectory_type (str): 'target' (usa a*) o 'baseline' (usa a' con noise)
+            trajectory_type (str): 'target' (usa a*) - baseline non più necessario
 
         Returns:
             trajectory (dict): Trajectory completa
@@ -448,32 +459,24 @@ class ProcessChain(nn.Module):
                 # Scale inputs
                 scaled_inputs = self.scale_inputs(current_inputs, i)
 
-                # Uncertainty predictor
-                outputs_mean_scaled, outputs_var_scaled = self.uncertainty_predictors[i](scaled_inputs)
+                # Compute deterministic outputs using SCM
+                outputs_scaled = self.compute_scm_outputs(scaled_inputs, i)
 
                 # Unscale outputs
-                outputs_mean = self.unscale_outputs(outputs_mean_scaled, i)
-                outputs_var = self.unscale_variance(outputs_var_scaled, i)
-
-                # Sample from distribution
-                std = torch.sqrt(outputs_var + 1e-8)
-                epsilon = torch.randn_like(outputs_mean)
-                outputs_sampled = outputs_mean + epsilon * std
+                outputs = self.unscale_outputs(outputs_scaled, i)
 
                 trajectory[process_name] = {
                     'inputs': current_inputs,
-                    'outputs_mean': outputs_mean,
-                    'outputs_var': outputs_var,
-                    'outputs_sampled': outputs_sampled
+                    'outputs': outputs
                 }
 
         return trajectory
 
 
 if __name__ == '__main__':
-    # Test ProcessChain (requires trained models)
+    # Test ProcessChain
     print("Testing ProcessChain...")
-    print("Note: This requires trained uncertainty predictors.")
+    print("Note: This requires preprocessor scalers.")
     print("Run train_processes.py first if not already done.")
 
     from controller_optimization.configs.processes_config import PROCESSES
@@ -492,7 +495,7 @@ if __name__ == '__main__':
 
         print(f"\nProcessChain created successfully!")
         print(f"  Processes: {chain.process_names}")
-        print(f"  Uncertainty predictors: {len(chain.uncertainty_predictors)}")
+        print(f"  SCM functions: {len(chain.scm_functions)}")
         print(f"  Policy generators: {len(chain.policy_generators)}")
 
         # Test forward pass
@@ -502,11 +505,10 @@ if __name__ == '__main__':
         for process_name, data in trajectory.items():
             print(f"  {process_name}:")
             print(f"    Inputs shape: {data['inputs'].shape}")
-            print(f"    Outputs mean shape: {data['outputs_mean'].shape}")
-            print(f"    Outputs var shape: {data['outputs_var'].shape}")
+            print(f"    Outputs shape: {data['outputs'].shape}")
 
         print("\n✓ ProcessChain test passed!")
 
     except FileNotFoundError as e:
         print(f"\n✗ Error: {e}")
-        print("Please run train_processes.py first to train uncertainty predictors.")
+        print("Please run train_processes.py first to generate preprocessor scalers.")

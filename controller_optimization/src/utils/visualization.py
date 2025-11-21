@@ -121,9 +121,9 @@ def plot_trajectory_comparison(target_trajectory, baseline_trajectory,
         baseline_inputs = baseline[process_name]['inputs']
         actual_inputs = actual[process_name]['inputs']
 
-        target_outputs = target[process_name]['outputs_mean']  # shape: (n_samples, output_dim)
-        baseline_outputs = baseline[process_name]['outputs_mean']
-        actual_outputs = actual[process_name]['outputs_mean']
+        target_outputs = target[process_name]['outputs']  # shape: (n_samples, output_dim)
+        baseline_outputs = baseline[process_name]['outputs']
+        actual_outputs = actual[process_name]['outputs']
 
         n_samples = target_inputs.shape[0]
         x = np.arange(n_samples)

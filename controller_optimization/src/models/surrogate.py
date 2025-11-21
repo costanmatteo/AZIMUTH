@@ -76,16 +76,13 @@ class ProTSurrogate:
         """
         Calcola reliability F per una trajectory.
 
-        Usa gli output già campionati se disponibili, altrimenti fa sampling
-        dalle distribuzioni degli outputs (backward compatibility).
+        Usa gli output deterministici dalle funzioni SCM.
 
         Args:
             trajectory (dict): {
                 'laser': {
                     'inputs': tensor (batch, input_dim),
-                    'outputs_mean': tensor (batch, output_dim),
-                    'outputs_var': tensor (batch, output_dim),
-                    'outputs_sampled': tensor (batch, output_dim)  # Optional
+                    'outputs': tensor (batch, output_dim)
                 },
                 'plasma': {...},
                 'galvanic': {...}
@@ -94,29 +91,12 @@ class ProTSurrogate:
         Returns:
             torch.Tensor: Reliability score F (scalar, differentiable)
         """
-        # Use already sampled outputs if available, otherwise sample here
+        # Extract deterministic outputs
         sampled_outputs = {}
 
         for process_name, data in trajectory.items():
-            # Check if outputs are already sampled
-            if 'outputs_sampled' in data:
-                # Use pre-sampled outputs from ProcessChain
-                sample = data['outputs_sampled']
-            else:
-                # Backward compatibility: sample here
-                mean = data['outputs_mean']
-                var = data['outputs_var']
-
-                if self.use_deterministic_sampling:
-                    # DETERMINISTIC: Use mean directly (no sampling)
-                    sample = mean
-                else:
-                    # STOCHASTIC: Sample using reparameterization trick
-                    std = torch.sqrt(var + 1e-8)
-                    epsilon = torch.randn_like(mean)
-                    sample = mean + epsilon * std
-
-            sampled_outputs[process_name] = sample
+            # Use deterministic outputs from SCM
+            sampled_outputs[process_name] = data['outputs']
 
         # ADAPTIVE RELIABILITY COMPUTATION WITH EXPLICIT PROCESS DEPENDENCIES
         # Formula adapted based on which processes are present
@@ -247,8 +227,7 @@ class ProTSurrogate:
                 for process_name, data in self.target_trajectory_tensors.items():
                     scenario_traj[process_name] = {
                         'inputs': data['inputs'][scenario_idx:scenario_idx+1],  # Keep batch dim
-                        'outputs_mean': data['outputs'][scenario_idx:scenario_idx+1],
-                        'outputs_var': torch.zeros_like(data['outputs'][scenario_idx:scenario_idx+1])
+                        'outputs': data['outputs'][scenario_idx:scenario_idx+1]
                     }
 
                 F_star = self.compute_reliability(scenario_traj)
@@ -290,13 +269,11 @@ if __name__ == '__main__':
     test_traj_same = {
         'laser': {
             'inputs': torch.tensor([[0.5, 25.0]]),
-            'outputs_mean': torch.tensor([[0.45]]),
-            'outputs_var': torch.tensor([[0.01]])
+            'outputs': torch.tensor([[0.45]])
         },
         'plasma': {
             'inputs': torch.tensor([[200.0, 30.0]]),
-            'outputs_mean': torch.tensor([[5.0]]),
-            'outputs_var': torch.tensor([[0.02]])
+            'outputs': torch.tensor([[5.0]])
         }
     }
 
@@ -307,13 +284,11 @@ if __name__ == '__main__':
     test_traj_different = {
         'laser': {
             'inputs': torch.tensor([[0.6, 26.0]]),  # Slightly different
-            'outputs_mean': torch.tensor([[0.50]]),  # Slightly different
-            'outputs_var': torch.tensor([[0.01]])
+            'outputs': torch.tensor([[0.50]])  # Slightly different
         },
         'plasma': {
             'inputs': torch.tensor([[220.0, 32.0]]),  # Slightly different
-            'outputs_mean': torch.tensor([[5.5]]),    # Slightly different
-            'outputs_var': torch.tensor([[0.02]])
+            'outputs': torch.tensor([[5.5]])  # Slightly different
         }
     }
 
@@ -324,13 +299,11 @@ if __name__ == '__main__':
     test_traj_grad = {
         'laser': {
             'inputs': torch.tensor([[0.5, 25.0]], requires_grad=True),
-            'outputs_mean': torch.tensor([[0.45]], requires_grad=True),
-            'outputs_var': torch.tensor([[0.01]])
+            'outputs': torch.tensor([[0.45]], requires_grad=True)
         },
         'plasma': {
             'inputs': torch.tensor([[200.0, 30.0]], requires_grad=True),
-            'outputs_mean': torch.tensor([[5.0]], requires_grad=True),
-            'outputs_var': torch.tensor([[0.02]])
+            'outputs': torch.tensor([[5.0]], requires_grad=True)
         }
     }
 
@@ -339,6 +312,6 @@ if __name__ == '__main__':
 
     print(f"\nGradient test:")
     print(f"  Inputs grad exists: {test_traj_grad['laser']['inputs'].grad is not None}")
-    print(f"  Outputs grad exists: {test_traj_grad['laser']['outputs_mean'].grad is not None}")
+    print(f"  Outputs grad exists: {test_traj_grad['laser']['outputs'].grad is not None}")
 
     print("\n✓ ProTSurrogate test passed!")

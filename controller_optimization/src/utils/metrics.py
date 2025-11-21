@@ -10,16 +10,13 @@ def convert_trajectory_to_numpy(trajectory):
     """
     Convert trajectory tensors to numpy arrays.
 
-    Handles two formats:
-    - Target/baseline: {'inputs': array, 'outputs': array}
-    - Actual: {'inputs': tensor, 'outputs_mean': tensor, 'outputs_var': tensor}
-
     Args:
         trajectory (dict): Trajectory with torch tensors or numpy arrays
+                          Format: {'inputs': tensor/array, 'outputs': tensor/array}
 
     Returns:
         dict: Trajectory with numpy arrays in consistent format
-              (always 'outputs_mean' and 'outputs_var')
+              (always 'outputs' for compatibility)
     """
     numpy_traj = {}
     for process_name, data in trajectory.items():
@@ -28,30 +25,14 @@ def convert_trajectory_to_numpy(trajectory):
         if torch.is_tensor(inputs):
             inputs = inputs.detach().cpu().numpy()
 
-        # Convert outputs (handle both formats)
-        if 'outputs_mean' in data:
-            # Format: outputs_mean, outputs_var
-            outputs_mean = data['outputs_mean']
-            if torch.is_tensor(outputs_mean):
-                outputs_mean = outputs_mean.detach().cpu().numpy()
-
-            outputs_var = data.get('outputs_var', None)
-            if outputs_var is not None:
-                if torch.is_tensor(outputs_var):
-                    outputs_var = outputs_var.detach().cpu().numpy()
-            else:
-                outputs_var = np.zeros_like(outputs_mean)
-        else:
-            # Format: outputs only (target/baseline)
-            outputs_mean = data['outputs']
-            if torch.is_tensor(outputs_mean):
-                outputs_mean = outputs_mean.detach().cpu().numpy()
-            outputs_var = np.zeros_like(outputs_mean)
+        # Convert outputs
+        outputs = data['outputs']
+        if torch.is_tensor(outputs):
+            outputs = outputs.detach().cpu().numpy()
 
         numpy_traj[process_name] = {
             'inputs': inputs,
-            'outputs_mean': outputs_mean,
-            'outputs_var': outputs_var
+            'outputs': outputs
         }
     return numpy_traj
 
@@ -86,8 +67,8 @@ def compute_trajectory_distance(trajectory1, trajectory2):
         input_distances.append(input_dist)
 
         # Output distance (MSE)
-        outputs1 = traj1[process_name]['outputs_mean']
-        outputs2 = traj2[process_name]['outputs_mean']
+        outputs1 = traj1[process_name]['outputs']
+        outputs2 = traj2[process_name]['outputs']
         output_dist = np.mean((outputs1 - outputs2) ** 2)
         output_distances.append(output_dist)
 
@@ -129,8 +110,8 @@ def compute_process_wise_metrics(trajectory, target_trajectory):
         input_max_error = np.max(np.abs(inputs_actual - inputs_target))
 
         # Output metrics
-        outputs_actual = actual[process_name]['outputs_mean']
-        outputs_target = target[process_name]['outputs_mean']
+        outputs_actual = actual[process_name]['outputs']
+        outputs_target = target[process_name]['outputs']
 
         output_mse = np.mean((outputs_actual - outputs_target) ** 2)
         output_mae = np.mean(np.abs(outputs_actual - outputs_target))

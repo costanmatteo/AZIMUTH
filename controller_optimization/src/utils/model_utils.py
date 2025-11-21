@@ -38,6 +38,47 @@ preprocessing = importlib.util.module_from_spec(spec_preprocessing)
 sys.modules['preprocessing'] = preprocessing  # Register for pickle
 spec_preprocessing.loader.exec_module(preprocessing)
 
+# Load SCM datasets explicitly
+spec_datasets = importlib.util.spec_from_file_location(
+    "scm_datasets",
+    UNCERTAINTY_PREDICTOR_PATH / "scm_ds" / "datasets.py"
+)
+scm_datasets = importlib.util.module_from_spec(spec_datasets)
+sys.modules['scm_datasets'] = scm_datasets
+spec_datasets.loader.exec_module(scm_datasets)
+ds_scm_laser = scm_datasets.ds_scm_laser
+ds_scm_plasma = scm_datasets.ds_scm_plasma
+ds_scm_galvanic = scm_datasets.ds_scm_galvanic
+ds_scm_microetch = scm_datasets.ds_scm_microetch
+
+
+def load_scm(process_config):
+    """
+    Carica SCM deterministico per un processo.
+
+    Args:
+        process_config (dict): Process configuration from PROCESSES
+
+    Returns:
+        scm: SCM instance with deterministic functions
+        input_labels: List of input variable names
+        output_labels: List of output variable names
+    """
+    scm_type = process_config['scm_dataset_type']
+
+    if scm_type == 'laser':
+        ds_scm = ds_scm_laser
+    elif scm_type == 'plasma':
+        ds_scm = ds_scm_plasma
+    elif scm_type == 'galvanic':
+        ds_scm = ds_scm_galvanic
+    elif scm_type == 'microetch':
+        ds_scm = ds_scm_microetch
+    else:
+        raise ValueError(f"Unknown SCM dataset type: {scm_type}")
+
+    return ds_scm.scm, ds_scm.input_labels, ds_scm.target_labels
+
 
 def load_uncertainty_predictor(checkpoint_path, input_dim, output_dim, model_config, device='cpu'):
     """
@@ -175,10 +216,7 @@ def convert_numpy_to_tensor(trajectory, device='cpu'):
     for process_name, data in trajectory.items():
         tensor_trajectory[process_name] = {
             'inputs': torch.tensor(data['inputs'], dtype=torch.float32, device=device),
-            'outputs_mean': torch.tensor(data['outputs'], dtype=torch.float32, device=device),
-            'outputs_var': torch.zeros_like(
-                torch.tensor(data['outputs'], dtype=torch.float32, device=device)
-            )  # Baseline has no variance prediction
+            'outputs': torch.tensor(data['outputs'], dtype=torch.float32, device=device)
         }
 
     return tensor_trajectory
@@ -199,8 +237,7 @@ def convert_tensor_to_numpy(trajectory):
     for process_name, data in trajectory.items():
         numpy_trajectory[process_name] = {
             'inputs': data['inputs'].detach().cpu().numpy(),
-            'outputs_mean': data['outputs_mean'].detach().cpu().numpy(),
-            'outputs_var': data['outputs_var'].detach().cpu().numpy()
+            'outputs': data['outputs'].detach().cpu().numpy()
         }
 
     return numpy_trajectory
