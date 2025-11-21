@@ -341,8 +341,9 @@ class ProcessChain(nn.Module):
             trajectory (dict): {
                 'laser': {
                     'inputs': tensor,
-                    'outputs_mean': tensor,
-                    'outputs_var': tensor
+                    'outputs_mean': tensor (predicted mean),
+                    'outputs_var': tensor (predicted variance),
+                    'outputs_sampled': tensor (sampled from N(mean, var))
                 },
                 'plasma': {...},
                 ...
@@ -401,16 +402,25 @@ class ProcessChain(nn.Module):
             outputs_mean = self.unscale_outputs(outputs_mean_scaled, i)
             outputs_var = self.unscale_variance(outputs_var_scaled, i)
 
-            # 5. Store in trajectory
+            # 5. Sample from distribution using reparameterization trick
+            # This makes the actual trajectory stochastic based on predicted uncertainty
+            std = torch.sqrt(outputs_var + 1e-8)
+            epsilon = torch.randn_like(outputs_mean)
+            outputs_sampled = outputs_mean + epsilon * std
+
+            # 6. Store in trajectory
             trajectory[process_name] = {
                 'inputs': current_inputs,
                 'outputs_mean': outputs_mean,
-                'outputs_var': outputs_var
+                'outputs_var': outputs_var,
+                'outputs_sampled': outputs_sampled  # Actual sampled outputs
             }
 
-            # 6. Update per prossima iterazione
+            # 7. Update per prossima iterazione
+            # Use sampled outputs as feedback for next policy generator
+            # This propagates uncertainty through the chain
             prev_inputs = current_inputs
-            prev_outputs_mean = outputs_mean
+            prev_outputs_mean = outputs_sampled  # Use sampled outputs instead of mean
             prev_outputs_var = outputs_var
 
         return trajectory
@@ -445,10 +455,16 @@ class ProcessChain(nn.Module):
                 outputs_mean = self.unscale_outputs(outputs_mean_scaled, i)
                 outputs_var = self.unscale_variance(outputs_var_scaled, i)
 
+                # Sample from distribution
+                std = torch.sqrt(outputs_var + 1e-8)
+                epsilon = torch.randn_like(outputs_mean)
+                outputs_sampled = outputs_mean + epsilon * std
+
                 trajectory[process_name] = {
                     'inputs': current_inputs,
                     'outputs_mean': outputs_mean,
-                    'outputs_var': outputs_var
+                    'outputs_var': outputs_var,
+                    'outputs_sampled': outputs_sampled
                 }
 
         return trajectory
