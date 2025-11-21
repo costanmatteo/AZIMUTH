@@ -2,10 +2,14 @@
 Process Chain: orchestrazione della sequenza di processi.
 
 Gestisce:
-- Funzioni SCM deterministiche (per calcolare output esatti)
+- Funzioni SCM realistiche (structural noise=0, process noise=attivo)
 - Policy generators (trainable)
 - Preprocessors (scaling/unscaling)
 - Forward pass attraverso tutta la catena
+
+Il sistema ora simula condizioni realistiche come baseline:
+- Structural conditions fisse per scenario (es. AmbientTemp)
+- Process noise attivo (es. shot noise, drift)
 """
 
 import sys
@@ -32,12 +36,16 @@ from controller_optimization.src.models.scenario_encoder import ScenarioEncoder
 
 class ProcessChain(nn.Module):
     """
-    Catena di processi con funzioni SCM deterministiche e policy generators trainable.
+    Catena di processi con funzioni SCM realistiche e policy generators trainable.
 
     Sequenza:
     a1 (fisso) → SCM1 → o1 → Policy1 → a2 → SCM2 → o2 → ...
 
-    Nota: Le funzioni SCM calcolano output deterministici esatti (niente incertezza).
+    Noise model:
+    - Structural noise (es. AmbientTemp): Fisso per scenario (da target)
+    - Process noise (es. shot noise, drift): Attivo (variabilità realistica)
+
+    Questo simula il comportamento baseline: stessi input, ma con variabilità del processo.
     """
 
     @staticmethod
@@ -131,10 +139,11 @@ class ProcessChain(nn.Module):
         self.use_scenario_encoder = policy_config.get('use_scenario_encoder', True)
         self.scenario_embedding_dim = policy_config.get('scenario_embedding_dim', 16)
 
-        # Load SCM functions (deterministic)
+        # Load SCM functions with noise models
         self.scm_functions = []
         self.scm_input_labels = []
         self.scm_output_labels = []
+        self.scm_datasets = []  # Complete datasets for noise classification
         self.preprocessors = []
 
         for process_config in processes_config:
@@ -147,11 +156,12 @@ class ProcessChain(nn.Module):
                     f"Run train_processes.py first to generate scalers."
                 )
 
-            # Load SCM
-            scm, input_labels, output_labels = load_scm(process_config)
+            # Load SCM with complete dataset
+            scm, input_labels, output_labels, ds_scm = load_scm(process_config)
             self.scm_functions.append(scm)
             self.scm_input_labels.append(input_labels)
             self.scm_output_labels.append(output_labels)
+            self.scm_datasets.append(ds_scm)
 
             # Load preprocessor
             preprocessor = load_preprocessor(scaler_path)
@@ -276,21 +286,27 @@ class ProcessChain(nn.Module):
 
         return torch.tensor(outputs_unscaled, dtype=torch.float32, device=self.device)
 
-    def compute_scm_outputs(self, inputs, process_idx):
+    def compute_scm_outputs(self, inputs, process_idx, seed=None):
         """
-        Calcola output deterministici usando le funzioni SCM.
+        Calcola output usando funzioni SCM con process noise attivo.
+
+        Noise model:
+        - Structural noise (es. AmbientTemp): ZERO (già fissato negli input)
+        - Process noise (es. shot noise, drift): ATTIVO (campionato)
 
         Args:
             inputs (torch.Tensor): Input tensor, shape (batch_size, input_dim)
             process_idx (int): Index del processo
+            seed (int, optional): Random seed per reproducibilità
 
         Returns:
-            torch.Tensor: Output deterministici, shape (batch_size, output_dim)
+            torch.Tensor: Output con process noise, shape (batch_size, output_dim)
         """
         batch_size = inputs.shape[0]
         scm = self.scm_functions[process_idx]
         input_labels = self.scm_input_labels[process_idx]
         output_labels = self.scm_output_labels[process_idx]
+        ds_scm = self.scm_datasets[process_idx]
 
         # Convert to numpy for SCM evaluation
         inputs_np = inputs.detach().cpu().numpy()
@@ -298,13 +314,29 @@ class ProcessChain(nn.Module):
         # Evaluate SCM for each sample in batch
         outputs_list = []
         for i in range(batch_size):
+            # Create RNG with unique seed for each batch item
+            if seed is not None:
+                rng = np.random.default_rng(seed + i)
+            else:
+                rng = np.random.default_rng()
+
             # Create context with input values
             context = {}
             for j, label in enumerate(input_labels):
                 context[label] = np.array([inputs_np[i, j]])
 
-            # Create zero noise (deterministic)
-            eps_draws = {node: np.zeros(1) for node in scm.specs.keys()}
+            # Create noise draws: structural=0, process=sampled
+            eps_draws = {}
+            for node in scm.specs.keys():
+                if node in ds_scm.structural_noise_vars:
+                    # Structural noise: zero (deterministic for this scenario)
+                    eps_draws[node] = np.zeros(1)
+                elif node in ds_scm.process_noise_vars:
+                    # Process noise: ACTIVE (realistic variability)
+                    eps_draws[node] = rng.standard_normal(1)
+                else:
+                    # Other nodes (inputs, constants): zero
+                    eps_draws[node] = np.zeros(1)
 
             # Forward pass through SCM
             scm.forward(context, eps_draws)
@@ -375,11 +407,14 @@ class ProcessChain(nn.Module):
             trajectory (dict): {
                 'laser': {
                     'inputs': tensor,
-                    'outputs': tensor (deterministic outputs from SCM)
+                    'outputs': tensor (outputs from SCM with process noise)
                 },
                 'plasma': {...},
                 ...
             }
+
+        Note: Gli output includono variabilità realistica da process noise,
+              come nel comportamento baseline.
         """
         trajectory = {}
 

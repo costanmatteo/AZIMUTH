@@ -54,7 +54,7 @@ ds_scm_microetch = scm_datasets.ds_scm_microetch
 
 def load_scm(process_config):
     """
-    Carica SCM deterministico per un processo.
+    Carica SCM con noise model completo per un processo.
 
     Args:
         process_config (dict): Process configuration from PROCESSES
@@ -63,6 +63,7 @@ def load_scm(process_config):
         scm: SCM instance with deterministic functions
         input_labels: List of input variable names
         output_labels: List of output variable names
+        ds_scm: Complete SCM dataset (needed for noise classification)
     """
     scm_type = process_config['scm_dataset_type']
 
@@ -77,7 +78,7 @@ def load_scm(process_config):
     else:
         raise ValueError(f"Unknown SCM dataset type: {scm_type}")
 
-    return ds_scm.scm, ds_scm.input_labels, ds_scm.target_labels
+    return ds_scm.scm, ds_scm.input_labels, ds_scm.target_labels, ds_scm
 
 
 def load_uncertainty_predictor(checkpoint_path, input_dim, output_dim, model_config, device='cpu'):
