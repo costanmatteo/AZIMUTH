@@ -48,7 +48,7 @@ PROCESSES = [
         'output_dim': 1,
         'input_labels': ['RF_Power', 'Duration'],
         'output_labels': ['RemovalRate'],
-        'controllable_inputs': ['RF_Power', 'Duration'],  # All inputs controllable
+        'controllable_inputs': ['RF_Power'],  # All inputs controllable
 
         'uncertainty_predictor': {
             'model': {

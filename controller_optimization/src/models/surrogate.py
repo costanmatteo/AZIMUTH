@@ -207,10 +207,10 @@ class ProTSurrogate:
         # COMBINE QUALITY SCORES WITH WEIGHTED AVERAGE
         # Weights reflect relative importance of each process
         weights = {
-            'laser': 0.2,
-            'plasma': 0.15,
-            'galvanic': 0.5,    # Most important (final product quality)
-            'microetch': 0.15
+            'laser': 0.1,
+            'plasma': 1.0,
+            'galvanic': 0.0,    # Most important (final product quality)
+            'microetch': 0.0
         }
 
         # Only use weights for processes that are actually present

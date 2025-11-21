@@ -124,8 +124,8 @@ CONTROLLER_CONFIG = {
     'scenarios': {
         'n_train': 1,         # Training scenarios (diverse operating conditions)
         'n_test': 1,          # Test scenarios (final evaluation, never seen during training)
-        'seed_target': 42,     # Seed for target trajectory generation (train)
-        'seed_baseline': 43,   # Seed for baseline process noise (same inputs, different noise)
+        'seed_target': 50,     # Seed for target trajectory generation (train)
+        'seed_baseline': 51,   # Seed for baseline process noise (same inputs, different noise)
         'test_seed_offset': 1000,  # Offset added to seeds for test scenarios (ensures different from train)
     },
 
