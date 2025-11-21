@@ -347,7 +347,20 @@ class ProcessChain(nn.Module):
 
         # Convert back to torch tensor
         outputs_np = np.array(outputs_list)  # Shape: (batch_size, output_dim)
-        return torch.tensor(outputs_np, dtype=torch.float32, device=self.device)
+        outputs_tensor = torch.tensor(outputs_np, dtype=torch.float32, device=self.device)
+
+        # Check for NaN/inf in SCM outputs
+        if not torch.isfinite(outputs_tensor).all():
+            print(f"\n⚠ WARNING: SCM function {process_idx} produced NaN/inf!")
+            print(f"  Process: {self.process_names[process_idx]}")
+            print(f"  Inputs min/max: {inputs_np.min():.6f} / {inputs_np.max():.6f}")
+            print(f"  Outputs: {outputs_np}")
+            print(f"  Has NaN: {np.isnan(outputs_np).any()}")
+            print(f"  Has inf: {np.isinf(outputs_np).any()}")
+            # Replace NaN/inf with zeros
+            outputs_tensor = torch.nan_to_num(outputs_tensor, nan=0.0, posinf=0.0, neginf=0.0)
+
+        return outputs_tensor
 
     def _apply_non_controllable_constraints(self, generated_inputs, process_idx, scenario_idx, batch_size):
         """
@@ -444,6 +457,18 @@ class ProcessChain(nn.Module):
                 policy_input = torch.cat(policy_input_parts, dim=1)
 
                 generated_inputs = self.policy_generators[i - 1](policy_input)
+
+                # Clamp generated inputs to prevent extreme values
+                # Use reasonable bounds based on typical process parameter ranges
+                generated_inputs = torch.clamp(generated_inputs, min=-1000.0, max=1000.0)
+
+                # Check for NaN/inf in generated inputs
+                if not torch.isfinite(generated_inputs).all():
+                    print(f"\n⚠ WARNING: Policy generator {i-1} produced NaN/inf!")
+                    print(f"  Process: {process_name}")
+                    print(f"  Generated inputs: {generated_inputs}")
+                    # Replace with zeros as fallback
+                    generated_inputs = torch.zeros_like(generated_inputs)
 
                 # Apply non-controllable constraints: replace non-controllable inputs
                 # with values from target trajectory (e.g., Temperature for microetch)

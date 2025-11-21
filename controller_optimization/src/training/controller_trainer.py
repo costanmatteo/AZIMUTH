@@ -245,9 +245,38 @@ class ControllerTrainer:
             # Compute loss using scenario-specific F_star
             total_loss, rel_loss, bc_loss, F = self.compute_loss(trajectory, scenario_idx)
 
+            # Check for NaN/inf before backward pass
+            if not torch.isfinite(total_loss):
+                print(f"\n⚠ WARNING: NaN/inf detected at scenario {scenario_idx}!")
+                print(f"  Total loss: {total_loss.item()}")
+                print(f"  Reliability loss: {rel_loss}")
+                print(f"  BC loss: {bc_loss}")
+                print(f"  F value: {F}")
+
+                # Debug trajectory values
+                print("\n  Trajectory values:")
+                for proc_name, data in trajectory.items():
+                    inputs_np = data['inputs'].detach().cpu().numpy()
+                    outputs_np = data['outputs'].detach().cpu().numpy()
+                    print(f"    {proc_name}:")
+                    print(f"      inputs:  min={inputs_np.min():.6f}, max={inputs_np.max():.6f}, mean={inputs_np.mean():.6f}")
+                    print(f"      outputs: min={outputs_np.min():.6f}, max={outputs_np.max():.6f}, mean={outputs_np.mean():.6f}")
+                    print(f"      has NaN: inputs={np.isnan(inputs_np).any()}, outputs={np.isnan(outputs_np).any()}")
+
+                # Skip this scenario to prevent corruption
+                print("  → Skipping this scenario")
+                continue
+
             # Backward pass
             self.optimizer.zero_grad()
             total_loss.backward()
+
+            # Gradient clipping to prevent explosion
+            torch.nn.utils.clip_grad_norm_(
+                [p for p in self.process_chain.parameters() if p.requires_grad],
+                max_norm=1.0
+            )
+
             self.optimizer.step()
 
             # Track metrics
