@@ -200,7 +200,7 @@ def main():
             device=device
         )
         print(f"  ✓ Process chain created")
-        print(f"    Uncertainty predictors: {len(process_chain.uncertainty_predictors)} (frozen)")
+        print(f"    SCM functions: {len(process_chain.scm_functions)} (deterministic)")
         print(f"    Policy generators: {len(process_chain.policy_generators)} (trainable)")
 
         # Count parameters
@@ -567,8 +567,7 @@ def main():
     for process_name, data in actual_scenario_batch.items():
         actual_scenario[process_name] = {
             'inputs': data['inputs'][0:1],
-            'outputs_mean': data['outputs_mean'][0:1],
-            'outputs_var': data['outputs_var'][0:1]
+            'outputs': data['outputs'][0:1]
         }
 
     # Plot comparison
