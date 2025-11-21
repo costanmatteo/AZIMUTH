@@ -28,14 +28,19 @@ from controller_optimization.src.models.policy_generator import (
     create_large_policy_generator
 )
 from controller_optimization.src.models.scenario_encoder import ScenarioEncoder
+from controller_optimization.src.models.scm_surrogate import create_scm_surrogate_for_process
 
 
 class ProcessChain(nn.Module):
     """
-    Catena di processi con uncertainty predictors frozen e policy generators trainable.
+    Catena di processi con uncertainty predictors (o surrogati SCM) frozen e policy generators trainable.
 
     Sequenza:
-    a1 (fisso) → UncertPred1 → (o1, σ1²) → Policy1 → a2 → UncertPred2 → (o2, σ2²) → ...
+    a1 (fisso) → UncertPred1/SCM1 → (o1, σ1²) → Policy1 → a2 → UncertPred2/SCM2 → (o2, σ2²) → ...
+
+    Supporta due modalità:
+    1. Uncertainty Predictors: reti neurali trained (default)
+    2. SCM Surrogates: funzioni deterministiche dal dataset SCM
     """
 
     @staticmethod
@@ -94,21 +99,20 @@ class ProcessChain(nn.Module):
 
         return torch.tensor(structural_values, dtype=torch.float32, device=self.device)
 
-    def __init__(self, processes_config, target_trajectory, policy_config=None, device='cpu'):
+    def __init__(self, processes_config, target_trajectory, policy_config=None, device='cpu', use_scm_surrogate=False):
         """
         Args:
             processes_config (list): Lista da PROCESSES
             target_trajectory (dict): Da generate_target_trajectory()
             policy_config (dict): Config for policy generators
             device (str): Device
+            use_scm_surrogate (bool): If True, use SCM surrogates instead of trained uncertainty predictors
         """
         super(ProcessChain, self).__init__()
 
         self.device = device
         self.process_names = [p['name'] for p in processes_config]
-
-
-
+        self.use_scm_surrogate = use_scm_surrogate
 
         self.processes_config = processes_config
         self.target_trajectory = target_trajectory
@@ -129,34 +133,57 @@ class ProcessChain(nn.Module):
         self.use_scenario_encoder = policy_config.get('use_scenario_encoder', True)
         self.scenario_embedding_dim = policy_config.get('scenario_embedding_dim', 16)
 
-        # Load uncertainty predictors (frozen)
+        # Load uncertainty predictors or SCM surrogates (frozen)
         self.uncertainty_predictors = nn.ModuleList()
         self.preprocessors = []
 
-        for process_config in processes_config:
-            checkpoint_dir = Path(process_config['checkpoint_dir'])
-            model_path = checkpoint_dir / 'uncertainty_predictor.pth'
-            scaler_path = checkpoint_dir / 'scalers.pkl'
+        if use_scm_surrogate:
+            print(f"\n{'='*70}")
+            print(f"USING SCM SURROGATES (deterministic functions from dataset)")
+            print(f"{'='*70}")
 
-            if not model_path.exists():
-                raise FileNotFoundError(
-                    f"Uncertainty predictor not found for process '{process_config['name']}'. "
-                    f"Run train_processes.py first."
+            # Load SCM surrogates (no preprocessing needed)
+            for process_config in processes_config:
+                print(f"  Loading SCM surrogate for: {process_config['name']}")
+                model = create_scm_surrogate_for_process(process_config, device=device)
+                self.uncertainty_predictors.append(model)
+
+                # SCM surrogates don't need preprocessing (they work in original space)
+                # Store None as placeholder
+                self.preprocessors.append(None)
+
+        else:
+            print(f"\n{'='*70}")
+            print(f"USING TRAINED UNCERTAINTY PREDICTORS (neural networks)")
+            print(f"{'='*70}")
+
+            # Load trained uncertainty predictors (original behavior)
+            for process_config in processes_config:
+                checkpoint_dir = Path(process_config['checkpoint_dir'])
+                model_path = checkpoint_dir / 'uncertainty_predictor.pth'
+                scaler_path = checkpoint_dir / 'scalers.pkl'
+
+                if not model_path.exists():
+                    raise FileNotFoundError(
+                        f"Uncertainty predictor not found for process '{process_config['name']}'. "
+                        f"Run train_processes.py first."
+                    )
+
+                print(f"  Loading uncertainty predictor for: {process_config['name']}")
+
+                # Load model
+                model = load_uncertainty_predictor(
+                    checkpoint_path=model_path,
+                    input_dim=process_config['input_dim'],
+                    output_dim=process_config['output_dim'],
+                    model_config=process_config['uncertainty_predictor']['model'],
+                    device=device
                 )
+                self.uncertainty_predictors.append(model)
 
-            # Load model
-            model = load_uncertainty_predictor(
-                checkpoint_path=model_path,
-                input_dim=process_config['input_dim'],
-                output_dim=process_config['output_dim'],
-                model_config=process_config['uncertainty_predictor']['model'],
-                device=device
-            )
-            self.uncertainty_predictors.append(model)
-
-            # Load preprocessor
-            preprocessor = load_preprocessor(scaler_path)
-            self.preprocessors.append(preprocessor)
+                # Load preprocessor
+                preprocessor = load_preprocessor(scaler_path)
+                self.preprocessors.append(preprocessor)
 
         # Create scenario encoder (if enabled)
         if self.use_scenario_encoder:
@@ -239,49 +266,53 @@ class ProcessChain(nn.Module):
         return torch.tensor(initial_inputs, dtype=torch.float32, device=self.device)
 
     def scale_inputs(self, inputs, process_idx):
-        """Scale inputs using preprocessor."""
-        inputs_np = inputs.detach().cpu().numpy()
-        inputs_scaled = self.preprocessors[process_idx].input_scaler.transform(inputs_np)
-        return torch.tensor(inputs_scaled, dtype=torch.float32, device=self.device)
+        """Scale inputs using preprocessor (if available)."""
+        if self.use_scm_surrogate:
+            # SCM surrogates work in original space (no scaling needed)
+            return inputs
+        else:
+            # Use preprocessor for trained models
+            inputs_np = inputs.detach().cpu().numpy()
+            inputs_scaled = self.preprocessors[process_idx].input_scaler.transform(inputs_np)
+            return torch.tensor(inputs_scaled, dtype=torch.float32, device=self.device)
 
     def unscale_outputs(self, outputs, process_idx):
-        """Unscale outputs using preprocessor."""
-        outputs_np = outputs.detach().cpu().numpy()
-        outputs_unscaled = self.preprocessors[process_idx].output_scaler.inverse_transform(outputs_np)
+        """Unscale outputs using preprocessor (if available)."""
+        if self.use_scm_surrogate:
+            # SCM surrogates already output in original space
+            return outputs
+        else:
+            # Use preprocessor for trained models
+            outputs_np = outputs.detach().cpu().numpy()
+            outputs_unscaled = self.preprocessors[process_idx].output_scaler.inverse_transform(outputs_np)
 
-        
+            # DEBUG
+            if process_idx == 'microetch':
+                print(f"\n=== UNSCALE OUTPUTS: {process_idx} ===")
+                print(f"Scaled outputs (from model): {outputs_np}")
+                print(f"Scaler type: {type(self.preprocessors[process_idx].output_scaler)}")
+                print(f"Scaler mean_: {self.preprocessors[process_idx].output_scaler.mean_}")
+                print(f"Scaler scale_: {self.preprocessors[process_idx].output_scaler.scale_}")
 
+            outputs_unscaled = self.preprocessors[process_idx].output_scaler.inverse_transform(outputs_np)
 
-        # DEBUG
-        if process_idx == 'microetch':
-            print(f"\n=== UNSCALE OUTPUTS: {process_idx} ===")
-            print(f"Scaled outputs (from model): {outputs_np}")
-            print(f"Scaler type: {type(self.preprocessors[process_idx].output_scaler)}")
-            print(f"Scaler mean_: {self.preprocessors[process_idx].output_scaler.mean_}")
-            print(f"Scaler scale_: {self.preprocessors[process_idx].output_scaler.scale_}")
-    
-        outputs_unscaled = self.preprocessors[process_idx].output_scaler.inverse_transform(outputs_np)
-    
-        if process_idx == 'microetch':
-            print(f"Unscaled outputs: {outputs_unscaled}")
-            print(f"Expected range: 0-40")
-            print("=" * 50)
+            if process_idx == 'microetch':
+                print(f"Unscaled outputs: {outputs_unscaled}")
+                print(f"Expected range: 0-40")
+                print("=" * 50)
 
-
-
-
-
-
-
-
-
-        return torch.tensor(outputs_unscaled, dtype=torch.float32, device=self.device)
+            return torch.tensor(outputs_unscaled, dtype=torch.float32, device=self.device)
 
     def unscale_variance(self, variance, process_idx):
-        """Unscale variance (variance scales with scale^2)."""
-        output_scale = self.preprocessors[process_idx].output_scaler.scale_
-        scale_squared = torch.tensor(output_scale ** 2, dtype=torch.float32, device=self.device)
-        return variance * scale_squared
+        """Unscale variance (variance scales with scale^2 if using preprocessor)."""
+        if self.use_scm_surrogate:
+            # SCM surrogates already output in original space
+            return variance
+        else:
+            # Use preprocessor for trained models
+            output_scale = self.preprocessors[process_idx].output_scaler.scale_
+            scale_squared = torch.tensor(output_scale ** 2, dtype=torch.float32, device=self.device)
+            return variance * scale_squared
 
     def _apply_non_controllable_constraints(self, generated_inputs, process_idx, scenario_idx, batch_size):
         """
