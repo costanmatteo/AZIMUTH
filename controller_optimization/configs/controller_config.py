@@ -4,6 +4,15 @@ Configuration for controller training with multi-scenario support.
 Key Parameters Guide:
 ===================
 
+PROCESS SELECTION:
+- process_names: Controls which processes to include in training
+  * None (or omitted): Uses ALL processes defined in PROCESSES
+  * ['laser', 'plasma']: Uses only laser and plasma (in that order)
+  * ['laser', 'plasma', 'galvanic', 'microetch']: Uses all 4 processes
+  NOTE: The order matters! Processes are chained in the order specified.
+        Example: ['plasma', 'laser'] would put plasma BEFORE laser (unusual!)
+  VALIDATION: Will raise ValueError if a specified process doesn't exist in PROCESSES
+
 TRAINING:
 - epochs: Number of training epochs (each epoch cycles through all training scenarios once)
 - batch_size: Number of replicas per scenario in each forward pass
@@ -74,8 +83,11 @@ Typical Modifications:
 """
 
 CONTROLLER_CONFIG = {
-    # Processi da includere (presi da PROCESSES)
-    'process_names': ['laser', 'plasma'],
+    # Processi da includere (filtrati da PROCESSES in processes_config.py)
+    # - None: usa tutti i processi definiti in PROCESSES
+    # - ['laser', 'plasma']: usa solo laser e plasma (nell'ordine specificato)
+    # - ['laser', 'plasma', 'galvanic', 'microetch']: usa tutti e 4 i processi
+    'process_names': ['laser', 'plasma'],  # Cambia a None per usare tutti i processi
 
     # Policy generator architecture
     'policy_generator': {
