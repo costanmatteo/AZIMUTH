@@ -76,15 +76,16 @@ class ProTSurrogate:
         """
         Calcola reliability F per una trajectory.
 
-        Fa sampling dalle distribuzioni degli outputs e calcola una metrica
-        fisica combinata che rappresenta la qualità del processo.
+        Usa gli output già campionati se disponibili, altrimenti fa sampling
+        dalle distribuzioni degli outputs (backward compatibility).
 
         Args:
             trajectory (dict): {
                 'laser': {
                     'inputs': tensor (batch, input_dim),
                     'outputs_mean': tensor (batch, output_dim),
-                    'outputs_var': tensor (batch, output_dim)
+                    'outputs_var': tensor (batch, output_dim),
+                    'outputs_sampled': tensor (batch, output_dim)  # Optional
                 },
                 'plasma': {...},
                 'galvanic': {...}
@@ -93,25 +94,27 @@ class ProTSurrogate:
         Returns:
             torch.Tensor: Reliability score F (scalar, differentiable)
         """
-        # Sample outputs da distribuzioni N(mean, var)
+        # Use already sampled outputs if available, otherwise sample here
         sampled_outputs = {}
 
         for process_name, data in trajectory.items():
-            mean = data['outputs_mean']
-            var = data['outputs_var']
-
-            if self.use_deterministic_sampling:
-                # DETERMINISTIC: Use mean directly (no sampling)
-                # Pros: Stable gradients, consistent loss
-                # Cons: Doesn't capture uncertainty
-                sample = mean
+            # Check if outputs are already sampled
+            if 'outputs_sampled' in data:
+                # Use pre-sampled outputs from ProcessChain
+                sample = data['outputs_sampled']
             else:
-                # STOCHASTIC: Sample using reparameterization trick
-                # Pros: Captures uncertainty, differentiable
-                # Cons: High gradient variance, loss oscillates
-                std = torch.sqrt(var + 1e-8)
-                epsilon = torch.randn_like(mean)
-                sample = mean + epsilon * std
+                # Backward compatibility: sample here
+                mean = data['outputs_mean']
+                var = data['outputs_var']
+
+                if self.use_deterministic_sampling:
+                    # DETERMINISTIC: Use mean directly (no sampling)
+                    sample = mean
+                else:
+                    # STOCHASTIC: Sample using reparameterization trick
+                    std = torch.sqrt(var + 1e-8)
+                    epsilon = torch.randn_like(mean)
+                    sample = mean + epsilon * std
 
             sampled_outputs[process_name] = sample
 
