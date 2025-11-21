@@ -25,7 +25,7 @@ import numpy as np
 REPO_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from controller_optimization.configs.processes_config import PROCESSES
+from controller_optimization.configs.processes_config import PROCESSES, get_filtered_processes
 from controller_optimization.configs.controller_config import CONTROLLER_CONFIG
 from controller_optimization.src.utils.target_generation import (
     generate_target_trajectory,
@@ -56,35 +56,6 @@ from controller_optimization.src.utils.model_utils import convert_numpy_to_tenso
 from controller_optimization.src.utils.scm_validation import validate_all_processes
 
 
-def filter_processes_by_config(all_processes, config):
-    """
-    Filter PROCESSES list based on process_names in config.
-
-    Args:
-        all_processes (list): Complete list of process configurations
-        config (dict): Controller configuration with 'process_names' key
-
-    Returns:
-        list: Filtered list containing only selected processes
-    """
-    process_names = config.get('process_names', None)
-
-    # If no process_names specified, use all processes
-    if process_names is None:
-        return all_processes
-
-    # Filter processes by name
-    filtered = [p for p in all_processes if p['name'] in process_names]
-
-    # Validate that all requested processes were found
-    found_names = [p['name'] for p in filtered]
-    missing = set(process_names) - set(found_names)
-    if missing:
-        raise ValueError(f"Requested processes not found in PROCESSES: {missing}")
-
-    return filtered
-
-
 def main():
     """
     Pipeline completo:
@@ -110,8 +81,13 @@ def main():
     print("="*70)
 
     # Filter processes based on configuration
-    selected_processes = filter_processes_by_config(PROCESSES, CONTROLLER_CONFIG)
+    process_names = CONTROLLER_CONFIG.get('process_names', None)
+    selected_processes = get_filtered_processes(process_names)
     print(f"\nSelected processes: {[p['name'] for p in selected_processes]}")
+    if process_names:
+        print(f"  (filtered from PROCESSES using process_names: {process_names})")
+    else:
+        print(f"  (using all PROCESSES, no filter applied)")
 
     # Device setup
     device = CONTROLLER_CONFIG['training']['device']

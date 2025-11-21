@@ -164,3 +164,42 @@ def get_controllable_inputs(process_config):
         list: Lista di nomi delle variabili controllabili
     """
     return process_config.get('controllable_inputs', process_config['input_labels'])
+
+
+def get_filtered_processes(process_names=None):
+    """
+    Ritorna lista di processi filtrata per nomi.
+
+    Se process_names è None, ritorna tutti i processi.
+    Se process_names è fornito, ritorna solo i processi specificati nell'ordine dato.
+
+    Args:
+        process_names (list[str], optional): Lista di nomi processi da includere.
+                                            Se None, ritorna tutti i PROCESSES.
+
+    Returns:
+        list: Lista di configurazioni processi filtrata e ordinata
+
+    Raises:
+        ValueError: Se un nome processo specificato non esiste
+
+    Example:
+        >>> filtered = get_filtered_processes(['laser', 'plasma'])
+        >>> [p['name'] for p in filtered]
+        ['laser', 'plasma']
+    """
+    if process_names is None:
+        return PROCESSES
+
+    # Validate: tutti i nomi devono esistere
+    available_names = {p['name'] for p in PROCESSES}
+    for name in process_names:
+        if name not in available_names:
+            raise ValueError(
+                f"Process '{name}' not found in PROCESSES. "
+                f"Available: {sorted(available_names)}"
+            )
+
+    # Filtra e ordina secondo process_names
+    process_map = {p['name']: p for p in PROCESSES}
+    return [process_map[name] for name in process_names]
