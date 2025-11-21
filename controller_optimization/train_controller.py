@@ -192,12 +192,14 @@ def main():
 
     # 3. Create ProcessChain (uses multi-scenario trajectory)
     print("\n[3/9] Building process chain...")
+    use_scm_surrogate = CONTROLLER_CONFIG['surrogate'].get('use_scm_surrogate', False)
     try:
         process_chain = ProcessChain(
             processes_config=selected_processes,
             target_trajectory=target_trajectory,
             policy_config=CONTROLLER_CONFIG['policy_generator'],
-            device=device
+            device=device,
+            use_scm_surrogate=use_scm_surrogate
         )
         print(f"  ✓ Process chain created")
         print(f"    Uncertainty predictors: {len(process_chain.uncertainty_predictors)} (frozen)")
@@ -368,7 +370,8 @@ def main():
         processes_config=selected_processes,
         target_trajectory=target_trajectory_test,
         policy_config=CONTROLLER_CONFIG['policy_generator'],
-        device=device
+        device=device,
+        use_scm_surrogate=use_scm_surrogate
     )
 
     # Load trained policy generators into test chain

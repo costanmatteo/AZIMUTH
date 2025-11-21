@@ -62,9 +62,13 @@ METRICS:
                           Success means F_actual >= threshold * F_star
 
 SURROGATE:
+- use_scm_surrogate: If True, uses SCM surrogates (deterministic functions from dataset)
+                     If False, uses trained uncertainty predictors (neural networks)
+                     Recommended: True for perfect accuracy, False for realistic uncertainty
 - use_deterministic_sampling: If True, uses mean values directly (deterministic)
                               If False, uses reparameterization trick (stochastic)
                               Recommended: True for stable training, False for uncertainty estimation
+                              Note: Only relevant when use_scm_surrogate=False
 
 MISC:
 - random_seed: Global random seed
@@ -155,6 +159,7 @@ CONTROLLER_CONFIG = {
 
     # Surrogate model
     'surrogate': {
+        'use_scm_surrogate': False,  # True = SCM functions (perfect), False = uncertainty predictors (realistic)
         'use_deterministic_sampling': True,  # True = use mean (stable), False = use sampling (stochastic)
     },
 

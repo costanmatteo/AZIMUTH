@@ -39,12 +39,34 @@ Caratteristiche principali:
 
 ## Utilizzo
 
-### 1. Training del Controller con Surrogato SCM
+### 1. Training del Controller con Surrogato SCM (CONFIGURABILE)
 
-Modifica `train_controller.py` per abilitare il surrogato:
+Il modo più semplice è modificare il **config file**:
 
 ```python
-# Crea ProcessChain con surrogato SCM
+# controller_optimization/configs/controller_config.py
+
+CONTROLLER_CONFIG = {
+    # ... altre configurazioni ...
+
+    'surrogate': {
+        'use_scm_surrogate': True,  # <-- Cambia a True per usare surrogato SCM
+        'use_deterministic_sampling': True,
+    },
+}
+```
+
+Poi esegui normalmente:
+```bash
+python controller_optimization/train_controller.py
+```
+
+### 1b. Alternativa: Usa Parametro Diretto
+
+Se preferisci, puoi anche passare il parametro direttamente:
+
+```python
+# train_controller.py (o tuo script personalizzato)
 chain = ProcessChain(
     processes_config=PROCESSES,
     target_trajectory=target_traj,
