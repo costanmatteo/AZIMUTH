@@ -520,10 +520,9 @@ def plot_training_progression(progression_path, save_path=None):
     Plot training progression showing how controllable inputs evolve across epochs.
 
     X-axis: Epoch number
-    Y-axis: Input values
+    Y-axis: Mean input value (averaged across sequence)
     One subplot per controllable input dimension.
-    Shows multiple lines for different time steps in the sequence, with target values
-    as horizontal dashed lines.
+    Shows convergence toward target values with warmup phase marker.
 
     Args:
         progression_path (str): Path to training_progression.npz file
@@ -605,7 +604,7 @@ def plot_training_progression(progression_path, save_path=None):
         total_input_plots += n_inputs
 
     # Create figure with subplots (one plot per controllable input dimension)
-    fig, axes = plt.subplots(total_input_plots, 1, figsize=(14, 4 * total_input_plots))
+    fig, axes = plt.subplots(total_input_plots, 1, figsize=(12, 4 * total_input_plots))
     if total_input_plots == 1:
         axes = [axes]
 
@@ -615,67 +614,55 @@ def plot_training_progression(progression_path, save_path=None):
         config = get_process_by_name(process_name)
         n_inputs = process_dims[process_name]['n_inputs']
 
-        # Get sequence length from first snapshot
-        process_data = snapshots[0]['processes'][process_name]
-        if len(process_data['inputs'].shape) == 2:
-            seq_len = process_data['inputs'].shape[0]
-        else:
-            seq_len = process_data['inputs'].shape[1]
-
-        # Select representative time steps to plot (beginning, middle, end, and a few in between)
-        if seq_len <= 5:
-            time_steps = list(range(seq_len))
-        else:
-            time_steps = [0, seq_len // 4, seq_len // 2, 3 * seq_len // 4, seq_len - 1]
-
         # Plot each input dimension
         for input_idx in range(n_inputs):
             ax = axes[plot_idx]
             input_label = config['input_labels'][input_idx] if input_idx < len(config['input_labels']) else f'Input {input_idx}'
 
-            # Get target value for this input (constant across epochs)
-            process_data = snapshots[0]['processes'][process_name]
-            if len(process_data['target_inputs'].shape) == 2:
-                target_inputs = process_data['target_inputs'][:, input_idx]
-            else:
-                target_inputs = process_data['target_inputs'][0, :, input_idx]
+            # Collect mean input values across all epochs
+            actual_values = []
+            target_values = []
 
-            # Plot evolution across epochs for each selected time step
-            import matplotlib.cm as cm
-            cmap = cm.get_cmap('viridis', len(time_steps))
+            for snapshot in snapshots:
+                process_data = snapshot['processes'][process_name]
 
-            for i, t in enumerate(time_steps):
-                # Collect values at this time step across all epochs
-                actual_values = []
-                for snapshot in snapshots:
-                    process_data = snapshot['processes'][process_name]
-                    if len(process_data['inputs'].shape) == 2:
-                        val = process_data['inputs'][t, input_idx]
-                    else:
-                        val = process_data['inputs'][0, t, input_idx]
-                    actual_values.append(val)
+                # Get actual inputs
+                if len(process_data['inputs'].shape) == 2:
+                    inputs = process_data['inputs'][:, input_idx]
+                else:
+                    inputs = process_data['inputs'][0, :, input_idx]
 
-                # Plot evolution of this time step across epochs
-                ax.plot(epochs, actual_values, 'o-', label=f't={t}',
-                       color=cmap(i), linewidth=2, markersize=6, alpha=0.7)
+                # Get target inputs
+                if len(process_data['target_inputs'].shape) == 2:
+                    target_inputs = process_data['target_inputs'][:, input_idx]
+                else:
+                    target_inputs = process_data['target_inputs'][0, :, input_idx]
 
-                # Plot target value as horizontal dashed line
-                target_val = target_inputs[t]
-                ax.axhline(y=target_val, color=cmap(i), linestyle='--',
-                          linewidth=1, alpha=0.5)
+                # Average across sequence
+                actual_values.append(np.mean(inputs))
+                target_values.append(np.mean(target_inputs))
+
+            # Plot actual values evolution
+            ax.plot(epochs, actual_values, 'o-', color='blue', label='Actual',
+                   linewidth=2.5, markersize=7, alpha=0.8)
+
+            # Plot target value as horizontal line (should be constant)
+            target_mean = np.mean(target_values)
+            ax.axhline(y=target_mean, color='green', linestyle='--',
+                      linewidth=2, alpha=0.7, label=f'Target ({target_mean:.3f})')
 
             # Mark warmup end if applicable
             if snapshots[0]['phase'] == 'warmup':
                 for i, snapshot in enumerate(snapshots):
                     if snapshot['phase'] == 'curriculum':
                         ax.axvline(x=snapshot['epoch'], color='red', linestyle=':',
-                                  linewidth=2, alpha=0.5, label='Warmup end')
+                                  linewidth=2.5, alpha=0.6, label='Warmup end')
                         break
 
             ax.set_ylabel(f"{process_name.capitalize()}\n{input_label}", fontsize=11, fontweight='bold')
             ax.set_xlabel('Epoch', fontsize=10)
             ax.grid(True, alpha=0.3)
-            ax.legend(fontsize=8, loc='best', ncol=3)
+            ax.legend(fontsize=9, loc='best')
 
             # Add title with F progression
             F_start = snapshots[0]['F_actual']
