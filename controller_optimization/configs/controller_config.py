@@ -130,6 +130,15 @@ CONTROLLER_CONFIG = {
 
         # Evaluation frequency
         'eval_all_scenarios_every': None,  # None = only at end, or int (e.g., 10 = every 10 epochs)
+
+        # Curriculum Learning (gradual introduction of reliability loss)
+        'curriculum_learning': {
+            'enabled': True,  # Enable curriculum learning strategy
+            'warmup_fraction': 0.1,  # First 10% of epochs = warm-up (BC only)
+            'lambda_bc_start': 10.0,  # High BC weight during warm-up
+            'lambda_bc_end': 0.001,  # Low BC weight at end of training
+            'reliability_weight_curve': 'exponential',  # 'exponential', 'linear', 'sigmoid'
+        },
     },
 
     # Scenario generation (train/test split)

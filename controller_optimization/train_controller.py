@@ -233,6 +233,16 @@ def main():
 
     # 5. Create Trainer
     print("\n[5/9] Creating controller trainer...")
+
+    # Get curriculum learning config (backward compatible)
+    curriculum_config = CONTROLLER_CONFIG['training'].get('curriculum_learning', {
+        'enabled': False,
+        'warmup_fraction': 0.1,
+        'lambda_bc_start': 10.0,
+        'lambda_bc_end': 0.001,
+        'reliability_weight_curve': 'exponential'
+    })
+
     trainer = ControllerTrainer(
         process_chain=process_chain,
         surrogate=surrogate,
@@ -240,7 +250,8 @@ def main():
         learning_rate=CONTROLLER_CONFIG['training']['learning_rate'],
         weight_decay=CONTROLLER_CONFIG['training']['weight_decay'],
         reliability_loss_scale=CONTROLLER_CONFIG['training']['reliability_loss_scale'],
-        device=device
+        device=device,
+        curriculum_config=curriculum_config
     )
 
     # 6. Training
