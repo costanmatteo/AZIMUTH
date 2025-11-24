@@ -570,7 +570,58 @@ class ControllerReportGenerator:
             self.story.append(caption_table)
             self.story.append(Spacer(1, 0.15*cm))
 
+        # Training progression plot (inputs/outputs evolution)
+        progression_plot = checkpoint_dir / 'training_progression.png'
+        if progression_plot.exists():
+            self.story.append(PageBreak())
+            self.add_section_title("Training Progression")
+
+            # Add description
+            description = Paragraph(
+                "Evolution of inputs and outputs through key training epochs. "
+                "Shows how the controller learns to match target trajectories during warm-up "
+                "and curriculum learning phases.",
+                self.styles['Normal']
+            )
+            self.story.append(description)
+            self.story.append(Spacer(1, 0.3*cm))
+
+            img = Image(str(progression_plot))
+            img_width, img_height = img.imageWidth, img.imageHeight
+            aspect_ratio = img_height / img_width
+
+            # Full width for progression plot
+            new_width = 18*cm
+            new_height = new_width * aspect_ratio
+
+            # Max height constraint
+            if new_height > 20*cm:
+                new_height = 20*cm
+                new_width = new_height / aspect_ratio
+
+            img.drawWidth = new_width
+            img.drawHeight = new_height
+
+            img_table = Table([[img]], colWidths=[18*cm])
+            img_table.setStyle(TableStyle([
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ]))
+            self.story.append(img_table)
+
+            caption = Paragraph(
+                "<i>Training Progression: Actual vs Target Inputs/Outputs at Key Epochs</i>",
+                self.styles['Normal']
+            )
+            caption_table = Table([[caption]], colWidths=[18*cm])
+            caption_table.setStyle(TableStyle([
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ]))
+            self.story.append(caption_table)
+            self.story.append(Spacer(1, 0.3*cm))
+
         # Advanced Analysis - 2x2 grid
+        self.story.append(PageBreak())
         self.add_section_title("Advanced Analysis")
 
         # Load all 4 plots

@@ -49,7 +49,8 @@ from controller_optimization.src.utils.visualization import (
     plot_reliability_comparison,
     plot_process_improvements,
     plot_target_vs_actual_scatter,
-    plot_gap_distribution
+    plot_gap_distribution,
+    plot_training_progression
 )
 from controller_optimization.src.utils.report_generator import generate_controller_report
 from controller_optimization.src.utils.model_utils import convert_numpy_to_tensor
@@ -233,6 +234,16 @@ def main():
 
     # 5. Create Trainer
     print("\n[5/9] Creating controller trainer...")
+
+    # Get curriculum learning config (backward compatible)
+    curriculum_config = CONTROLLER_CONFIG['training'].get('curriculum_learning', {
+        'enabled': False,
+        'warmup_fraction': 0.1,
+        'lambda_bc_start': 10.0,
+        'lambda_bc_end': 0.001,
+        'reliability_weight_curve': 'exponential'
+    })
+
     trainer = ControllerTrainer(
         process_chain=process_chain,
         surrogate=surrogate,
@@ -240,7 +251,8 @@ def main():
         learning_rate=CONTROLLER_CONFIG['training']['learning_rate'],
         weight_decay=CONTROLLER_CONFIG['training']['weight_decay'],
         reliability_loss_scale=CONTROLLER_CONFIG['training']['reliability_loss_scale'],
-        device=device
+        device=device,
+        curriculum_config=curriculum_config
     )
 
     # 6. Training
@@ -573,6 +585,15 @@ def main():
         history=history,
         save_path=str(checkpoint_dir / 'training_history.png')
     )
+
+    # Plot training progression (inputs/outputs evolution through epochs)
+    progression_file = checkpoint_dir / 'training_progression.npz'
+    if progression_file.exists():
+        print("  Generating training progression plot...")
+        plot_training_progression(
+            progression_path=str(progression_file),
+            save_path=str(checkpoint_dir / 'training_progression.png')
+        )
 
     # Plot reliability comparison (using mean values)
     plot_reliability_comparison(
