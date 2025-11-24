@@ -483,20 +483,8 @@ class ControllerTrainer:
             self.history['lambda_bc'].append(lambda_bc)
             self.history['reliability_weight'].append(reliability_weight)
 
-            # Save training progression snapshots at key epochs
-            # Key epochs: 1, 10, warmup_end, warmup_end+1, middle, every 100, final
-            is_key_epoch = (
-                epoch == 1 or  # Start
-                epoch == 10 or  # Early warm-up
-                (warmup_epochs > 0 and epoch == warmup_epochs) or  # End of warm-up
-                (warmup_epochs > 0 and epoch == warmup_epochs + 1) or  # Start of curriculum
-                epoch == epochs // 2 or  # Middle
-                epoch % 100 == 0 or  # Every 100 epochs
-                epoch == epochs  # Final (will be handled below if early stopping doesn't trigger)
-            )
-
-            if is_key_epoch:
-                self._save_training_progression_snapshot(epoch, lambda_bc, reliability_weight, phase)
+            # Save training progression snapshots every epoch
+            self._save_training_progression_snapshot(epoch, lambda_bc, reliability_weight, phase)
 
             # Save embedding snapshot periodically
             if hasattr(self.process_chain, 'scenario_encoder') and self.process_chain.scenario_encoder is not None:
