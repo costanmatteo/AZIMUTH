@@ -39,6 +39,45 @@ class ProcessChain(nn.Module):
     """
 
     @staticmethod
+    def _compute_input_ranges(processes_config, target_trajectory):
+        """
+        Computes min/max ranges for ALL inputs (controllable and non-controllable) in each process.
+        These ranges are used to denormalize policy generator outputs from [0, 1] to actual values.
+
+        Args:
+            processes_config (list): Lista di configurazioni dei processi
+            target_trajectory (dict): Target trajectory with input data for all scenarios
+
+        Returns:
+            dict: {process_idx: {'min': tensor, 'max': tensor}}
+                  where tensors have shape (input_dim,)
+        """
+        input_ranges = {}
+
+        for i, process_config in enumerate(processes_config):
+            process_name = process_config['name']
+
+            # Get all input data across all scenarios
+            all_inputs = target_trajectory[process_name]['inputs']  # Shape: (n_scenarios, input_dim)
+
+            # Compute min/max for each input dimension
+            input_min = np.min(all_inputs, axis=0)  # Shape: (input_dim,)
+            input_max = np.max(all_inputs, axis=0)  # Shape: (input_dim,)
+
+            # Add small epsilon to avoid division by zero if min == max
+            epsilon = 1e-8
+            range_span = input_max - input_min
+            range_span = np.maximum(range_span, epsilon)
+
+            input_ranges[i] = {
+                'min': input_min,
+                'max': input_max,
+                'span': range_span
+            }
+
+        return input_ranges
+
+    @staticmethod
     def _count_structural_params(processes_config):
         """
         Conta il numero totale di parametri strutturali (non-controllabili) in tutti i processi.
@@ -107,8 +146,9 @@ class ProcessChain(nn.Module):
         self.device = device
         self.process_names = [p['name'] for p in processes_config]
 
-
-
+        # Compute min/max ranges for denormalizing policy generator outputs
+        # Policy outputs are in [0, 1] and need to be mapped to actual input ranges
+        self.input_ranges = self._compute_input_ranges(processes_config, target_trajectory)
 
         self.processes_config = processes_config
         self.target_trajectory = target_trajectory
@@ -283,6 +323,27 @@ class ProcessChain(nn.Module):
         scale_squared = torch.tensor(output_scale ** 2, dtype=torch.float32, device=self.device)
         return variance * scale_squared
 
+    def denormalize_inputs(self, normalized_inputs, process_idx):
+        """
+        Denormalize policy generator outputs from [0, 1] to actual input ranges.
+
+        Args:
+            normalized_inputs: Tensor with normalized values in [0, 1]
+                              Shape: (batch_size, input_dim)
+            process_idx: Index of the process
+
+        Returns:
+            Tensor with denormalized values in actual ranges
+            Shape: (batch_size, input_dim)
+        """
+        ranges = self.input_ranges[process_idx]
+        min_vals = torch.tensor(ranges['min'], dtype=torch.float32, device=self.device)
+        max_vals = torch.tensor(ranges['max'], dtype=torch.float32, device=self.device)
+
+        # Denormalize: value = min + normalized * (max - min)
+        denormalized = min_vals + normalized_inputs * (max_vals - min_vals)
+        return denormalized
+
     def _apply_non_controllable_constraints(self, generated_inputs, process_idx, scenario_idx, batch_size):
         """
         Replaces non-controllable inputs with values from target trajectory.
@@ -413,10 +474,17 @@ class ProcessChain(nn.Module):
                 if debug:
                     print(f"  Policy input (concatenated): {policy_input[0].detach().cpu().numpy()}")
 
-                generated_inputs = self.policy_generators[i - 1](policy_input)
+                # Policy generator outputs normalized values in [0, 1]
+                normalized_inputs = self.policy_generators[i - 1](policy_input)
 
                 if debug:
-                    print(f"  Generated inputs (raw): {generated_inputs[0].detach().cpu().numpy()}")
+                    print(f"  Policy output (normalized [0,1]): {normalized_inputs[0].detach().cpu().numpy()}")
+
+                # Denormalize to actual input ranges
+                generated_inputs = self.denormalize_inputs(normalized_inputs, i)
+
+                if debug:
+                    print(f"  Generated inputs (denormalized): {generated_inputs[0].detach().cpu().numpy()}")
 
                 # Apply non-controllable constraints: replace non-controllable inputs
                 # with values from target trajectory (e.g., Temperature for microetch)

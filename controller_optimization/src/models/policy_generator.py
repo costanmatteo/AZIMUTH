@@ -43,6 +43,10 @@ class PolicyGenerator(nn.Module):
         # Single output head (no variance head)
         self.output_head = nn.Linear(prev_size, output_size)
 
+        # Sigmoid activation to bound outputs to [0, 1]
+        # These will be denormalized later to actual input ranges
+        self.sigmoid = nn.Sigmoid()
+
     def forward(self, x):
         """
         Forward pass.
@@ -51,11 +55,15 @@ class PolicyGenerator(nn.Module):
             x (torch.Tensor): Input tensor of shape (batch_size, input_size)
 
         Returns:
-            torch.Tensor: Actions for next process, shape (batch_size, output_size)
+            torch.Tensor: Normalized actions for next process (in [0, 1]),
+                         shape (batch_size, output_size)
         """
         features = self.network(x)
         actions = self.output_head(features)
-        return actions
+        # Apply sigmoid to bound output to [0, 1]
+        # Will be denormalized to actual ranges in ProcessChain
+        normalized_actions = self.sigmoid(actions)
+        return normalized_actions
 
 
 # Convenience functions for creating common architectures
