@@ -532,17 +532,30 @@ def plot_training_progression(progression_path, save_path=None):
     data = np.load(progression_path, allow_pickle=True)
 
     # Extract snapshot information
+    # Keys format: snapshot_0_epoch_1_epoch, snapshot_0_epoch_1_phase, etc.
     snapshots = []
-    snapshot_indices = set()
 
+    # Find all unique prefixes (snapshot_X_epoch_Y)
+    prefixes = set()
     for key in data.files:
-        if key.endswith('_epoch'):
-            idx = int(key.split('_')[1])
-            snapshot_indices.add(idx)
+        # Extract prefix (everything before the last underscore + field name)
+        # E.g., "snapshot_0_epoch_1_epoch" -> "snapshot_0_epoch_1"
+        if key.count('_') >= 3:  # At least snapshot_X_epoch_Y_field
+            parts = key.split('_')
+            if len(parts) >= 4 and parts[0] == 'snapshot' and parts[2] == 'epoch':
+                # Reconstruct prefix: snapshot_X_epoch_Y
+                prefix = '_'.join(parts[:4])  # snapshot_X_epoch_Y
+                prefixes.add(prefix)
 
-    for idx in sorted(snapshot_indices):
-        prefix = f'snapshot_{idx}_epoch_{int(data[f"snapshot_{idx}_epoch"])}'
+    # Sort prefixes by epoch number
+    def get_epoch_from_prefix(prefix):
+        # Extract epoch from "snapshot_X_epoch_Y"
+        parts = prefix.split('_')
+        return int(parts[3])
 
+    sorted_prefixes = sorted(prefixes, key=get_epoch_from_prefix)
+
+    for prefix in sorted_prefixes:
         snapshot = {
             'epoch': int(data[f'{prefix}_epoch']),
             'phase': str(data[f'{prefix}_phase']),
@@ -556,13 +569,17 @@ def plot_training_progression(progression_path, save_path=None):
         # Extract process data
         for key in data.files:
             if key.startswith(prefix) and '_inputs' in key and '_target_inputs' not in key:
-                process_name = key.replace(f'{prefix}_', '').replace('_inputs', '')
-                snapshot['processes'][process_name] = {
-                    'inputs': data[f'{prefix}_{process_name}_inputs'],
-                    'outputs': data[f'{prefix}_{process_name}_outputs'],
-                    'target_inputs': data[f'{prefix}_{process_name}_target_inputs'],
-                    'target_outputs': data[f'{prefix}_{process_name}_target_outputs']
-                }
+                # Extract process name from key like "snapshot_0_epoch_1_laser_inputs"
+                # Remove prefix and "_inputs" suffix
+                remaining = key.replace(f'{prefix}_', '')
+                if remaining.endswith('_inputs'):
+                    process_name = remaining.replace('_inputs', '')
+                    snapshot['processes'][process_name] = {
+                        'inputs': data[f'{prefix}_{process_name}_inputs'],
+                        'outputs': data[f'{prefix}_{process_name}_outputs'],
+                        'target_inputs': data[f'{prefix}_{process_name}_target_inputs'],
+                        'target_outputs': data[f'{prefix}_{process_name}_target_outputs']
+                    }
 
         snapshots.append(snapshot)
 
