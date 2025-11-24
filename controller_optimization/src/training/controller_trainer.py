@@ -325,12 +325,12 @@ class ControllerTrainer:
 
         if debug:
             print(f"\nReliability computation:")
-            print(f"  F (actual):     {F.item():.6f}")
+            print(f"  F (actual):     mean={torch.mean(F).item():.6f}, std={torch.std(F).item():.6f}")
             print(f"  F* (target):    {F_star_value:.6f}")
-            print(f"  Delta F:        {(F - F_star_tensor).item():.6f}")
-            print(f"  (Delta F)^2:    {((F - F_star_tensor) ** 2).item():.6f}")
-            print(f"  Reliability loss (unscaled): {((F - F_star_tensor) ** 2).item():.6f}")
-            print(f"  Reliability loss (scaled):   {reliability_loss.item():.6f}")
+            print(f"  Delta F:        mean={torch.mean(F - F_star_tensor).item():.6f}")
+            print(f"  (Delta F)^2:    mean={torch.mean((F - F_star_tensor) ** 2).item():.6f}")
+            print(f"  Reliability loss (unscaled): {torch.mean((F - F_star_tensor) ** 2).item():.6f}")
+            print(f"  Reliability loss (scaled):   {torch.mean(reliability_loss).item():.6f}")
 
         # Behavior cloning loss: mean( ||a_t - a_t*||^2 ) across all processes
         # Compare to the specific scenario's target inputs
