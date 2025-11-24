@@ -570,7 +570,7 @@ class ControllerReportGenerator:
             self.story.append(caption_table)
             self.story.append(Spacer(1, 0.15*cm))
 
-        # Advanced Analysis - Stacked vertically
+        # Advanced Analysis - 2x2 grid
         self.add_section_title("Advanced Analysis")
 
         # Load all 4 plots
@@ -579,54 +579,89 @@ class ControllerReportGenerator:
         gap_train_plot = checkpoint_dir / 'gap_distribution_train.png'
         gap_test_plot = checkpoint_dir / 'gap_distribution_test.png'
 
-        # List of plots to display vertically
-        plots_info = [
-            (scatter_train_plot, "Target vs Baseline & Controller - Training Scenarios"),
-            (gap_train_plot, "Gap Distribution - Training Scenarios"),
-            (scatter_test_plot, "Target vs Baseline & Controller - Test Scenarios"),
-            (gap_test_plot, "Gap Distribution - Test Scenarios"),
-        ]
-
         # Check if all plots exist
-        if all(p.exists() for p, _ in plots_info):
-            # Target dimensions for stacked layout (larger than grid)
-            plot_width = 16*cm
-            plot_height = 11*cm
+        if all(p.exists() for p in [scatter_train_plot, scatter_test_plot, gap_train_plot, gap_test_plot]):
+            # Create 2x2 grid with slightly smaller dimensions
+            # Target size for each cell (reduced from 8x6 to 7x5)
+            cell_width = 7*cm
+            cell_height = 5*cm
 
-            for plot_path, caption_text in plots_info:
-                # Create image
-                img = Image(str(plot_path))
-                img_width, img_height = img.imageWidth, img.imageHeight
-                aspect_ratio = img_height / img_width
+            # Row 1: Train scenarios
+            # Scatter train
+            img_scatter_train = Image(str(scatter_train_plot))
+            img_scatter_train.drawWidth = cell_width
+            img_scatter_train.drawHeight = cell_height
 
-                # Calculate dimensions maintaining aspect ratio
-                new_width = plot_width
-                new_height = new_width * aspect_ratio
+            caption_scatter_train = Paragraph("<i>Target vs Baseline & Controller<br/>Training Scenarios</i>",
+                                             self.styles['Normal'])
 
-                # Limit height if too tall
-                if new_height > plot_height:
-                    new_height = plot_height
-                    new_width = new_height / aspect_ratio
+            # Gap train
+            img_gap_train = Image(str(gap_train_plot))
+            img_gap_train.drawWidth = cell_width
+            img_gap_train.drawHeight = cell_height
 
-                img.drawWidth = new_width
-                img.drawHeight = new_height
+            caption_gap_train = Paragraph("<i>Gap Distribution<br/>Training Scenarios</i>",
+                                         self.styles['Normal'])
 
-                # Center the image
-                img_table = Table([[img]], colWidths=[18*cm])
-                img_table.setStyle(TableStyle([
-                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                    ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                ]))
-                self.story.append(img_table)
+            # Row 2: Test scenarios
+            # Scatter test
+            img_scatter_test = Image(str(scatter_test_plot))
+            img_scatter_test.drawWidth = cell_width
+            img_scatter_test.drawHeight = cell_height
 
-                # Create caption
-                caption = Paragraph(f"<i>{caption_text}</i>", self.styles['Normal'])
-                caption_table = Table([[caption]], colWidths=[18*cm])
-                caption_table.setStyle(TableStyle([
-                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ]))
-                self.story.append(caption_table)
-                self.story.append(Spacer(1, 0.15*cm))
+            caption_scatter_test = Paragraph("<i>Target vs Baseline & Controller<br/>Test Scenarios</i>",
+                                            self.styles['Normal'])
+
+            # Gap test
+            img_gap_test = Image(str(gap_test_plot))
+            img_gap_test.drawWidth = cell_width
+            img_gap_test.drawHeight = cell_height
+
+            caption_gap_test = Paragraph("<i>Gap Distribution<br/>Test Scenarios</i>",
+                                        self.styles['Normal'])
+
+            # Create grid structure
+            # Each cell contains: [[image], [caption]]
+            data = [
+                # Row 1: Training scenarios
+                [
+                    [[img_scatter_train], [caption_scatter_train]],  # Left: scatter train
+                    [[img_gap_train], [caption_gap_train]]          # Right: gap train
+                ],
+                # Row 2: Test scenarios
+                [
+                    [[img_scatter_test], [caption_scatter_test]],   # Left: scatter test
+                    [[img_gap_test], [caption_gap_test]]            # Right: gap test
+                ]
+            ]
+
+            # Create nested tables for each cell
+            cell_tables = []
+            for row in data:
+                cell_row = []
+                for cell_content in row:
+                    cell_table = Table(cell_content, colWidths=[cell_width])
+                    cell_table.setStyle(TableStyle([
+                        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                    ]))
+                    cell_row.append(cell_table)
+                cell_tables.append(cell_row)
+
+            # Create main grid table
+            grid_table = Table(cell_tables, colWidths=[cell_width, cell_width],
+                             rowHeights=[cell_height + 1*cm, cell_height + 1*cm])
+            grid_table.setStyle(TableStyle([
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                ('LEFTPADDING', (0, 0), (-1, -1), 5),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 5),
+                ('TOPPADDING', (0, 0), (-1, -1), 5),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+            ]))
+
+            self.story.append(grid_table)
+            self.story.append(Spacer(1, 0.15*cm))
 
     def generate(self, config, training_history, final_metrics, process_metrics,
                  F_star, F_baseline, F_actual, timestamp, n_scenarios=None, advanced_metrics=None,
