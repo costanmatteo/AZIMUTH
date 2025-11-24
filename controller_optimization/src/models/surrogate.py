@@ -207,7 +207,7 @@ class ProTSurrogate:
         # COMBINE QUALITY SCORES WITH WEIGHTED AVERAGE
         # Weights reflect relative importance of each process
         weights = {
-            'laser': 0.1,
+            'laser': 1.0,      # Increased from 0.1 to balance gradient flow
             'plasma': 1.0,
             'galvanic': 0.0,    # Most important (final product quality)
             'microetch': 0.0
