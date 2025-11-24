@@ -10,7 +10,7 @@ from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch, cm
 from reportlab.lib import colors
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle, Frame, PageTemplate, KeepTogether
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle, Frame, PageTemplate, KeepTogether, PageBreak
 from reportlab.lib.enums import TA_LEFT, TA_CENTER
 from reportlab.platypus.flowables import HRFlowable
 
@@ -707,6 +707,9 @@ class ControllerReportGenerator:
         # Advanced metrics (if available)
         if advanced_metrics:
             self.add_advanced_metrics_section(advanced_metrics)
+
+        # Start new page for visualizations
+        self.story.append(PageBreak())
 
         # Visualizations
         self.add_plots_stacked(Path(config['training']['checkpoint_dir']))
