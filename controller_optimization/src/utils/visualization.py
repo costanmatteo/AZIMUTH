@@ -519,8 +519,9 @@ def plot_training_progression(progression_path, save_path=None):
     """
     Plot training progression showing how inputs/outputs evolve through epochs.
 
-    Shows snapshots at key epochs (start, warmup end, curriculum start, middle, end)
-    to visualize how the controller learns.
+    All epoch snapshots are overlaid on the same plot for each input/output dimension,
+    using a color gradient from red (early epochs) to blue (late epochs) to show
+    the learning progression over time.
 
     Args:
         progression_path (str): Path to training_progression.npz file
@@ -587,10 +588,9 @@ def plot_training_progression(progression_path, save_path=None):
         print("No progression snapshots found")
         return
 
-    # Count total plots needed
+    # Setup
     n_snapshots = len(snapshots)
     process_names = list(snapshots[0]['processes'].keys())
-    n_processes = len(process_names)
 
     # Get input/output dimensions for each process
     total_plots = 0
@@ -602,10 +602,17 @@ def plot_training_progression(progression_path, save_path=None):
         process_dims[process_name] = {'n_inputs': n_inputs, 'n_outputs': n_outputs}
         total_plots += n_inputs + n_outputs
 
-    # Create figure with subplots (one row per input/output, one column per snapshot)
-    fig = plt.figure(figsize=(4 * n_snapshots, 3 * total_plots))
+    # Color map: gradient from red (early epochs) to blue (late epochs)
+    import matplotlib.cm as cm
+    cmap = cm.get_cmap('RdYlBu')  # Red -> Yellow -> Blue
+    colors = [cmap(i / (n_snapshots - 1)) if n_snapshots > 1 else cmap(0.5) for i in range(n_snapshots)]
 
-    plot_idx = 1
+    # Create figure with subplots (one plot per input/output dimension)
+    fig, axes = plt.subplots(total_plots, 1, figsize=(12, 3 * total_plots))
+    if total_plots == 1:
+        axes = [axes]
+
+    plot_idx = 0
 
     for process_name in process_names:
         config = get_process_by_name(process_name)
@@ -614,79 +621,91 @@ def plot_training_progression(progression_path, save_path=None):
 
         # Plot each input dimension
         for input_idx in range(n_inputs):
+            ax = axes[plot_idx]
             input_label = config['input_labels'][input_idx] if input_idx < len(config['input_labels']) else f'Input {input_idx}'
 
-            for snap_idx, snapshot in enumerate(snapshots):
-                ax = plt.subplot(total_plots, n_snapshots, plot_idx)
+            # Plot target once (same for all epochs)
+            process_data = snapshots[0]['processes'][process_name]
+            if len(process_data['target_inputs'].shape) == 2:
+                target_inputs = process_data['target_inputs'][:, input_idx]
+            else:
+                target_inputs = process_data['target_inputs'][0, :, input_idx]
+            x = np.arange(len(target_inputs))
+            ax.plot(x, target_inputs, 'o-', color='green', label='Target', linewidth=2.5, markersize=5, alpha=0.8, zorder=100)
 
+            # Overlay all epochs
+            for snap_idx, snapshot in enumerate(snapshots):
                 process_data = snapshot['processes'][process_name]
+
                 # Handle both 2D (seq_len, dim) and 3D (batch, seq_len, dim) arrays
                 if len(process_data['inputs'].shape) == 2:
                     actual_inputs = process_data['inputs'][:, input_idx]
-                    target_inputs = process_data['target_inputs'][:, input_idx]
                 else:
-                    actual_inputs = process_data['inputs'][0, :, input_idx]  # First sample
-                    target_inputs = process_data['target_inputs'][0, :, input_idx]
+                    actual_inputs = process_data['inputs'][0, :, input_idx]
 
-                x = np.arange(len(actual_inputs))
-                ax.plot(x, target_inputs, 'o-', color='green', label='Target', linewidth=2, markersize=4, alpha=0.7)
-                ax.plot(x, actual_inputs, '^-', color='blue', label='Actual', linewidth=2, markersize=4)
+                epoch_label = f"Epoch {snapshot['epoch']}"
+                phase_label = f"[{snapshot['phase'][:4].upper()}]" if snapshot['phase'] != 'standard' else ""
 
-                # Title with epoch and phase info
-                phase_label = f"[{snapshot['phase'].upper()}]" if snapshot['phase'] != 'standard' else ""
-                title = f"Epoch {snapshot['epoch']} {phase_label}\n"
-                title += f"λ_BC={snapshot['lambda_bc']:.3f}, Rel={snapshot['reliability_weight']:.2f}\n"
-                title += f"F={snapshot['F_actual']:.4f} (F*={snapshot['F_star']:.4f})"
-                ax.set_title(title, fontsize=8)
+                ax.plot(x, actual_inputs, '-', color=colors[snap_idx],
+                       label=f"{epoch_label} {phase_label}",
+                       linewidth=1.5, alpha=0.7)
 
-                if snap_idx == 0:
-                    ax.set_ylabel(f"{process_name.capitalize()}\n{input_label}", fontsize=9)
+            ax.set_ylabel(f"{process_name.capitalize()}\n{input_label}", fontsize=10, fontweight='bold')
+            ax.set_xlabel('Time step', fontsize=9)
+            ax.grid(True, alpha=0.3)
+            ax.legend(fontsize=7, loc='best', ncol=2)
 
-                if snap_idx == 0 and plot_idx <= n_snapshots:
-                    ax.legend(fontsize=7, loc='best')
+            # Add title with F progression
+            F_start = snapshots[0]['F_actual']
+            F_end = snapshots[-1]['F_actual']
+            F_star = snapshots[0]['F_star']
+            ax.set_title(f"F: {F_start:.4f} → {F_end:.4f} (F*={F_star:.4f})", fontsize=9)
 
-                ax.grid(True, alpha=0.3)
-                ax.tick_params(labelsize=7)
-
-                plot_idx += 1
+            plot_idx += 1
 
         # Plot each output dimension
         for output_idx in range(n_outputs):
+            ax = axes[plot_idx]
             output_label = config['output_labels'][output_idx] if output_idx < len(config['output_labels']) else f'Output {output_idx}'
 
-            for snap_idx, snapshot in enumerate(snapshots):
-                ax = plt.subplot(total_plots, n_snapshots, plot_idx)
+            # Plot target once (same for all epochs)
+            process_data = snapshots[0]['processes'][process_name]
+            if len(process_data['target_outputs'].shape) == 2:
+                target_outputs = process_data['target_outputs'][:, output_idx]
+            else:
+                target_outputs = process_data['target_outputs'][0, :, output_idx]
+            x = np.arange(len(target_outputs))
+            ax.plot(x, target_outputs, 'o-', color='green', label='Target', linewidth=2.5, markersize=5, alpha=0.8, zorder=100)
 
+            # Overlay all epochs
+            for snap_idx, snapshot in enumerate(snapshots):
                 process_data = snapshot['processes'][process_name]
+
                 # Handle both 2D (seq_len, dim) and 3D (batch, seq_len, dim) arrays
                 if len(process_data['outputs'].shape) == 2:
                     actual_outputs = process_data['outputs'][:, output_idx]
-                    target_outputs = process_data['target_outputs'][:, output_idx]
                 else:
-                    actual_outputs = process_data['outputs'][0, :, output_idx]  # First sample
-                    target_outputs = process_data['target_outputs'][0, :, output_idx]
+                    actual_outputs = process_data['outputs'][0, :, output_idx]
 
-                x = np.arange(len(actual_outputs))
-                ax.plot(x, target_outputs, 'o-', color='green', label='Target', linewidth=2, markersize=4, alpha=0.7)
-                ax.plot(x, actual_outputs, '^-', color='blue', label='Actual', linewidth=2, markersize=4)
+                epoch_label = f"Epoch {snapshot['epoch']}"
+                phase_label = f"[{snapshot['phase'][:4].upper()}]" if snapshot['phase'] != 'standard' else ""
 
-                # Title with epoch and phase info
-                phase_label = f"[{snapshot['phase'].upper()}]" if snapshot['phase'] != 'standard' else ""
-                title = f"Epoch {snapshot['epoch']} {phase_label}\n"
-                title += f"λ_BC={snapshot['lambda_bc']:.3f}, Rel={snapshot['reliability_weight']:.2f}\n"
-                title += f"F={snapshot['F_actual']:.4f} (F*={snapshot['F_star']:.4f})"
-                ax.set_title(title, fontsize=8)
+                ax.plot(x, actual_outputs, '-', color=colors[snap_idx],
+                       label=f"{epoch_label} {phase_label}",
+                       linewidth=1.5, alpha=0.7)
 
-                if snap_idx == 0:
-                    ax.set_ylabel(f"{process_name.capitalize()}\n{output_label}", fontsize=9)
+            ax.set_ylabel(f"{process_name.capitalize()}\n{output_label}", fontsize=10, fontweight='bold')
+            ax.set_xlabel('Time step', fontsize=9)
+            ax.grid(True, alpha=0.3)
+            ax.legend(fontsize=7, loc='best', ncol=2)
 
-                if snap_idx == 0 and plot_idx <= n_snapshots:
-                    ax.legend(fontsize=7, loc='best')
+            # Add title with F progression
+            F_start = snapshots[0]['F_actual']
+            F_end = snapshots[-1]['F_actual']
+            F_star = snapshots[0]['F_star']
+            ax.set_title(f"F: {F_start:.4f} → {F_end:.4f} (F*={F_star:.4f})", fontsize=9)
 
-                ax.grid(True, alpha=0.3)
-                ax.tick_params(labelsize=7)
-
-                plot_idx += 1
+            plot_idx += 1
 
     plt.tight_layout()
 
