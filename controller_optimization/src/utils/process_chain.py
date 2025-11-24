@@ -38,16 +38,15 @@ class ProcessChain(nn.Module):
     a1 (fisso) → UncertPred1 → (o1, σ1²) → Policy1 → a2 → UncertPred2 → (o2, σ2²) → ...
     """
 
-    def _compute_input_ranges(self, processes_config):
+    def _compute_input_ranges(self, processes_config, method='uncertainty_predictor', scale_factor=3.0):
         """
-        Computes min/max ranges from uncertainty predictor training data statistics.
-        This uses the actual process operational ranges rather than target trajectory samples.
-
-        For StandardScaler: estimates range as mean ± k*scale (k=3 for ~99.7% coverage)
-        For MinMaxScaler: uses stored min/max directly
+        Computes min/max ranges for denormalizing policy generator outputs.
 
         Args:
             processes_config (list): Lista di configurazioni dei processi
+            method (str): 'uncertainty_predictor' or 'target_trajectory'
+            scale_factor (float): For StandardScaler, k in [mean - k*scale, mean + k*scale]
+                                 k=2.0: 95%, k=3.0: 99.7%, k=4.0: 99.99% coverage
 
         Returns:
             dict: {process_idx: {'min': array, 'max': array, 'span': array}}
@@ -55,44 +54,74 @@ class ProcessChain(nn.Module):
         """
         input_ranges = {}
 
-        for i, process_config in enumerate(processes_config):
-            process_name = process_config['name']
-            preprocessor = self.preprocessors[i]
-            scaler = preprocessor.input_scaler
+        if method == 'target_trajectory':
+            # Legacy method: compute from target trajectory
+            # WARNING: Degenerates to constant with 1 scenario (min=max)
+            for i, process_config in enumerate(processes_config):
+                process_name = process_config['name']
+                all_inputs = self.target_trajectory[process_name]['inputs']
+                input_min = np.min(all_inputs, axis=0)
+                input_max = np.max(all_inputs, axis=0)
 
-            # Extract range based on scaler type
-            if hasattr(scaler, 'data_min_') and hasattr(scaler, 'data_max_'):
-                # MinMaxScaler stores actual min/max
-                input_min = scaler.data_min_
-                input_max = scaler.data_max_
-            elif hasattr(scaler, 'mean_') and hasattr(scaler, 'scale_'):
-                # StandardScaler: estimate range as mean ± k*scale
-                # k=3 covers ~99.7% of data (assuming normal distribution)
-                k = 3.0
-                input_min = scaler.mean_ - k * scaler.scale_
-                input_max = scaler.mean_ + k * scaler.scale_
-            else:
-                raise ValueError(
-                    f"Scaler for process '{process_name}' does not have "
-                    f"recognizable statistics (data_min_/data_max_ or mean_/scale_)"
-                )
+                range_span = input_max - input_min
+                epsilon = 1e-6
+                range_span = np.maximum(range_span, epsilon)
 
-            # Compute span
-            range_span = input_max - input_min
+                input_ranges[i] = {
+                    'min': input_min,
+                    'max': input_max,
+                    'span': range_span
+                }
 
-            # Ensure minimum span to avoid numerical issues
-            epsilon = 1e-6
-            range_span = np.maximum(range_span, epsilon)
+                print(f"  Input ranges for {process_name} (target_trajectory):")
+                print(f"    Min: {input_min}")
+                print(f"    Max: {input_max}")
 
-            input_ranges[i] = {
-                'min': input_min,
-                'max': input_max,
-                'span': range_span
-            }
+        elif method == 'uncertainty_predictor':
+            # Recommended method: use uncertainty predictor training statistics
+            for i, process_config in enumerate(processes_config):
+                process_name = process_config['name']
+                preprocessor = self.preprocessors[i]
+                scaler = preprocessor.input_scaler
 
-            print(f"  Input ranges for {process_name}:")
-            print(f"    Min: {input_min}")
-            print(f"    Max: {input_max}")
+                # Extract range based on scaler type
+                if hasattr(scaler, 'data_min_') and hasattr(scaler, 'data_max_'):
+                    # MinMaxScaler stores actual min/max
+                    input_min = scaler.data_min_
+                    input_max = scaler.data_max_
+                elif hasattr(scaler, 'mean_') and hasattr(scaler, 'scale_'):
+                    # StandardScaler: estimate range as mean ± k*scale
+                    k = scale_factor
+                    input_min = scaler.mean_ - k * scaler.scale_
+                    input_max = scaler.mean_ + k * scaler.scale_
+                else:
+                    raise ValueError(
+                        f"Scaler for process '{process_name}' does not have "
+                        f"recognizable statistics (data_min_/data_max_ or mean_/scale_)"
+                    )
+
+                # Compute span
+                range_span = input_max - input_min
+
+                # Ensure minimum span to avoid numerical issues
+                epsilon = 1e-6
+                range_span = np.maximum(range_span, epsilon)
+
+                input_ranges[i] = {
+                    'min': input_min,
+                    'max': input_max,
+                    'span': range_span
+                }
+
+                print(f"  Input ranges for {process_name} (uncertainty_predictor, k={scale_factor}):")
+                print(f"    Min: {input_min}")
+                print(f"    Max: {input_max}")
+
+        else:
+            raise ValueError(
+                f"Unknown range_estimation_method: '{method}'. "
+                f"Expected 'uncertainty_predictor' or 'target_trajectory'"
+            )
 
         return input_ranges
 
@@ -213,11 +242,17 @@ class ProcessChain(nn.Module):
             preprocessor = load_preprocessor(scaler_path)
             self.preprocessors.append(preprocessor)
 
-        # Compute min/max ranges from uncertainty predictor training data
-        # This uses the actual process operational ranges (mean ± k*scale)
-        # and works correctly even with 1 scenario in target trajectory
-        print("\nComputing input ranges from uncertainty predictor statistics:")
-        self.input_ranges = self._compute_input_ranges(processes_config)
+        # Compute min/max ranges for denormalization
+        # Extract configuration parameters
+        range_method = policy_config.get('range_estimation_method', 'uncertainty_predictor')
+        scale_factor = policy_config.get('range_scale_factor', 3.0)
+
+        print(f"\nComputing input ranges (method: {range_method}, scale_factor: {scale_factor}):")
+        self.input_ranges = self._compute_input_ranges(
+            processes_config,
+            method=range_method,
+            scale_factor=scale_factor
+        )
 
         # Create scenario encoder (if enabled)
         if self.use_scenario_encoder:

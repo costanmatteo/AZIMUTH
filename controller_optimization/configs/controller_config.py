@@ -45,6 +45,15 @@ POLICY GENERATOR:
 - scenario_embedding_dim: Dimension of scenario embedding vector (default: 16)
                          Higher = more expressive but more parameters
 
+OUTPUT NORMALIZATION:
+- range_estimation_method: How to compute input ranges for denormalization
+                          'uncertainty_predictor': Use scaler statistics (recommended)
+                          'target_trajectory': Use target trajectory min/max (legacy, fails with 1 scenario)
+- range_scale_factor: For StandardScaler, k in [mean - k*scale, mean + k*scale]
+                     k=2.0: 95% coverage, k=3.0: 99.7%, k=4.0: 99.99%
+                     Default: 3.0 (recommended)
+                     Higher = more conservative (wider range)
+
 SCENARIOS:
 - n_train: Number of scenarios for training (diverse operating conditions)
 - n_test: Number of scenarios for final evaluation (never seen during training)
@@ -97,6 +106,11 @@ CONTROLLER_CONFIG = {
         'use_batchnorm': False,
         'use_scenario_encoder': False,  # Enable scenario context encoding
         'scenario_embedding_dim': 16,  # Dimension of scenario embedding vector
+
+        # Output normalization settings
+        'range_estimation_method': 'uncertainty_predictor',  # 'uncertainty_predictor' or 'target_trajectory'
+        'range_scale_factor': 3.0,  # For StandardScaler: k in [mean - k*scale, mean + k*scale]
+                                    # k=2.0: 95%, k=3.0: 99.7%, k=4.0: 99.99% coverage
     },
 
     # Training parameters
