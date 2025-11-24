@@ -137,6 +137,31 @@ class SCMProcessSurrogate(nn.Module):
         """Safe square root with absolute value."""
         return torch.sqrt(torch.abs(x) + 1e-8)
 
+    def _safe_pow(self, base, exp):
+        """
+        Safe power operation.
+
+        Handles special cases:
+        - exp = 0.5: safe sqrt
+        - exp = -0.5: 1 / safe sqrt
+        - base near zero with negative exp: return large value instead of inf
+        """
+        # Handle sqrt (x^0.5)
+        if isinstance(exp, (int, float)) and abs(exp - 0.5) < 1e-9:
+            return self._safe_sqrt(base)
+
+        # Handle 1/sqrt (x^-0.5)
+        if isinstance(exp, (int, float)) and abs(exp + 0.5) < 1e-9:
+            return 1.0 / (self._safe_sqrt(base) + 1e-8)
+
+        # Handle negative exponents (division)
+        if isinstance(exp, (int, float)) and exp < 0:
+            # Prevent division by zero
+            return torch.pow(torch.abs(base) + 1e-8, exp)
+
+        # Standard power
+        return torch.pow(base, exp)
+
     def _evaluate_expression(self, node_name: str, context: Dict[str, torch.Tensor]) -> torch.Tensor:
         """
         Evaluate a node's expression using PyTorch operations.
@@ -231,17 +256,21 @@ class SCMProcessSurrogate(nn.Module):
         elif isinstance(expr, sp.Pow):
             # Power: base ** exponent
             base = self._sympy_to_torch(expr.base, context, node_name)
-            exp = self._sympy_to_torch(expr.exp, context, node_name)
 
-            # Handle special cases
+            # Handle constant exponents with special cases
             if isinstance(expr.exp, (sp.Integer, sp.Float, sp.Rational)):
                 exp_val = float(expr.exp)
-                if exp_val == 0.5:
-                    return self._safe_sqrt(base)
-                elif exp_val == 2:
+
+                # Square: optimize to multiplication
+                if abs(exp_val - 2.0) < 1e-9:
                     return base * base
 
-            return torch.pow(base, exp)
+                # Use safe power for sqrt and 1/sqrt
+                return self._safe_pow(base, exp_val)
+            else:
+                # Dynamic exponent (rare)
+                exp = self._sympy_to_torch(expr.exp, context, node_name)
+                return torch.pow(base, exp)
 
         elif isinstance(expr, sp.exp):
             # Exponential
@@ -267,6 +296,11 @@ class SCMProcessSurrogate(nn.Module):
             # Absolute value
             arg = self._sympy_to_torch(expr.args[0], context, node_name)
             return torch.abs(arg)
+
+        elif isinstance(expr, sp.sqrt):
+            # Square root (explicit)
+            arg = self._sympy_to_torch(expr.args[0], context, node_name)
+            return self._safe_sqrt(arg)
 
         else:
             raise NotImplementedError(f"Unsupported SymPy operation: {type(expr)} in {expr}")
