@@ -77,6 +77,9 @@ class ControllerTrainer:
         # Embedding tracking (if scenario encoder is enabled)
         self.embedding_history = {}  # Dict: {epoch: embeddings_array}
 
+        # Training progression tracking (for visualization)
+        self.training_progression = []  # List of snapshots at key epochs
+
         # Best model tracking
         self.best_loss = float('inf')
         self.best_F = -float('inf')
@@ -229,6 +232,61 @@ class ControllerTrainer:
         embeddings, _, _ = self._extract_all_embeddings()
         if embeddings is not None:
             self.embedding_history[epoch] = embeddings
+
+    def _save_training_progression_snapshot(self, epoch, lambda_bc, reliability_weight, phase):
+        """
+        Save snapshot of generated inputs/outputs at key epochs for progression visualization.
+
+        Args:
+            epoch (int): Current epoch number
+            lambda_bc (float): Current lambda_bc value
+            reliability_weight (float): Current reliability_weight value
+            phase (str): Current training phase
+        """
+        self.process_chain.eval()
+
+        # Use first scenario as representative
+        representative_scenario_idx = 0
+
+        with torch.no_grad():
+            # Generate trajectory for representative scenario
+            trajectory = self.process_chain.forward(
+                batch_size=1,
+                scenario_idx=representative_scenario_idx
+            )
+
+            # Convert to numpy for storage
+            from controller_optimization.src.utils.metrics import convert_trajectory_to_numpy
+            trajectory_np = convert_trajectory_to_numpy(trajectory)
+
+            # Also get target trajectory for this scenario
+            target_trajectory_np = {}
+            for process_name, data in self.surrogate.target_trajectory_tensors.items():
+                target_trajectory_np[process_name] = {
+                    'inputs': data['inputs'][representative_scenario_idx:representative_scenario_idx+1].cpu().numpy(),
+                    'outputs': data['outputs'][representative_scenario_idx:representative_scenario_idx+1].cpu().numpy()
+                }
+
+            # Compute F for this snapshot
+            F_actual = self.surrogate.compute_reliability(trajectory).item()
+            F_star = self.surrogate.F_star[representative_scenario_idx]
+
+            # Save snapshot
+            snapshot = {
+                'epoch': epoch,
+                'phase': phase,
+                'lambda_bc': lambda_bc,
+                'reliability_weight': reliability_weight,
+                'trajectory': trajectory_np,
+                'target_trajectory': target_trajectory_np,
+                'F_actual': F_actual,
+                'F_star': F_star,
+                'scenario_idx': representative_scenario_idx
+            }
+
+            self.training_progression.append(snapshot)
+
+        self.process_chain.train()
 
     def compute_loss(self, trajectory, scenario_idx, reliability_weight=1.0, lambda_bc=None):
         """
@@ -425,6 +483,21 @@ class ControllerTrainer:
             self.history['lambda_bc'].append(lambda_bc)
             self.history['reliability_weight'].append(reliability_weight)
 
+            # Save training progression snapshots at key epochs
+            # Key epochs: 1, 10, warmup_end, warmup_end+1, middle, every 100, final
+            is_key_epoch = (
+                epoch == 1 or  # Start
+                epoch == 10 or  # Early warm-up
+                (warmup_epochs > 0 and epoch == warmup_epochs) or  # End of warm-up
+                (warmup_epochs > 0 and epoch == warmup_epochs + 1) or  # Start of curriculum
+                epoch == epochs // 2 or  # Middle
+                epoch % 100 == 0 or  # Every 100 epochs
+                epoch == epochs  # Final (will be handled below if early stopping doesn't trigger)
+            )
+
+            if is_key_epoch:
+                self._save_training_progression_snapshot(epoch, lambda_bc, reliability_weight, phase)
+
             # Save embedding snapshot periodically
             if hasattr(self.process_chain, 'scenario_encoder') and self.process_chain.scenario_encoder is not None:
                 if epoch % 20 == 0 or epoch == 1:  # Save every 20 epochs and at epoch 1
@@ -504,6 +577,32 @@ class ControllerTrainer:
         history_path = save_dir / 'training_history.json'
         with open(history_path, 'w') as f:
             json.dump(self.history, f, indent=2)
+
+        # Save training progression snapshots
+        if len(self.training_progression) > 0:
+            progression_path = save_dir / 'training_progression.npz'
+            progression_data = {}
+
+            for i, snapshot in enumerate(self.training_progression):
+                prefix = f'snapshot_{i}_epoch_{snapshot["epoch"]}'
+                progression_data[f'{prefix}_epoch'] = snapshot['epoch']
+                progression_data[f'{prefix}_phase'] = snapshot['phase']
+                progression_data[f'{prefix}_lambda_bc'] = snapshot['lambda_bc']
+                progression_data[f'{prefix}_reliability_weight'] = snapshot['reliability_weight']
+                progression_data[f'{prefix}_F_actual'] = snapshot['F_actual']
+                progression_data[f'{prefix}_F_star'] = snapshot['F_star']
+
+                # Save inputs and outputs for each process
+                for process_name in snapshot['trajectory'].keys():
+                    progression_data[f'{prefix}_{process_name}_inputs'] = snapshot['trajectory'][process_name]['inputs']
+                    progression_data[f'{prefix}_{process_name}_outputs'] = snapshot['trajectory'][process_name]['outputs_mean']
+                    progression_data[f'{prefix}_{process_name}_target_inputs'] = snapshot['target_trajectory'][process_name]['inputs']
+                    progression_data[f'{prefix}_{process_name}_target_outputs'] = snapshot['target_trajectory'][process_name]['outputs']
+
+            np.savez(progression_path, **progression_data)
+
+            if verbose:
+                print(f"  Saved {len(self.training_progression)} training progression snapshots to {progression_path}")
 
         if verbose:
             print(f"\n{'='*70}")

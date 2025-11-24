@@ -513,3 +513,160 @@ def plot_gap_distribution(F_star_per_scenario, F_actual_per_scenario, save_path=
         plt.show()
 
     plt.close()
+
+
+def plot_training_progression(progression_path, save_path=None):
+    """
+    Plot training progression showing how inputs/outputs evolve through epochs.
+
+    Shows snapshots at key epochs (start, warmup end, curriculum start, middle, end)
+    to visualize how the controller learns.
+
+    Args:
+        progression_path (str): Path to training_progression.npz file
+        save_path (str): Path to save figure
+    """
+    from controller_optimization.configs.processes_config import get_process_by_name
+
+    # Load progression data
+    data = np.load(progression_path, allow_pickle=True)
+
+    # Extract snapshot information
+    snapshots = []
+    snapshot_indices = set()
+
+    for key in data.files:
+        if key.endswith('_epoch'):
+            idx = int(key.split('_')[1])
+            snapshot_indices.add(idx)
+
+    for idx in sorted(snapshot_indices):
+        prefix = f'snapshot_{idx}_epoch_{int(data[f"snapshot_{idx}_epoch"])}'
+
+        snapshot = {
+            'epoch': int(data[f'{prefix}_epoch']),
+            'phase': str(data[f'{prefix}_phase']),
+            'lambda_bc': float(data[f'{prefix}_lambda_bc']),
+            'reliability_weight': float(data[f'{prefix}_reliability_weight']),
+            'F_actual': float(data[f'{prefix}_F_actual']),
+            'F_star': float(data[f'{prefix}_F_star']),
+            'processes': {}
+        }
+
+        # Extract process data
+        for key in data.files:
+            if key.startswith(prefix) and '_inputs' in key and '_target_inputs' not in key:
+                process_name = key.replace(f'{prefix}_', '').replace('_inputs', '')
+                snapshot['processes'][process_name] = {
+                    'inputs': data[f'{prefix}_{process_name}_inputs'],
+                    'outputs': data[f'{prefix}_{process_name}_outputs'],
+                    'target_inputs': data[f'{prefix}_{process_name}_target_inputs'],
+                    'target_outputs': data[f'{prefix}_{process_name}_target_outputs']
+                }
+
+        snapshots.append(snapshot)
+
+    if len(snapshots) == 0:
+        print("No progression snapshots found")
+        return
+
+    # Count total plots needed
+    n_snapshots = len(snapshots)
+    process_names = list(snapshots[0]['processes'].keys())
+    n_processes = len(process_names)
+
+    # Get input/output dimensions for each process
+    total_plots = 0
+    process_dims = {}
+    for process_name in process_names:
+        config = get_process_by_name(process_name)
+        n_inputs = config['input_dim']
+        n_outputs = config['output_dim']
+        process_dims[process_name] = {'n_inputs': n_inputs, 'n_outputs': n_outputs}
+        total_plots += n_inputs + n_outputs
+
+    # Create figure with subplots (one row per input/output, one column per snapshot)
+    fig = plt.figure(figsize=(4 * n_snapshots, 3 * total_plots))
+
+    plot_idx = 1
+
+    for process_name in process_names:
+        config = get_process_by_name(process_name)
+        n_inputs = process_dims[process_name]['n_inputs']
+        n_outputs = process_dims[process_name]['n_outputs']
+
+        # Plot each input dimension
+        for input_idx in range(n_inputs):
+            input_label = config['input_labels'][input_idx] if input_idx < len(config['input_labels']) else f'Input {input_idx}'
+
+            for snap_idx, snapshot in enumerate(snapshots):
+                ax = plt.subplot(total_plots, n_snapshots, plot_idx)
+
+                process_data = snapshot['processes'][process_name]
+                actual_inputs = process_data['inputs'][0, :, input_idx]  # First sample
+                target_inputs = process_data['target_inputs'][0, :, input_idx]
+
+                x = np.arange(len(actual_inputs))
+                ax.plot(x, target_inputs, 'o-', color='green', label='Target', linewidth=2, markersize=4, alpha=0.7)
+                ax.plot(x, actual_inputs, '^-', color='blue', label='Actual', linewidth=2, markersize=4)
+
+                # Title with epoch and phase info
+                phase_label = f"[{snapshot['phase'].upper()}]" if snapshot['phase'] != 'standard' else ""
+                title = f"Epoch {snapshot['epoch']} {phase_label}\n"
+                title += f"λ_BC={snapshot['lambda_bc']:.3f}, Rel={snapshot['reliability_weight']:.2f}\n"
+                title += f"F={snapshot['F_actual']:.4f} (F*={snapshot['F_star']:.4f})"
+                ax.set_title(title, fontsize=8)
+
+                if snap_idx == 0:
+                    ax.set_ylabel(f"{process_name.capitalize()}\n{input_label}", fontsize=9)
+
+                if snap_idx == 0 and plot_idx <= n_snapshots:
+                    ax.legend(fontsize=7, loc='best')
+
+                ax.grid(True, alpha=0.3)
+                ax.tick_params(labelsize=7)
+
+                plot_idx += 1
+
+        # Plot each output dimension
+        for output_idx in range(n_outputs):
+            output_label = config['output_labels'][output_idx] if output_idx < len(config['output_labels']) else f'Output {output_idx}'
+
+            for snap_idx, snapshot in enumerate(snapshots):
+                ax = plt.subplot(total_plots, n_snapshots, plot_idx)
+
+                process_data = snapshot['processes'][process_name]
+                actual_outputs = process_data['outputs'][0, :, output_idx]  # First sample
+                target_outputs = process_data['target_outputs'][0, :, output_idx]
+
+                x = np.arange(len(actual_outputs))
+                ax.plot(x, target_outputs, 'o-', color='green', label='Target', linewidth=2, markersize=4, alpha=0.7)
+                ax.plot(x, actual_outputs, '^-', color='blue', label='Actual', linewidth=2, markersize=4)
+
+                # Title with epoch and phase info
+                phase_label = f"[{snapshot['phase'].upper()}]" if snapshot['phase'] != 'standard' else ""
+                title = f"Epoch {snapshot['epoch']} {phase_label}\n"
+                title += f"λ_BC={snapshot['lambda_bc']:.3f}, Rel={snapshot['reliability_weight']:.2f}\n"
+                title += f"F={snapshot['F_actual']:.4f} (F*={snapshot['F_star']:.4f})"
+                ax.set_title(title, fontsize=8)
+
+                if snap_idx == 0:
+                    ax.set_ylabel(f"{process_name.capitalize()}\n{output_label}", fontsize=9)
+
+                if snap_idx == 0 and plot_idx <= n_snapshots:
+                    ax.legend(fontsize=7, loc='best')
+
+                ax.grid(True, alpha=0.3)
+                ax.tick_params(labelsize=7)
+
+                plot_idx += 1
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"  Training progression plot saved: {save_path}")
+    else:
+        plt.show()
+
+    plt.close()

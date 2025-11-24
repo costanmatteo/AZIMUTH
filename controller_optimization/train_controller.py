@@ -49,7 +49,8 @@ from controller_optimization.src.utils.visualization import (
     plot_reliability_comparison,
     plot_process_improvements,
     plot_target_vs_actual_scatter,
-    plot_gap_distribution
+    plot_gap_distribution,
+    plot_training_progression
 )
 from controller_optimization.src.utils.report_generator import generate_controller_report
 from controller_optimization.src.utils.model_utils import convert_numpy_to_tensor
@@ -584,6 +585,15 @@ def main():
         history=history,
         save_path=str(checkpoint_dir / 'training_history.png')
     )
+
+    # Plot training progression (inputs/outputs evolution through epochs)
+    progression_file = checkpoint_dir / 'training_progression.npz'
+    if progression_file.exists():
+        print("  Generating training progression plot...")
+        plot_training_progression(
+            progression_path=str(progression_file),
+            save_path=str(checkpoint_dir / 'training_progression.png')
+        )
 
     # Plot reliability comparison (using mean values)
     plot_reliability_comparison(
