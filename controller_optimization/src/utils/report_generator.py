@@ -10,7 +10,7 @@ from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch, cm
 from reportlab.lib import colors
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle, Frame, PageTemplate, KeepTogether
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle, Frame, PageTemplate, KeepTogether, PageBreak
 from reportlab.lib.enums import TA_LEFT, TA_CENTER
 from reportlab.platypus.flowables import HRFlowable
 
@@ -322,6 +322,113 @@ class ControllerReportGenerator:
             self.story.append(Paragraph(div_text, self.styles['BodyText']))
             self.story.append(Spacer(1, 0.15*cm))
 
+    def add_trajectory_values_section(self, target_trajectory, baseline_trajectory, actual_trajectory,
+                                     scenario_idx, process_names, F_star_repr, F_baseline_repr, F_actual_repr):
+        """Add trajectory values comparison section to PDF
+
+        Args:
+            target_trajectory (dict): Target trajectory (numpy arrays)
+            baseline_trajectory (dict): Baseline trajectory (numpy arrays)
+            actual_trajectory (dict): Actual trajectory (torch tensors)
+            scenario_idx (int): Scenario index
+            process_names (list): List of process names
+            F_star_repr (float): Target reliability for this scenario
+            F_baseline_repr (float): Baseline reliability for this scenario
+            F_actual_repr (float): Actual reliability for this scenario
+        """
+        import torch
+        import numpy as np
+
+        self.add_section_title(f"Trajectory Values Comparison (Scenario {scenario_idx})")
+
+        for process_name in process_names:
+            # Get values
+            target_inputs = target_trajectory[process_name]['inputs'][scenario_idx]
+            target_outputs = target_trajectory[process_name]['outputs'][scenario_idx]
+
+            baseline_inputs = baseline_trajectory[process_name]['inputs'][scenario_idx]
+            baseline_outputs = baseline_trajectory[process_name]['outputs'][scenario_idx]
+
+            # Convert actual from torch to numpy
+            if torch.is_tensor(actual_trajectory[process_name]['inputs']):
+                actual_inputs = actual_trajectory[process_name]['inputs'][0].detach().cpu().numpy()
+                actual_outputs = actual_trajectory[process_name]['outputs_sampled'][0].detach().cpu().numpy()
+            else:
+                actual_inputs = actual_trajectory[process_name]['inputs'][0]
+                actual_outputs = actual_trajectory[process_name]['outputs_sampled'][0]
+
+            # Create table for this process
+            # Header
+            data = [[Paragraph(f"<b>{process_name.upper()}</b>", self.styles['Normal'])]]
+
+            # Input labels and values
+            input_labels_text = "Target (a*) | Baseline (a') | Actual (a)"
+            data.append([Paragraph(f"<b>INPUTS</b> ({input_labels_text})", self.styles['BodyText'])])
+
+            # Format input values
+            target_inputs_str = ', '.join([f"{v:.4f}" for v in target_inputs])
+            baseline_inputs_str = ', '.join([f"{v:.4f}" for v in baseline_inputs])
+            actual_inputs_str = ', '.join([f"{v:.4f}" for v in actual_inputs])
+
+            data.append([Paragraph(f"[{target_inputs_str}] | [{baseline_inputs_str}] | [{actual_inputs_str}]",
+                                  self.styles['BodyText'])])
+
+            # Check if inputs are same
+            inputs_same = np.allclose(target_inputs, baseline_inputs, atol=1e-6) and \
+                         np.allclose(target_inputs, actual_inputs, atol=1e-6)
+            if inputs_same:
+                status_text = "→ All inputs IDENTICAL ✓"
+            elif np.allclose(target_inputs, baseline_inputs, atol=1e-6):
+                status_text = "→ Target = Baseline (✓), Actual DIFFERENT (controller adjusted)"
+            else:
+                status_text = "→ Inputs DIFFER"
+
+            data.append([Paragraph(f"<i>{status_text}</i>", self.styles['BodyText'])])
+
+            # Output values
+            data.append([Paragraph(f"<b>OUTPUTS</b> ({input_labels_text})", self.styles['BodyText'])])
+
+            target_outputs_str = ', '.join([f"{v:.4f}" for v in target_outputs])
+            baseline_outputs_str = ', '.join([f"{v:.4f}" for v in baseline_outputs])
+            actual_outputs_str = ', '.join([f"{v:.4f}" for v in actual_outputs])
+
+            data.append([Paragraph(f"[{target_outputs_str}] | [{baseline_outputs_str}] | [{actual_outputs_str}]",
+                                  self.styles['BodyText'])])
+
+            # Differences
+            baseline_diff = baseline_outputs - target_outputs
+            actual_diff = actual_outputs - target_outputs
+
+            baseline_diff_str = ', '.join([f"{v:+.4f}" for v in baseline_diff])
+            actual_diff_str = ', '.join([f"{v:+.4f}" for v in actual_diff])
+
+            data.append([Paragraph(f"Δ Baseline: [{baseline_diff_str}]  |  Δ Actual: [{actual_diff_str}]",
+                                  self.styles['BodyText'])])
+
+            # Create table for this process
+            table = Table(data, colWidths=[17*cm])
+            table.setStyle(TableStyle([
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('LEFTPADDING', (0, 0), (-1, -1), 5),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 5),
+                ('TOPPADDING', (0, 0), (-1, -1), 2),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+                ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ]))
+
+            self.story.append(table)
+            self.story.append(Spacer(1, 0.1*cm))
+
+        # Add reliability scores at the end
+        reliability_text = f"""<b>Reliability Scores for Scenario {scenario_idx}:</b><br/>
+• F* (target): {F_star_repr:.6f}<br/>
+• F' (baseline): {F_baseline_repr:.6f}<br/>
+• F (actual): {F_actual_repr:.6f}"""
+
+        self.story.append(Paragraph(reliability_text, self.styles['BodyText']))
+        self.story.append(Spacer(1, 0.2*cm))
+
     def add_embedding_plots(self, checkpoint_dir):
         """Add scenario embedding visualization plots"""
         checkpoint_dir = Path(checkpoint_dir)
@@ -474,10 +581,10 @@ class ControllerReportGenerator:
 
         # Check if all plots exist
         if all(p.exists() for p in [scatter_train_plot, scatter_test_plot, gap_train_plot, gap_test_plot]):
-            # Create 2x2 grid
-            # Target size for each cell
-            cell_width = 8*cm
-            cell_height = 6*cm
+            # Create 2x2 grid with slightly reduced dimensions
+            # Target size for each cell (reduced from 8x6 to 7.5x5.5)
+            cell_width = 7.5*cm
+            cell_height = 5.5*cm
 
             # Row 1: Train scenarios
             # Scatter train
@@ -557,12 +664,24 @@ class ControllerReportGenerator:
             self.story.append(Spacer(1, 0.15*cm))
 
     def generate(self, config, training_history, final_metrics, process_metrics,
-                 F_star, F_baseline, F_actual, timestamp, n_scenarios=None, advanced_metrics=None):
+                 F_star, F_baseline, F_actual, timestamp, n_scenarios=None, advanced_metrics=None,
+                 trajectory_values=None):
         """Generate the complete PDF
 
         Args:
             n_scenarios: Number of scenarios (for multi-scenario training)
             advanced_metrics: Advanced metrics dictionary (optional)
+            trajectory_values: Dictionary with trajectory comparison data (optional)
+                {
+                    'target_trajectory': dict,
+                    'baseline_trajectory': dict,
+                    'actual_trajectory': dict,
+                    'scenario_idx': int,
+                    'process_names': list,
+                    'F_star': float,
+                    'F_baseline': float,
+                    'F_actual': float
+                }
         """
 
         # Add all sections in logical order
@@ -572,9 +691,25 @@ class ControllerReportGenerator:
         self.create_two_column_section(config, training_history, F_star, F_baseline, F_actual,
                                       final_metrics, n_scenarios=n_scenarios)
 
+        # Trajectory values comparison (if available)
+        if trajectory_values:
+            self.add_trajectory_values_section(
+                target_trajectory=trajectory_values['target_trajectory'],
+                baseline_trajectory=trajectory_values['baseline_trajectory'],
+                actual_trajectory=trajectory_values['actual_trajectory'],
+                scenario_idx=trajectory_values['scenario_idx'],
+                process_names=trajectory_values['process_names'],
+                F_star_repr=trajectory_values['F_star'],
+                F_baseline_repr=trajectory_values['F_baseline'],
+                F_actual_repr=trajectory_values['F_actual']
+            )
+
         # Advanced metrics (if available)
         if advanced_metrics:
             self.add_advanced_metrics_section(advanced_metrics)
+
+        # Start new page for visualizations
+        self.story.append(PageBreak())
 
         # Visualizations
         self.add_plots_stacked(Path(config['training']['checkpoint_dir']))
@@ -669,7 +804,8 @@ def generate_controller_report(
     checkpoint_dir,
     timestamp=None,
     n_scenarios=None,
-    advanced_metrics=None
+    advanced_metrics=None,
+    trajectory_values=None
 ):
     """
     Generate a LaTeX-style controller optimization training report
@@ -686,6 +822,7 @@ def generate_controller_report(
         timestamp: Training timestamp (optional)
         n_scenarios: Number of scenarios (for multi-scenario training)
         advanced_metrics: Advanced metrics dictionary (optional)
+        trajectory_values: Dictionary with trajectory comparison data (optional)
 
     Returns:
         Path to the generated PDF report
@@ -704,7 +841,7 @@ def generate_controller_report(
         generator = ControllerReportGenerator(temp_report_path)
         generator.generate(config, training_history, final_metrics, process_metrics,
                           F_star, F_baseline, F_actual, timestamp, n_scenarios=n_scenarios,
-                          advanced_metrics=advanced_metrics)
+                          advanced_metrics=advanced_metrics, trajectory_values=trajectory_values)
 
         # Convert to 2-up format
         try:
@@ -723,7 +860,7 @@ def generate_controller_report(
         generator = ControllerReportGenerator(final_report_path)
         generator.generate(config, training_history, final_metrics, process_metrics,
                           F_star, F_baseline, F_actual, timestamp, n_scenarios=n_scenarios,
-                          advanced_metrics=advanced_metrics)
+                          advanced_metrics=advanced_metrics, trajectory_values=trajectory_values)
 
     return final_report_path
 

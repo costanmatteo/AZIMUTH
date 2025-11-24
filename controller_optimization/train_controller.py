@@ -358,6 +358,54 @@ def main():
     print(f"Robustness (std of F):         {F_actual_std:.6f}  (lower = more robust)")
     print("="*70)
 
+    # 7a.5. Prepare trajectory values for PDF report
+    print("\n[7a.5/9] Preparing trajectory values for PDF report...")
+    print("-"*70)
+
+    # Choose representative scenario (scenario 0 for simplicity)
+    representative_scenario_idx = 0
+    print(f"  Using scenario {representative_scenario_idx} for trajectory comparison...")
+
+    # Generate actual trajectory for this scenario
+    with torch.no_grad():
+        process_chain.eval()
+        actual_trajectory_repr = process_chain.forward(batch_size=1, scenario_idx=representative_scenario_idx)
+
+    # Extract target and baseline for this scenario
+    target_scenario_repr = {}
+    baseline_scenario_repr = {}
+    for process_name, data in target_trajectory.items():
+        target_scenario_repr[process_name] = {
+            'inputs': data['inputs'][representative_scenario_idx:representative_scenario_idx+1],
+            'outputs': data['outputs'][representative_scenario_idx:representative_scenario_idx+1]
+        }
+        baseline_scenario_repr[process_name] = {
+            'inputs': baseline_trajectory[process_name]['inputs'][representative_scenario_idx:representative_scenario_idx+1],
+            'outputs': baseline_trajectory[process_name]['outputs'][representative_scenario_idx:representative_scenario_idx+1]
+        }
+
+    # Convert to tensors for reliability computation
+    target_repr_tensor = convert_numpy_to_tensor(target_scenario_repr, device=device)
+    baseline_repr_tensor = convert_numpy_to_tensor(baseline_scenario_repr, device=device)
+
+    # Compute reliability for this specific scenario
+    F_star_repr = surrogate.compute_reliability(target_repr_tensor).item()
+    F_baseline_repr = surrogate.compute_reliability(baseline_repr_tensor).item()
+    F_actual_repr = surrogate.compute_reliability(actual_trajectory_repr).item()
+
+    # Prepare trajectory values dict for PDF report
+    trajectory_values_for_report = {
+        'target_trajectory': target_trajectory,
+        'baseline_trajectory': baseline_trajectory,
+        'actual_trajectory': actual_trajectory_repr,
+        'scenario_idx': representative_scenario_idx,
+        'process_names': process_chain.process_names,
+        'F_star': F_star_repr,
+        'F_baseline': F_baseline_repr,
+        'F_actual': F_actual_repr
+    }
+    print(f"  ✓ Trajectory values prepared (will be included in PDF report)")
+
     # 7b. Evaluate on TEST scenarios
     print("\n[7b/9] Evaluating on TEST scenarios...")
     print("-"*70)
@@ -756,7 +804,8 @@ def main():
                 checkpoint_dir=checkpoint_dir,
                 timestamp=datetime.now(),
                 n_scenarios=n_scenarios,
-                advanced_metrics=advanced_metrics_for_report
+                advanced_metrics=advanced_metrics_for_report,
+                trajectory_values=trajectory_values_for_report
             )
             print(f"  ✓ PDF report generated: {report_path}")
         except Exception as e:
