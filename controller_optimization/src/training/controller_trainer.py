@@ -288,7 +288,7 @@ class ControllerTrainer:
 
         self.process_chain.train()
 
-    def compute_loss(self, trajectory, scenario_idx, reliability_weight=1.0, lambda_bc=None):
+    def compute_loss(self, trajectory, scenario_idx, reliability_weight=1.0, lambda_bc=None, debug=False):
         """
         Calcola loss totale per uno specifico scenario.
 
@@ -297,6 +297,7 @@ class ControllerTrainer:
             scenario_idx (int): Index of the scenario being evaluated
             reliability_weight (float): Weight for reliability loss (0.0 = ignore, 1.0 = full)
             lambda_bc (float): Behavior cloning weight (if None, uses self.lambda_bc)
+            debug (bool): If True, print detailed debugging information
 
         Returns:
             total_loss, reliability_loss, bc_loss, F
@@ -304,6 +305,14 @@ class ControllerTrainer:
         # Use provided lambda_bc or fall back to instance value
         if lambda_bc is None:
             lambda_bc = self.lambda_bc
+
+        if debug:
+            print(f"\n{'='*70}")
+            print(f"COMPUTE_LOSS DEBUG - Scenario {scenario_idx}")
+            print(f"{'='*70}")
+            print(f"Reliability weight: {reliability_weight:.6f}")
+            print(f"Lambda BC: {lambda_bc:.6f}")
+            print(f"Reliability loss scale: {self.reliability_loss_scale}")
 
         # Reliability loss: scale * (F - F*)^2
         # Scale prevents vanishing gradients when delta F is small (~0.1)
@@ -314,11 +323,23 @@ class ControllerTrainer:
         F_star_tensor = torch.tensor(F_star_value, dtype=torch.float32, device=self.device)
         reliability_loss = self.reliability_loss_scale * (F - F_star_tensor) ** 2
 
+        if debug:
+            print(f"\nReliability computation:")
+            print(f"  F (actual):     {F.item():.6f}")
+            print(f"  F* (target):    {F_star_value:.6f}")
+            print(f"  Delta F:        {(F - F_star_tensor).item():.6f}")
+            print(f"  (Delta F)^2:    {((F - F_star_tensor) ** 2).item():.6f}")
+            print(f"  Reliability loss (unscaled): {((F - F_star_tensor) ** 2).item():.6f}")
+            print(f"  Reliability loss (scaled):   {reliability_loss.item():.6f}")
+
         # Behavior cloning loss: mean( ||a_t - a_t*||^2 ) across all processes
         # Compare to the specific scenario's target inputs
         # Inputs are normalized to [0,1] range to match reliability loss scale
         bc_loss = torch.tensor(0.0, device=self.device)
         n_processes = len(trajectory.keys())
+
+        if debug:
+            print(f"\nBehavior Cloning computation:")
 
         for process_name in trajectory.keys():
             actual_inputs = trajectory[process_name]['inputs']
@@ -331,18 +352,37 @@ class ControllerTrainer:
             target_inputs_norm = (target_inputs_scenario - stats['min']) / stats['range']
 
             # Compute MSE on normalized inputs
-            bc_loss = bc_loss + torch.mean((actual_inputs_norm - target_inputs_norm) ** 2)
+            process_bc_loss = torch.mean((actual_inputs_norm - target_inputs_norm) ** 2)
+            bc_loss = bc_loss + process_bc_loss
+
+            if debug:
+                print(f"  Process: {process_name}")
+                print(f"    Actual inputs:  {actual_inputs[0].detach().cpu().numpy()}")
+                print(f"    Target inputs:  {target_inputs_scenario[0].detach().cpu().numpy()}")
+                print(f"    Actual (norm):  {actual_inputs_norm[0].detach().cpu().numpy()}")
+                print(f"    Target (norm):  {target_inputs_norm[0].detach().cpu().numpy()}")
+                print(f"    BC loss:        {process_bc_loss.item():.6f}")
 
         # Average BC loss across processes (not sum!)
         bc_loss = bc_loss / n_processes
+
+        if debug:
+            print(f"  Total BC loss (avg): {bc_loss.item():.6f}")
 
         # Total loss with dynamic weights
         # reliability_weight controls if reliability loss is active (0.0 during warm-up)
         total_loss = reliability_weight * torch.mean(reliability_loss) + lambda_bc * bc_loss
 
+        if debug:
+            print(f"\nFinal loss computation:")
+            print(f"  Reliability component: {reliability_weight:.6f} × {torch.mean(reliability_loss).item():.6f} = {(reliability_weight * torch.mean(reliability_loss)).item():.6f}")
+            print(f"  BC component:          {lambda_bc:.6f} × {bc_loss.item():.6f} = {(lambda_bc * bc_loss).item():.6f}")
+            print(f"  Total loss:            {total_loss.item():.6f}")
+            print(f"{'='*70}\n")
+
         return total_loss, torch.mean(reliability_loss).item(), bc_loss.item(), torch.mean(F).item()
 
-    def train_epoch(self, batch_size=32, reliability_weight=1.0, lambda_bc=None):
+    def train_epoch(self, batch_size=32, reliability_weight=1.0, lambda_bc=None, debug_first_scenario=False):
         """
         Training per un epoch ACROSS ALL SCENARIOS.
 
@@ -362,6 +402,7 @@ class ControllerTrainer:
             batch_size: Number of samples per scenario (default 32)
             reliability_weight: Weight for reliability loss (for curriculum learning)
             lambda_bc: BC weight (if None, uses self.lambda_bc)
+            debug_first_scenario: If True, debug first scenario in detail
 
         Returns:
             Tuple of (avg_total_loss, avg_reliability_loss, avg_bc_loss, avg_F)
@@ -379,24 +420,113 @@ class ControllerTrainer:
         scenario_order = np.random.permutation(n_scenarios)
 
         # Cycle through all scenarios exactly once
-        for scenario_idx in scenario_order:
+        for idx, scenario_idx in enumerate(scenario_order):
+            debug_this = debug_first_scenario and (idx == 0)
+
+            if debug_this:
+                print(f"\n{'#'*70}")
+                print(f"TRAINING STEP DEBUG - First scenario in epoch")
+                print(f"{'#'*70}")
+                print(f"Scenario index: {scenario_idx}")
+                print(f"Batch size: {batch_size}")
+
+                # Save initial parameters for comparison
+                initial_params = {}
+                for i, policy in enumerate(self.process_chain.policy_generators):
+                    initial_params[i] = {name: param.clone().detach()
+                                       for name, param in policy.named_parameters()}
+
             # Forward pass through process chain for this scenario
             trajectory = self.process_chain.forward(
                 batch_size=batch_size,
-                scenario_idx=scenario_idx
+                scenario_idx=scenario_idx,
+                debug=debug_this
             )
+
+            if debug_this:
+                print(f"\nForward pass outputs:")
+                for process_name, data in trajectory.items():
+                    print(f"  {process_name}:")
+                    print(f"    Inputs:        {data['inputs'][0].detach().cpu().numpy()}")
+                    print(f"    Outputs mean:  {data['outputs_mean'][0].detach().cpu().numpy()}")
+                    print(f"    Outputs var:   {data['outputs_var'][0].detach().cpu().numpy()}")
 
             # Compute loss using scenario-specific F_star and dynamic weights
             total_loss, rel_loss, bc_loss, F = self.compute_loss(
                 trajectory, scenario_idx,
                 reliability_weight=reliability_weight,
-                lambda_bc=lambda_bc
+                lambda_bc=lambda_bc,
+                debug=debug_this
             )
 
             # Backward pass
             self.optimizer.zero_grad()
             total_loss.backward()
+
+            if debug_this:
+                print(f"\nGradient analysis:")
+                for i, policy in enumerate(self.process_chain.policy_generators):
+                    print(f"  Policy generator {i}:")
+                    total_grad_norm = 0.0
+                    max_grad = 0.0
+                    min_grad = float('inf')
+                    n_params = 0
+
+                    for name, param in policy.named_parameters():
+                        if param.grad is not None:
+                            grad_norm = param.grad.norm().item()
+                            total_grad_norm += grad_norm ** 2
+                            max_grad = max(max_grad, param.grad.abs().max().item())
+                            min_grad = min(min_grad, param.grad.abs().min().item())
+                            n_params += 1
+
+                            if n_params <= 2:  # Show first 2 param gradients
+                                print(f"    {name}:")
+                                print(f"      Grad norm: {grad_norm:.6e}")
+                                print(f"      Grad max:  {param.grad.abs().max().item():.6e}")
+
+                    total_grad_norm = np.sqrt(total_grad_norm)
+                    print(f"    Total gradient norm: {total_grad_norm:.6e}")
+                    print(f"    Max gradient:        {max_grad:.6e}")
+                    print(f"    Min gradient:        {min_grad:.6e}")
+
+                    if total_grad_norm < 1e-10:
+                        print(f"    ⚠️  WARNING: Gradients are VANISHING!")
+                    elif total_grad_norm > 100:
+                        print(f"    ⚠️  WARNING: Gradients are EXPLODING!")
+
             self.optimizer.step()
+
+            if debug_this:
+                print(f"\nParameter update analysis:")
+                for i, policy in enumerate(self.process_chain.policy_generators):
+                    print(f"  Policy generator {i}:")
+                    max_change = 0.0
+                    avg_change = 0.0
+                    n_params = 0
+
+                    for name, param in policy.named_parameters():
+                        if name in initial_params[i]:
+                            change = (param - initial_params[i][name]).abs()
+                            max_change = max(max_change, change.max().item())
+                            avg_change += change.mean().item()
+                            n_params += 1
+
+                            if n_params <= 2:  # Show first 2 param changes
+                                print(f"    {name}:")
+                                print(f"      Max change: {change.max().item():.6e}")
+                                print(f"      Avg change: {change.mean().item():.6e}")
+
+                    avg_change /= n_params if n_params > 0 else 1
+                    print(f"    Overall max change: {max_change:.6e}")
+                    print(f"    Overall avg change: {avg_change:.6e}")
+
+                    if avg_change < 1e-10:
+                        print(f"    ⚠️  WARNING: Parameters barely changed! (learning rate too low or gradients vanishing)")
+                    elif avg_change > 0.1:
+                        print(f"    ⚠️  WARNING: Parameters changed dramatically! (learning rate too high or gradients exploding)")
+
+                print(f"{'#'*70}\n")
 
             # Track metrics
             epoch_total_loss += total_loss.item()
@@ -468,11 +598,20 @@ class ControllerTrainer:
             # Get dynamic loss weights for curriculum learning
             lambda_bc, reliability_weight, phase = self.get_loss_weights(epoch, epochs)
 
+            # Enable debugging for first 3 epochs
+            debug_this_epoch = epoch <= 3
+
+            if debug_this_epoch and verbose:
+                print(f"\n{'='*70}")
+                print(f"DEBUG MODE ENABLED FOR EPOCH {epoch}")
+                print(f"{'='*70}")
+
             # Train epoch with dynamic weights
             avg_total_loss, avg_rel_loss, avg_bc_loss, avg_F = self.train_epoch(
                 batch_size=batch_size,
                 reliability_weight=reliability_weight,
-                lambda_bc=lambda_bc
+                lambda_bc=lambda_bc,
+                debug_first_scenario=debug_this_epoch
             )
 
             # Track history

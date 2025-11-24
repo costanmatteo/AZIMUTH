@@ -329,13 +329,14 @@ class ProcessChain(nn.Module):
 
         return constrained_inputs
 
-    def forward(self, batch_size=1, scenario_idx=0):
+    def forward(self, batch_size=1, scenario_idx=0, debug=False):
         """
         Forward pass attraverso tutta la catena per uno scenario specifico.
 
         Args:
             batch_size (int): Number of parallel samples
             scenario_idx (int): Which scenario's structural conditions to use (default: 0)
+            debug (bool): If True, print detailed debugging information
 
         Returns:
             trajectory (dict): {
@@ -350,13 +351,22 @@ class ProcessChain(nn.Module):
             }
         """
 
-
-
+        if debug:
+            print(f"\n{'~'*70}")
+            print(f"PROCESS CHAIN FORWARD DEBUG")
+            print(f"{'~'*70}")
+            print(f"Batch size: {batch_size}")
+            print(f"Scenario idx: {scenario_idx}")
 
         trajectory = {}
 
         # a1 è fisso dalla target trajectory (per lo scenario specifico)
         current_inputs = self.get_initial_inputs(batch_size, scenario_idx)
+
+        if debug:
+            print(f"\nInitial inputs (from target trajectory):")
+            print(f"  Shape: {current_inputs.shape}")
+            print(f"  Values: {current_inputs[0].detach().cpu().numpy()}")
 
         # Extract and encode scenario structural parameters (if encoder is enabled)
         if self.use_scenario_encoder:
@@ -365,12 +375,26 @@ class ProcessChain(nn.Module):
             structural_params = structural_params.unsqueeze(0).repeat(batch_size, 1)  # (batch_size, n_params)
             # Encode to embedding
             scenario_embedding = self.scenario_encoder(structural_params)  # (batch_size, embedding_dim)
+            if debug:
+                print(f"\nScenario encoding:")
+                print(f"  Structural params: {structural_params[0].detach().cpu().numpy()}")
+                print(f"  Embedding: {scenario_embedding[0].detach().cpu().numpy()}")
         else:
             scenario_embedding = None
+            if debug:
+                print(f"\nScenario encoder: disabled")
 
         for i, process_name in enumerate(self.process_names):
+            if debug:
+                print(f"\n--- Process {i}: {process_name} ---")
+
             # 1. Se i > 0: policy generator produce inputs
             if i > 0:
+                if debug:
+                    print(f"  Policy input components:")
+                    print(f"    prev_outputs_mean: {prev_outputs_mean[0].detach().cpu().numpy()}")
+                    print(f"    prev_outputs_var:  {prev_outputs_var[0].detach().cpu().numpy()}")
+
                 # Concatenate: [prev_inputs, prev_outputs_mean, prev_outputs_var, scenario_embedding]
                 policy_input_parts = [
                    # prev_inputs,
@@ -381,10 +405,18 @@ class ProcessChain(nn.Module):
                 # Add scenario embedding if encoder is enabled
                 if self.use_scenario_encoder:
                     policy_input_parts.append(scenario_embedding)
+                    if debug:
+                        print(f"    scenario_embedding: {scenario_embedding[0].detach().cpu().numpy()}")
 
                 policy_input = torch.cat(policy_input_parts, dim=1)
 
+                if debug:
+                    print(f"  Policy input (concatenated): {policy_input[0].detach().cpu().numpy()}")
+
                 generated_inputs = self.policy_generators[i - 1](policy_input)
+
+                if debug:
+                    print(f"  Generated inputs (raw): {generated_inputs[0].detach().cpu().numpy()}")
 
                 # Apply non-controllable constraints: replace non-controllable inputs
                 # with values from target trajectory (e.g., Temperature for microetch)
@@ -392,21 +424,43 @@ class ProcessChain(nn.Module):
                     generated_inputs, i, scenario_idx, batch_size
                 )
 
+                if debug:
+                    print(f"  Current inputs (after constraints): {current_inputs[0].detach().cpu().numpy()}")
+
             # 2. Scale inputs
             scaled_inputs = self.scale_inputs(current_inputs, i)
+
+            if debug:
+                print(f"  Scaled inputs: {scaled_inputs[0].detach().cpu().numpy()}")
 
             # 3. Uncertainty predictor (frozen)
             outputs_mean_scaled, outputs_var_scaled = self.uncertainty_predictors[i](scaled_inputs)
 
+            if debug:
+                print(f"  UncertPred outputs (scaled):")
+                print(f"    mean: {outputs_mean_scaled[0].detach().cpu().numpy()}")
+                print(f"    var:  {outputs_var_scaled[0].detach().cpu().numpy()}")
+
             # 4. Unscale outputs
             outputs_mean = self.unscale_outputs(outputs_mean_scaled, i)
             outputs_var = self.unscale_variance(outputs_var_scaled, i)
+
+            if debug:
+                print(f"  UncertPred outputs (unscaled):")
+                print(f"    mean: {outputs_mean[0].detach().cpu().numpy()}")
+                print(f"    var:  {outputs_var[0].detach().cpu().numpy()}")
 
             # 5. Sample from distribution using reparameterization trick
             # This makes the actual trajectory stochastic based on predicted uncertainty
             std = torch.sqrt(outputs_var + 1e-8)
             epsilon = torch.randn_like(outputs_mean)
             outputs_sampled = outputs_mean + epsilon * std
+
+            if debug:
+                print(f"  Sampled outputs:")
+                print(f"    std:     {std[0].detach().cpu().numpy()}")
+                print(f"    epsilon: {epsilon[0].detach().cpu().numpy()}")
+                print(f"    sampled: {outputs_sampled[0].detach().cpu().numpy()}")
 
             # 6. Store in trajectory
             trajectory[process_name] = {
@@ -422,6 +476,9 @@ class ProcessChain(nn.Module):
             prev_inputs = current_inputs
             prev_outputs_mean = outputs_sampled  # Use sampled outputs instead of mean
             prev_outputs_var = outputs_var
+
+        if debug:
+            print(f"{'~'*70}\n")
 
         return trajectory
 
