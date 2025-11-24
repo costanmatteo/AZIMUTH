@@ -581,10 +581,10 @@ class ControllerReportGenerator:
 
         # Check if all plots exist
         if all(p.exists() for p in [scatter_train_plot, scatter_test_plot, gap_train_plot, gap_test_plot]):
-            # Create 2x2 grid with slightly smaller dimensions
-            # Target size for each cell (reduced from 8x6 to 7x5)
-            cell_width = 7*cm
-            cell_height = 5*cm
+            # Create 2x2 grid with slightly reduced dimensions
+            # Target size for each cell (reduced from 8x6 to 7.5x5.5)
+            cell_width = 7.5*cm
+            cell_height = 5.5*cm
 
             # Row 1: Train scenarios
             # Scatter train
