@@ -98,6 +98,72 @@ For StandardScaler only: controls the range width as `[mean - k×scale, mean + k
 
 ---
 
+#### `force_scaler_method`
+
+**Type:** `str` or `None`
+**Default:** `None`
+**Options:** `None` | `'standard'`
+
+Override the automatic scaler detection to force a specific range computation method.
+
+**None** (Auto-detect, Recommended):
+- MinMaxScaler detected → uses exact `data_min_`/`data_max_` from training data
+- StandardScaler detected → uses `mean ± k×scale` estimation
+- Automatically selects the most appropriate method
+
+**'standard'** (Force StandardScaler method):
+- Always uses `mean ± k×scale` even if MinMaxScaler is detected
+- Requires scaler to have `mean_` and `scale_` attributes
+- Useful for comparing different range estimation strategies
+
+**When to use:**
+- **None**: Almost always (default behavior is optimal)
+- **'standard'**: Only for experimentation or when you specifically want probabilistic ranges instead of exact min/max
+
+**Example:**
+```python
+# Auto-detect (recommended)
+'force_scaler_method': None
+
+# Force StandardScaler method (experimental)
+'force_scaler_method': 'standard'
+```
+
+**Note:** There is no 'minmax' option because StandardScaler doesn't store exact min/max values, only mean and standard deviation.
+
+---
+
+## Scaler Type Information
+
+### Displayed Output
+
+When initializing, you'll see which scaler type was detected:
+
+```
+Computing input ranges:
+  Method: uncertainty_predictor
+  Scale factor: 3.0
+
+  Process: laser
+    Scaler: StandardScaler (mean ± 3.0σ)
+    Range:  [0.1500, 1.5000] (dim 0)
+            [20.0000, 40.0000] (dim 1)
+
+  Process: plasma
+    Scaler: MinMaxScaler (exact)
+    Range:  [180.0000, 400.0000] (dim 0)
+            [15.0000, 45.0000] (dim 1)
+```
+
+### Scaler Type Comparison
+
+| Scaler | Range Source | Accuracy | Use Case |
+|--------|--------------|----------|----------|
+| **StandardScaler** | mean ± k×σ | 99.7% (k=3) | Normal-ish data distribution |
+| **MinMaxScaler** | Exact min/max | 100% | Exact training data bounds |
+
+---
+
 ## Usage Examples
 
 ### Example 1: Standard Configuration (Recommended)
@@ -273,10 +339,15 @@ If training data is $\mathcal{N}(\mu, \sigma^2)$:
 
 ## Summary
 
-| Setting | Recommended | Alternative | Legacy |
-|---------|-------------|-------------|--------|
-| **method** | `uncertainty_predictor` | - | `target_trajectory` |
-| **scale_factor** | `3.0` | `4.0` (conservative) | N/A |
-| **n_train** | Any (even 1) | 20+ (better) | 50+ (required for legacy) |
+| Setting | Recommended | Alternative | Experimental |
+|---------|-------------|-------------|--------------|
+| **method** | `uncertainty_predictor` | `target_trajectory` (20+ scenarios) | - |
+| **scale_factor** | `3.0` | `2.0` / `4.0` | - |
+| **force_scaler** | `None` (auto) | - | `'standard'` |
+| **n_train** | Any (even 1) | 20+ (better) | - |
 
-The recommended configuration works robustly in all scenarios and uses physically meaningful process ranges.
+**Key Points:**
+- ✅ Default configuration (`uncertainty_predictor`, `scale_factor=3.0`, `force_scaler=None`) works robustly in all scenarios
+- ✅ Automatically detects scaler type (StandardScaler vs MinMaxScaler) and uses appropriate method
+- ✅ Displays scaler information during initialization for verification
+- ✅ Uses physically meaningful process operational ranges

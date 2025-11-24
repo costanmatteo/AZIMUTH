@@ -53,6 +53,10 @@ OUTPUT NORMALIZATION:
                      k=2.0: 95% coverage, k=3.0: 99.7%, k=4.0: 99.99%
                      Default: 3.0 (recommended)
                      Higher = more conservative (wider range)
+- force_scaler_method: Override detected scaler behavior (optional)
+                      None: Auto-detect (MinMaxScaler → exact, StandardScaler → mean±kσ)
+                      'standard': Always use mean±kσ (requires mean_/scale_)
+                      Default: None (recommended)
 
 SCENARIOS:
 - n_train: Number of scenarios for training (diverse operating conditions)
@@ -111,6 +115,7 @@ CONTROLLER_CONFIG = {
         'range_estimation_method': 'uncertainty_predictor',  # 'uncertainty_predictor' or 'target_trajectory'
         'range_scale_factor': 3.0,  # For StandardScaler: k in [mean - k*scale, mean + k*scale]
                                     # k=2.0: 95%, k=3.0: 99.7%, k=4.0: 99.99% coverage
+        'force_scaler_method': None,  # None (auto-detect) or 'standard' (force mean±kσ)
     },
 
     # Training parameters

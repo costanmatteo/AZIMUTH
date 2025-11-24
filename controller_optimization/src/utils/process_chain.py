@@ -38,7 +38,8 @@ class ProcessChain(nn.Module):
     a1 (fisso) → UncertPred1 → (o1, σ1²) → Policy1 → a2 → UncertPred2 → (o2, σ2²) → ...
     """
 
-    def _compute_input_ranges(self, processes_config, method='uncertainty_predictor', scale_factor=3.0):
+    def _compute_input_ranges(self, processes_config, method='uncertainty_predictor',
+                             scale_factor=3.0, force_scaler_method=None):
         """
         Computes min/max ranges for denormalizing policy generator outputs.
 
@@ -47,6 +48,7 @@ class ProcessChain(nn.Module):
             method (str): 'uncertainty_predictor' or 'target_trajectory'
             scale_factor (float): For StandardScaler, k in [mean - k*scale, mean + k*scale]
                                  k=2.0: 95%, k=3.0: 99.7%, k=4.0: 99.99% coverage
+            force_scaler_method (str): None (auto-detect) or 'standard' (force mean±kσ)
 
         Returns:
             dict: {process_idx: {'min': array, 'max': array, 'span': array}}
@@ -84,19 +86,45 @@ class ProcessChain(nn.Module):
                 preprocessor = self.preprocessors[i]
                 scaler = preprocessor.input_scaler
 
-                # Extract range based on scaler type
-                if hasattr(scaler, 'data_min_') and hasattr(scaler, 'data_max_'):
-                    # MinMaxScaler stores actual min/max
-                    input_min = scaler.data_min_
-                    input_max = scaler.data_max_
-                elif hasattr(scaler, 'mean_') and hasattr(scaler, 'scale_'):
-                    # StandardScaler: estimate range as mean ± k*scale
+                # Detect scaler type and extract ranges
+                scaler_type = type(scaler).__name__
+
+                # Check if we should force a specific method
+                use_standard_method = False
+                if force_scaler_method == 'standard':
+                    use_standard_method = True
+                elif force_scaler_method is not None:
+                    raise ValueError(
+                        f"Unknown force_scaler_method: '{force_scaler_method}'. "
+                        f"Expected None or 'standard'"
+                    )
+
+                # Extract ranges based on scaler type and force_scaler_method
+                if use_standard_method or (not hasattr(scaler, 'data_min_') and hasattr(scaler, 'mean_')):
+                    # Use StandardScaler method: mean ± k*scale
+                    if not (hasattr(scaler, 'mean_') and hasattr(scaler, 'scale_')):
+                        raise ValueError(
+                            f"Scaler for process '{process_name}' (type: {scaler_type}) "
+                            f"does not have mean_/scale_ required for StandardScaler method"
+                        )
+
+                    scaler_method = f'StandardScaler (mean ± {scale_factor}σ)'
+                    if use_standard_method and hasattr(scaler, 'data_min_'):
+                        scaler_method += ' [forced]'
+
                     k = scale_factor
                     input_min = scaler.mean_ - k * scaler.scale_
                     input_max = scaler.mean_ + k * scaler.scale_
+
+                elif hasattr(scaler, 'data_min_') and hasattr(scaler, 'data_max_'):
+                    # Use MinMaxScaler method: exact min/max from training data
+                    scaler_method = 'MinMaxScaler (exact)'
+                    input_min = scaler.data_min_
+                    input_max = scaler.data_max_
+
                 else:
                     raise ValueError(
-                        f"Scaler for process '{process_name}' does not have "
+                        f"Scaler for process '{process_name}' (type: {scaler_type}) does not have "
                         f"recognizable statistics (data_min_/data_max_ or mean_/scale_)"
                     )
 
@@ -110,12 +138,18 @@ class ProcessChain(nn.Module):
                 input_ranges[i] = {
                     'min': input_min,
                     'max': input_max,
-                    'span': range_span
+                    'span': range_span,
+                    'scaler_type': scaler_type,
+                    'scaler_method': scaler_method
                 }
 
-                print(f"  Input ranges for {process_name} (uncertainty_predictor, k={scale_factor}):")
-                print(f"    Min: {input_min}")
-                print(f"    Max: {input_max}")
+                print(f"  Process: {process_name}")
+                print(f"    Scaler: {scaler_method}")
+                print(f"    Range:  [{input_min[0]:.4f}, {input_max[0]:.4f}] (dim 0)")
+                if len(input_min) > 1:
+                    print(f"            [{input_min[1]:.4f}, {input_max[1]:.4f}] (dim 1)")
+                if len(input_min) > 2:
+                    print(f"            [... {len(input_min)} dimensions total]")
 
         else:
             raise ValueError(
@@ -246,12 +280,19 @@ class ProcessChain(nn.Module):
         # Extract configuration parameters
         range_method = policy_config.get('range_estimation_method', 'uncertainty_predictor')
         scale_factor = policy_config.get('range_scale_factor', 3.0)
+        force_scaler = policy_config.get('force_scaler_method', None)
 
-        print(f"\nComputing input ranges (method: {range_method}, scale_factor: {scale_factor}):")
+        print(f"\nComputing input ranges:")
+        print(f"  Method: {range_method}")
+        print(f"  Scale factor: {scale_factor}")
+        if force_scaler:
+            print(f"  Force scaler: {force_scaler}")
+
         self.input_ranges = self._compute_input_ranges(
             processes_config,
             method=range_method,
-            scale_factor=scale_factor
+            scale_factor=scale_factor,
+            force_scaler_method=force_scaler
         )
 
         # Create scenario encoder (if enabled)
