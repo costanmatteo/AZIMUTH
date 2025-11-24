@@ -620,8 +620,13 @@ def plot_training_progression(progression_path, save_path=None):
                 ax = plt.subplot(total_plots, n_snapshots, plot_idx)
 
                 process_data = snapshot['processes'][process_name]
-                actual_inputs = process_data['inputs'][0, :, input_idx]  # First sample
-                target_inputs = process_data['target_inputs'][0, :, input_idx]
+                # Handle both 2D (seq_len, dim) and 3D (batch, seq_len, dim) arrays
+                if len(process_data['inputs'].shape) == 2:
+                    actual_inputs = process_data['inputs'][:, input_idx]
+                    target_inputs = process_data['target_inputs'][:, input_idx]
+                else:
+                    actual_inputs = process_data['inputs'][0, :, input_idx]  # First sample
+                    target_inputs = process_data['target_inputs'][0, :, input_idx]
 
                 x = np.arange(len(actual_inputs))
                 ax.plot(x, target_inputs, 'o-', color='green', label='Target', linewidth=2, markersize=4, alpha=0.7)
@@ -653,8 +658,13 @@ def plot_training_progression(progression_path, save_path=None):
                 ax = plt.subplot(total_plots, n_snapshots, plot_idx)
 
                 process_data = snapshot['processes'][process_name]
-                actual_outputs = process_data['outputs'][0, :, output_idx]  # First sample
-                target_outputs = process_data['target_outputs'][0, :, output_idx]
+                # Handle both 2D (seq_len, dim) and 3D (batch, seq_len, dim) arrays
+                if len(process_data['outputs'].shape) == 2:
+                    actual_outputs = process_data['outputs'][:, output_idx]
+                    target_outputs = process_data['target_outputs'][:, output_idx]
+                else:
+                    actual_outputs = process_data['outputs'][0, :, output_idx]  # First sample
+                    target_outputs = process_data['target_outputs'][0, :, output_idx]
 
                 x = np.arange(len(actual_outputs))
                 ax.plot(x, target_outputs, 'o-', color='green', label='Target', linewidth=2, markersize=4, alpha=0.7)
