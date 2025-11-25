@@ -109,7 +109,11 @@ def diagnose_policy(checkpoint_dir: str):
                         use_batchnorm=False
                     ).to(device)
 
-                    new_policy.load_state_dict(state_dict)
+                    # Load with strict=False to allow missing output_min/output_max buffers
+                    new_policy.load_state_dict(state_dict, strict=False)
+                    # Set bounds after loading
+                    new_policy.output_min = output_min
+                    new_policy.output_max = output_max
                     process_chain.policy_generators[i] = new_policy
                     print(f"    Loaded {policy_path.name} -> policy_generator[{i}]")
         else:
