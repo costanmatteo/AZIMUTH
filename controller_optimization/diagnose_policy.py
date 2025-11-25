@@ -111,13 +111,13 @@ def diagnose_policy(checkpoint_dir: str):
 
                     # Load with strict=False to allow missing output_min/output_max buffers
                     new_policy.load_state_dict(state_dict, strict=False)
-                    # Set bounds after loading (in case they weren't set in constructor)
+                    # Set bounds after loading using register_buffer to ensure proper registration
                     if output_min is not None:
-                        new_policy.output_min = output_min
+                        new_policy.register_buffer('output_min', output_min.clone())
                     if output_max is not None:
-                        new_policy.output_max = output_max
+                        new_policy.register_buffer('output_max', output_max.clone())
                     process_chain.policy_generators[i] = new_policy
-                    print(f"    Loaded {policy_path.name} -> policy_generator[{i}]")
+                    print(f"    Loaded {policy_path.name} -> policy_generator[{i}] (bounds: {output_min.shape if output_min is not None else None})")
         else:
             print(f"  ERROR: No checkpoint found at {checkpoint_dir}")
             print(f"  Expected: process_chain.pth or policy_*.pth files")
