@@ -72,10 +72,45 @@ def diagnose_policy(checkpoint_dir: str):
         policy_files = sorted(checkpoint_dir.glob('policy_*.pth'))
         if policy_files:
             print(f"  Found {len(policy_files)} policy files")
+
+            # Need to recreate policy generators with correct architecture from saved weights
+            from controller_optimization.src.models.policy_generator import PolicyGenerator
+
             for i, policy_path in enumerate(policy_files):
                 if i < len(process_chain.policy_generators):
                     state_dict = torch.load(policy_path, map_location=device, weights_only=False)
-                    process_chain.policy_generators[i].load_state_dict(state_dict)
+
+                    # Infer architecture from saved weights
+                    hidden_sizes = []
+                    layer_idx = 0
+                    while f'network.{layer_idx}.weight' in state_dict:
+                        weight_shape = state_dict[f'network.{layer_idx}.weight'].shape
+                        hidden_sizes.append(weight_shape[0])
+                        layer_idx += 3  # Each block: Linear, activation, dropout
+
+                    input_size = state_dict['network.0.weight'].shape[1]
+                    output_size = state_dict['output_head.weight'].shape[0]
+
+                    print(f"    {policy_path.name}: input={input_size}, hidden={hidden_sizes}, output={output_size}")
+
+                    # Get bounds from current policy generator
+                    old_policy = process_chain.policy_generators[i]
+                    output_min = old_policy.output_min
+                    output_max = old_policy.output_max
+
+                    # Create new policy with correct architecture
+                    new_policy = PolicyGenerator(
+                        input_size=input_size,
+                        hidden_sizes=hidden_sizes,
+                        output_size=output_size,
+                        output_min=output_min,
+                        output_max=output_max,
+                        dropout_rate=0.1,
+                        use_batchnorm=False
+                    ).to(device)
+
+                    new_policy.load_state_dict(state_dict)
+                    process_chain.policy_generators[i] = new_policy
                     print(f"    Loaded {policy_path.name} -> policy_generator[{i}]")
         else:
             print(f"  ERROR: No checkpoint found at {checkpoint_dir}")
@@ -140,26 +175,31 @@ def diagnose_policy(checkpoint_dir: str):
             next_process = process_chain.process_names[i + 1]
             print(f"\n  Policy: {prev_process} -> {next_process}")
 
-            # Get typical input to this policy
-            # First run a forward pass to get realistic inputs
-            torch.manual_seed(42)
-            trajectory = process_chain.forward(batch_size=1, scenario_idx=0)
+            # Get the expected input size from the policy's first layer
+            expected_input_size = policy.network[0].weight.shape[1]
+            print(f"    Expected input size: {expected_input_size}")
 
-            # Get the actual policy input that was used
-            prev_outputs = trajectory[prev_process]['outputs_sampled']
-            prev_var = trajectory[prev_process]['outputs_var']
+            # Create a synthetic input with realistic values
+            # Use outputs from the uncertainty predictor as reference
+            inputs = process_chain.get_initial_inputs(batch_size=1, scenario_idx=0)
+            inputs_scaled = process_chain.scale_inputs(inputs, i)
+            outputs_mean, outputs_var = process_chain.uncertainty_predictors[i](inputs_scaled)
+            outputs_mean = process_chain.unscale_outputs(outputs_mean, i)
+            outputs_var = process_chain.unscale_variance(outputs_var, i)
 
-            # Build policy input
-            if process_chain.use_scenario_encoder:
-                structural_params = process_chain._extract_structural_params(0)
-                structural_params = structural_params.unsqueeze(0)
-                scenario_embedding = process_chain.scenario_encoder(structural_params)
-                policy_input = torch.cat([prev_outputs, prev_var, scenario_embedding], dim=1)
-            else:
-                policy_input = torch.cat([prev_outputs, prev_var], dim=1)
+            # Build policy input with correct size
+            # The policy was trained with [outputs_mean, outputs_var] (no scenario encoder)
+            policy_input = torch.cat([outputs_mean, outputs_var], dim=1)
+
+            # Pad or truncate to match expected size
+            if policy_input.shape[1] < expected_input_size:
+                padding = torch.zeros(1, expected_input_size - policy_input.shape[1], device=device)
+                policy_input = torch.cat([policy_input, padding], dim=1)
+            elif policy_input.shape[1] > expected_input_size:
+                policy_input = policy_input[:, :expected_input_size]
 
             print(f"    Policy input shape: {policy_input.shape}")
-            print(f"    Policy input: {policy_input[0].tolist()[:10]}..." if policy_input.shape[1] > 10 else f"    Policy input: {policy_input[0].tolist()}")
+            print(f"    Policy input: {policy_input[0].tolist()}")
 
             # Get baseline output
             baseline_output = policy(policy_input)
@@ -167,7 +207,7 @@ def diagnose_policy(checkpoint_dir: str):
 
             # Perturb input and see if output changes
             print(f"\n    Perturbation test (±10% of input range):")
-            input_range = policy_input.max() - policy_input.min()
+            input_range = max(policy_input.max() - policy_input.min(), 1.0)
             perturbations = [-0.1, -0.01, 0.01, 0.1]
 
             for pert in perturbations:
@@ -199,20 +239,24 @@ def diagnose_policy(checkpoint_dir: str):
             next_process = process_chain.process_names[i + 1]
             print(f"\n  Policy: {prev_process} -> {next_process}")
 
-            # Run forward pass to get typical input
-            torch.manual_seed(42)
-            trajectory = process_chain.forward(batch_size=1, scenario_idx=0)
+            # Get expected input size from policy
+            expected_input_size = policy.network[0].weight.shape[1]
 
-            prev_outputs = trajectory[prev_process]['outputs_sampled']
-            prev_var = trajectory[prev_process]['outputs_var']
+            # Create synthetic input
+            inputs = process_chain.get_initial_inputs(batch_size=1, scenario_idx=0)
+            inputs_scaled = process_chain.scale_inputs(inputs, i)
+            outputs_mean, outputs_var = process_chain.uncertainty_predictors[i](inputs_scaled)
+            outputs_mean = process_chain.unscale_outputs(outputs_mean, i)
+            outputs_var = process_chain.unscale_variance(outputs_var, i)
 
-            if process_chain.use_scenario_encoder:
-                structural_params = process_chain._extract_structural_params(0)
-                structural_params = structural_params.unsqueeze(0)
-                scenario_embedding = process_chain.scenario_encoder(structural_params)
-                policy_input = torch.cat([prev_outputs, prev_var, scenario_embedding], dim=1)
-            else:
-                policy_input = torch.cat([prev_outputs, prev_var], dim=1)
+            policy_input = torch.cat([outputs_mean, outputs_var], dim=1)
+
+            # Pad or truncate to match expected size
+            if policy_input.shape[1] < expected_input_size:
+                padding = torch.zeros(1, expected_input_size - policy_input.shape[1], device=device)
+                policy_input = torch.cat([policy_input, padding], dim=1)
+            elif policy_input.shape[1] > expected_input_size:
+                policy_input = policy_input[:, :expected_input_size]
 
             # Manually compute forward pass to inspect internals
             features = policy.network(policy_input)
@@ -249,44 +293,55 @@ def diagnose_policy(checkpoint_dir: str):
                   f"max={param.data.max().item():.4f}")
 
     # =========================================================================
-    # DIAGNOSTIC 5: Compare outputs across seeds
+    # DIAGNOSTIC 5: Compare policy outputs across different inputs
     # =========================================================================
     print(f"\n{'='*70}")
-    print("[6] OUTPUT COMPARISON ACROSS SEEDS")
-    print("    (Final test: are outputs truly identical?)")
+    print("[6] POLICY OUTPUT VARIATION TEST")
+    print("    (Do different inputs produce different outputs?)")
     print(f"{'='*70}")
 
     with torch.no_grad():
-        all_outputs = {}
+        for i, policy in enumerate(process_chain.policy_generators):
+            prev_process = process_chain.process_names[i]
+            next_process = process_chain.process_names[i + 1]
+            print(f"\n  Policy: {prev_process} -> {next_process}")
 
-        for seed in seeds:
-            torch.manual_seed(seed)
-            trajectory = process_chain.forward(batch_size=1, scenario_idx=0)
+            expected_input_size = policy.network[0].weight.shape[1]
 
-            for process_name in process_chain.process_names:
-                if process_name not in all_outputs:
-                    all_outputs[process_name] = {'inputs': [], 'outputs': []}
-                all_outputs[process_name]['inputs'].append(
-                    trajectory[process_name]['inputs'][0].numpy()
-                )
-                all_outputs[process_name]['outputs'].append(
-                    trajectory[process_name]['outputs_sampled'][0].numpy()
-                )
+            # Generate multiple different inputs and check outputs
+            outputs_list = []
+            for seed in seeds:
+                torch.manual_seed(seed)
 
-        for process_name in process_chain.process_names:
-            inputs = np.array(all_outputs[process_name]['inputs'])
-            outputs = np.array(all_outputs[process_name]['outputs'])
+                # Create input with some variation based on seed
+                inputs = process_chain.get_initial_inputs(batch_size=1, scenario_idx=0)
+                inputs_scaled = process_chain.scale_inputs(inputs, i)
+                outputs_mean, outputs_var = process_chain.uncertainty_predictors[i](inputs_scaled)
+                outputs_mean = process_chain.unscale_outputs(outputs_mean, i)
+                outputs_var = process_chain.unscale_variance(outputs_var, i)
 
-            print(f"\n  Process: {process_name}")
-            print(f"    Inputs across seeds:")
-            for j, seed in enumerate(seeds):
-                print(f"      Seed {seed}: {inputs[j].tolist()}")
-            print(f"    Input std across seeds: {inputs.std(axis=0).tolist()}")
+                # Add noise based on variance
+                std = torch.sqrt(outputs_var + 1e-8)
+                epsilon = torch.randn_like(outputs_mean)
+                sampled = outputs_mean + epsilon * std
 
-            print(f"    Outputs across seeds:")
-            for j, seed in enumerate(seeds):
-                print(f"      Seed {seed}: {outputs[j].tolist()}")
-            print(f"    Output std across seeds: {outputs.std(axis=0).tolist()}")
+                policy_input = torch.cat([sampled, outputs_var], dim=1)
+
+                # Pad or truncate
+                if policy_input.shape[1] < expected_input_size:
+                    padding = torch.zeros(1, expected_input_size - policy_input.shape[1], device=device)
+                    policy_input = torch.cat([policy_input, padding], dim=1)
+                elif policy_input.shape[1] > expected_input_size:
+                    policy_input = policy_input[:, :expected_input_size]
+
+                output = policy(policy_input)
+                outputs_list.append(output[0].numpy())
+                print(f"    Seed {seed}: input={policy_input[0, :2].tolist()}, output={output[0].tolist()}")
+
+            outputs_arr = np.array(outputs_list)
+            print(f"    Output std across seeds: {outputs_arr.std(axis=0).tolist()}")
+            if outputs_arr.std() < 1e-6:
+                print(f"    ⚠️  WARNING: Outputs are IDENTICAL regardless of input!")
 
     print(f"\n{'='*70}")
     print("DIAGNOSTICS COMPLETE")
