@@ -191,13 +191,35 @@ class ProcessChain(nn.Module):
             # Output from policy: next process inputs
             next_input_dim = processes_config[i + 1]['input_dim']
 
-            # Create policy generator
+            # Get output bounds from next process's preprocessor (derived from UP training data)
+            next_preprocessor = self.preprocessors[i + 1]
+            if next_preprocessor.input_min is not None and next_preprocessor.input_max is not None:
+                output_min = torch.tensor(next_preprocessor.input_min, dtype=torch.float32)
+                output_max = torch.tensor(next_preprocessor.input_max, dtype=torch.float32)
+                print(f"  Policy {i} -> Process '{processes_config[i + 1]['name']}' bounds:")
+                print(f"    Min: {output_min.numpy()}")
+                print(f"    Max: {output_max.numpy()}")
+            else:
+                output_min = None
+                output_max = None
+                print(f"  Policy {i} -> Process '{processes_config[i + 1]['name']}': No bounds (unbounded output)")
+
+            # Create policy generator with bounds
             if policy_config['architecture'] == 'small':
-                policy = create_small_policy_generator(policy_input_size, next_input_dim)
+                policy = create_small_policy_generator(
+                    policy_input_size, next_input_dim,
+                    output_min=output_min, output_max=output_max
+                )
             elif policy_config['architecture'] == 'medium':
-                policy = create_medium_policy_generator(policy_input_size, next_input_dim)
+                policy = create_medium_policy_generator(
+                    policy_input_size, next_input_dim,
+                    output_min=output_min, output_max=output_max
+                )
             elif policy_config['architecture'] == 'large':
-                policy = create_large_policy_generator(policy_input_size, next_input_dim)
+                policy = create_large_policy_generator(
+                    policy_input_size, next_input_dim,
+                    output_min=output_min, output_max=output_max
+                )
             elif policy_config['architecture'] == 'custom':
                 from controller_optimization.src.models.policy_generator import PolicyGenerator
                 policy = PolicyGenerator(
@@ -205,7 +227,9 @@ class ProcessChain(nn.Module):
                     output_size=next_input_dim,
                     hidden_sizes=policy_config['hidden_sizes'],
                     dropout_rate=policy_config['dropout'],
-                    use_batchnorm=policy_config['use_batchnorm']
+                    use_batchnorm=policy_config['use_batchnorm'],
+                    output_min=output_min,
+                    output_max=output_max
                 )
             else:
                 raise ValueError(f"Unknown policy architecture: {policy_config['architecture']}")
