@@ -520,9 +520,11 @@ def plot_training_progression(progression_path, save_path=None):
     Plot training progression showing how controllable inputs evolve across epochs.
 
     X-axis: Epoch number
-    Y-axis: Mean input value (averaged across sequence)
+    Y-axis: Input value for each of 3 fixed samples
     One subplot per controllable input dimension.
     Shows convergence toward target values with warmup phase marker.
+
+    Supports both old format (single sample) and new format (3 fixed samples).
 
     Args:
         progression_path (str): Path to training_progression.npz file
@@ -534,54 +536,91 @@ def plot_training_progression(progression_path, save_path=None):
     data = np.load(progression_path, allow_pickle=True)
 
     # Extract snapshot information
-    # Keys format: snapshot_0_epoch_1_epoch, snapshot_0_epoch_1_phase, etc.
     snapshots = []
 
     # Find all unique prefixes (snapshot_X_epoch_Y)
     prefixes = set()
     for key in data.files:
-        # Extract prefix (everything before the last underscore + field name)
-        # E.g., "snapshot_0_epoch_1_epoch" -> "snapshot_0_epoch_1"
-        if key.count('_') >= 3:  # At least snapshot_X_epoch_Y_field
+        if key.count('_') >= 3:
             parts = key.split('_')
             if len(parts) >= 4 and parts[0] == 'snapshot' and parts[2] == 'epoch':
-                # Reconstruct prefix: snapshot_X_epoch_Y
-                prefix = '_'.join(parts[:4])  # snapshot_X_epoch_Y
+                prefix = '_'.join(parts[:4])
                 prefixes.add(prefix)
 
-    # Sort prefixes by epoch number
     def get_epoch_from_prefix(prefix):
-        # Extract epoch from "snapshot_X_epoch_Y"
         parts = prefix.split('_')
         return int(parts[3])
 
     sorted_prefixes = sorted(prefixes, key=get_epoch_from_prefix)
 
     for prefix in sorted_prefixes:
+        # Check if new format (with n_samples) or old format
+        n_samples_key = f'{prefix}_n_samples'
+        if n_samples_key in data.files:
+            n_samples = int(data[n_samples_key])
+        else:
+            n_samples = 1  # Old format
+
+        # Get F values for all samples
+        if f'{prefix}_F_actuals' in data.files:
+            F_actuals = data[f'{prefix}_F_actuals']
+        else:
+            F_actuals = [float(data[f'{prefix}_F_actual'])]
+
         snapshot = {
             'epoch': int(data[f'{prefix}_epoch']),
             'phase': str(data[f'{prefix}_phase']),
             'lambda_bc': float(data[f'{prefix}_lambda_bc']),
             'reliability_weight': float(data[f'{prefix}_reliability_weight']),
-            'F_actual': float(data[f'{prefix}_F_actual']),
+            'F_actuals': list(F_actuals),
+            'F_actual': float(F_actuals[0]),
             'F_star': float(data[f'{prefix}_F_star']),
-            'processes': {}
+            'n_samples': n_samples,
+            'samples': []  # List of process data dicts, one per sample
         }
 
-        # Extract process data
-        for key in data.files:
-            if key.startswith(prefix) and '_inputs' in key and '_target_inputs' not in key:
-                # Extract process name from key like "snapshot_0_epoch_1_laser_inputs"
-                # Remove prefix and "_inputs" suffix
-                remaining = key.replace(f'{prefix}_', '')
-                if remaining.endswith('_inputs'):
-                    process_name = remaining.replace('_inputs', '')
-                    snapshot['processes'][process_name] = {
-                        'inputs': data[f'{prefix}_{process_name}_inputs'],
-                        'outputs': data[f'{prefix}_{process_name}_outputs'],
-                        'target_inputs': data[f'{prefix}_{process_name}_target_inputs'],
-                        'target_outputs': data[f'{prefix}_{process_name}_target_outputs']
+        # Extract process data for each sample
+        for sample_idx in range(n_samples):
+            sample_processes = {}
+
+            # Find process names for this sample
+            sample_prefix = f'{prefix}_sample{sample_idx}_'
+
+            for key in data.files:
+                if key.startswith(sample_prefix) and key.endswith('_inputs'):
+                    # Extract process name: "prefix_sample0_plasma_inputs" -> "plasma"
+                    remaining = key.replace(sample_prefix, '').replace('_inputs', '')
+                    process_name = remaining
+
+                    sample_processes[process_name] = {
+                        'inputs': data[f'{sample_prefix}{process_name}_inputs'],
+                        'outputs': data[f'{sample_prefix}{process_name}_outputs'],
                     }
+
+            # Get target inputs (same for all samples)
+            for process_name in sample_processes.keys():
+                target_key = f'{prefix}_{process_name}_target_inputs'
+                if target_key in data.files:
+                    sample_processes[process_name]['target_inputs'] = data[target_key]
+                    sample_processes[process_name]['target_outputs'] = data[f'{prefix}_{process_name}_target_outputs']
+
+            snapshot['samples'].append(sample_processes)
+
+        # Backward compatibility: if old format, extract process data directly
+        if n_samples == 1 and len(snapshot['samples'][0]) == 0:
+            sample_processes = {}
+            for key in data.files:
+                if key.startswith(prefix) and '_inputs' in key and '_target_inputs' not in key and 'sample' not in key:
+                    remaining = key.replace(f'{prefix}_', '')
+                    if remaining.endswith('_inputs'):
+                        process_name = remaining.replace('_inputs', '')
+                        sample_processes[process_name] = {
+                            'inputs': data[f'{prefix}_{process_name}_inputs'],
+                            'outputs': data[f'{prefix}_{process_name}_outputs'],
+                            'target_inputs': data[f'{prefix}_{process_name}_target_inputs'],
+                            'target_outputs': data[f'{prefix}_{process_name}_target_outputs']
+                        }
+            snapshot['samples'] = [sample_processes]
 
         snapshots.append(snapshot)
 
@@ -590,9 +629,14 @@ def plot_training_progression(progression_path, save_path=None):
         return
 
     # Setup
-    n_snapshots = len(snapshots)
-    process_names = list(snapshots[0]['processes'].keys())
+    process_names = list(snapshots[0]['samples'][0].keys())
     epochs = [s['epoch'] for s in snapshots]
+    n_samples = snapshots[0]['n_samples']
+
+    # Sample colors and markers
+    sample_colors = ['#1f77b4', '#ff7f0e', '#2ca02c']  # Blue, Orange, Green
+    sample_markers = ['o', 's', '^']  # Circle, Square, Triangle
+    sample_labels = ['Sample 1 (seed=42)', 'Sample 2 (seed=123)', 'Sample 3 (seed=456)']
 
     # Get input/output dimensions for each process
     total_input_plots = 0
@@ -603,7 +647,7 @@ def plot_training_progression(progression_path, save_path=None):
         process_dims[process_name] = {'n_inputs': n_inputs}
         total_input_plots += n_inputs
 
-    # Create figure with subplots (one plot per controllable input dimension)
+    # Create figure with subplots
     fig, axes = plt.subplots(total_input_plots, 1, figsize=(12, 4 * total_input_plots))
     if total_input_plots == 1:
         axes = [axes]
@@ -614,44 +658,54 @@ def plot_training_progression(progression_path, save_path=None):
         config = get_process_by_name(process_name)
         n_inputs = process_dims[process_name]['n_inputs']
 
-        # Plot each input dimension
         for input_idx in range(n_inputs):
             ax = axes[plot_idx]
             input_label = config['input_labels'][input_idx] if input_idx < len(config['input_labels']) else f'Input {input_idx}'
 
-            # Collect mean input values across all epochs
-            actual_values = []
+            # Plot each sample separately
+            for sample_idx in range(n_samples):
+                sample_values = []
+
+                for snapshot in snapshots:
+                    if sample_idx < len(snapshot['samples']):
+                        process_data = snapshot['samples'][sample_idx].get(process_name, {})
+                        if 'inputs' in process_data:
+                            inputs = process_data['inputs']
+                            if len(inputs.shape) == 2:
+                                val = inputs[:, input_idx]
+                            else:
+                                val = inputs[0, :, input_idx]
+                            sample_values.append(np.mean(val))
+                        else:
+                            sample_values.append(np.nan)
+                    else:
+                        sample_values.append(np.nan)
+
+                color = sample_colors[sample_idx % len(sample_colors)]
+                marker = sample_markers[sample_idx % len(sample_markers)]
+                label = sample_labels[sample_idx] if sample_idx < len(sample_labels) else f'Sample {sample_idx+1}'
+
+                ax.plot(epochs, sample_values, marker=marker, linestyle='-', color=color,
+                       label=label, linewidth=2, markersize=6, alpha=0.8)
+
+            # Plot target value as horizontal line
             target_values = []
-
             for snapshot in snapshots:
-                process_data = snapshot['processes'][process_name]
+                process_data = snapshot['samples'][0].get(process_name, {})
+                if 'target_inputs' in process_data:
+                    target_inputs = process_data['target_inputs']
+                    if len(target_inputs.shape) == 2:
+                        val = target_inputs[:, input_idx]
+                    else:
+                        val = target_inputs[0, :, input_idx]
+                    target_values.append(np.mean(val))
 
-                # Get actual inputs
-                if len(process_data['inputs'].shape) == 2:
-                    inputs = process_data['inputs'][:, input_idx]
-                else:
-                    inputs = process_data['inputs'][0, :, input_idx]
+            if target_values:
+                target_mean = np.mean(target_values)
+                ax.axhline(y=target_mean, color='gray', linestyle='--',
+                          linewidth=2.5, alpha=0.7, label=f'Target ({target_mean:.3f})')
 
-                # Get target inputs
-                if len(process_data['target_inputs'].shape) == 2:
-                    target_inputs = process_data['target_inputs'][:, input_idx]
-                else:
-                    target_inputs = process_data['target_inputs'][0, :, input_idx]
-
-                # Average across sequence
-                actual_values.append(np.mean(inputs))
-                target_values.append(np.mean(target_inputs))
-
-            # Plot actual values evolution
-            ax.plot(epochs, actual_values, 'o-', color='blue', label='Actual',
-                   linewidth=2.5, markersize=7, alpha=0.8)
-
-            # Plot target value as horizontal line (should be constant)
-            target_mean = np.mean(target_values)
-            ax.axhline(y=target_mean, color='green', linestyle='--',
-                      linewidth=2, alpha=0.7, label=f'Target ({target_mean:.3f})')
-
-            # Mark warmup end if applicable
+            # Mark warmup end
             if snapshots[0]['phase'] == 'warmup':
                 for i, snapshot in enumerate(snapshots):
                     if snapshot['phase'] == 'curriculum':
@@ -664,9 +718,9 @@ def plot_training_progression(progression_path, save_path=None):
             ax.grid(True, alpha=0.3)
             ax.legend(fontsize=9, loc='best')
 
-            # Add title with F progression
-            F_start = snapshots[0]['F_actual']
-            F_end = snapshots[-1]['F_actual']
+            # Title with F progression (mean across samples)
+            F_start = np.mean(snapshots[0]['F_actuals'])
+            F_end = np.mean(snapshots[-1]['F_actuals'])
             F_star = snapshots[0]['F_star']
             ax.set_title(f"F: {F_start:.4f} → {F_end:.4f} (F*={F_star:.4f})", fontsize=10)
 
