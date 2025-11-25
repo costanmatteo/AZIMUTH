@@ -237,6 +237,9 @@ class ControllerTrainer:
         """
         Save snapshot of generated inputs/outputs at key epochs for progression visualization.
 
+        Uses 3 fixed random seeds to generate consistent samples across epochs,
+        allowing tracking of how the same samples evolve during training.
+
         Args:
             epoch (int): Current epoch number
             lambda_bc (float): Current lambda_bc value
@@ -248,16 +251,27 @@ class ControllerTrainer:
         # Use first scenario as representative
         representative_scenario_idx = 0
 
-        with torch.no_grad():
-            # Generate trajectory for representative scenario
-            trajectory = self.process_chain.forward(
-                batch_size=1,
-                scenario_idx=representative_scenario_idx
-            )
+        # Fixed seeds for reproducible samples across epochs
+        fixed_seeds = [42, 123, 456]
 
-            # Convert to numpy for storage
+        with torch.no_grad():
             from controller_optimization.src.utils.metrics import convert_trajectory_to_numpy
-            trajectory_np = convert_trajectory_to_numpy(trajectory)
+
+            # Generate 3 trajectories with fixed seeds
+            trajectories_np = []
+            F_actuals = []
+
+            for seed in fixed_seeds:
+                # Set seed for reproducibility
+                torch.manual_seed(seed)
+
+                trajectory = self.process_chain.forward(
+                    batch_size=1,
+                    scenario_idx=representative_scenario_idx
+                )
+
+                trajectories_np.append(convert_trajectory_to_numpy(trajectory))
+                F_actuals.append(self.surrogate.compute_reliability(trajectory).item())
 
             # Also get target trajectory for this scenario
             target_trajectory_np = {}
@@ -267,21 +281,22 @@ class ControllerTrainer:
                     'outputs': data['outputs'][representative_scenario_idx:representative_scenario_idx+1].cpu().numpy()
                 }
 
-            # Compute F for this snapshot
-            F_actual = self.surrogate.compute_reliability(trajectory).item()
             F_star = self.surrogate.F_star[representative_scenario_idx]
 
-            # Save snapshot
+            # Save snapshot with all 3 samples
             snapshot = {
                 'epoch': epoch,
                 'phase': phase,
                 'lambda_bc': lambda_bc,
                 'reliability_weight': reliability_weight,
-                'trajectory': trajectory_np,
+                'trajectories': trajectories_np,  # List of 3 trajectories
+                'trajectory': trajectories_np[0],  # Keep first for backward compatibility
                 'target_trajectory': target_trajectory_np,
-                'F_actual': F_actual,
+                'F_actuals': F_actuals,  # List of 3 F values
+                'F_actual': F_actuals[0],  # Keep first for backward compatibility
                 'F_star': F_star,
-                'scenario_idx': representative_scenario_idx
+                'scenario_idx': representative_scenario_idx,
+                'seeds': fixed_seeds
             }
 
             self.training_progression.append(snapshot)
@@ -633,15 +648,32 @@ class ControllerTrainer:
                 progression_data[f'{prefix}_phase'] = snapshot['phase']
                 progression_data[f'{prefix}_lambda_bc'] = snapshot['lambda_bc']
                 progression_data[f'{prefix}_reliability_weight'] = snapshot['reliability_weight']
-                progression_data[f'{prefix}_F_actual'] = snapshot['F_actual']
                 progression_data[f'{prefix}_F_star'] = snapshot['F_star']
 
-                # Save inputs and outputs for each process
-                for process_name in snapshot['trajectory'].keys():
-                    progression_data[f'{prefix}_{process_name}_inputs'] = snapshot['trajectory'][process_name]['inputs']
-                    progression_data[f'{prefix}_{process_name}_outputs'] = snapshot['trajectory'][process_name]['outputs_mean']
+                # Save all 3 samples if available, otherwise fallback to single trajectory
+                trajectories = snapshot.get('trajectories', [snapshot['trajectory']])
+                F_actuals = snapshot.get('F_actuals', [snapshot['F_actual']])
+                seeds = snapshot.get('seeds', [0])
+
+                progression_data[f'{prefix}_n_samples'] = len(trajectories)
+                progression_data[f'{prefix}_seeds'] = np.array(seeds)
+                progression_data[f'{prefix}_F_actuals'] = np.array(F_actuals)
+                progression_data[f'{prefix}_F_actual'] = F_actuals[0]  # Backward compatibility
+
+                # Save inputs and outputs for each sample and process
+                for sample_idx, traj in enumerate(trajectories):
+                    for process_name in traj.keys():
+                        sample_prefix = f'{prefix}_sample{sample_idx}_{process_name}'
+                        progression_data[f'{sample_prefix}_inputs'] = traj[process_name]['inputs']
+                        progression_data[f'{sample_prefix}_outputs'] = traj[process_name]['outputs_mean']
+
+                # Save target (same for all samples) - backward compatible keys
+                for process_name in snapshot['target_trajectory'].keys():
                     progression_data[f'{prefix}_{process_name}_target_inputs'] = snapshot['target_trajectory'][process_name]['inputs']
                     progression_data[f'{prefix}_{process_name}_target_outputs'] = snapshot['target_trajectory'][process_name]['outputs']
+                    # Also save with sample0 prefix for new format
+                    progression_data[f'{prefix}_sample0_{process_name}_inputs'] = trajectories[0][process_name]['inputs']
+                    progression_data[f'{prefix}_sample0_{process_name}_outputs'] = trajectories[0][process_name]['outputs_mean']
 
             np.savez(progression_path, **progression_data)
 
