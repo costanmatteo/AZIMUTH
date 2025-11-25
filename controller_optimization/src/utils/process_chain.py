@@ -60,6 +60,51 @@ class ProcessChain(nn.Module):
             policy.debug_weights()
 
     @staticmethod
+    def _get_controllable_info(process_config):
+        """
+        Get information about controllable and non-controllable inputs for a process.
+
+        Args:
+            process_config (dict): Process configuration
+
+        Returns:
+            dict: {
+                'controllable_indices': list of indices for controllable inputs,
+                'non_controllable_indices': list of indices for non-controllable inputs,
+                'controllable_labels': list of controllable input names,
+                'non_controllable_labels': list of non-controllable input names,
+                'n_controllable': number of controllable inputs,
+                'n_non_controllable': number of non-controllable inputs,
+            }
+        """
+        from controller_optimization.configs.processes_config import get_controllable_inputs
+
+        input_labels = process_config['input_labels']
+        controllable = get_controllable_inputs(process_config)
+
+        controllable_indices = []
+        non_controllable_indices = []
+        controllable_labels = []
+        non_controllable_labels = []
+
+        for idx, label in enumerate(input_labels):
+            if label in controllable:
+                controllable_indices.append(idx)
+                controllable_labels.append(label)
+            else:
+                non_controllable_indices.append(idx)
+                non_controllable_labels.append(label)
+
+        return {
+            'controllable_indices': controllable_indices,
+            'non_controllable_indices': non_controllable_indices,
+            'controllable_labels': controllable_labels,
+            'non_controllable_labels': non_controllable_labels,
+            'n_controllable': len(controllable_indices),
+            'n_non_controllable': len(non_controllable_indices),
+        }
+
+    @staticmethod
     def _count_structural_params(processes_config):
         """
         Conta il numero totale di parametri strutturali (non-controllabili) in tutti i processi.
@@ -70,15 +115,10 @@ class ProcessChain(nn.Module):
         Returns:
             int: Numero totale di parametri strutturali
         """
-        from controller_optimization.configs.processes_config import get_controllable_inputs
-
         total = 0
         for process_config in processes_config:
-            input_labels = process_config['input_labels']
-            controllable = get_controllable_inputs(process_config)
-            # Count non-controllable inputs
-            n_non_controllable = len([label for label in input_labels if label not in controllable])
-            total += n_non_controllable
+            info = ProcessChain._get_controllable_info(process_config)
+            total += info['n_non_controllable']
 
         return total
 
@@ -92,22 +132,18 @@ class ProcessChain(nn.Module):
         Returns:
             torch.Tensor: Parametri strutturali, shape (n_structural_params,)
         """
-        from controller_optimization.configs.processes_config import get_controllable_inputs
-
         structural_values = []
 
         for i, process_config in enumerate(self.processes_config):
             process_name = process_config['name']
-            input_labels = process_config['input_labels']
-            controllable = get_controllable_inputs(process_config)
+            info = self._get_controllable_info(process_config)
 
             # Get target inputs for this scenario
             target_inputs = self.target_trajectory[process_name]['inputs'][scenario_idx]
 
-            # Extract non-controllable values
-            for idx, label in enumerate(input_labels):
-                if label not in controllable:
-                    structural_values.append(target_inputs[idx])
+            # Extract non-controllable values using indices
+            for idx in info['non_controllable_indices']:
+                structural_values.append(target_inputs[idx])
 
         if len(structural_values) == 0:
             # No structural params → return dummy zero tensor
@@ -196,56 +232,81 @@ class ProcessChain(nn.Module):
             print(f"  Scenario encoder: disabled")
 
         # Create policy generators (trainable)
-        # Policy i generates inputs for process i+1 based on outputs of process i
+        # Policy i generates ONLY CONTROLLABLE inputs for process i+1 based on outputs of process i
         self.policy_generators = nn.ModuleList()
+        self.controllable_info_per_process = []  # Store controllable info for each process
+
+        # Pre-compute controllable info for all processes
+        for process_config in processes_config:
+            info = self._get_controllable_info(process_config)
+            self.controllable_info_per_process.append(info)
 
         for i in range(len(processes_config) - 1):
-            # Input to policy: [prev_inputs, prev_outputs_mean, prev_outputs_var, scenario_embedding]
-            prev_input_dim = processes_config[i]['input_dim']
+            # Input to policy: [prev_outputs_mean, prev_outputs_var, scenario_embedding]
             prev_output_dim = processes_config[i]['output_dim']
-            policy_input_size = prev_output_dim + prev_output_dim #+ prev_input_dim
+            policy_input_size = prev_output_dim + prev_output_dim
 
             # Add scenario embedding dimension if encoder is enabled
             if self.use_scenario_encoder:
                 policy_input_size += self.scenario_embedding_dim
 
-            # Output from policy: next process inputs
-            next_input_dim = processes_config[i + 1]['input_dim']
+            # Output from policy: ONLY controllable inputs for next process
+            next_process_info = self.controllable_info_per_process[i + 1]
+            n_controllable = next_process_info['n_controllable']
 
-            # Get output bounds from next process's preprocessor (derived from UP training data)
+            if n_controllable == 0:
+                raise ValueError(
+                    f"Process '{processes_config[i + 1]['name']}' has no controllable inputs. "
+                    f"Policy generator cannot be created for this process."
+                )
+
+            # Get output bounds ONLY for controllable inputs from next process's preprocessor
             next_preprocessor = self.preprocessors[i + 1]
+            controllable_indices = next_process_info['controllable_indices']
+
             if next_preprocessor.input_min is not None and next_preprocessor.input_max is not None:
-                output_min = torch.tensor(next_preprocessor.input_min, dtype=torch.float32)
-                output_max = torch.tensor(next_preprocessor.input_max, dtype=torch.float32)
-                print(f"  Policy {i} -> Process '{processes_config[i + 1]['name']}' bounds:")
+                # Extract bounds only for controllable inputs
+                output_min = torch.tensor(
+                    [next_preprocessor.input_min[idx] for idx in controllable_indices],
+                    dtype=torch.float32
+                )
+                output_max = torch.tensor(
+                    [next_preprocessor.input_max[idx] for idx in controllable_indices],
+                    dtype=torch.float32
+                )
+                print(f"  Policy {i} -> Process '{processes_config[i + 1]['name']}' (controllable only):")
+                print(f"    Controllable inputs: {next_process_info['controllable_labels']}")
+                print(f"    Non-controllable inputs: {next_process_info['non_controllable_labels']}")
+                print(f"    Output dim: {n_controllable} (was {processes_config[i + 1]['input_dim']})")
                 print(f"    Min: {output_min.numpy()}")
                 print(f"    Max: {output_max.numpy()}")
             else:
                 output_min = None
                 output_max = None
                 print(f"  Policy {i} -> Process '{processes_config[i + 1]['name']}': No bounds (unbounded output)")
+                print(f"    Controllable inputs: {next_process_info['controllable_labels']}")
 
-            # Create policy generator with bounds
+            # Create policy generator with bounds - output size is n_controllable, not full input_dim
             if policy_config['architecture'] == 'small':
                 policy = create_small_policy_generator(
-                    policy_input_size, next_input_dim,
+                    policy_input_size, n_controllable,
                     output_min=output_min, output_max=output_max
                 )
             elif policy_config['architecture'] == 'medium':
                 policy = create_medium_policy_generator(
-                    policy_input_size, next_input_dim,
+                    policy_input_size, n_controllable,
                     output_min=output_min, output_max=output_max
                 )
             elif policy_config['architecture'] == 'large':
                 policy = create_large_policy_generator(
-                    policy_input_size, next_input_dim,
+                    policy_input_size, n_controllable,
                     output_min=output_min, output_max=output_max
                 )
             elif policy_config['architecture'] == 'custom':
                 from controller_optimization.src.models.policy_generator import PolicyGenerator
                 policy = PolicyGenerator(
                     input_size=policy_input_size,
-                    output_size=next_input_dim,
+                    output_size=n_controllable,
                     hidden_sizes=policy_config['hidden_sizes'],
                     dropout_rate=policy_config['dropout'],
                     use_batchnorm=policy_config['use_batchnorm'],
@@ -327,51 +388,53 @@ class ProcessChain(nn.Module):
         scale_squared = torch.tensor(output_scale ** 2, dtype=torch.float32, device=self.device)
         return variance * scale_squared
 
-    def _apply_non_controllable_constraints(self, generated_inputs, process_idx, scenario_idx, batch_size):
+    def _merge_controllable_inputs(self, controllable_outputs, process_idx, scenario_idx, batch_size):
         """
-        Replaces non-controllable inputs with values from target trajectory.
+        Merges controllable inputs from policy with non-controllable inputs from target.
 
-        This ensures that environmental/fixed conditions (e.g., ambient temperature)
-        are inherited from the target scenario, while controllable inputs
-        are generated by the policy network.
+        The policy generator outputs ONLY controllable inputs. This method combines them
+        with non-controllable values from the target trajectory to form the complete
+        input tensor for the process.
 
         Args:
-            generated_inputs: Tensor with all inputs generated by policy generator
-                            Shape: (batch_size, input_dim)
+            controllable_outputs: Tensor with ONLY controllable inputs from policy generator
+                                 Shape: (batch_size, n_controllable)
             process_idx: Index of the current process
             scenario_idx: Index of the scenario (for retrieving target values)
             batch_size: Batch size
 
         Returns:
-            Tensor with controllable inputs from policy, non-controllable from target
+            Tensor with all inputs in correct order
             Shape: (batch_size, input_dim)
         """
-        from controller_optimization.configs.processes_config import get_controllable_inputs
-
         process_name = self.process_names[process_idx]
         process_config = self.processes_config[process_idx]
-        input_labels = process_config['input_labels']
-        controllable = get_controllable_inputs(process_config)
+        info = self.controllable_info_per_process[process_idx]
 
-        # If all inputs are controllable, return as-is (optimization)
-        if len(controllable) == len(input_labels):
-            return generated_inputs
+        input_dim = process_config['input_dim']
+        controllable_indices = info['controllable_indices']
+        non_controllable_indices = info['non_controllable_indices']
 
-        # Clone tensor to avoid modifying the original
-        constrained_inputs = generated_inputs.clone()
+        # If all inputs are controllable, return as-is (no merging needed)
+        if info['n_non_controllable'] == 0:
+            return controllable_outputs
 
-        # Get target inputs for this scenario
+        # Get target inputs for this scenario (for non-controllable values)
         target_inputs_all = self.target_trajectory[process_name]['inputs']
         target_inputs = target_inputs_all[scenario_idx]  # Shape: (input_dim,)
 
-        # Replace non-controllable inputs with target values
-        for idx, label in enumerate(input_labels):
-            if label not in controllable:
-                # This input is NOT controllable -> use value from target
-                target_value = target_inputs[idx]
-                constrained_inputs[:, idx] = target_value  # Broadcast to batch
+        # Create full input tensor
+        full_inputs = torch.zeros(batch_size, input_dim, dtype=torch.float32, device=self.device)
 
-        return constrained_inputs
+        # Place controllable outputs in their correct positions
+        for out_idx, input_idx in enumerate(controllable_indices):
+            full_inputs[:, input_idx] = controllable_outputs[:, out_idx]
+
+        # Place non-controllable values from target in their positions
+        for input_idx in non_controllable_indices:
+            full_inputs[:, input_idx] = target_inputs[input_idx]
+
+        return full_inputs
 
     def forward(self, batch_size=1, scenario_idx=0):
         """
@@ -450,28 +513,29 @@ class ProcessChain(nn.Module):
                     print(f"      mean={policy_input.mean().item():.6f}, std={policy_input.std().item():.6f}")
                     print(f"      min={policy_input.min().item():.6f}, max={policy_input.max().item():.6f}")
 
-                generated_inputs = self.policy_generators[i - 1](policy_input)
+                # Policy outputs ONLY controllable inputs
+                controllable_outputs = self.policy_generators[i - 1](policy_input)
+                process_info = self.controllable_info_per_process[i]
 
                 if ProcessChain.debug:
-                    print(f"\n[2] GENERATED INPUTS (before constraints):")
-                    for dim_idx in range(generated_inputs.shape[1]):
-                        label = self.processes_config[i]['input_labels'][dim_idx]
-                        vals = generated_inputs[:, dim_idx]
+                    print(f"\n[2] POLICY OUTPUT (controllable inputs only):")
+                    for dim_idx, label in enumerate(process_info['controllable_labels']):
+                        vals = controllable_outputs[:, dim_idx]
                         print(f"      {label}: mean={vals.mean().item():.6f}, std={vals.std().item():.6f}, min={vals.min().item():.6f}, max={vals.max().item():.6f}")
-                    print(f"      Sample (first batch): {generated_inputs[0].tolist()}")
+                    print(f"      Sample (first batch): {controllable_outputs[0].tolist()}")
 
-                # Apply non-controllable constraints: replace non-controllable inputs
-                # with values from target trajectory (e.g., Temperature for microetch)
-                current_inputs = self._apply_non_controllable_constraints(
-                    generated_inputs, i, scenario_idx, batch_size
+                # Merge controllable outputs with non-controllable values from target
+                current_inputs = self._merge_controllable_inputs(
+                    controllable_outputs, i, scenario_idx, batch_size
                 )
 
                 if ProcessChain.debug:
-                    print(f"\n[3] CURRENT INPUTS (after constraints):")
+                    print(f"\n[3] MERGED INPUTS (controllable + non-controllable from target):")
                     for dim_idx in range(current_inputs.shape[1]):
                         label = self.processes_config[i]['input_labels'][dim_idx]
+                        source = "policy" if dim_idx in process_info['controllable_indices'] else "target"
                         vals = current_inputs[:, dim_idx]
-                        print(f"      {label}: mean={vals.mean().item():.6f}, std={vals.std().item():.6f}, min={vals.min().item():.6f}, max={vals.max().item():.6f}")
+                        print(f"      {label} [{source}]: mean={vals.mean().item():.6f}, std={vals.std().item():.6f}, min={vals.min().item():.6f}, max={vals.max().item():.6f}")
                     print(f"      Sample (first batch): {current_inputs[0].tolist()}")
 
             # 2. Scale inputs
