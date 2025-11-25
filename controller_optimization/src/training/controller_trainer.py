@@ -257,6 +257,9 @@ class ControllerTrainer:
         with torch.no_grad():
             from controller_optimization.src.utils.metrics import convert_trajectory_to_numpy
 
+            # Save random state before setting seeds (to restore after)
+            rng_state = torch.get_rng_state()
+
             # Generate 3 trajectories with fixed seeds
             trajectories_np = []
             F_actuals = []
@@ -272,6 +275,9 @@ class ControllerTrainer:
 
                 trajectories_np.append(convert_trajectory_to_numpy(trajectory))
                 F_actuals.append(self.surrogate.compute_reliability(trajectory).item())
+
+            # Restore random state so training is not affected
+            torch.set_rng_state(rng_state)
 
             # Also get target trajectory for this scenario
             target_trajectory_np = {}
