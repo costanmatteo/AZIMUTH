@@ -103,7 +103,7 @@ CONTROLLER_CONFIG = {
     'training': {
         'epochs': 800,  # Each epoch cycles through all training scenarios once
         'batch_size': 64,  # Replicas per scenario (same inputs, different dropout/stochasticity)
-        'learning_rate': 0.000001,
+        'learning_rate': 0.0001,  # Increased from 1e-6 for meaningful updates
         'weight_decay': 0.001,
         'lambda_bc': 0.001,  # Behavior cloning weight
         'reliability_loss_scale': 100.0,  # Scale factor for reliability loss (F - F*)^2
@@ -136,8 +136,8 @@ CONTROLLER_CONFIG = {
             'enabled': True,  # Enable curriculum learning strategy
             'warmup_fraction': 0.1,  # First 10% of epochs = warm-up (BC only)
             'lambda_bc_start': 10.0,  # High BC weight during warm-up
-            'lambda_bc_end': 0.001,  # Low BC weight at end of training
-            'reliability_weight_curve': 'exponential',  # 'exponential', 'linear', 'sigmoid'
+            'lambda_bc_end': 0.1,  # Keep some BC weight for stability (was 0.001)
+            'reliability_weight_curve': 'sigmoid',  # Slower transition than exponential
         },
     },
 
