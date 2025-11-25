@@ -260,6 +260,7 @@ def main():
 
     # Enable gradient debugging for first epoch
     trainer._debug_gradients = True
+    trainer._debug_bc_loss = True
 
     # 6. Training
     print("\n[6/9] Starting training...")

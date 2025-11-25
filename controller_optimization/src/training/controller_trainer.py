@@ -330,6 +330,17 @@ class ControllerTrainer:
             actual_inputs_norm = (actual_inputs - stats['min']) / stats['range']
             target_inputs_norm = (target_inputs_scenario - stats['min']) / stats['range']
 
+            # DEBUG: Print BC loss details on first call
+            if hasattr(self, '_debug_bc_loss') and self._debug_bc_loss:
+                print(f"\n  BC Loss Debug [{process_name}]:")
+                print(f"    actual_inputs (raw): {actual_inputs[0].tolist()}")
+                print(f"    target_inputs (raw): {target_inputs_scenario[0].tolist()}")
+                print(f"    stats['min']: {stats['min'].tolist()}")
+                print(f"    stats['range']: {stats['range'].tolist()}")
+                print(f"    actual_inputs_norm: {actual_inputs_norm[0].tolist()}")
+                print(f"    target_inputs_norm: {target_inputs_norm[0].tolist()}")
+                print(f"    MSE per dim: {((actual_inputs_norm - target_inputs_norm) ** 2).mean(dim=0).tolist()}")
+
             # Compute MSE on normalized inputs
             bc_loss = bc_loss + torch.mean((actual_inputs_norm - target_inputs_norm) ** 2)
 
@@ -508,6 +519,7 @@ class ControllerTrainer:
                 from controller_optimization.src.utils.process_chain import ProcessChain
                 ProcessChain.enable_debug(False)
                 self._debug_gradients = False  # Also disable gradient debug
+                self._debug_bc_loss = False  # Also disable BC loss debug
 
             # Get dynamic loss weights for curriculum learning
             lambda_bc, reliability_weight, phase = self.get_loss_weights(epoch, epochs)
