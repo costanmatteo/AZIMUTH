@@ -286,43 +286,40 @@ class ProcessChain(nn.Module):
         return torch.tensor(initial_inputs, dtype=torch.float32, device=self.device)
 
     def scale_inputs(self, inputs, process_idx):
-        """Scale inputs using preprocessor."""
-        inputs_np = inputs.detach().cpu().numpy()
-        inputs_scaled = self.preprocessors[process_idx].input_scaler.transform(inputs_np)
-        return torch.tensor(inputs_scaled, dtype=torch.float32, device=self.device)
+        """
+        Scale inputs using preprocessor (DIFFERENTIABLE VERSION).
+
+        Uses PyTorch operations to maintain gradient flow.
+        For StandardScaler: scaled = (x - mean) / scale
+        """
+        scaler = self.preprocessors[process_idx].input_scaler
+
+        # Get scaler parameters as tensors (on same device as inputs)
+        mean = torch.tensor(scaler.mean_, dtype=torch.float32, device=self.device)
+        scale = torch.tensor(scaler.scale_, dtype=torch.float32, device=self.device)
+
+        # Differentiable scaling
+        inputs_scaled = (inputs - mean) / scale
+
+        return inputs_scaled
 
     def unscale_outputs(self, outputs, process_idx):
-        """Unscale outputs using preprocessor."""
-        outputs_np = outputs.detach().cpu().numpy()
-        outputs_unscaled = self.preprocessors[process_idx].output_scaler.inverse_transform(outputs_np)
+        """
+        Unscale outputs using preprocessor (DIFFERENTIABLE VERSION).
 
-        
+        Uses PyTorch operations to maintain gradient flow.
+        For StandardScaler: unscaled = x * scale + mean
+        """
+        scaler = self.preprocessors[process_idx].output_scaler
 
+        # Get scaler parameters as tensors (on same device as outputs)
+        mean = torch.tensor(scaler.mean_, dtype=torch.float32, device=self.device)
+        scale = torch.tensor(scaler.scale_, dtype=torch.float32, device=self.device)
 
-        # DEBUG
-        if process_idx == 'microetch':
-            print(f"\n=== UNSCALE OUTPUTS: {process_idx} ===")
-            print(f"Scaled outputs (from model): {outputs_np}")
-            print(f"Scaler type: {type(self.preprocessors[process_idx].output_scaler)}")
-            print(f"Scaler mean_: {self.preprocessors[process_idx].output_scaler.mean_}")
-            print(f"Scaler scale_: {self.preprocessors[process_idx].output_scaler.scale_}")
-    
-        outputs_unscaled = self.preprocessors[process_idx].output_scaler.inverse_transform(outputs_np)
-    
-        if process_idx == 'microetch':
-            print(f"Unscaled outputs: {outputs_unscaled}")
-            print(f"Expected range: 0-40")
-            print("=" * 50)
+        # Differentiable unscaling
+        outputs_unscaled = outputs * scale + mean
 
-
-
-
-
-
-
-
-
-        return torch.tensor(outputs_unscaled, dtype=torch.float32, device=self.device)
+        return outputs_unscaled
 
     def unscale_variance(self, variance, process_idx):
         """Unscale variance (variance scales with scale^2)."""
