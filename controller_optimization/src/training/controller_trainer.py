@@ -102,25 +102,28 @@ class ControllerTrainer:
 
     def _compute_normalization_stats(self):
         """
-        Compute normalization statistics (min, max) for each process's inputs
-        from the target trajectories to scale BC loss to [0,1] range.
+        Compute normalization statistics (min, max) for each process's inputs.
+        Uses the SAME ranges as ProcessChain denormalization (from uncertainty predictor)
+        to ensure consistent normalization throughout training.
         """
         self.input_stats = {}
 
-        for process_name, data in self.surrogate.target_trajectory_tensors.items():
-            inputs = data['inputs']  # Shape: (n_scenarios, seq_len, input_dim)
+        # Use ProcessChain's input_ranges (from uncertainty predictor)
+        # instead of computing from target_trajectory
+        for process_idx, process_name in enumerate(self.process_chain.process_names):
+            ranges = self.process_chain.input_ranges[process_idx]
 
-            # Compute min and max across all scenarios and timesteps
-            # Add small epsilon to avoid division by zero
-            input_min = inputs.min(dim=0)[0].min(dim=0)[0]  # Shape: (input_dim,)
-            input_max = inputs.max(dim=0)[0].max(dim=0)[0]  # Shape: (input_dim,)
+            # Convert numpy arrays to tensors
+            input_min = torch.tensor(ranges['min'], dtype=torch.float32, device=self.device)
+            input_max = torch.tensor(ranges['max'], dtype=torch.float32, device=self.device)
             input_range = input_max - input_min + 1e-8  # Avoid division by zero
 
             self.input_stats[process_name] = {
-                'min': input_min.to(self.device),
-                'range': input_range.to(self.device)
+                'min': input_min,
+                'range': input_range
             }
 
+        print(f"  BC loss normalization: using ProcessChain input_ranges (uncertainty predictor)")
         print(f"  Input normalization stats computed for {len(self.input_stats)} processes")
 
     def get_loss_weights(self, epoch, total_epochs):
