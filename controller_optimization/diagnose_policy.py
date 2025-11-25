@@ -29,8 +29,9 @@ from controller_optimization.configs.processes_config import PROCESSES
 
 def diagnose_policy(checkpoint_dir: str):
     """Run diagnostics on a trained policy."""
+    import os
 
-    checkpoint_dir = Path(checkpoint_dir)
+    checkpoint_dir = Path(checkpoint_dir).resolve()
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     print(f"\n{'='*70}")
@@ -39,18 +40,26 @@ def diagnose_policy(checkpoint_dir: str):
     print(f"Checkpoint: {checkpoint_dir}")
     print(f"Device: {device}")
 
+    # Change to controller_optimization directory so relative checkpoint paths work
+    original_dir = os.getcwd()
+    os.chdir(script_dir)
+    print(f"Working directory: {os.getcwd()}")
+
     # Load process chain
     print("\n[1] Loading trained model...")
 
-    # Generate target trajectory (needed to initialize ProcessChain)
-    target_trajectory = generate_target_trajectory(PROCESSES)
+    try:
+        # Generate target trajectory (needed to initialize ProcessChain)
+        target_trajectory = generate_target_trajectory(PROCESSES)
 
-    # Create ProcessChain
-    process_chain = ProcessChain(
-        processes_config=PROCESSES,
-        target_trajectory=target_trajectory,
-        device=device
-    )
+        # Create ProcessChain
+        process_chain = ProcessChain(
+            processes_config=PROCESSES,
+            target_trajectory=target_trajectory,
+            device=device
+        )
+    finally:
+        os.chdir(original_dir)  # Restore original directory
 
     # Load trained weights
     chain_path = checkpoint_dir / 'process_chain.pth'
