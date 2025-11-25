@@ -12,7 +12,14 @@ Checks:
 import argparse
 import torch
 import numpy as np
+import sys
 from pathlib import Path
+
+# Add parent directory to path for imports
+script_dir = Path(__file__).resolve().parent
+project_root = script_dir.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
 
 from controller_optimization.src.utils.process_chain import ProcessChain
 from controller_optimization.src.models.surrogate import ProTSurrogate
