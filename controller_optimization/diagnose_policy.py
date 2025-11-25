@@ -61,15 +61,26 @@ def diagnose_policy(checkpoint_dir: str):
     finally:
         os.chdir(original_dir)  # Restore original directory
 
-    # Load trained weights
+    # Load trained weights - try multiple formats
     chain_path = checkpoint_dir / 'process_chain.pth'
     if chain_path.exists():
-        state_dict = torch.load(chain_path, map_location=device)
+        state_dict = torch.load(chain_path, map_location=device, weights_only=False)
         process_chain.load_state_dict(state_dict)
         print(f"  Loaded weights from {chain_path}")
     else:
-        print(f"  ERROR: No checkpoint found at {chain_path}")
-        return
+        # Try loading individual policy files (policy_0.pth, policy_1.pth, etc.)
+        policy_files = sorted(checkpoint_dir.glob('policy_*.pth'))
+        if policy_files:
+            print(f"  Found {len(policy_files)} policy files")
+            for i, policy_path in enumerate(policy_files):
+                if i < len(process_chain.policy_generators):
+                    state_dict = torch.load(policy_path, map_location=device, weights_only=False)
+                    process_chain.policy_generators[i].load_state_dict(state_dict)
+                    print(f"    Loaded {policy_path.name} -> policy_generator[{i}]")
+        else:
+            print(f"  ERROR: No checkpoint found at {checkpoint_dir}")
+            print(f"  Expected: process_chain.pth or policy_*.pth files")
+            return
 
     process_chain.eval()
 
