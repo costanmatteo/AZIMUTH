@@ -95,29 +95,31 @@ def diagnose_policy(checkpoint_dir: str):
 
                     # Get bounds from current policy generator (truncate to match output_size)
                     old_policy = process_chain.policy_generators[i]
-                    output_min = old_policy.output_min[:output_size] if old_policy.output_min is not None else None
-                    output_max = old_policy.output_max[:output_size] if old_policy.output_max is not None else None
+                    output_min = old_policy.output_min[:output_size].clone() if old_policy.output_min is not None else None
+                    output_max = old_policy.output_max[:output_size].clone() if old_policy.output_max is not None else None
 
-                    # Create new policy with correct architecture
+                    # Create new policy WITHOUT bounds first
                     new_policy = PolicyGenerator(
                         input_size=input_size,
                         hidden_sizes=hidden_sizes,
                         output_size=output_size,
-                        output_min=output_min,
-                        output_max=output_max,
+                        output_min=None,
+                        output_max=None,
                         dropout_rate=0.1,
                         use_batchnorm=False
                     ).to(device)
 
-                    # Load with strict=False to allow missing output_min/output_max buffers
+                    # Load weights
                     new_policy.load_state_dict(state_dict, strict=False)
-                    # Set bounds after loading using register_buffer to ensure proper registration
-                    if output_min is not None:
-                        new_policy.register_buffer('output_min', output_min.clone())
-                    if output_max is not None:
-                        new_policy.register_buffer('output_max', output_max.clone())
+
+                    # Now set bounds with correct dimensions
+                    if output_min is not None and output_max is not None:
+                        new_policy.set_bounds(output_min, output_max)
+                        print(f"    Loaded {policy_path.name} -> policy_generator[{i}] (bounds: {new_policy.output_min.shape})")
+                    else:
+                        print(f"    Loaded {policy_path.name} -> policy_generator[{i}] (no bounds)")
+
                     process_chain.policy_generators[i] = new_policy
-                    print(f"    Loaded {policy_path.name} -> policy_generator[{i}] (bounds: {output_min.shape if output_min is not None else None})")
         else:
             print(f"  ERROR: No checkpoint found at {checkpoint_dir}")
             print(f"  Expected: process_chain.pth or policy_*.pth files")
