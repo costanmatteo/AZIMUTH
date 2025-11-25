@@ -23,6 +23,7 @@ from controller_optimization.src.utils.model_utils import (
     load_preprocessor
 )
 from controller_optimization.src.models.policy_generator import (
+    PolicyGenerator,
     create_small_policy_generator,
     create_medium_policy_generator,
     create_large_policy_generator
@@ -37,6 +38,26 @@ class ProcessChain(nn.Module):
     Sequenza:
     a1 (fisso) → UncertPred1 → (o1, σ1²) → Policy1 → a2 → UncertPred2 → (o2, σ2²) → ...
     """
+
+    # Class-level debug flag
+    debug = False
+
+    @classmethod
+    def enable_debug(cls, enable=True):
+        """Enable/disable debug mode for ProcessChain and all PolicyGenerators."""
+        cls.debug = enable
+        PolicyGenerator.debug = enable
+        print(f"Debug mode {'ENABLED' if enable else 'DISABLED'} for ProcessChain and PolicyGenerator")
+
+    def debug_all_gradients(self):
+        """Print gradient statistics for all policy generators."""
+        for i, policy in enumerate(self.policy_generators):
+            policy.debug_gradients()
+
+    def debug_all_weights(self):
+        """Print weight statistics for all policy generators."""
+        for i, policy in enumerate(self.policy_generators):
+            policy.debug_weights()
 
     @staticmethod
     def _count_structural_params(processes_config):
@@ -235,6 +256,8 @@ class ProcessChain(nn.Module):
                 raise ValueError(f"Unknown policy architecture: {policy_config['architecture']}")
 
             policy = policy.to(device)
+            # Set debug name for this policy generator
+            policy.debug_name = f"{processes_config[i]['name']}->{processes_config[i + 1]['name']}"
             self.policy_generators.append(policy)
 
     def get_initial_inputs(self, batch_size=1, scenario_idx=None):
@@ -410,11 +433,39 @@ class ProcessChain(nn.Module):
 
                 generated_inputs = self.policy_generators[i - 1](policy_input)
 
+                # Debug: print policy generator input/output
+                if ProcessChain.debug:
+                    with torch.no_grad():
+                        print(f"\n{'#'*70}")
+                        print(f"# PROCESS CHAIN DEBUG: {self.process_names[i-1]} -> {process_name}")
+                        print(f"{'#'*70}")
+                        print(f"Policy input (prev_outputs_mean):")
+                        print(f"  mean={prev_outputs_mean.mean().item():.4f}, std={prev_outputs_mean.std().item():.4f}")
+                        print(f"  min={prev_outputs_mean.min().item():.4f}, max={prev_outputs_mean.max().item():.4f}")
+                        print(f"Policy input (prev_outputs_var):")
+                        print(f"  mean={prev_outputs_var.mean().item():.4f}, std={prev_outputs_var.std().item():.4f}")
+                        print(f"Generated inputs (before constraints):")
+                        for dim_idx in range(generated_inputs.shape[1]):
+                            label = self.processes_config[i]['input_labels'][dim_idx]
+                            print(f"  {label}: mean={generated_inputs[:, dim_idx].mean().item():.4f}, "
+                                  f"min={generated_inputs[:, dim_idx].min().item():.4f}, "
+                                  f"max={generated_inputs[:, dim_idx].max().item():.4f}")
+
                 # Apply non-controllable constraints: replace non-controllable inputs
                 # with values from target trajectory (e.g., Temperature for microetch)
                 current_inputs = self._apply_non_controllable_constraints(
                     generated_inputs, i, scenario_idx, batch_size
                 )
+
+                # Debug: print after constraints
+                if ProcessChain.debug:
+                    with torch.no_grad():
+                        print(f"Current inputs (after constraints):")
+                        for dim_idx in range(current_inputs.shape[1]):
+                            label = self.processes_config[i]['input_labels'][dim_idx]
+                            print(f"  {label}: mean={current_inputs[:, dim_idx].mean().item():.4f}, "
+                                  f"min={current_inputs[:, dim_idx].min().item():.4f}, "
+                                  f"max={current_inputs[:, dim_idx].max().item():.4f}")
 
             # 2. Scale inputs
             scaled_inputs = self.scale_inputs(current_inputs, i)
