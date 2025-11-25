@@ -95,6 +95,13 @@ def load_preprocessor(scaler_path):
     with open(scaler_path, 'rb') as f:
         preprocessor = pickle.load(f)
 
+    # Backward compatibility: ensure input_min and input_max attributes exist
+    # Old saved preprocessors may not have these attributes
+    if not hasattr(preprocessor, 'input_min'):
+        preprocessor.input_min = None
+    if not hasattr(preprocessor, 'input_max'):
+        preprocessor.input_max = None
+
     return preprocessor
 
 

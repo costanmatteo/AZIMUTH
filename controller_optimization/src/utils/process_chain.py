@@ -397,13 +397,16 @@ class ProcessChain(nn.Module):
             }
         """
 
-
-
-
         trajectory = {}
 
         # a1 è fisso dalla target trajectory (per lo scenario specifico)
         current_inputs = self.get_initial_inputs(batch_size, scenario_idx)
+
+        if ProcessChain.debug:
+            print(f"\n{'='*80}")
+            print(f"PROCESS CHAIN FORWARD PASS - Scenario {scenario_idx}, Batch {batch_size}")
+            print(f"{'='*80}")
+            print(f"Initial inputs (laser): {current_inputs[0].tolist()}")
 
         # Extract and encode scenario structural parameters (if encoder is enabled)
         if self.use_scenario_encoder:
@@ -412,12 +415,26 @@ class ProcessChain(nn.Module):
             structural_params = structural_params.unsqueeze(0).repeat(batch_size, 1)  # (batch_size, n_params)
             # Encode to embedding
             scenario_embedding = self.scenario_encoder(structural_params)  # (batch_size, embedding_dim)
+            if ProcessChain.debug:
+                print(f"Scenario embedding: mean={scenario_embedding.mean().item():.4f}, std={scenario_embedding.std().item():.4f}")
         else:
             scenario_embedding = None
 
         for i, process_name in enumerate(self.process_names):
+            if ProcessChain.debug:
+                print(f"\n{'-'*80}")
+                print(f"STEP {i}: Process '{process_name}'")
+                print(f"{'-'*80}")
+
             # 1. Se i > 0: policy generator produce inputs
             if i > 0:
+                if ProcessChain.debug:
+                    print(f"\n[1] POLICY GENERATOR {i-1}: {self.process_names[i-1]} -> {process_name}")
+                    print(f"    Policy input components:")
+                    print(f"      prev_outputs_mean: shape={prev_outputs_mean.shape}, mean={prev_outputs_mean.mean().item():.6f}, std={prev_outputs_mean.std().item():.6f}")
+                    print(f"      prev_outputs_var: shape={prev_outputs_var.shape}, mean={prev_outputs_var.mean().item():.6f}, std={prev_outputs_var.std().item():.6f}")
+                    print(f"      Sample values (first batch): prev_mean={prev_outputs_mean[0].tolist()}, prev_var={prev_outputs_var[0].tolist()}")
+
                 # Concatenate: [prev_inputs, prev_outputs_mean, prev_outputs_var, scenario_embedding]
                 policy_input_parts = [
                    # prev_inputs,
@@ -431,25 +448,20 @@ class ProcessChain(nn.Module):
 
                 policy_input = torch.cat(policy_input_parts, dim=1)
 
+                if ProcessChain.debug:
+                    print(f"    Concatenated policy_input: shape={policy_input.shape}")
+                    print(f"      mean={policy_input.mean().item():.6f}, std={policy_input.std().item():.6f}")
+                    print(f"      min={policy_input.min().item():.6f}, max={policy_input.max().item():.6f}")
+
                 generated_inputs = self.policy_generators[i - 1](policy_input)
 
-                # Debug: print policy generator input/output
                 if ProcessChain.debug:
-                    with torch.no_grad():
-                        print(f"\n{'#'*70}")
-                        print(f"# PROCESS CHAIN DEBUG: {self.process_names[i-1]} -> {process_name}")
-                        print(f"{'#'*70}")
-                        print(f"Policy input (prev_outputs_mean):")
-                        print(f"  mean={prev_outputs_mean.mean().item():.4f}, std={prev_outputs_mean.std().item():.4f}")
-                        print(f"  min={prev_outputs_mean.min().item():.4f}, max={prev_outputs_mean.max().item():.4f}")
-                        print(f"Policy input (prev_outputs_var):")
-                        print(f"  mean={prev_outputs_var.mean().item():.4f}, std={prev_outputs_var.std().item():.4f}")
-                        print(f"Generated inputs (before constraints):")
-                        for dim_idx in range(generated_inputs.shape[1]):
-                            label = self.processes_config[i]['input_labels'][dim_idx]
-                            print(f"  {label}: mean={generated_inputs[:, dim_idx].mean().item():.4f}, "
-                                  f"min={generated_inputs[:, dim_idx].min().item():.4f}, "
-                                  f"max={generated_inputs[:, dim_idx].max().item():.4f}")
+                    print(f"\n[2] GENERATED INPUTS (before constraints):")
+                    for dim_idx in range(generated_inputs.shape[1]):
+                        label = self.processes_config[i]['input_labels'][dim_idx]
+                        vals = generated_inputs[:, dim_idx]
+                        print(f"      {label}: mean={vals.mean().item():.6f}, std={vals.std().item():.6f}, min={vals.min().item():.6f}, max={vals.max().item():.6f}")
+                    print(f"      Sample (first batch): {generated_inputs[0].tolist()}")
 
                 # Apply non-controllable constraints: replace non-controllable inputs
                 # with values from target trajectory (e.g., Temperature for microetch)
@@ -457,31 +469,52 @@ class ProcessChain(nn.Module):
                     generated_inputs, i, scenario_idx, batch_size
                 )
 
-                # Debug: print after constraints
                 if ProcessChain.debug:
-                    with torch.no_grad():
-                        print(f"Current inputs (after constraints):")
-                        for dim_idx in range(current_inputs.shape[1]):
-                            label = self.processes_config[i]['input_labels'][dim_idx]
-                            print(f"  {label}: mean={current_inputs[:, dim_idx].mean().item():.4f}, "
-                                  f"min={current_inputs[:, dim_idx].min().item():.4f}, "
-                                  f"max={current_inputs[:, dim_idx].max().item():.4f}")
+                    print(f"\n[3] CURRENT INPUTS (after constraints):")
+                    for dim_idx in range(current_inputs.shape[1]):
+                        label = self.processes_config[i]['input_labels'][dim_idx]
+                        vals = current_inputs[:, dim_idx]
+                        print(f"      {label}: mean={vals.mean().item():.6f}, std={vals.std().item():.6f}, min={vals.min().item():.6f}, max={vals.max().item():.6f}")
+                    print(f"      Sample (first batch): {current_inputs[0].tolist()}")
 
             # 2. Scale inputs
             scaled_inputs = self.scale_inputs(current_inputs, i)
 
+            if ProcessChain.debug:
+                print(f"\n[4] SCALED INPUTS for UncertaintyPredictor:")
+                print(f"      mean={scaled_inputs.mean().item():.6f}, std={scaled_inputs.std().item():.6f}")
+                print(f"      min={scaled_inputs.min().item():.6f}, max={scaled_inputs.max().item():.6f}")
+
             # 3. Uncertainty predictor (frozen)
             outputs_mean_scaled, outputs_var_scaled = self.uncertainty_predictors[i](scaled_inputs)
+
+            if ProcessChain.debug:
+                print(f"\n[5] UNCERTAINTY PREDICTOR OUTPUT (scaled):")
+                print(f"      mean_scaled: mean={outputs_mean_scaled.mean().item():.6f}, std={outputs_mean_scaled.std().item():.6f}")
+                print(f"      var_scaled: mean={outputs_var_scaled.mean().item():.6f}, std={outputs_var_scaled.std().item():.6f}")
 
             # 4. Unscale outputs
             outputs_mean = self.unscale_outputs(outputs_mean_scaled, i)
             outputs_var = self.unscale_variance(outputs_var_scaled, i)
+
+            if ProcessChain.debug:
+                print(f"\n[6] UNSCALED OUTPUTS:")
+                print(f"      outputs_mean: mean={outputs_mean.mean().item():.6f}, std={outputs_mean.std().item():.6f}, min={outputs_mean.min().item():.6f}, max={outputs_mean.max().item():.6f}")
+                print(f"      outputs_var: mean={outputs_var.mean().item():.6f}, std={outputs_var.std().item():.6f}")
+                print(f"      Sample (first batch): mean={outputs_mean[0].tolist()}, var={outputs_var[0].tolist()}")
 
             # 5. Sample from distribution using reparameterization trick
             # This makes the actual trajectory stochastic based on predicted uncertainty
             std = torch.sqrt(outputs_var + 1e-8)
             epsilon = torch.randn_like(outputs_mean)
             outputs_sampled = outputs_mean + epsilon * std
+
+            if ProcessChain.debug:
+                print(f"\n[7] SAMPLED OUTPUTS (reparameterization):")
+                print(f"      std: mean={std.mean().item():.6f}")
+                print(f"      epsilon: mean={epsilon.mean().item():.6f}, std={epsilon.std().item():.6f}")
+                print(f"      outputs_sampled: mean={outputs_sampled.mean().item():.6f}, std={outputs_sampled.std().item():.6f}")
+                print(f"      Sample (first batch): {outputs_sampled[0].tolist()}")
 
             # 6. Store in trajectory
             trajectory[process_name] = {
@@ -497,6 +530,16 @@ class ProcessChain(nn.Module):
             prev_inputs = current_inputs
             prev_outputs_mean = outputs_sampled  # Use sampled outputs instead of mean
             prev_outputs_var = outputs_var
+
+            if ProcessChain.debug:
+                print(f"\n[8] STORED FOR NEXT ITERATION:")
+                print(f"      prev_outputs_mean (=outputs_sampled): {prev_outputs_mean[0].tolist()}")
+                print(f"      prev_outputs_var: {prev_outputs_var[0].tolist()}")
+
+        if ProcessChain.debug:
+            print(f"\n{'='*80}")
+            print(f"FORWARD PASS COMPLETE")
+            print(f"{'='*80}\n")
 
         return trajectory
 
