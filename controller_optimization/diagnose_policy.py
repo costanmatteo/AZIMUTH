@@ -93,10 +93,10 @@ def diagnose_policy(checkpoint_dir: str):
 
                     print(f"    {policy_path.name}: input={input_size}, hidden={hidden_sizes}, output={output_size}")
 
-                    # Get bounds from current policy generator
+                    # Get bounds from current policy generator (truncate to match output_size)
                     old_policy = process_chain.policy_generators[i]
-                    output_min = old_policy.output_min
-                    output_max = old_policy.output_max
+                    output_min = old_policy.output_min[:output_size] if old_policy.output_min is not None else None
+                    output_max = old_policy.output_max[:output_size] if old_policy.output_max is not None else None
 
                     # Create new policy with correct architecture
                     new_policy = PolicyGenerator(
@@ -111,9 +111,11 @@ def diagnose_policy(checkpoint_dir: str):
 
                     # Load with strict=False to allow missing output_min/output_max buffers
                     new_policy.load_state_dict(state_dict, strict=False)
-                    # Set bounds after loading
-                    new_policy.output_min = output_min
-                    new_policy.output_max = output_max
+                    # Set bounds after loading (in case they weren't set in constructor)
+                    if output_min is not None:
+                        new_policy.output_min = output_min
+                    if output_max is not None:
+                        new_policy.output_max = output_max
                     process_chain.policy_generators[i] = new_policy
                     print(f"    Loaded {policy_path.name} -> policy_generator[{i}]")
         else:
