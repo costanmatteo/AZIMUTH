@@ -258,6 +258,9 @@ def main():
         curriculum_config=curriculum_config
     )
 
+    # Enable gradient debugging for first epoch
+    trainer._debug_gradients = True
+
     # 6. Training
     print("\n[6/9] Starting training...")
     print("-"*70)

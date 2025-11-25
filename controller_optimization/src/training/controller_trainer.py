@@ -396,6 +396,44 @@ class ControllerTrainer:
             # Backward pass
             self.optimizer.zero_grad()
             total_loss.backward()
+
+            # DEBUG: Check gradient flow on first scenario of first few epochs
+            if hasattr(self, '_debug_gradients') and self._debug_gradients and scenario_idx == scenario_order[0]:
+                print(f"\n{'='*60}")
+                print("GRADIENT DEBUG - After backward pass")
+                print(f"{'='*60}")
+
+                # Check gradients on policy generators
+                for i, policy in enumerate(self.process_chain.policy_generators):
+                    print(f"\nPolicy Generator {i}:")
+                    total_grad_norm = 0.0
+                    has_any_grad = False
+                    for name, param in policy.named_parameters():
+                        if param.grad is not None:
+                            has_any_grad = True
+                            grad_norm = param.grad.norm().item()
+                            total_grad_norm += grad_norm ** 2
+                            if 'weight' in name or 'bias' in name:
+                                print(f"  {name}: grad_norm={grad_norm:.8f}, param_norm={param.norm().item():.4f}")
+                        else:
+                            print(f"  {name}: NO GRADIENT!")
+
+                    if has_any_grad:
+                        print(f"  Total grad norm: {total_grad_norm**0.5:.8f}")
+                    else:
+                        print(f"  WARNING: No gradients at all!")
+
+                # Check if trajectory inputs have gradients
+                print(f"\nTrajectory Gradient Check:")
+                for proc_name, data in trajectory.items():
+                    inputs = data['inputs']
+                    outputs_mean = data['outputs_mean']
+                    print(f"  {proc_name}:")
+                    print(f"    inputs.requires_grad: {inputs.requires_grad}, inputs.grad_fn: {inputs.grad_fn}")
+                    print(f"    outputs_mean.requires_grad: {outputs_mean.requires_grad}, outputs_mean.grad_fn: {outputs_mean.grad_fn}")
+
+                print(f"{'='*60}\n")
+
             self.optimizer.step()
 
             # Track metrics
@@ -469,6 +507,7 @@ class ControllerTrainer:
             if epoch == 2:
                 from controller_optimization.src.utils.process_chain import ProcessChain
                 ProcessChain.enable_debug(False)
+                self._debug_gradients = False  # Also disable gradient debug
 
             # Get dynamic loss weights for curriculum learning
             lambda_bc, reliability_weight, phase = self.get_loss_weights(epoch, epochs)
