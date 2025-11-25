@@ -244,6 +244,17 @@ def main():
         'reliability_weight_curve': 'exponential'
     })
 
+    # Get residual learning config (backward compatible)
+    # Sync enabled flag with policy_generator config
+    residual_policy_enabled = CONTROLLER_CONFIG['policy_generator'].get('use_residual_policy', False)
+    residual_config = CONTROLLER_CONFIG['training'].get('residual_learning', {
+        'enabled': False,
+        'bc_pretraining_fraction': 0.1,
+        'residual_learning_rate': None,
+    })
+    # Ensure residual_config.enabled matches policy_generator.use_residual_policy
+    residual_config['enabled'] = residual_policy_enabled
+
     trainer = ControllerTrainer(
         process_chain=process_chain,
         surrogate=surrogate,
@@ -252,7 +263,8 @@ def main():
         weight_decay=CONTROLLER_CONFIG['training']['weight_decay'],
         reliability_loss_scale=CONTROLLER_CONFIG['training']['reliability_loss_scale'],
         device=device,
-        curriculum_config=curriculum_config
+        curriculum_config=curriculum_config,
+        residual_config=residual_config
     )
 
     # 6. Training

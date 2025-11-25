@@ -44,6 +44,21 @@ POLICY GENERATOR:
                        Recommended: True (default)
 - scenario_embedding_dim: Dimension of scenario embedding vector (default: 16)
                          Higher = more expressive but more parameters
+- use_residual_policy: Enable Residual Policy Learning (two-phase training)
+                       Phase 1: BC pretraining (base policy learns from demonstrations)
+                       Phase 2: Residual learning (frozen base + trainable residual network)
+                       Final action = base_policy(state) + residual_scale * residual(state)
+- residual_hidden_sizes: Hidden layers for residual network (default: [32, 16])
+                         Typically smaller than base policy for stable learning
+- residual_scale: Scaling factor for residual output (default: 0.1)
+                  Smaller values = more stable learning, larger = more correction capability
+
+RESIDUAL LEARNING:
+- enabled: Must match policy_generator.use_residual_policy
+- bc_pretraining_fraction: Fraction of epochs for BC pretraining (e.g., 0.1 = 10%)
+                           Higher values = better BC initialization, less time for residual learning
+- residual_learning_rate: Learning rate for residual phase (None = same as main LR)
+                          Can use higher LR since base policy is frozen
 
 SCENARIOS:
 - n_train: Number of scenarios for training (diverse operating conditions)
@@ -97,6 +112,15 @@ CONTROLLER_CONFIG = {
         'use_batchnorm': False,
         'use_scenario_encoder': False,  # Enable scenario context encoding
         'scenario_embedding_dim': 16,  # Dimension of scenario embedding vector
+
+        # Residual Policy Learning settings
+        # When enabled, uses a two-phase training approach:
+        # 1. BC Pretraining: Train base policy with pure BC loss
+        # 2. Residual Learning: Freeze base policy, train residual network
+        # Final action = base_policy(state) + residual_scale * residual(state)
+        'use_residual_policy': False,  # Enable residual policy learning
+        'residual_hidden_sizes': [32, 16],  # Hidden layers for residual network
+        'residual_scale': 0.1,  # Scaling factor for residual output (smaller = more stable)
     },
 
     # Training parameters
@@ -138,6 +162,14 @@ CONTROLLER_CONFIG = {
             'lambda_bc_start': 10.0,  # High BC weight during warm-up
             'lambda_bc_end': 0.001,  # Low BC weight at end of training
             'reliability_weight_curve': 'exponential',  # 'exponential', 'linear', 'sigmoid'
+        },
+
+        # Residual Policy Learning (two-phase training)
+        # Only applies when policy_generator.use_residual_policy = True
+        'residual_learning': {
+            'enabled': False,  # Must match policy_generator.use_residual_policy
+            'bc_pretraining_fraction': 0.1,  # 10% of epochs for BC pretraining
+            'residual_learning_rate': None,  # LR for residual phase (None = same as main LR)
         },
     },
 

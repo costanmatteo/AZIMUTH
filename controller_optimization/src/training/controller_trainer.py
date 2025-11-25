@@ -35,11 +35,13 @@ class ControllerTrainer:
     def __init__(self, process_chain, surrogate, lambda_bc=0.1,
                  learning_rate=0.001, weight_decay=0.01,
                  reliability_loss_scale=100.0, device='cpu',
-                 curriculum_config=None):
+                 curriculum_config=None, residual_config=None):
 
         self.process_chain = process_chain
         self.surrogate = surrogate
         self.lambda_bc = lambda_bc
+        self.learning_rate = learning_rate
+        self.weight_decay = weight_decay
         self.reliability_loss_scale = reliability_loss_scale
         self.device = device
 
@@ -52,17 +54,21 @@ class ControllerTrainer:
             'reliability_weight_curve': 'exponential'
         }
 
-        # Optimizer SOLO per policy generators (uncertainty predictors sono frozen)
-        trainable_params = [p for p in process_chain.parameters() if p.requires_grad]
+        # Residual policy learning configuration
+        self.residual_config = residual_config or {
+            'enabled': False,
+            'bc_pretraining_fraction': 0.1,  # 10% of epochs for BC pretraining
+            'residual_learning_rate': None,  # If None, uses same as learning_rate
+        }
 
-        if len(trainable_params) == 0:
-            raise ValueError("No trainable parameters found in process chain!")
+        # Track current training phase
+        self._current_phase = 'bc_pretraining' if self.residual_config.get('enabled', False) else 'standard'
 
-        self.optimizer = optim.Adam(
-            trainable_params,
-            lr=learning_rate,
-            weight_decay=weight_decay
-        )
+        # Initialize optimizer (will be recreated when switching phases for residual learning)
+        self._create_optimizer()
+
+        # Store residual learning rate for phase switch
+        self._residual_lr = self.residual_config.get('residual_learning_rate') or learning_rate
 
         # Tracking
         self.history = {
@@ -72,6 +78,7 @@ class ControllerTrainer:
             'F_values': [],  # Reliability values durante training
             'lambda_bc': [],  # Track lambda_bc per epoch
             'reliability_weight': [],  # Track reliability_weight per epoch
+            'phase': [],  # Track training phase ('bc_pretraining', 'residual_learning', 'standard')
         }
 
         # Embedding tracking (if scenario encoder is enabled)
@@ -88,17 +95,86 @@ class ControllerTrainer:
         # Compute normalization statistics from target trajectories
         self._compute_normalization_stats()
 
+        # Print initialization info
+        trainable_params = [p for p in process_chain.parameters() if p.requires_grad]
         print(f"ControllerTrainer initialized:")
         print(f"  Trainable parameters: {sum(p.numel() for p in trainable_params):,}")
         print(f"  Learning rate: {learning_rate}")
         print(f"  Lambda BC: {lambda_bc}")
         print(f"  Reliability loss scale: {reliability_loss_scale}")
         print(f"  Device: {device}")
+
+        # Print residual policy learning info
+        if self.residual_config.get('enabled', False):
+            print(f"  Residual Policy Learning: ENABLED")
+            print(f"    BC pretraining fraction: {self.residual_config['bc_pretraining_fraction']}")
+            print(f"    Residual learning rate: {self._residual_lr}")
+            print(f"    Current phase: {self._current_phase}")
+
+        # Print curriculum learning info
         if self.curriculum_config['enabled']:
             print(f"  Curriculum Learning: ENABLED")
             print(f"    Warm-up fraction: {self.curriculum_config['warmup_fraction']}")
             print(f"    Lambda BC: {self.curriculum_config['lambda_bc_start']} → {self.curriculum_config['lambda_bc_end']}")
             print(f"    Reliability weight curve: {self.curriculum_config['reliability_weight_curve']}")
+
+    def _create_optimizer(self, learning_rate=None):
+        """
+        Create optimizer for currently trainable parameters.
+        Called at init and when switching between BC pretraining and residual learning phases.
+
+        Args:
+            learning_rate (float): Learning rate to use. If None, uses self.learning_rate
+        """
+        if learning_rate is None:
+            learning_rate = self.learning_rate
+
+        trainable_params = [p for p in self.process_chain.parameters() if p.requires_grad]
+
+        if len(trainable_params) == 0:
+            raise ValueError("No trainable parameters found in process chain!")
+
+        self.optimizer = optim.Adam(
+            trainable_params,
+            lr=learning_rate,
+            weight_decay=self.weight_decay
+        )
+
+    def _switch_to_residual_learning_phase(self):
+        """
+        Switch from BC pretraining phase to residual learning phase.
+        Freezes base policy, activates residual network, and recreates optimizer.
+        """
+        if not self.residual_config.get('enabled', False):
+            return
+
+        print(f"\n{'='*70}")
+        print("SWITCHING TO RESIDUAL LEARNING PHASE")
+        print(f"{'='*70}")
+
+        # Freeze base policy, activate residual
+        self.process_chain.start_residual_learning_phase()
+        self._current_phase = 'residual_learning'
+
+        # Recreate optimizer with only residual parameters
+        self._create_optimizer(learning_rate=self._residual_lr)
+
+        # Print info about new trainable parameters
+        trainable_params = [p for p in self.process_chain.parameters() if p.requires_grad]
+        print(f"  New trainable parameters: {sum(p.numel() for p in trainable_params):,}")
+        print(f"  Learning rate: {self._residual_lr}")
+
+        # Print per-policy info
+        policy_info = self.process_chain.get_policy_info()
+        for p_info in policy_info['policies']:
+            if 'residual_network' in p_info:
+                print(f"  Policy {p_info['index']}: base frozen, residual active")
+                print(f"    Trainable: {p_info['trainable_params']:,} params")
+        print(f"{'='*70}\n")
+
+    def get_current_phase(self):
+        """Get current training phase."""
+        return self._current_phase
 
     def _compute_normalization_stats(self):
         """
@@ -127,6 +203,10 @@ class ControllerTrainer:
         """
         Calculate dynamic loss weights for curriculum learning.
 
+        For Residual Policy Learning:
+        - BC Pretraining phase: Pure BC loss (lambda_bc = high, reliability_weight = 0)
+        - Residual Learning phase: Uses curriculum if enabled, otherwise standard weights
+
         Args:
             epoch (int): Current epoch (1-indexed)
             total_epochs (int): Total number of epochs
@@ -135,8 +215,51 @@ class ControllerTrainer:
             tuple: (lambda_bc, reliability_weight, phase)
                 - lambda_bc: Behavior cloning weight
                 - reliability_weight: Reliability loss weight
-                - phase: 'warmup' or 'curriculum'
+                - phase: 'bc_pretraining', 'residual_learning', 'warmup', 'curriculum', or 'standard'
         """
+        # ==================== Residual Policy Learning ====================
+        if self.residual_config.get('enabled', False):
+            bc_pretraining_epochs = int(total_epochs * self.residual_config['bc_pretraining_fraction'])
+
+            if epoch <= bc_pretraining_epochs:
+                # BC PRETRAINING PHASE: Pure BC loss, no reliability
+                # Use high BC weight for strong supervision
+                lambda_bc = self.curriculum_config.get('lambda_bc_start', 10.0) if self.curriculum_config['enabled'] else 10.0
+                reliability_weight = 0.0
+                phase = 'bc_pretraining'
+                return lambda_bc, reliability_weight, phase
+
+            # After BC pretraining: Residual Learning Phase
+            # Calculate progress within residual learning phase
+            residual_start_epoch = bc_pretraining_epochs + 1
+            residual_epochs = total_epochs - bc_pretraining_epochs
+            progress = (epoch - residual_start_epoch) / residual_epochs
+
+            if self.curriculum_config['enabled']:
+                # Apply curriculum schedule within residual learning phase
+                lambda_bc_start = self.curriculum_config['lambda_bc_start']
+                lambda_bc_end = self.curriculum_config['lambda_bc_end']
+                lambda_bc = lambda_bc_start * np.exp(np.log(lambda_bc_end / lambda_bc_start) * progress)
+
+                curve_type = self.curriculum_config['reliability_weight_curve']
+                if curve_type == 'exponential':
+                    reliability_weight = 1.0 - np.exp(-5.0 * progress)
+                elif curve_type == 'linear':
+                    reliability_weight = progress
+                elif curve_type == 'sigmoid':
+                    x = 10 * (progress - 0.5)
+                    reliability_weight = 1.0 / (1.0 + np.exp(-x))
+                else:
+                    raise ValueError(f"Unknown reliability_weight_curve: {curve_type}")
+            else:
+                # No curriculum: use fixed weights
+                lambda_bc = self.lambda_bc
+                reliability_weight = 1.0
+
+            phase = 'residual_learning'
+            return lambda_bc, reliability_weight, phase
+
+        # ==================== Standard Curriculum Learning ====================
         if not self.curriculum_config['enabled']:
             # Curriculum learning disabled: use fixed weights
             return self.lambda_bc, 1.0, 'standard'
@@ -439,6 +562,14 @@ class ControllerTrainer:
         if self.curriculum_config['enabled']:
             warmup_epochs = int(epochs * self.curriculum_config['warmup_fraction'])
 
+        # Calculate BC pretraining epochs for residual policy learning
+        bc_pretraining_epochs = 0
+        if self.residual_config.get('enabled', False):
+            bc_pretraining_epochs = int(epochs * self.residual_config['bc_pretraining_fraction'])
+
+        # Track if we've already switched to residual learning phase
+        _switched_to_residual = False
+
         if verbose:
             print(f"\n{'='*70}")
             print("STARTING CONTROLLER TRAINING")
@@ -451,7 +582,15 @@ class ControllerTrainer:
             print(f"  Save dir: {save_dir}")
             print(f"  F* (target, mean): {np.mean(self.surrogate.F_star):.6f} ± {np.std(self.surrogate.F_star):.6f}")
 
-            if self.curriculum_config['enabled']:
+            # Print residual policy learning info
+            if self.residual_config.get('enabled', False):
+                print(f"\n  RESIDUAL POLICY LEARNING STRATEGY:")
+                print(f"    Phase 1 - BC Pretraining: Epochs 1-{bc_pretraining_epochs} (pure BC, base policy trainable)")
+                print(f"    Phase 2 - Residual Learning: Epochs {bc_pretraining_epochs + 1}-{epochs} (base frozen, residual learns)")
+                if self.curriculum_config['enabled']:
+                    print(f"    + Curriculum applied in Phase 2")
+
+            elif self.curriculum_config['enabled']:
                 print(f"\n  CURRICULUM LEARNING STRATEGY:")
                 print(f"    Phase 1 - Warm-up: Epochs 1-{warmup_epochs} (BC only)")
                 print(f"    Phase 2 - Curriculum: Epochs {warmup_epochs + 1}-{epochs} (gradual reliability)")
@@ -465,6 +604,16 @@ class ControllerTrainer:
                 print(f"  Saved initial embedding snapshot")
 
         for epoch in range(1, epochs + 1):
+            # Handle phase transition for residual policy learning
+            # Switch to residual learning when BC pretraining is complete
+            if self.residual_config.get('enabled', False) and not _switched_to_residual:
+                if epoch > bc_pretraining_epochs:
+                    self._switch_to_residual_learning_phase()
+                    _switched_to_residual = True
+                    # Reset best loss tracking for new phase
+                    self.best_loss = float('inf')
+                    self.epochs_without_improvement = 0
+
             # Get dynamic loss weights for curriculum learning
             lambda_bc, reliability_weight, phase = self.get_loss_weights(epoch, epochs)
 
@@ -482,6 +631,7 @@ class ControllerTrainer:
             self.history['F_values'].append(avg_F)
             self.history['lambda_bc'].append(lambda_bc)
             self.history['reliability_weight'].append(reliability_weight)
+            self.history['phase'].append(phase)
 
             # Save training progression snapshots every epoch
             self._save_training_progression_snapshot(epoch, lambda_bc, reliability_weight, phase)
@@ -491,9 +641,16 @@ class ControllerTrainer:
                 if epoch % 20 == 0 or epoch == 1:  # Save every 20 epochs and at epoch 1
                     self._save_embedding_snapshot(epoch)
 
-            # Print progress with curriculum learning info
+            # Print progress with phase info
             if verbose and (epoch % 10 == 0 or epoch == 1):
-                phase_label = "[WARM-UP]" if phase == 'warmup' else "[CURRICULUM]" if phase == 'curriculum' else ""
+                phase_labels = {
+                    'bc_pretraining': '[BC PRETRAINING]',
+                    'residual_learning': '[RESIDUAL LEARNING]',
+                    'warmup': '[WARM-UP]',
+                    'curriculum': '[CURRICULUM]',
+                    'standard': ''
+                }
+                phase_label = phase_labels.get(phase, '')
                 print(f"\nEpoch {epoch}/{epochs} {phase_label}")
                 print(f"  λ_BC: {lambda_bc:.6f}, Rel Weight: {reliability_weight:.3f}")
                 print(f"  Total Loss:       {avg_total_loss:.6f}")
@@ -502,15 +659,21 @@ class ControllerTrainer:
                 print(f"  F (actual):       {avg_F:.6f}")
                 print(f"  F* (target, mean):{np.mean(self.surrogate.F_star):.6f}")
 
-            # Print warm-up completion message
-            if verbose and self.curriculum_config['enabled'] and epoch == warmup_epochs:
+            # Print BC pretraining completion message (for residual policy learning)
+            if verbose and self.residual_config.get('enabled', False) and epoch == bc_pretraining_epochs:
+                print(f"\n{'='*70}")
+                print("BC PRETRAINING COMPLETED! Switching to residual learning phase...")
+                print(f"{'='*70}")
+
+            # Print warm-up completion message (for standard curriculum learning)
+            if verbose and not self.residual_config.get('enabled', False) and self.curriculum_config['enabled'] and epoch == warmup_epochs:
                 print(f"\n{'='*70}")
                 print("WARM-UP COMPLETED! Starting curriculum learning phase...")
                 print(f"{'='*70}")
 
             # Check for improvement (based on LOSS, not F value)
             # We want F to become more similar to F*, i.e., loss to decrease
-            # IMPORTANT: During warm-up, reliability loss is random, so we skip early stopping
+            # IMPORTANT: During BC pretraining/warm-up, reliability loss is random, so skip early stopping
             if avg_total_loss < self.best_loss:
                 self.best_loss = avg_total_loss
                 self.best_F = avg_F  # Track best F for information
@@ -525,9 +688,18 @@ class ControllerTrainer:
             else:
                 self.epochs_without_improvement += 1
 
-                # Early stopping: ONLY after warm-up period
-                # During warm-up, reliability is random and shouldn't trigger early stopping
-                if epoch > warmup_epochs and self.epochs_without_improvement >= patience:
+                # Determine when early stopping should be active
+                # Skip early stopping during BC pretraining (for residual policy) or warm-up (for curriculum)
+                early_stopping_active = True
+
+                if self.residual_config.get('enabled', False):
+                    # For residual policy learning: early stopping only active during residual learning phase
+                    early_stopping_active = epoch > bc_pretraining_epochs
+                elif self.curriculum_config['enabled']:
+                    # For curriculum learning: early stopping only after warm-up
+                    early_stopping_active = epoch > warmup_epochs
+
+                if early_stopping_active and self.epochs_without_improvement >= patience:
                     if verbose:
                         print(f"\n  Early stopping triggered (patience={patience})")
                         print(f"  Loss has not improved for {patience} epochs")

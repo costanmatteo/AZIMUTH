@@ -25,7 +25,10 @@ from controller_optimization.src.utils.model_utils import (
 from controller_optimization.src.models.policy_generator import (
     create_small_policy_generator,
     create_medium_policy_generator,
-    create_large_policy_generator
+    create_large_policy_generator,
+    PolicyGenerator,
+    ResidualPolicyGenerator,
+    create_residual_policy_generator
 )
 from controller_optimization.src.models.scenario_encoder import ScenarioEncoder
 
@@ -122,12 +125,21 @@ class ProcessChain(nn.Module):
                 'use_batchnorm': False,
                 'use_scenario_encoder': True,  # Enable scenario encoding
                 'scenario_embedding_dim': 16,  # Dimension of scenario embedding
+                # Residual policy settings
+                'use_residual_policy': False,  # Enable residual policy learning
+                'residual_hidden_sizes': [32, 16],  # Hidden layers for residual network
+                'residual_scale': 0.1,  # Scaling factor for residual output
             }
         self.policy_config = policy_config
 
         # Use scenario encoder if enabled
         self.use_scenario_encoder = policy_config.get('use_scenario_encoder', True)
         self.scenario_embedding_dim = policy_config.get('scenario_embedding_dim', 16)
+
+        # Residual policy settings
+        self.use_residual_policy = policy_config.get('use_residual_policy', False)
+        self.residual_hidden_sizes = policy_config.get('residual_hidden_sizes', [32, 16])
+        self.residual_scale = policy_config.get('residual_scale', 0.1)
 
         # Load uncertainty predictors (frozen)
         self.uncertainty_predictors = nn.ModuleList()
@@ -191,24 +203,44 @@ class ProcessChain(nn.Module):
             # Output from policy: next process inputs
             next_input_dim = processes_config[i + 1]['input_dim']
 
-            # Create policy generator
+            # Determine base hidden sizes for the policy
             if policy_config['architecture'] == 'small':
-                policy = create_small_policy_generator(policy_input_size, next_input_dim)
+                base_hidden_sizes = [32, 16]
             elif policy_config['architecture'] == 'medium':
-                policy = create_medium_policy_generator(policy_input_size, next_input_dim)
+                base_hidden_sizes = [64, 32]
             elif policy_config['architecture'] == 'large':
-                policy = create_large_policy_generator(policy_input_size, next_input_dim)
+                base_hidden_sizes = [128, 64, 32]
             elif policy_config['architecture'] == 'custom':
-                from controller_optimization.src.models.policy_generator import PolicyGenerator
+                base_hidden_sizes = policy_config['hidden_sizes']
+            else:
+                raise ValueError(f"Unknown policy architecture: {policy_config['architecture']}")
+
+            # Create policy generator (either standard or residual)
+            if self.use_residual_policy:
+                # Create ResidualPolicyGenerator for residual learning
+                policy = ResidualPolicyGenerator(
+                    input_size=policy_input_size,
+                    output_size=next_input_dim,
+                    base_hidden_sizes=base_hidden_sizes,
+                    residual_hidden_sizes=self.residual_hidden_sizes,
+                    dropout_rate=policy_config.get('dropout', 0.1),
+                    residual_scale=self.residual_scale,
+                    use_batchnorm=policy_config.get('use_batchnorm', False)
+                )
+                print(f"  Policy {i}: ResidualPolicyGenerator (input={policy_input_size}, output={next_input_dim})")
+                print(f"    Base hidden: {base_hidden_sizes}, Residual hidden: {self.residual_hidden_sizes}")
+                print(f"    Residual scale: {self.residual_scale}")
+            else:
+                # Create standard PolicyGenerator
                 policy = PolicyGenerator(
                     input_size=policy_input_size,
                     output_size=next_input_dim,
-                    hidden_sizes=policy_config['hidden_sizes'],
-                    dropout_rate=policy_config['dropout'],
-                    use_batchnorm=policy_config['use_batchnorm']
+                    hidden_sizes=base_hidden_sizes,
+                    dropout_rate=policy_config.get('dropout', 0.1),
+                    use_batchnorm=policy_config.get('use_batchnorm', False)
                 )
-            else:
-                raise ValueError(f"Unknown policy architecture: {policy_config['architecture']}")
+                print(f"  Policy {i}: PolicyGenerator (input={policy_input_size}, output={next_input_dim})")
+                print(f"    Hidden: {base_hidden_sizes}")
 
             policy = policy.to(device)
             self.policy_generators.append(policy)
@@ -424,6 +456,86 @@ class ProcessChain(nn.Module):
             prev_outputs_var = outputs_var
 
         return trajectory
+
+    # ==================== Residual Policy Phase Management ====================
+
+    def start_bc_pretraining_phase(self):
+        """
+        Start BC pre-training phase.
+        For ResidualPolicyGenerator: unfreezes base policy, deactivates residual.
+        For standard PolicyGenerator: no-op (all params already trainable).
+        """
+        if not self.use_residual_policy:
+            return
+
+        for policy in self.policy_generators:
+            if isinstance(policy, ResidualPolicyGenerator):
+                policy.unfreeze_base_policy()
+        print("  → Started BC pre-training phase (base policy trainable, residual inactive)")
+
+    def start_residual_learning_phase(self):
+        """
+        Start residual learning phase.
+        Freezes base policy and activates residual network.
+        Only applicable when use_residual_policy=True.
+        """
+        if not self.use_residual_policy:
+            print("  Warning: start_residual_learning_phase() called but use_residual_policy=False")
+            return
+
+        for policy in self.policy_generators:
+            if isinstance(policy, ResidualPolicyGenerator):
+                policy.freeze_base_policy()
+        print("  → Started residual learning phase (base policy frozen, residual active)")
+
+    def is_residual_phase(self) -> bool:
+        """
+        Check if currently in residual learning phase.
+        Returns True if any ResidualPolicyGenerator has residual active.
+        """
+        if not self.use_residual_policy:
+            return False
+
+        for policy in self.policy_generators:
+            if isinstance(policy, ResidualPolicyGenerator):
+                return policy.is_residual_active()
+        return False
+
+    def get_policy_info(self):
+        """
+        Get information about policy generators.
+
+        Returns:
+            dict: {
+                'use_residual_policy': bool,
+                'is_residual_phase': bool,
+                'policies': list of dicts with per-policy info
+            }
+        """
+        info = {
+            'use_residual_policy': self.use_residual_policy,
+            'is_residual_phase': self.is_residual_phase(),
+            'policies': []
+        }
+
+        for i, policy in enumerate(self.policy_generators):
+            policy_info = {
+                'index': i,
+                'type': type(policy).__name__,
+                'total_params': sum(p.numel() for p in policy.parameters()),
+                'trainable_params': sum(p.numel() for p in policy.parameters() if p.requires_grad)
+            }
+
+            if isinstance(policy, ResidualPolicyGenerator):
+                params_detail = policy.get_trainable_params_info()
+                policy_info['base_policy'] = params_detail['base_policy']
+                policy_info['residual_network'] = params_detail['residual_network']
+                policy_info['residual_active'] = policy.is_residual_active()
+                policy_info['residual_scale'] = policy.residual_scale
+
+            info['policies'].append(policy_info)
+
+        return info
 
     def evaluate_trajectory(self, trajectory_type='target'):
         """
