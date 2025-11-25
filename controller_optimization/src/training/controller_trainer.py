@@ -465,6 +465,11 @@ class ControllerTrainer:
                 print(f"  Saved initial embedding snapshot")
 
         for epoch in range(1, epochs + 1):
+            # Disable debug after first epoch to avoid flooding output
+            if epoch == 2:
+                from controller_optimization.src.utils.process_chain import ProcessChain
+                ProcessChain.enable_debug(False)
+
             # Get dynamic loss weights for curriculum learning
             lambda_bc, reliability_weight, phase = self.get_loss_weights(epoch, epochs)
 

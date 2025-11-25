@@ -210,6 +210,9 @@ def main():
         print(f"    Total parameters: {total_params:,}")
         print(f"    Trainable parameters: {trainable_params:,}")
 
+        # Enable debug mode for first epoch only
+        ProcessChain.enable_debug(True)
+
     except FileNotFoundError as e:
         print(f"\n✗ Error: {e}")
         print("\nPlease run train_processes.py first to train uncertainty predictors.")
