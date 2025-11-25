@@ -18,6 +18,7 @@ class DataPreprocessor:
     - Missing values handling
     - Train/validation/test split
     - Scaler saving/loading for inference
+    - Input bounds tracking (min/max from training data)
 
     Args:
         scaling_method (str): 'standard' or 'minmax' (default: 'standard')
@@ -27,6 +28,10 @@ class DataPreprocessor:
         self.scaling_method = scaling_method
         self.input_scaler = None
         self.output_scaler = None
+
+        # Track input bounds from training data (for policy generator bounds)
+        self.input_min = None  # np.ndarray of shape (n_features,)
+        self.input_max = None  # np.ndarray of shape (n_features,)
 
         if scaling_method == 'standard':
             self.input_scaler = StandardScaler()
@@ -54,6 +59,10 @@ class DataPreprocessor:
         # Handle missing values
         X = self._handle_missing_values(X)
         y = self._handle_missing_values(y)
+
+        # Store input bounds from training data (for policy generator)
+        self.input_min = np.min(X, axis=0)
+        self.input_max = np.max(X, axis=0)
 
         # Fit and transform
         X_scaled = self.input_scaler.fit_transform(X)
@@ -134,22 +143,27 @@ class DataPreprocessor:
         return X_train, X_val, X_test, y_train, y_val, y_test
 
     def save_scalers(self, filepath):
-        """Save scalers for future use"""
+        """Save scalers and input bounds for future use"""
         with open(filepath, 'wb') as f:
             pickle.dump({
                 'input_scaler': self.input_scaler,
                 'output_scaler': self.output_scaler,
-                'scaling_method': self.scaling_method
+                'scaling_method': self.scaling_method,
+                'input_min': self.input_min,
+                'input_max': self.input_max
             }, f)
         print(f"Scalers saved to: {filepath}")
 
     def load_scalers(self, filepath):
-        """Load previously saved scalers"""
+        """Load previously saved scalers and input bounds"""
         with open(filepath, 'rb') as f:
             data = pickle.load(f)
             self.input_scaler = data['input_scaler']
             self.output_scaler = data['output_scaler']
             self.scaling_method = data['scaling_method']
+            # Load input bounds (backward compatible - may not exist in old files)
+            self.input_min = data.get('input_min', None)
+            self.input_max = data.get('input_max', None)
         print(f"Scalers loaded from: {filepath}")
 
     @staticmethod

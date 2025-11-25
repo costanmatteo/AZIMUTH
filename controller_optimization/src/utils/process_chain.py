@@ -23,6 +23,7 @@ from controller_optimization.src.utils.model_utils import (
     load_preprocessor
 )
 from controller_optimization.src.models.policy_generator import (
+    PolicyGenerator,
     create_small_policy_generator,
     create_medium_policy_generator,
     create_large_policy_generator
@@ -37,6 +38,26 @@ class ProcessChain(nn.Module):
     Sequenza:
     a1 (fisso) → UncertPred1 → (o1, σ1²) → Policy1 → a2 → UncertPred2 → (o2, σ2²) → ...
     """
+
+    # Class-level debug flag
+    debug = False
+
+    @classmethod
+    def enable_debug(cls, enable=True):
+        """Enable/disable debug mode for ProcessChain and all PolicyGenerators."""
+        cls.debug = enable
+        PolicyGenerator.debug = enable
+        print(f"Debug mode {'ENABLED' if enable else 'DISABLED'} for ProcessChain and PolicyGenerator")
+
+    def debug_all_gradients(self):
+        """Print gradient statistics for all policy generators."""
+        for i, policy in enumerate(self.policy_generators):
+            policy.debug_gradients()
+
+    def debug_all_weights(self):
+        """Print weight statistics for all policy generators."""
+        for i, policy in enumerate(self.policy_generators):
+            policy.debug_weights()
 
     @staticmethod
     def _count_structural_params(processes_config):
@@ -191,13 +212,35 @@ class ProcessChain(nn.Module):
             # Output from policy: next process inputs
             next_input_dim = processes_config[i + 1]['input_dim']
 
-            # Create policy generator
+            # Get output bounds from next process's preprocessor (derived from UP training data)
+            next_preprocessor = self.preprocessors[i + 1]
+            if next_preprocessor.input_min is not None and next_preprocessor.input_max is not None:
+                output_min = torch.tensor(next_preprocessor.input_min, dtype=torch.float32)
+                output_max = torch.tensor(next_preprocessor.input_max, dtype=torch.float32)
+                print(f"  Policy {i} -> Process '{processes_config[i + 1]['name']}' bounds:")
+                print(f"    Min: {output_min.numpy()}")
+                print(f"    Max: {output_max.numpy()}")
+            else:
+                output_min = None
+                output_max = None
+                print(f"  Policy {i} -> Process '{processes_config[i + 1]['name']}': No bounds (unbounded output)")
+
+            # Create policy generator with bounds
             if policy_config['architecture'] == 'small':
-                policy = create_small_policy_generator(policy_input_size, next_input_dim)
+                policy = create_small_policy_generator(
+                    policy_input_size, next_input_dim,
+                    output_min=output_min, output_max=output_max
+                )
             elif policy_config['architecture'] == 'medium':
-                policy = create_medium_policy_generator(policy_input_size, next_input_dim)
+                policy = create_medium_policy_generator(
+                    policy_input_size, next_input_dim,
+                    output_min=output_min, output_max=output_max
+                )
             elif policy_config['architecture'] == 'large':
-                policy = create_large_policy_generator(policy_input_size, next_input_dim)
+                policy = create_large_policy_generator(
+                    policy_input_size, next_input_dim,
+                    output_min=output_min, output_max=output_max
+                )
             elif policy_config['architecture'] == 'custom':
                 from controller_optimization.src.models.policy_generator import PolicyGenerator
                 policy = PolicyGenerator(
@@ -205,12 +248,16 @@ class ProcessChain(nn.Module):
                     output_size=next_input_dim,
                     hidden_sizes=policy_config['hidden_sizes'],
                     dropout_rate=policy_config['dropout'],
-                    use_batchnorm=policy_config['use_batchnorm']
+                    use_batchnorm=policy_config['use_batchnorm'],
+                    output_min=output_min,
+                    output_max=output_max
                 )
             else:
                 raise ValueError(f"Unknown policy architecture: {policy_config['architecture']}")
 
             policy = policy.to(device)
+            # Set debug name for this policy generator
+            policy.debug_name = f"{processes_config[i]['name']}->{processes_config[i + 1]['name']}"
             self.policy_generators.append(policy)
 
     def get_initial_inputs(self, batch_size=1, scenario_idx=None):
@@ -239,43 +286,40 @@ class ProcessChain(nn.Module):
         return torch.tensor(initial_inputs, dtype=torch.float32, device=self.device)
 
     def scale_inputs(self, inputs, process_idx):
-        """Scale inputs using preprocessor."""
-        inputs_np = inputs.detach().cpu().numpy()
-        inputs_scaled = self.preprocessors[process_idx].input_scaler.transform(inputs_np)
-        return torch.tensor(inputs_scaled, dtype=torch.float32, device=self.device)
+        """
+        Scale inputs using preprocessor (DIFFERENTIABLE VERSION).
+
+        Uses PyTorch operations to maintain gradient flow.
+        For StandardScaler: scaled = (x - mean) / scale
+        """
+        scaler = self.preprocessors[process_idx].input_scaler
+
+        # Get scaler parameters as tensors (on same device as inputs)
+        mean = torch.tensor(scaler.mean_, dtype=torch.float32, device=self.device)
+        scale = torch.tensor(scaler.scale_, dtype=torch.float32, device=self.device)
+
+        # Differentiable scaling
+        inputs_scaled = (inputs - mean) / scale
+
+        return inputs_scaled
 
     def unscale_outputs(self, outputs, process_idx):
-        """Unscale outputs using preprocessor."""
-        outputs_np = outputs.detach().cpu().numpy()
-        outputs_unscaled = self.preprocessors[process_idx].output_scaler.inverse_transform(outputs_np)
+        """
+        Unscale outputs using preprocessor (DIFFERENTIABLE VERSION).
 
-        
+        Uses PyTorch operations to maintain gradient flow.
+        For StandardScaler: unscaled = x * scale + mean
+        """
+        scaler = self.preprocessors[process_idx].output_scaler
 
+        # Get scaler parameters as tensors (on same device as outputs)
+        mean = torch.tensor(scaler.mean_, dtype=torch.float32, device=self.device)
+        scale = torch.tensor(scaler.scale_, dtype=torch.float32, device=self.device)
 
-        # DEBUG
-        if process_idx == 'microetch':
-            print(f"\n=== UNSCALE OUTPUTS: {process_idx} ===")
-            print(f"Scaled outputs (from model): {outputs_np}")
-            print(f"Scaler type: {type(self.preprocessors[process_idx].output_scaler)}")
-            print(f"Scaler mean_: {self.preprocessors[process_idx].output_scaler.mean_}")
-            print(f"Scaler scale_: {self.preprocessors[process_idx].output_scaler.scale_}")
-    
-        outputs_unscaled = self.preprocessors[process_idx].output_scaler.inverse_transform(outputs_np)
-    
-        if process_idx == 'microetch':
-            print(f"Unscaled outputs: {outputs_unscaled}")
-            print(f"Expected range: 0-40")
-            print("=" * 50)
+        # Differentiable unscaling
+        outputs_unscaled = outputs * scale + mean
 
-
-
-
-
-
-
-
-
-        return torch.tensor(outputs_unscaled, dtype=torch.float32, device=self.device)
+        return outputs_unscaled
 
     def unscale_variance(self, variance, process_idx):
         """Unscale variance (variance scales with scale^2)."""
@@ -350,13 +394,16 @@ class ProcessChain(nn.Module):
             }
         """
 
-
-
-
         trajectory = {}
 
         # a1 è fisso dalla target trajectory (per lo scenario specifico)
         current_inputs = self.get_initial_inputs(batch_size, scenario_idx)
+
+        if ProcessChain.debug:
+            print(f"\n{'='*80}")
+            print(f"PROCESS CHAIN FORWARD PASS - Scenario {scenario_idx}, Batch {batch_size}")
+            print(f"{'='*80}")
+            print(f"Initial inputs (laser): {current_inputs[0].tolist()}")
 
         # Extract and encode scenario structural parameters (if encoder is enabled)
         if self.use_scenario_encoder:
@@ -365,12 +412,26 @@ class ProcessChain(nn.Module):
             structural_params = structural_params.unsqueeze(0).repeat(batch_size, 1)  # (batch_size, n_params)
             # Encode to embedding
             scenario_embedding = self.scenario_encoder(structural_params)  # (batch_size, embedding_dim)
+            if ProcessChain.debug:
+                print(f"Scenario embedding: mean={scenario_embedding.mean().item():.4f}, std={scenario_embedding.std().item():.4f}")
         else:
             scenario_embedding = None
 
         for i, process_name in enumerate(self.process_names):
+            if ProcessChain.debug:
+                print(f"\n{'-'*80}")
+                print(f"STEP {i}: Process '{process_name}'")
+                print(f"{'-'*80}")
+
             # 1. Se i > 0: policy generator produce inputs
             if i > 0:
+                if ProcessChain.debug:
+                    print(f"\n[1] POLICY GENERATOR {i-1}: {self.process_names[i-1]} -> {process_name}")
+                    print(f"    Policy input components:")
+                    print(f"      prev_outputs_mean: shape={prev_outputs_mean.shape}, mean={prev_outputs_mean.mean().item():.6f}, std={prev_outputs_mean.std().item():.6f}")
+                    print(f"      prev_outputs_var: shape={prev_outputs_var.shape}, mean={prev_outputs_var.mean().item():.6f}, std={prev_outputs_var.std().item():.6f}")
+                    print(f"      Sample values (first batch): prev_mean={prev_outputs_mean[0].tolist()}, prev_var={prev_outputs_var[0].tolist()}")
+
                 # Concatenate: [prev_inputs, prev_outputs_mean, prev_outputs_var, scenario_embedding]
                 policy_input_parts = [
                    # prev_inputs,
@@ -384,7 +445,20 @@ class ProcessChain(nn.Module):
 
                 policy_input = torch.cat(policy_input_parts, dim=1)
 
+                if ProcessChain.debug:
+                    print(f"    Concatenated policy_input: shape={policy_input.shape}")
+                    print(f"      mean={policy_input.mean().item():.6f}, std={policy_input.std().item():.6f}")
+                    print(f"      min={policy_input.min().item():.6f}, max={policy_input.max().item():.6f}")
+
                 generated_inputs = self.policy_generators[i - 1](policy_input)
+
+                if ProcessChain.debug:
+                    print(f"\n[2] GENERATED INPUTS (before constraints):")
+                    for dim_idx in range(generated_inputs.shape[1]):
+                        label = self.processes_config[i]['input_labels'][dim_idx]
+                        vals = generated_inputs[:, dim_idx]
+                        print(f"      {label}: mean={vals.mean().item():.6f}, std={vals.std().item():.6f}, min={vals.min().item():.6f}, max={vals.max().item():.6f}")
+                    print(f"      Sample (first batch): {generated_inputs[0].tolist()}")
 
                 # Apply non-controllable constraints: replace non-controllable inputs
                 # with values from target trajectory (e.g., Temperature for microetch)
@@ -392,21 +466,52 @@ class ProcessChain(nn.Module):
                     generated_inputs, i, scenario_idx, batch_size
                 )
 
+                if ProcessChain.debug:
+                    print(f"\n[3] CURRENT INPUTS (after constraints):")
+                    for dim_idx in range(current_inputs.shape[1]):
+                        label = self.processes_config[i]['input_labels'][dim_idx]
+                        vals = current_inputs[:, dim_idx]
+                        print(f"      {label}: mean={vals.mean().item():.6f}, std={vals.std().item():.6f}, min={vals.min().item():.6f}, max={vals.max().item():.6f}")
+                    print(f"      Sample (first batch): {current_inputs[0].tolist()}")
+
             # 2. Scale inputs
             scaled_inputs = self.scale_inputs(current_inputs, i)
+
+            if ProcessChain.debug:
+                print(f"\n[4] SCALED INPUTS for UncertaintyPredictor:")
+                print(f"      mean={scaled_inputs.mean().item():.6f}, std={scaled_inputs.std().item():.6f}")
+                print(f"      min={scaled_inputs.min().item():.6f}, max={scaled_inputs.max().item():.6f}")
 
             # 3. Uncertainty predictor (frozen)
             outputs_mean_scaled, outputs_var_scaled = self.uncertainty_predictors[i](scaled_inputs)
 
+            if ProcessChain.debug:
+                print(f"\n[5] UNCERTAINTY PREDICTOR OUTPUT (scaled):")
+                print(f"      mean_scaled: mean={outputs_mean_scaled.mean().item():.6f}, std={outputs_mean_scaled.std().item():.6f}")
+                print(f"      var_scaled: mean={outputs_var_scaled.mean().item():.6f}, std={outputs_var_scaled.std().item():.6f}")
+
             # 4. Unscale outputs
             outputs_mean = self.unscale_outputs(outputs_mean_scaled, i)
             outputs_var = self.unscale_variance(outputs_var_scaled, i)
+
+            if ProcessChain.debug:
+                print(f"\n[6] UNSCALED OUTPUTS:")
+                print(f"      outputs_mean: mean={outputs_mean.mean().item():.6f}, std={outputs_mean.std().item():.6f}, min={outputs_mean.min().item():.6f}, max={outputs_mean.max().item():.6f}")
+                print(f"      outputs_var: mean={outputs_var.mean().item():.6f}, std={outputs_var.std().item():.6f}")
+                print(f"      Sample (first batch): mean={outputs_mean[0].tolist()}, var={outputs_var[0].tolist()}")
 
             # 5. Sample from distribution using reparameterization trick
             # This makes the actual trajectory stochastic based on predicted uncertainty
             std = torch.sqrt(outputs_var + 1e-8)
             epsilon = torch.randn_like(outputs_mean)
             outputs_sampled = outputs_mean + epsilon * std
+
+            if ProcessChain.debug:
+                print(f"\n[7] SAMPLED OUTPUTS (reparameterization):")
+                print(f"      std: mean={std.mean().item():.6f}")
+                print(f"      epsilon: mean={epsilon.mean().item():.6f}, std={epsilon.std().item():.6f}")
+                print(f"      outputs_sampled: mean={outputs_sampled.mean().item():.6f}, std={outputs_sampled.std().item():.6f}")
+                print(f"      Sample (first batch): {outputs_sampled[0].tolist()}")
 
             # 6. Store in trajectory
             trajectory[process_name] = {
@@ -422,6 +527,16 @@ class ProcessChain(nn.Module):
             prev_inputs = current_inputs
             prev_outputs_mean = outputs_sampled  # Use sampled outputs instead of mean
             prev_outputs_var = outputs_var
+
+            if ProcessChain.debug:
+                print(f"\n[8] STORED FOR NEXT ITERATION:")
+                print(f"      prev_outputs_mean (=outputs_sampled): {prev_outputs_mean[0].tolist()}")
+                print(f"      prev_outputs_var: {prev_outputs_var[0].tolist()}")
+
+        if ProcessChain.debug:
+            print(f"\n{'='*80}")
+            print(f"FORWARD PASS COMPLETE")
+            print(f"{'='*80}\n")
 
         return trajectory
 
