@@ -24,7 +24,8 @@ if str(project_root) not in sys.path:
 from controller_optimization.src.utils.process_chain import ProcessChain
 from controller_optimization.src.models.surrogate import ProTSurrogate
 from controller_optimization.src.utils.target_generation import generate_target_trajectory
-from controller_optimization.configs.processes_config import PROCESSES
+from controller_optimization.configs.processes_config import PROCESSES, get_filtered_processes
+from controller_optimization.configs.controller_config import CONTROLLER_CONFIG
 
 
 def diagnose_policy(checkpoint_dir: str):
@@ -49,12 +50,17 @@ def diagnose_policy(checkpoint_dir: str):
     print("\n[1] Loading trained model...")
 
     try:
+        # Get filtered processes based on controller config
+        process_names = CONTROLLER_CONFIG.get('process_names', None)
+        filtered_processes = get_filtered_processes(process_names)
+        print(f"Using processes: {[p['name'] for p in filtered_processes]}")
+
         # Generate target trajectory (needed to initialize ProcessChain)
-        target_trajectory = generate_target_trajectory(PROCESSES)
+        target_trajectory = generate_target_trajectory(filtered_processes)
 
         # Create ProcessChain
         process_chain = ProcessChain(
-            processes_config=PROCESSES,
+            processes_config=filtered_processes,
             target_trajectory=target_trajectory,
             device=device
         )
