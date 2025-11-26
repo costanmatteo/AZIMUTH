@@ -42,6 +42,11 @@ class ProcessChain(nn.Module):
     # Class-level debug flag
     debug = False
 
+    # Pre-sampled noise for deterministic training
+    presampled_noise = None
+    n_scenarios = 0
+    samples_per_scenario = 0
+
     @classmethod
     def enable_debug(cls, enable=True):
         """Enable/disable debug mode for ProcessChain and all PolicyGenerators."""
@@ -58,6 +63,85 @@ class ProcessChain(nn.Module):
         """Print weight statistics for all policy generators."""
         for i, policy in enumerate(self.policy_generators):
             policy.debug_weights()
+
+    def generate_noise_samples(self, n_scenarios, samples_per_scenario, batch_size, seed=42):
+        """
+        Pre-generate noise samples for deterministic training.
+
+        Instead of sampling epsilon ~ N(0,1) at each forward pass (which causes
+        loss oscillations), we pre-generate all noise samples at the start of training.
+        This ensures:
+        - Same (scenario, sample_idx) = same noise = deterministic loss
+        - Different samples still capture uncertainty variability
+        - Stable gradients during training
+
+        Args:
+            n_scenarios (int): Number of training scenarios
+            samples_per_scenario (int): Number of noise samples per scenario
+            batch_size (int): Batch size for each forward pass
+            seed (int): Random seed for reproducibility
+
+        Returns:
+            dict: Pre-sampled noise structure
+        """
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+
+        self.n_scenarios = n_scenarios
+        self.samples_per_scenario = samples_per_scenario
+
+        # Structure: {scenario_idx: {sample_idx: {process_name: epsilon_tensor}}}
+        self.presampled_noise = {}
+
+        for scenario_idx in range(n_scenarios):
+            self.presampled_noise[scenario_idx] = {}
+
+            for sample_idx in range(samples_per_scenario):
+                self.presampled_noise[scenario_idx][sample_idx] = {}
+
+                for process_config in self.processes_config:
+                    process_name = process_config['name']
+                    output_dim = process_config['output_dim']
+
+                    # Generate epsilon ~ N(0, 1) for this (scenario, sample, process)
+                    epsilon = torch.randn(batch_size, output_dim, device=self.device)
+                    self.presampled_noise[scenario_idx][sample_idx][process_name] = epsilon
+
+        print(f"\n{'='*60}")
+        print(f"PRE-SAMPLED NOISE GENERATED")
+        print(f"{'='*60}")
+        print(f"  Scenarios: {n_scenarios}")
+        print(f"  Samples per scenario: {samples_per_scenario}")
+        print(f"  Total samples: {n_scenarios * samples_per_scenario}")
+        print(f"  Batch size: {batch_size}")
+        print(f"  Processes: {[p['name'] for p in self.processes_config]}")
+        print(f"  Seed: {seed}")
+        print(f"{'='*60}\n")
+
+        return self.presampled_noise
+
+    def get_noise_for_sample(self, scenario_idx, sample_idx, process_name):
+        """
+        Get pre-sampled noise for a specific (scenario, sample, process).
+
+        Args:
+            scenario_idx (int): Scenario index
+            sample_idx (int): Sample index within scenario
+            process_name (str): Name of the process
+
+        Returns:
+            torch.Tensor: Pre-sampled epsilon, or None if not available
+        """
+        if self.presampled_noise is None:
+            return None
+
+        if scenario_idx not in self.presampled_noise:
+            return None
+
+        if sample_idx not in self.presampled_noise[scenario_idx]:
+            return None
+
+        return self.presampled_noise[scenario_idx][sample_idx].get(process_name, None)
 
     @staticmethod
     def _get_controllable_info(process_config):
@@ -436,13 +520,15 @@ class ProcessChain(nn.Module):
 
         return full_inputs
 
-    def forward(self, batch_size=1, scenario_idx=0):
+    def forward(self, batch_size=1, scenario_idx=0, sample_idx=None):
         """
         Forward pass attraverso tutta la catena per uno scenario specifico.
 
         Args:
             batch_size (int): Number of parallel samples
             scenario_idx (int): Which scenario's structural conditions to use (default: 0)
+            sample_idx (int, optional): If provided, uses pre-sampled noise for deterministic
+                                        training. If None, samples fresh noise each time.
 
         Returns:
             trajectory (dict): {
@@ -456,6 +542,8 @@ class ProcessChain(nn.Module):
                 ...
             }
         """
+        # Determine if using pre-sampled noise
+        use_presampled = (sample_idx is not None and self.presampled_noise is not None)
 
         trajectory = {}
 
@@ -567,11 +655,22 @@ class ProcessChain(nn.Module):
             # 5. Sample from distribution using reparameterization trick
             # This makes the actual trajectory stochastic based on predicted uncertainty
             std = torch.sqrt(outputs_var + 1e-8)
-            epsilon = torch.randn_like(outputs_mean)
+
+            # Use pre-sampled noise if available (deterministic training)
+            # Otherwise sample fresh noise (stochastic, for evaluation or backward compatibility)
+            if use_presampled:
+                epsilon = self.get_noise_for_sample(scenario_idx, sample_idx, process_name)
+                if epsilon is None:
+                    # Fallback to random sampling if pre-sampled noise not found
+                    epsilon = torch.randn_like(outputs_mean)
+            else:
+                epsilon = torch.randn_like(outputs_mean)
+
             outputs_sampled = outputs_mean + epsilon * std
 
             if ProcessChain.debug:
-                print(f"\n[7] SAMPLED OUTPUTS (reparameterization):")
+                noise_source = "pre-sampled" if use_presampled else "fresh random"
+                print(f"\n[7] SAMPLED OUTPUTS (reparameterization, noise: {noise_source}):")
                 print(f"      std: mean={std.mean().item():.6f}")
                 print(f"      epsilon: mean={epsilon.mean().item():.6f}, std={epsilon.std().item():.6f}")
                 print(f"      outputs_sampled: mean={outputs_sampled.mean().item():.6f}, std={outputs_sampled.std().item():.6f}")

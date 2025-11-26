@@ -35,13 +35,14 @@ class ControllerTrainer:
     def __init__(self, process_chain, surrogate, lambda_bc=0.1,
                  learning_rate=0.001, weight_decay=0.01,
                  reliability_loss_scale=100.0, device='cpu',
-                 curriculum_config=None):
+                 curriculum_config=None, samples_per_scenario=1):
 
         self.process_chain = process_chain
         self.surrogate = surrogate
         self.lambda_bc = lambda_bc
         self.reliability_loss_scale = reliability_loss_scale
         self.device = device
+        self.samples_per_scenario = samples_per_scenario
 
         # Curriculum learning configuration
         self.curriculum_config = curriculum_config or {
@@ -93,6 +94,7 @@ class ControllerTrainer:
         print(f"  Learning rate: {learning_rate}")
         print(f"  Lambda BC: {lambda_bc}")
         print(f"  Reliability loss scale: {reliability_loss_scale}")
+        print(f"  Samples per scenario: {samples_per_scenario}")
         print(f"  Device: {device}")
         if self.curriculum_config['enabled']:
             print(f"  Curriculum Learning: ENABLED")
@@ -376,16 +378,16 @@ class ControllerTrainer:
 
     def train_epoch(self, batch_size=32, reliability_weight=1.0, lambda_bc=None):
         """
-        Training per un epoch ACROSS ALL SCENARIOS.
+        Training per un epoch ACROSS ALL SCENARIOS AND SAMPLES.
 
-        Each epoch cycles through ALL scenarios exactly once in shuffled order.
-        This ensures:
-        - Equal coverage: every scenario trained once per epoch
-        - Diversity: shuffled order prevents overfitting patterns
-        - Balanced generalization: no scenario over/under-represented
+        Each epoch cycles through ALL scenarios and ALL samples per scenario.
+        Using pre-sampled noise ensures deterministic training:
+        - Same (scenario, sample_idx) = same noise = stable loss
+        - Different samples still capture uncertainty variability
+        - No loss oscillations from random sampling
 
-        Per ogni scenario:
-        1. Forward pass → trajectory for that scenario
+        Per ogni (scenario, sample):
+        1. Forward pass → trajectory with pre-sampled noise
         2. Compute F (surrogate) using scenario-specific F_star
         3. Loss = reliability_weight * (F - F*_scenario)^2 + λ_BC * BC_loss
         4. Backward + optimizer step
@@ -406,78 +408,87 @@ class ControllerTrainer:
         epoch_F_values = []
 
         n_scenarios = len(self.surrogate.F_star)
+        n_samples = self.samples_per_scenario if self.samples_per_scenario > 0 else 1
 
         # Shuffle scenario order each epoch for diversity
         scenario_order = np.random.permutation(n_scenarios)
 
-        # Cycle through all scenarios exactly once
+        # Total training steps counter
+        n_steps = 0
+
+        # Cycle through all scenarios
         for scenario_idx in scenario_order:
-            # Forward pass through process chain for this scenario
-            trajectory = self.process_chain.forward(
-                batch_size=batch_size,
-                scenario_idx=scenario_idx
-            )
+            # Cycle through all samples for this scenario
+            for sample_idx in range(n_samples):
+                # Forward pass through process chain with pre-sampled noise
+                # sample_idx ensures deterministic noise (same sample = same noise)
+                trajectory = self.process_chain.forward(
+                    batch_size=batch_size,
+                    scenario_idx=scenario_idx,
+                    sample_idx=sample_idx if self.samples_per_scenario > 0 else None
+                )
 
-            # Compute loss using scenario-specific F_star and dynamic weights
-            total_loss, rel_loss, bc_loss, F = self.compute_loss(
-                trajectory, scenario_idx,
-                reliability_weight=reliability_weight,
-                lambda_bc=lambda_bc
-            )
+                # Compute loss using scenario-specific F_star and dynamic weights
+                total_loss, rel_loss, bc_loss, F = self.compute_loss(
+                    trajectory, scenario_idx,
+                    reliability_weight=reliability_weight,
+                    lambda_bc=lambda_bc
+                )
 
-            # Backward pass
-            self.optimizer.zero_grad()
-            total_loss.backward()
+                # Backward pass
+                self.optimizer.zero_grad()
+                total_loss.backward()
 
-            # DEBUG: Check gradient flow on first scenario of first few epochs
-            if hasattr(self, '_debug_gradients') and self._debug_gradients and scenario_idx == scenario_order[0]:
-                print(f"\n{'='*60}")
-                print("GRADIENT DEBUG - After backward pass")
-                print(f"{'='*60}")
+                # DEBUG: Check gradient flow on first scenario of first few epochs
+                if hasattr(self, '_debug_gradients') and self._debug_gradients and scenario_idx == scenario_order[0] and sample_idx == 0:
+                    print(f"\n{'='*60}")
+                    print("GRADIENT DEBUG - After backward pass")
+                    print(f"{'='*60}")
 
-                # Check gradients on policy generators
-                for i, policy in enumerate(self.process_chain.policy_generators):
-                    print(f"\nPolicy Generator {i}:")
-                    total_grad_norm = 0.0
-                    has_any_grad = False
-                    for name, param in policy.named_parameters():
-                        if param.grad is not None:
-                            has_any_grad = True
-                            grad_norm = param.grad.norm().item()
-                            total_grad_norm += grad_norm ** 2
-                            if 'weight' in name or 'bias' in name:
-                                print(f"  {name}: grad_norm={grad_norm:.8f}, param_norm={param.norm().item():.4f}")
+                    # Check gradients on policy generators
+                    for i, policy in enumerate(self.process_chain.policy_generators):
+                        print(f"\nPolicy Generator {i}:")
+                        total_grad_norm = 0.0
+                        has_any_grad = False
+                        for name, param in policy.named_parameters():
+                            if param.grad is not None:
+                                has_any_grad = True
+                                grad_norm = param.grad.norm().item()
+                                total_grad_norm += grad_norm ** 2
+                                if 'weight' in name or 'bias' in name:
+                                    print(f"  {name}: grad_norm={grad_norm:.8f}, param_norm={param.norm().item():.4f}")
+                            else:
+                                print(f"  {name}: NO GRADIENT!")
+
+                        if has_any_grad:
+                            print(f"  Total grad norm: {total_grad_norm**0.5:.8f}")
                         else:
-                            print(f"  {name}: NO GRADIENT!")
+                            print(f"  WARNING: No gradients at all!")
 
-                    if has_any_grad:
-                        print(f"  Total grad norm: {total_grad_norm**0.5:.8f}")
-                    else:
-                        print(f"  WARNING: No gradients at all!")
+                    # Check if trajectory inputs have gradients
+                    print(f"\nTrajectory Gradient Check:")
+                    for proc_name, data in trajectory.items():
+                        inputs = data['inputs']
+                        outputs_mean = data['outputs_mean']
+                        print(f"  {proc_name}:")
+                        print(f"    inputs.requires_grad: {inputs.requires_grad}, inputs.grad_fn: {inputs.grad_fn}")
+                        print(f"    outputs_mean.requires_grad: {outputs_mean.requires_grad}, outputs_mean.grad_fn: {outputs_mean.grad_fn}")
 
-                # Check if trajectory inputs have gradients
-                print(f"\nTrajectory Gradient Check:")
-                for proc_name, data in trajectory.items():
-                    inputs = data['inputs']
-                    outputs_mean = data['outputs_mean']
-                    print(f"  {proc_name}:")
-                    print(f"    inputs.requires_grad: {inputs.requires_grad}, inputs.grad_fn: {inputs.grad_fn}")
-                    print(f"    outputs_mean.requires_grad: {outputs_mean.requires_grad}, outputs_mean.grad_fn: {outputs_mean.grad_fn}")
+                    print(f"{'='*60}\n")
 
-                print(f"{'='*60}\n")
+                self.optimizer.step()
 
-            self.optimizer.step()
+                # Track metrics
+                n_steps += 1
+                epoch_total_loss += total_loss.item()
+                epoch_reliability_loss += rel_loss
+                epoch_bc_loss += bc_loss
+                epoch_F_values.append(F)
 
-            # Track metrics
-            epoch_total_loss += total_loss.item()
-            epoch_reliability_loss += rel_loss
-            epoch_bc_loss += bc_loss
-            epoch_F_values.append(F)
-
-        # Average over all scenarios
-        avg_total_loss = epoch_total_loss / n_scenarios
-        avg_reliability_loss = epoch_reliability_loss / n_scenarios
-        avg_bc_loss = epoch_bc_loss / n_scenarios
+        # Average over all training steps (scenarios * samples)
+        avg_total_loss = epoch_total_loss / n_steps
+        avg_reliability_loss = epoch_reliability_loss / n_steps
+        avg_bc_loss = epoch_bc_loss / n_steps
         avg_F = np.mean(epoch_F_values)
 
         return avg_total_loss, avg_reliability_loss, avg_bc_loss, avg_F
@@ -504,6 +515,16 @@ class ControllerTrainer:
 
         n_scenarios = len(self.surrogate.F_star)
 
+        # Generate pre-sampled noise for deterministic training
+        # This ensures same (scenario, sample_idx) = same noise = stable gradients
+        if self.samples_per_scenario > 0:
+            self.process_chain.generate_noise_samples(
+                n_scenarios=n_scenarios,
+                samples_per_scenario=self.samples_per_scenario,
+                batch_size=batch_size,
+                seed=42  # Fixed seed for reproducibility
+            )
+
         # Calculate warmup epochs for curriculum learning
         warmup_epochs = 0
         if self.curriculum_config['enabled']:
@@ -515,8 +536,9 @@ class ControllerTrainer:
             print(f"{'='*70}")
             print(f"  Epochs: {epochs}")
             print(f"  Scenarios per epoch: {n_scenarios} (all scenarios)")
+            print(f"  Samples per scenario: {self.samples_per_scenario}")
             print(f"  Batch size per scenario: {batch_size}")
-            print(f"  Total batches: {epochs * n_scenarios}")
+            print(f"  Total training steps per epoch: {n_scenarios * self.samples_per_scenario}")
             print(f"  Patience: {patience}")
             print(f"  Save dir: {save_dir}")
             print(f"  F* (target, mean): {np.mean(self.surrogate.F_star):.6f} ± {np.std(self.surrogate.F_star):.6f}")

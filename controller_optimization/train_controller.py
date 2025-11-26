@@ -255,7 +255,8 @@ def main():
         weight_decay=CONTROLLER_CONFIG['training']['weight_decay'],
         reliability_loss_scale=CONTROLLER_CONFIG['training']['reliability_loss_scale'],
         device=device,
-        curriculum_config=curriculum_config
+        curriculum_config=curriculum_config,
+        samples_per_scenario=CONTROLLER_CONFIG['scenarios'].get('samples_per_scenario', 1)
     )
 
     # Enable gradient debugging for first epoch

@@ -48,6 +48,10 @@ POLICY GENERATOR:
 SCENARIOS:
 - n_train: Number of scenarios for training (diverse operating conditions)
 - n_test: Number of scenarios for final evaluation (never seen during training)
+- samples_per_scenario: Number of pre-sampled trajectories per scenario. These are generated
+                        once at the start of training with different noise realizations.
+                        This ensures deterministic training (same sample = same loss) while
+                        still capturing uncertainty through multiple samples.
 - seed_target: Seed for target trajectory generation (train scenarios)
 - seed_baseline: Seed for baseline process noise (same inputs as target, different noise realization)
 - test_seed_offset: Offset added to seeds for test scenarios (default 1000, ensures test != train)
@@ -145,6 +149,7 @@ CONTROLLER_CONFIG = {
     'scenarios': {
         'n_train': 1,         # Training scenarios (diverse operating conditions)
         'n_test': 1,          # Test scenarios (final evaluation, never seen during training)
+        'samples_per_scenario': 10,  # Number of pre-sampled trajectories per scenario
         'seed_target': 42,     # Seed for target trajectory generation (train)
         'seed_baseline': 51,   # Seed for baseline process noise (same inputs, different noise)
         'test_seed_offset': 1000,  # Offset added to seeds for test scenarios (ensures different from train)
