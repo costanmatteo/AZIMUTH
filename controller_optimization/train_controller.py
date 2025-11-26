@@ -448,10 +448,22 @@ def main():
     )
 
     # Load trained policy generators into test chain
+    # If trained model uses residual mode, enable it on test chain first
     for process_idx in range(len(process_chain.policy_generators)):
-        process_chain_test.policy_generators[process_idx].load_state_dict(
-            process_chain.policy_generators[process_idx].state_dict()
-        )
+        source_policy = process_chain.policy_generators[process_idx]
+        target_policy = process_chain_test.policy_generators[process_idx]
+
+        # If source is in residual mode, enable it on target before loading
+        if source_policy.residual_mode:
+            # Get hidden size from the first linear layer's output features
+            hidden_size = source_policy.residual_network.network[0].out_features \
+                if source_policy.residual_network else 32
+            target_policy.enable_residual_mode(
+                alpha=source_policy.residual_alpha,
+                residual_hidden_size=hidden_size
+            )
+
+        target_policy.load_state_dict(source_policy.state_dict())
 
     # Evaluate test scenarios
     F_star_test_values = []
