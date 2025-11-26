@@ -22,12 +22,12 @@ class ProTSurrogate:
     # These values are based on typical ranges from the SCM models
     PROCESS_CONFIGS = {
         'laser': {
-            'target': 0.5,      # ActualPower target
+            'target': 0.8,      # ActualPower target
             'scale': 0.1,       # Quality scale (smaller = more sensitive)
             'weight': 1.0       # Relative importance
         },
         'plasma': {
-            'target': 5.0,      # RemovalRate target
+            'target': 3.0,      # RemovalRate target
             'scale': 2.0,
             'weight': 1.0
         },
@@ -136,7 +136,7 @@ class ProTSurrogate:
         # LASER: First process, fixed target
         if 'laser' in outputs:
             laser_power = outputs['laser']
-            adaptive_targets['laser'] = 0.5  # Fixed target
+            adaptive_targets['laser'] = 0.8  # Fixed target
 
             laser_quality = torch.exp(-((laser_power - adaptive_targets['laser']) ** 2) / 0.1)
             quality_scores['laser'] = laser_quality
@@ -146,12 +146,12 @@ class ProTSurrogate:
             plasma_rate = outputs['plasma']
 
             # Base target
-            plasma_target = 5.0
+            plasma_target = 3.0
 
             # Adapt based on Laser (if available)
             # If laser is too strong → plasma must compensate by increasing removal rate
             if 'laser' in outputs:
-                plasma_target = plasma_target + 20.0 * (outputs['laser'] - 0.5)
+                plasma_target = plasma_target + 2.0 * (outputs['laser'] - 0.8)
 
             adaptive_targets['plasma'] = plasma_target
 

@@ -92,7 +92,7 @@ CONTROLLER_CONFIG = {
     # Policy generator architecture
     'policy_generator': {
         'architecture': 'custom',  # 'small', 'medium', 'large', 'custom'
-        'hidden_sizes': [256, 128, 64, 32],  # Usato solo se 'custom'
+        'hidden_sizes': [128, 64, 32],  # Usato solo se 'custom'
         'dropout': 0.1,
         'use_batchnorm': False,
         'use_scenario_encoder': False,  # Enable scenario context encoding
@@ -103,11 +103,11 @@ CONTROLLER_CONFIG = {
     'training': {
         'epochs': 800,  # Each epoch cycles through all training scenarios once
         'batch_size': 64,  # Replicas per scenario (same inputs, different dropout/stochasticity)
-        'learning_rate': 0.000001,
+        'learning_rate': 0.001,
         'weight_decay': 0.001,
         'lambda_bc': 0.001,  # Behavior cloning weight
-        'reliability_loss_scale': 100.0,  # Scale factor for reliability loss (F - F*)^2
-        'patience': 300,
+        'reliability_loss_scale': 1.0,  # Scale factor for reliability loss (F - F*)^2
+        'patience': 400,
         'device': 'auto',
         'checkpoint_dir': 'controller_optimization/checkpoints/controller',
 
@@ -135,8 +135,8 @@ CONTROLLER_CONFIG = {
         'curriculum_learning': {
             'enabled': True,  # Enable curriculum learning strategy
             'warmup_fraction': 0.1,  # First 10% of epochs = warm-up (BC only)
-            'lambda_bc_start': 10.0,  # High BC weight during warm-up
-            'lambda_bc_end': 0.001,  # Low BC weight at end of training
+            'lambda_bc_start': 1.0,  # High BC weight during warm-up
+            'lambda_bc_end': 0.1,  # Low BC weight at end of training
             'reliability_weight_curve': 'exponential',  # 'exponential', 'linear', 'sigmoid'
         },
     },
@@ -145,7 +145,7 @@ CONTROLLER_CONFIG = {
     'scenarios': {
         'n_train': 1,         # Training scenarios (diverse operating conditions)
         'n_test': 1,          # Test scenarios (final evaluation, never seen during training)
-        'seed_target': 50,     # Seed for target trajectory generation (train)
+        'seed_target': 42,     # Seed for target trajectory generation (train)
         'seed_baseline': 51,   # Seed for baseline process noise (same inputs, different noise)
         'test_seed_offset': 1000,  # Offset added to seeds for test scenarios (ensures different from train)
     },
