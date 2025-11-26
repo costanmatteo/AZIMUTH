@@ -3,10 +3,55 @@ Policy Generator: genera parametri di input ottimali per il processo successivo.
 
 Architettura simile a UncertaintyPredictor ma con output bounded.
 Output è limitato tra min e max derivati dall'UncertaintyPredictor.
+
+Supports residual learning mode:
+- Phase 1 (warmup): Train policy normally with BC loss
+- Phase 2 (residual): Freeze baseline, train small residual network
+  Output = baseline(x) + alpha * residual(x)
 """
 
 import torch
 import torch.nn as nn
+import copy
+
+
+class ResidualNetwork(nn.Module):
+    """
+    Small residual network for learning corrections to baseline policy.
+
+    Architecture is intentionally smaller than the main policy to:
+    1. Limit the magnitude of corrections
+    2. Faster training
+    3. Regularization effect
+
+    Output is passed through tanh to bound corrections.
+    """
+
+    def __init__(self, input_size, output_size, hidden_size=32):
+        super(ResidualNetwork, self).__init__()
+
+        self.network = nn.Sequential(
+            nn.Linear(input_size, hidden_size),
+            nn.SiLU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.SiLU(),
+            nn.Linear(hidden_size, output_size),
+            nn.Tanh()  # Bound output to [-1, 1]
+        )
+
+        # Initialize with small weights for near-zero initial output
+        self._init_small_weights()
+
+    def _init_small_weights(self):
+        """Initialize weights small so residual starts near zero."""
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.normal_(m.weight, mean=0.0, std=0.01)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+
+    def forward(self, x):
+        return self.network(x)
 
 
 class PolicyGenerator(nn.Module):
