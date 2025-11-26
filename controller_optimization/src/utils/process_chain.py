@@ -59,6 +59,63 @@ class ProcessChain(nn.Module):
         for i, policy in enumerate(self.policy_generators):
             policy.debug_weights()
 
+    def enable_residual_mode(self, alpha=0.1, residual_hidden_size=32):
+        """
+        Enable residual learning mode for all policy generators.
+
+        This freezes the baseline policies and creates trainable residual networks.
+
+        Args:
+            alpha (float): Scaling factor for residual output (default: 0.1)
+            residual_hidden_size (int): Hidden layer size for residual networks
+        """
+        print(f"\n{'='*60}")
+        print("ENABLING RESIDUAL LEARNING MODE")
+        print(f"{'='*60}")
+
+        for i, policy in enumerate(self.policy_generators):
+            policy.enable_residual_mode(
+                alpha=alpha,
+                residual_hidden_size=residual_hidden_size
+            )
+
+        print(f"{'='*60}\n")
+
+    def disable_residual_mode(self):
+        """Disable residual learning mode for all policy generators."""
+        print("Disabling residual learning mode...")
+        for policy in self.policy_generators:
+            policy.disable_residual_mode()
+
+    def get_total_residual_norm(self):
+        """
+        Get sum of residual norms from all policy generators (for regularization).
+
+        Returns:
+            torch.Tensor: Sum of mean squared residual outputs
+        """
+        total_norm = torch.tensor(0.0, device=self.device)
+        for policy in self.policy_generators:
+            total_norm = total_norm + policy.get_residual_norm()
+        return total_norm
+
+    def get_residual_parameters(self):
+        """
+        Get all trainable residual network parameters.
+
+        Returns:
+            list: List of parameters from all residual networks
+        """
+        params = []
+        for policy in self.policy_generators:
+            if policy.residual_mode and policy.residual_network is not None:
+                params.extend(policy.residual_network.parameters())
+        return params
+
+    def is_residual_mode(self):
+        """Check if any policy generator is in residual mode."""
+        return any(p.residual_mode for p in self.policy_generators)
+
     @staticmethod
     def _get_controllable_info(process_config):
         """

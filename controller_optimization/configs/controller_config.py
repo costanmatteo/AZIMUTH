@@ -139,6 +139,16 @@ CONTROLLER_CONFIG = {
             'lambda_bc_end': 0.001,  # Low BC weight at end of training
             'reliability_weight_curve': 'exponential',  # 'exponential', 'linear', 'sigmoid'
         },
+
+        # Residual Learning (alternative to curriculum learning after warmup)
+        # When enabled, freezes baseline policy after warmup and trains small residual network
+        # Output = baseline(x) + alpha * residual(x)
+        'residual_learning': {
+            'enabled': False,  # Enable residual learning (requires curriculum_learning.enabled=True)
+            'alpha': 0.1,  # Scale factor for residual output (0.1 = max 10% correction)
+            'lambda_residual': 0.01,  # Regularization weight to keep residuals small
+            'residual_hidden_size': 32,  # Hidden layer size for residual network
+        },
     },
 
     # Scenario generation (train/test split)

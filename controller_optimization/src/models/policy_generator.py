@@ -81,6 +81,7 @@ class PolicyGenerator(nn.Module):
                  output_min=None, output_max=None):
         super(PolicyGenerator, self).__init__()
 
+        self.input_size = input_size
         self.output_size = output_size
 
         # Register bounds as buffers (not parameters, but saved with model)
@@ -111,6 +112,12 @@ class PolicyGenerator(nn.Module):
         # Single output head (no variance head)
         self.output_head = nn.Linear(prev_size, output_size)
 
+        # Residual learning mode (initialized as disabled)
+        self.residual_mode = False
+        self.residual_network = None
+        self.residual_alpha = 0.1  # Default scaling factor
+        self._last_residual_output = None  # For regularization loss
+
     def set_bounds(self, output_min, output_max):
         """
         Set or update output bounds.
@@ -123,13 +130,101 @@ class PolicyGenerator(nn.Module):
         self.output_min = output_min.to(device)
         self.output_max = output_max.to(device)
 
+    def enable_residual_mode(self, alpha=0.1, residual_hidden_size=32):
+        """
+        Enable residual learning mode.
+
+        This method:
+        1. Freezes the current policy (baseline)
+        2. Creates a small residual network
+        3. Changes forward() to output: baseline(x) + alpha * residual(x)
+
+        Args:
+            alpha (float): Scaling factor for residual output (default: 0.1)
+            residual_hidden_size (int): Hidden layer size for residual network
+        """
+        if self.residual_mode:
+            print(f"  [{self.debug_name}] Already in residual mode, skipping")
+            return
+
+        # Freeze baseline network
+        for param in self.network.parameters():
+            param.requires_grad = False
+        for param in self.output_head.parameters():
+            param.requires_grad = False
+
+        # Create residual network
+        device = next(self.parameters()).device
+        self.residual_network = ResidualNetwork(
+            input_size=self.input_size,
+            output_size=self.output_size,
+            hidden_size=residual_hidden_size
+        ).to(device)
+
+        self.residual_alpha = alpha
+        self.residual_mode = True
+
+        # Count parameters
+        frozen_params = sum(p.numel() for p in self.network.parameters())
+        frozen_params += sum(p.numel() for p in self.output_head.parameters())
+        trainable_params = sum(p.numel() for p in self.residual_network.parameters())
+
+        print(f"  [{self.debug_name}] Residual mode enabled:")
+        print(f"    Frozen baseline params: {frozen_params:,}")
+        print(f"    Trainable residual params: {trainable_params:,}")
+        print(f"    Alpha: {alpha}")
+
+    def disable_residual_mode(self):
+        """Disable residual mode and unfreeze baseline (for fine-tuning if needed)."""
+        if not self.residual_mode:
+            return
+
+        # Unfreeze baseline
+        for param in self.network.parameters():
+            param.requires_grad = True
+        for param in self.output_head.parameters():
+            param.requires_grad = True
+
+        self.residual_mode = False
+        print(f"  [{self.debug_name}] Residual mode disabled, baseline unfrozen")
+
+    def get_residual_norm(self):
+        """
+        Get the L2 norm of the last residual output (for regularization).
+
+        Returns:
+            torch.Tensor: Scalar tensor with mean squared residual, or 0 if not in residual mode
+        """
+        if self._last_residual_output is None:
+            return torch.tensor(0.0, device=next(self.parameters()).device)
+        return torch.mean(self._last_residual_output ** 2)
+
+    def _compute_baseline_actions(self, x):
+        """Compute actions from baseline network (used internally)."""
+        features = self.network(x)
+        raw_actions = self.output_head(features)
+
+        if self.output_min is not None and self.output_max is not None:
+            tanh_out = torch.tanh(raw_actions)
+            normalized = 0.5 * (tanh_out + 1.0)
+            actions = self.output_min + normalized * (self.output_max - self.output_min)
+        else:
+            actions = raw_actions
+
+        return actions
+
     def forward(self, x):
         """
         Forward pass with bounded output.
 
-        Uses tanh activation followed by affine scaling to enforce bounds:
+        In normal mode:
+            Uses tanh activation followed by affine scaling to enforce bounds:
             normalized = 0.5 * (tanh(raw) + 1)  -> [0, 1]
             bounded = min + normalized * (max - min)  -> [min, max]
+
+        In residual mode:
+            actions = baseline(x) + alpha * residual(x) * action_range
+            Where baseline is frozen and only residual is trained.
 
         Args:
             x (torch.Tensor): Input tensor of shape (batch_size, input_size)
@@ -137,6 +232,47 @@ class PolicyGenerator(nn.Module):
         Returns:
             torch.Tensor: Bounded actions for next process, shape (batch_size, output_size)
         """
+        # Residual mode: baseline + alpha * residual
+        if self.residual_mode and self.residual_network is not None:
+            # Compute baseline actions (no gradients through baseline)
+            with torch.no_grad():
+                baseline_actions = self._compute_baseline_actions(x)
+
+            # Compute residual (trainable)
+            residual_output = self.residual_network(x)  # Output in [-1, 1] due to tanh
+            self._last_residual_output = residual_output  # Store for regularization
+
+            # Scale residual by action range and alpha
+            if self.output_min is not None and self.output_max is not None:
+                action_range = self.output_max - self.output_min
+                # Residual can adjust up to alpha * action_range in either direction
+                scaled_residual = self.residual_alpha * residual_output * action_range * 0.5
+            else:
+                scaled_residual = self.residual_alpha * residual_output
+
+            # Combine baseline + residual
+            actions = baseline_actions + scaled_residual
+
+            # Clamp to stay within bounds
+            if self.output_min is not None and self.output_max is not None:
+                actions = torch.clamp(actions, self.output_min, self.output_max)
+
+            # Debug output
+            if PolicyGenerator.debug:
+                with torch.no_grad():
+                    print(f"\n{'='*60}")
+                    print(f"PolicyGenerator DEBUG [{self.debug_name}] RESIDUAL MODE")
+                    print(f"{'='*60}")
+                    print(f"Baseline actions: mean={baseline_actions.mean().item():.4f}, std={baseline_actions.std().item():.4f}")
+                    print(f"Residual output (raw): mean={residual_output.mean().item():.4f}, std={residual_output.std().item():.4f}")
+                    print(f"Scaled residual: mean={scaled_residual.mean().item():.4f}, std={scaled_residual.std().item():.4f}")
+                    print(f"Final actions: mean={actions.mean().item():.4f}, std={actions.std().item():.4f}")
+                    print(f"Alpha: {self.residual_alpha}")
+                    print(f"{'='*60}\n")
+
+            return actions
+
+        # Normal mode: standard forward pass
         features = self.network(x)
         raw_actions = self.output_head(features)
 

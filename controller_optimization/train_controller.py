@@ -247,6 +247,14 @@ def main():
         'reliability_weight_curve': 'exponential'
     })
 
+    # Get residual learning config (backward compatible)
+    residual_config = CONTROLLER_CONFIG['training'].get('residual_learning', {
+        'enabled': False,
+        'alpha': 0.1,
+        'lambda_residual': 0.01,
+        'residual_hidden_size': 32,
+    })
+
     trainer = ControllerTrainer(
         process_chain=process_chain,
         surrogate=surrogate,
@@ -255,7 +263,8 @@ def main():
         weight_decay=CONTROLLER_CONFIG['training']['weight_decay'],
         reliability_loss_scale=CONTROLLER_CONFIG['training']['reliability_loss_scale'],
         device=device,
-        curriculum_config=curriculum_config
+        curriculum_config=curriculum_config,
+        residual_config=residual_config
     )
 
     # Enable gradient debugging for first epoch

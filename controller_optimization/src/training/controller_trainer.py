@@ -35,13 +35,15 @@ class ControllerTrainer:
     def __init__(self, process_chain, surrogate, lambda_bc=0.1,
                  learning_rate=0.001, weight_decay=0.01,
                  reliability_loss_scale=100.0, device='cpu',
-                 curriculum_config=None):
+                 curriculum_config=None, residual_config=None):
 
         self.process_chain = process_chain
         self.surrogate = surrogate
         self.lambda_bc = lambda_bc
         self.reliability_loss_scale = reliability_loss_scale
         self.device = device
+        self.learning_rate = learning_rate
+        self.weight_decay = weight_decay
 
         # Curriculum learning configuration
         self.curriculum_config = curriculum_config or {
@@ -51,6 +53,15 @@ class ControllerTrainer:
             'lambda_bc_end': 0.001,
             'reliability_weight_curve': 'exponential'
         }
+
+        # Residual learning configuration
+        self.residual_config = residual_config or {
+            'enabled': False,
+            'alpha': 0.1,              # Scale factor for residual
+            'lambda_residual': 0.01,   # Regularization weight for residual norm
+            'residual_hidden_size': 32,
+        }
+        self._residual_mode_enabled = False  # Track if we've switched to residual mode
 
         # Optimizer SOLO per policy generators (uncertainty predictors sono frozen)
         trainable_params = [p for p in process_chain.parameters() if p.requires_grad]
@@ -69,6 +80,7 @@ class ControllerTrainer:
             'total_loss': [],
             'reliability_loss': [],
             'bc_loss': [],
+            'residual_loss': [],  # Track residual regularization loss
             'F_values': [],  # Reliability values durante training
             'lambda_bc': [],  # Track lambda_bc per epoch
             'reliability_weight': [],  # Track reliability_weight per epoch
@@ -99,6 +111,11 @@ class ControllerTrainer:
             print(f"    Warm-up fraction: {self.curriculum_config['warmup_fraction']}")
             print(f"    Lambda BC: {self.curriculum_config['lambda_bc_start']} → {self.curriculum_config['lambda_bc_end']}")
             print(f"    Reliability weight curve: {self.curriculum_config['reliability_weight_curve']}")
+        if self.residual_config['enabled']:
+            print(f"  Residual Learning: ENABLED")
+            print(f"    Alpha: {self.residual_config['alpha']}")
+            print(f"    Lambda residual: {self.residual_config['lambda_residual']}")
+            print(f"    Residual hidden size: {self.residual_config['residual_hidden_size']}")
 
     def _compute_normalization_stats(self):
         """
@@ -123,6 +140,41 @@ class ControllerTrainer:
 
         print(f"  Input normalization stats computed for {len(self.input_stats)} processes")
 
+    def _enable_residual_mode_internal(self):
+        """
+        Enable residual learning mode: freeze baselines, create residual networks,
+        and rebuild optimizer to only train residual parameters.
+        """
+        if self._residual_mode_enabled:
+            return  # Already enabled
+
+        print(f"\n{'='*70}")
+        print("SWITCHING TO RESIDUAL LEARNING MODE")
+        print(f"{'='*70}")
+
+        # Enable residual mode on process chain
+        self.process_chain.enable_residual_mode(
+            alpha=self.residual_config['alpha'],
+            residual_hidden_size=self.residual_config['residual_hidden_size']
+        )
+
+        # Rebuild optimizer with only residual parameters
+        residual_params = self.process_chain.get_residual_parameters()
+
+        if len(residual_params) == 0:
+            raise ValueError("No residual parameters found after enabling residual mode!")
+
+        self.optimizer = optim.Adam(
+            residual_params,
+            lr=self.learning_rate,
+            weight_decay=self.weight_decay
+        )
+
+        self._residual_mode_enabled = True
+
+        print(f"  Optimizer rebuilt with {sum(p.numel() for p in residual_params):,} residual parameters")
+        print(f"{'='*70}\n")
+
     def get_loss_weights(self, epoch, total_epochs):
         """
         Calculate dynamic loss weights for curriculum learning.
@@ -135,7 +187,7 @@ class ControllerTrainer:
             tuple: (lambda_bc, reliability_weight, phase)
                 - lambda_bc: Behavior cloning weight
                 - reliability_weight: Reliability loss weight
-                - phase: 'warmup' or 'curriculum'
+                - phase: 'warmup', 'curriculum', or 'residual'
         """
         if not self.curriculum_config['enabled']:
             # Curriculum learning disabled: use fixed weights
@@ -149,6 +201,12 @@ class ControllerTrainer:
             lambda_bc = self.curriculum_config['lambda_bc_start']
             reliability_weight = 0.0
             phase = 'warmup'
+        elif self._residual_mode_enabled:
+            # RESIDUAL LEARNING PHASE: reliability only, no BC (baseline is frozen)
+            # BC is implicitly preserved by the frozen baseline
+            lambda_bc = 0.0
+            reliability_weight = 1.0
+            phase = 'residual'
         else:
             # CURRICULUM LEARNING PHASE: gradual transition
             # Progress within curriculum phase (0.0 at start, 1.0 at end)
@@ -368,11 +426,21 @@ class ControllerTrainer:
         # Average BC loss across processes (not sum!)
         bc_loss = bc_loss / n_processes
 
+        # Residual regularization loss (only in residual mode)
+        residual_loss = torch.tensor(0.0, device=self.device)
+        if self._residual_mode_enabled and self.residual_config['enabled']:
+            residual_loss = self.process_chain.get_total_residual_norm()
+
         # Total loss with dynamic weights
         # reliability_weight controls if reliability loss is active (0.0 during warm-up)
-        total_loss = reliability_weight * torch.mean(reliability_loss) + lambda_bc * bc_loss
+        # lambda_residual controls residual regularization (only in residual mode)
+        total_loss = (
+            reliability_weight * torch.mean(reliability_loss)
+            + lambda_bc * bc_loss
+            + self.residual_config['lambda_residual'] * residual_loss
+        )
 
-        return total_loss, torch.mean(reliability_loss).item(), bc_loss.item(), torch.mean(F).item()
+        return total_loss, torch.mean(reliability_loss).item(), bc_loss.item(), torch.mean(F).item(), residual_loss.item()
 
     def train_epoch(self, batch_size=32, reliability_weight=1.0, lambda_bc=None):
         """
@@ -396,13 +464,14 @@ class ControllerTrainer:
             lambda_bc: BC weight (if None, uses self.lambda_bc)
 
         Returns:
-            Tuple of (avg_total_loss, avg_reliability_loss, avg_bc_loss, avg_F)
+            Tuple of (avg_total_loss, avg_reliability_loss, avg_bc_loss, avg_F, avg_residual_loss)
         """
         self.process_chain.train()
 
         epoch_total_loss = 0.0
         epoch_reliability_loss = 0.0
         epoch_bc_loss = 0.0
+        epoch_residual_loss = 0.0
         epoch_F_values = []
 
         n_scenarios = len(self.surrogate.F_star)
@@ -419,7 +488,7 @@ class ControllerTrainer:
             )
 
             # Compute loss using scenario-specific F_star and dynamic weights
-            total_loss, rel_loss, bc_loss, F = self.compute_loss(
+            total_loss, rel_loss, bc_loss, F, res_loss = self.compute_loss(
                 trajectory, scenario_idx,
                 reliability_weight=reliability_weight,
                 lambda_bc=lambda_bc
@@ -472,15 +541,17 @@ class ControllerTrainer:
             epoch_total_loss += total_loss.item()
             epoch_reliability_loss += rel_loss
             epoch_bc_loss += bc_loss
+            epoch_residual_loss += res_loss
             epoch_F_values.append(F)
 
         # Average over all scenarios
         avg_total_loss = epoch_total_loss / n_scenarios
         avg_reliability_loss = epoch_reliability_loss / n_scenarios
         avg_bc_loss = epoch_bc_loss / n_scenarios
+        avg_residual_loss = epoch_residual_loss / n_scenarios
         avg_F = np.mean(epoch_F_values)
 
-        return avg_total_loss, avg_reliability_loss, avg_bc_loss, avg_F
+        return avg_total_loss, avg_reliability_loss, avg_bc_loss, avg_F, avg_residual_loss
 
     def train(self, epochs=100, batch_size=32,
               patience=20, save_dir='checkpoints/controller', verbose=True):
@@ -524,9 +595,14 @@ class ControllerTrainer:
             if self.curriculum_config['enabled']:
                 print(f"\n  CURRICULUM LEARNING STRATEGY:")
                 print(f"    Phase 1 - Warm-up: Epochs 1-{warmup_epochs} (BC only)")
-                print(f"    Phase 2 - Curriculum: Epochs {warmup_epochs + 1}-{epochs} (gradual reliability)")
-                print(f"    Lambda BC schedule: {self.curriculum_config['lambda_bc_start']:.3f} → {self.curriculum_config['lambda_bc_end']:.6f}")
-                print(f"    Reliability weight curve: {self.curriculum_config['reliability_weight_curve']}")
+                if self.residual_config['enabled']:
+                    print(f"    Phase 2 - Residual: Epochs {warmup_epochs + 1}-{epochs} (frozen baseline + residual)")
+                    print(f"    Residual alpha: {self.residual_config['alpha']}")
+                    print(f"    Residual regularization: {self.residual_config['lambda_residual']}")
+                else:
+                    print(f"    Phase 2 - Curriculum: Epochs {warmup_epochs + 1}-{epochs} (gradual reliability)")
+                    print(f"    Lambda BC schedule: {self.curriculum_config['lambda_bc_start']:.3f} → {self.curriculum_config['lambda_bc_end']:.6f}")
+                    print(f"    Reliability weight curve: {self.curriculum_config['reliability_weight_curve']}")
 
         # Save embedding snapshot at epoch 1 (initial state)
         if hasattr(self.process_chain, 'scenario_encoder') and self.process_chain.scenario_encoder is not None:
@@ -546,7 +622,7 @@ class ControllerTrainer:
             lambda_bc, reliability_weight, phase = self.get_loss_weights(epoch, epochs)
 
             # Train epoch with dynamic weights
-            avg_total_loss, avg_rel_loss, avg_bc_loss, avg_F = self.train_epoch(
+            avg_total_loss, avg_rel_loss, avg_bc_loss, avg_F, avg_res_loss = self.train_epoch(
                 batch_size=batch_size,
                 reliability_weight=reliability_weight,
                 lambda_bc=lambda_bc
@@ -556,6 +632,7 @@ class ControllerTrainer:
             self.history['total_loss'].append(avg_total_loss)
             self.history['reliability_loss'].append(avg_rel_loss)
             self.history['bc_loss'].append(avg_bc_loss)
+            self.history['residual_loss'].append(avg_res_loss)
             self.history['F_values'].append(avg_F)
             self.history['lambda_bc'].append(lambda_bc)
             self.history['reliability_weight'].append(reliability_weight)
@@ -570,20 +647,25 @@ class ControllerTrainer:
 
             # Print progress with curriculum learning info
             if verbose and (epoch % 10 == 0 or epoch == 1):
-                phase_label = "[WARM-UP]" if phase == 'warmup' else "[CURRICULUM]" if phase == 'curriculum' else ""
+                phase_label = "[WARM-UP]" if phase == 'warmup' else "[RESIDUAL]" if phase == 'residual' else "[CURRICULUM]" if phase == 'curriculum' else ""
                 print(f"\nEpoch {epoch}/{epochs} {phase_label}")
                 print(f"  λ_BC: {lambda_bc:.6f}, Rel Weight: {reliability_weight:.3f}")
                 print(f"  Total Loss:       {avg_total_loss:.6f}")
                 print(f"  Reliability Loss: {avg_rel_loss:.6f} {'(ignored)' if reliability_weight == 0 else ''}")
                 print(f"  BC Loss:          {avg_bc_loss:.6f}")
+                if self._residual_mode_enabled:
+                    print(f"  Residual Loss:    {avg_res_loss:.6f}")
                 print(f"  F (actual):       {avg_F:.6f}")
                 print(f"  F* (target, mean):{np.mean(self.surrogate.F_star):.6f}")
 
-            # Print warm-up completion message
-            if verbose and self.curriculum_config['enabled'] and epoch == warmup_epochs:
-                print(f"\n{'='*70}")
-                print("WARM-UP COMPLETED! Starting curriculum learning phase...")
-                print(f"{'='*70}")
+            # At end of warmup: enable residual mode if configured
+            if self.curriculum_config['enabled'] and epoch == warmup_epochs:
+                if self.residual_config['enabled']:
+                    self._enable_residual_mode_internal()
+                elif verbose:
+                    print(f"\n{'='*70}")
+                    print("WARM-UP COMPLETED! Starting curriculum learning phase...")
+                    print(f"{'='*70}")
 
             # Check for improvement (based on LOSS, not F value)
             # We want F to become more similar to F*, i.e., loss to decrease
