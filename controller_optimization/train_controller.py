@@ -54,6 +54,7 @@ from controller_optimization.src.utils.visualization import (
 )
 from controller_optimization.src.utils.report_generator import generate_controller_report
 from controller_optimization.src.utils.model_utils import convert_numpy_to_tensor
+from controller_optimization.verify_structural_bias import run_structural_bias_verification
 from controller_optimization.src.utils.scm_validation import validate_all_processes
 
 
@@ -819,6 +820,21 @@ def main():
                 import traceback
                 traceback.print_exc()
 
+        # Run structural bias verification
+        structural_bias_results = None
+        try:
+            print("  Running structural bias verification...")
+            structural_bias_results = run_structural_bias_verification(
+                output_dir=checkpoint_dir,
+                n_samples=100000,
+                seed=CONTROLLER_CONFIG.get('misc', {}).get('random_seed', 42),
+                verbose=False
+            )
+            status = "VERIFIED" if structural_bias_results['all_verified'] else "SOME FAILURES"
+            print(f"  ✓ Structural bias verification: {status}")
+        except Exception as e:
+            print(f"  ✗ Warning: Structural bias verification failed: {e}")
+
         # Generate report
         try:
             report_path = generate_controller_report(
@@ -833,7 +849,8 @@ def main():
                 timestamp=datetime.now(),
                 n_scenarios=n_scenarios,
                 advanced_metrics=advanced_metrics_for_report,
-                trajectory_values=trajectory_values_for_report
+                trajectory_values=trajectory_values_for_report,
+                structural_bias_results=structural_bias_results
             )
             print(f"  ✓ PDF report generated: {report_path}")
         except Exception as e:
