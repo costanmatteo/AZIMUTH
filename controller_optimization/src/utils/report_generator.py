@@ -13,6 +13,7 @@ from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle, Frame, PageTemplate, KeepTogether, PageBreak
 from reportlab.lib.enums import TA_LEFT, TA_CENTER
 from reportlab.platypus.flowables import HRFlowable
+import numpy as np
 
 # Optional PDF manipulation for 2-up layout
 try:
@@ -529,6 +530,212 @@ class ControllerReportGenerator:
             self.story.append(caption_table)
             self.story.append(Spacer(1, 0.15*cm))
 
+    def add_structural_bias_section(self, bias_results: dict, checkpoint_dir):
+        """
+        Add structural bias verification section to the report.
+
+        Args:
+            bias_results: Results from verify_structural_bias.run_structural_bias_verification()
+            checkpoint_dir: Directory containing the plots
+        """
+        checkpoint_dir = Path(checkpoint_dir)
+
+        # Start new page
+        self.story.append(PageBreak())
+        self.add_section_title("Structural Bias Verification")
+
+        # Description
+        description = Paragraph(
+            "<b>Theoretical Background:</b> When using stochastic reparameterization (o = μ + σε, ε~N(0,1)) "
+            "with a Gaussian quality function Q(o) = exp(-(o-τ)²/s), a structural bias arises. "
+            "This section verifies the theoretical predictions using Monte Carlo simulations.",
+            self.styles['BodyText']
+        )
+        self.story.append(description)
+        self.story.append(Spacer(1, 0.2*cm))
+
+        # Key formulas
+        formulas = Paragraph(
+            "<b>Key Formulas (Theorem 10):</b><br/>"
+            "• F* = exp(-(μ-τ)²/s)  [deterministic reliability target]<br/>"
+            "• E[F] = F* / sqrt(1 + 2σ²/s) · exp(2δ²σ² / (s(s + 2σ²)))  [expected reliability]<br/>"
+            "• L_min = Var(F) + (E[F] - F*)² > 0 for σ² > 0  [minimum achievable loss]",
+            self.styles['BodyText']
+        )
+        self.story.append(formulas)
+        self.story.append(Spacer(1, 0.2*cm))
+
+        # Results summary
+        all_verified = bias_results.get('all_verified', False)
+        n_samples = bias_results.get('n_samples', 100000)
+
+        status_color = colors.green if all_verified else colors.red
+        status_text = "ALL VERIFIED" if all_verified else "SOME FAILURES"
+
+        summary_text = f"""<b>Verification Summary</b> (N = {n_samples:,} Monte Carlo samples):<br/>
+• <b>Status:</b> <font color="{'green' if all_verified else 'red'}">{status_text}</font>
+"""
+        self.story.append(Paragraph(summary_text, self.styles['BodyText']))
+        self.story.append(Spacer(1, 0.2*cm))
+
+        # Table for Experiment A results
+        exp_a = bias_results.get('experiment_a', {})
+        if exp_a:
+            self.story.append(Paragraph("<b>Experiment A: Perfect Policy (δ=0), varying σ²</b>", self.styles['BodyText']))
+            self.story.append(Spacer(1, 0.1*cm))
+
+            # Build table
+            headers = ['σ²', 'E[F] Theory', 'E[F] MC', 'Err%', 'Var Theory', 'Var MC', 'Err%', 'OK']
+            data = [headers]
+
+            for i in range(len(exp_a.get('sigma2', []))):
+                verified = "✓" if exp_a['verified_all'][i] else "✗"
+                row = [
+                    f"{exp_a['sigma2'][i]:.2f}",
+                    f"{exp_a['E_F_th'][i]:.6f}",
+                    f"{exp_a['E_F_mc'][i]:.6f}",
+                    f"{exp_a['E_F_err'][i]:.2f}%",
+                    f"{exp_a['Var_F_th'][i]:.6f}",
+                    f"{exp_a['Var_F_mc'][i]:.6f}",
+                    f"{exp_a['Var_F_err'][i]:.2f}%",
+                    verified
+                ]
+                data.append(row)
+
+            col_widths = [1.5*cm, 2.5*cm, 2.5*cm, 1.5*cm, 2.5*cm, 2.5*cm, 1.5*cm, 1*cm]
+            table = Table(data, colWidths=col_widths)
+            table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, -1), 7),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
+                ('TOPPADDING', (0, 0), (-1, 0), 6),
+                ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+                ('TOPPADDING', (0, 1), (-1, -1), 4),
+                ('BOTTOMPADDING', (0, 1), (-1, -1), 4),
+                ('LINEABOVE', (0, 0), (-1, 0), 1, colors.black),
+                ('LINEABOVE', (0, 1), (-1, 1), 0.5, colors.black),
+                ('LINEBELOW', (0, -1), (-1, -1), 1, colors.black),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ]))
+            self.story.append(table)
+            self.story.append(Spacer(1, 0.3*cm))
+
+        # Table for Experiment B results
+        exp_b = bias_results.get('experiment_b', {})
+        if exp_b:
+            self.story.append(Paragraph("<b>Experiment B: Varying δ (deviation from target)</b>", self.styles['BodyText']))
+            self.story.append(Spacer(1, 0.1*cm))
+
+            headers = ['μ', 'δ', 'F*', 'E[F] Th', 'E[F] MC', 'Loss Th', 'Loss MC', 'OK']
+            data = [headers]
+
+            for i in range(len(exp_b.get('mu', []))):
+                verified = "✓" if exp_b['verified_all'][i] else "✗"
+                row = [
+                    f"{exp_b['mu'][i]:.1f}",
+                    f"{exp_b['delta'][i]:.1f}",
+                    f"{exp_b['F_star'][i]:.4f}",
+                    f"{exp_b['E_F_th'][i]:.4f}",
+                    f"{exp_b['E_F_mc'][i]:.4f}",
+                    f"{exp_b['Loss_th'][i]:.4f}",
+                    f"{exp_b['Loss_mc'][i]:.4f}",
+                    verified
+                ]
+                data.append(row)
+
+            col_widths = [1.5*cm, 1.5*cm, 2*cm, 2.5*cm, 2.5*cm, 2.5*cm, 2.5*cm, 1*cm]
+            table = Table(data, colWidths=col_widths)
+            table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, -1), 7),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
+                ('TOPPADDING', (0, 0), (-1, 0), 6),
+                ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+                ('TOPPADDING', (0, 1), (-1, -1), 4),
+                ('BOTTOMPADDING', (0, 1), (-1, -1), 4),
+                ('LINEABOVE', (0, 0), (-1, 0), 1, colors.black),
+                ('LINEABOVE', (0, 1), (-1, 1), 0.5, colors.black),
+                ('LINEBELOW', (0, -1), (-1, -1), 1, colors.black),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ]))
+            self.story.append(table)
+            self.story.append(Spacer(1, 0.3*cm))
+
+        # Theoretical verification summary
+        exp_c = bias_results.get('experiment_c', {})
+        exp_d = bias_results.get('experiment_d', {})
+
+        summary_items = []
+
+        # Theorem 10 verification
+        if exp_a:
+            th10_ok = all(exp_a.get('verified_all', []))
+            summary_items.append(f"• <b>Theorem 10 (E[F] formula):</b> {'✓ Verified' if th10_ok else '✗ Failed'}")
+
+        # Jensen inequality
+        if exp_d:
+            jensen_ok = all(g > 0 for g in exp_d.get('jensen_gap_th', [0]))
+            summary_items.append(f"• <b>Jensen Inequality (E[F] < F*):</b> {'✓ Verified' if jensen_ok else '✗ Failed'}")
+
+        # L_min > 0
+        if exp_c:
+            lmin_ok = all(l > 0 for l in exp_c.get('L_min', [0])[1:])
+            summary_items.append(f"• <b>Theorem 19 (L_min > 0):</b> {'✓ Verified' if lmin_ok else '✗ Failed'}")
+
+        if summary_items:
+            summary_para = Paragraph("<br/>".join(summary_items), self.styles['BodyText'])
+            self.story.append(summary_para)
+            self.story.append(Spacer(1, 0.3*cm))
+
+        # Add plots if they exist
+        plot_names = [
+            ('structural_bias_EF_comparison.png', 'E[F] Theoretical vs Monte Carlo'),
+            ('structural_bias_loss_decomposition.png', 'Bias-Variance Decomposition of Minimum Loss'),
+            ('structural_bias_loss_vs_delta.png', 'Loss vs δ for Different Uncertainty Levels'),
+            ('structural_bias_jensen_gap.png', 'Jensen Inequality Gap Verification'),
+        ]
+
+        for plot_name, caption in plot_names:
+            plot_path = checkpoint_dir / plot_name
+            if plot_path.exists():
+                img = Image(str(plot_path))
+                img_width, img_height = img.imageWidth, img.imageHeight
+                aspect_ratio = img_height / img_width
+
+                # Fit to page width
+                new_width = 15*cm
+                new_height = new_width * aspect_ratio
+
+                if new_height > 9*cm:
+                    new_height = 9*cm
+                    new_width = new_height / aspect_ratio
+
+                img.drawWidth = new_width
+                img.drawHeight = new_height
+
+                # Center image
+                img_table = Table([[img]], colWidths=[18*cm])
+                img_table.setStyle(TableStyle([
+                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                    ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ]))
+                self.story.append(img_table)
+
+                # Caption
+                caption_para = Paragraph(f"<i>{caption}</i>", self.styles['Normal'])
+                caption_table = Table([[caption_para]], colWidths=[18*cm])
+                caption_table.setStyle(TableStyle([
+                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ]))
+                self.story.append(caption_table)
+                self.story.append(Spacer(1, 0.2*cm))
+
     def add_plots_stacked(self, checkpoint_dir):
         """Add controller optimization plots stacked vertically"""
         self.add_section_title("Training Visualization")
@@ -716,7 +923,7 @@ class ControllerReportGenerator:
 
     def generate(self, config, training_history, final_metrics, process_metrics,
                  F_star, F_baseline, F_actual, timestamp, n_scenarios=None, advanced_metrics=None,
-                 trajectory_values=None):
+                 trajectory_values=None, structural_bias_results=None):
         """Generate the complete PDF
 
         Args:
@@ -733,6 +940,7 @@ class ControllerReportGenerator:
                     'F_baseline': float,
                     'F_actual': float
                 }
+            structural_bias_results: Results from verify_structural_bias.run_structural_bias_verification()
         """
 
         # Add all sections in logical order
@@ -767,6 +975,10 @@ class ControllerReportGenerator:
 
         # Embedding visualizations (if scenario encoder is enabled)
         self.add_embedding_plots(Path(config['training']['checkpoint_dir']))
+
+        # Structural bias verification (if available)
+        if structural_bias_results:
+            self.add_structural_bias_section(structural_bias_results, Path(config['training']['checkpoint_dir']))
 
         # Build PDF
         doc = SimpleDocTemplate(
@@ -856,7 +1068,8 @@ def generate_controller_report(
     timestamp=None,
     n_scenarios=None,
     advanced_metrics=None,
-    trajectory_values=None
+    trajectory_values=None,
+    structural_bias_results=None
 ):
     """
     Generate a LaTeX-style controller optimization training report
@@ -874,6 +1087,7 @@ def generate_controller_report(
         n_scenarios: Number of scenarios (for multi-scenario training)
         advanced_metrics: Advanced metrics dictionary (optional)
         trajectory_values: Dictionary with trajectory comparison data (optional)
+        structural_bias_results: Results from verify_structural_bias (optional)
 
     Returns:
         Path to the generated PDF report
@@ -892,7 +1106,8 @@ def generate_controller_report(
         generator = ControllerReportGenerator(temp_report_path)
         generator.generate(config, training_history, final_metrics, process_metrics,
                           F_star, F_baseline, F_actual, timestamp, n_scenarios=n_scenarios,
-                          advanced_metrics=advanced_metrics, trajectory_values=trajectory_values)
+                          advanced_metrics=advanced_metrics, trajectory_values=trajectory_values,
+                          structural_bias_results=structural_bias_results)
 
         # Convert to 2-up format
         try:
@@ -911,7 +1126,8 @@ def generate_controller_report(
         generator = ControllerReportGenerator(final_report_path)
         generator.generate(config, training_history, final_metrics, process_metrics,
                           F_star, F_baseline, F_actual, timestamp, n_scenarios=n_scenarios,
-                          advanced_metrics=advanced_metrics, trajectory_values=trajectory_values)
+                          advanced_metrics=advanced_metrics, trajectory_values=trajectory_values,
+                          structural_bias_results=structural_bias_results)
 
     return final_report_path
 
