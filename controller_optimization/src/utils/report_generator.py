@@ -742,24 +742,41 @@ class ControllerReportGenerator:
             self.story.append(PageBreak())
             self.add_section_title("Controller Performance Analysis")
 
-            # Gap decomposition
-            gap_decomp = real_data.get('gap_decomposition', {})
-            if gap_decomp:
-                inputs = real_data.get('inputs', {})
-                F_star = inputs.get('F_star', 1.0)
-                F_actual = inputs.get('F_actual', 0.5)
-                avg_E_F = real_data.get('avg_E_F_theoretical', 0.7)
+            # Loss comparison (new approach: L_actual vs L_min)
+            loss_comp = real_data.get('loss_comparison', {})
+            if loss_comp:
+                L_actual = loss_comp.get('L_actual', 0)
+                L_min = loss_comp.get('L_min', 0)
+                efficiency = loss_comp.get('efficiency', 0) * 100
+                excess_loss = loss_comp.get('excess_loss', 0)
+                excess_pct = loss_comp.get('excess_loss_pct', 0)
+                F_star = loss_comp.get('F_star', 1.0)
+                F_actual = loss_comp.get('F_actual', 0.5)
+                F_gap = loss_comp.get('F_gap', 0)
 
-                decomp_text = f"""<b>Gap Decomposition (F* - F_actual):</b><br/>
-• <b>F* (target):</b> {F_star:.4f}<br/>
-• <b>E[F] (theoretical max with perfect policy):</b> {avg_E_F:.4f}<br/>
-• <b>F (actual achieved):</b> {F_actual:.4f}<br/><br/>
-<b>Gap Analysis:</b><br/>
-• Total Gap: {gap_decomp.get('total_gap', 0):.4f} (100%)<br/>
-• Structural Bias: {gap_decomp.get('structural_bias', 0):.4f} ({gap_decomp.get('structural_bias_pct', 0):.1f}%) - <i>IRREDUCIBLE</i><br/>
-• Policy Error: {gap_decomp.get('policy_error', 0):.4f} ({gap_decomp.get('policy_error_pct', 0):.1f}%) - <i>REDUCIBLE</i>
+                # Interpretation based on efficiency
+                if efficiency >= 90:
+                    interpretation = "Controller al limite teorico! La loss residua e' irriducibile."
+                    interp_color = "green"
+                elif efficiency >= 50:
+                    interpretation = f"Margine di miglioramento: {100-efficiency:.1f}% della loss e' riducibile."
+                    interp_color = "orange"
+                else:
+                    interpretation = f"Controller lontano dal limite teorico (efficienza < 50%)."
+                    interp_color = "red"
+
+                loss_text = f"""<b>Loss Comparison (L_actual vs L_min):</b><br/>
+• <b>L_actual (controller loss):</b> {L_actual:.6f}<br/>
+• <b>L_min (theoretical limit = Var(F)):</b> {L_min:.6f}<br/>
+• <b>Efficiency:</b> <font color="{interp_color}">{efficiency:.1f}%</font><br/>
+• <b>Excess Loss:</b> {excess_loss:.6f} ({excess_pct:.1f}%) - <i>REDUCIBLE</i><br/><br/>
+<b>Reliability:</b><br/>
+• <b>F* (target from trajectory):</b> {F_star:.4f}<br/>
+• <b>F (controller achieved):</b> {F_actual:.4f}<br/>
+• <b>Gap (F* - F):</b> {F_gap:.4f}<br/><br/>
+<b>Interpretation:</b> <font color="{interp_color}">{interpretation}</font>
 """
-                self.story.append(Paragraph(decomp_text, self.styles['BodyText']))
+                self.story.append(Paragraph(loss_text, self.styles['BodyText']))
                 self.story.append(Spacer(1, 0.3*cm))
 
             # Per-process bounds table
@@ -822,7 +839,7 @@ class ControllerReportGenerator:
                 ]))
                 self.story.append(img_table)
 
-                caption_para = Paragraph("<i>Controller Performance: Structural Bias vs Policy Error</i>", self.styles['Normal'])
+                caption_para = Paragraph("<i>Controller Performance: L_actual vs L_min (Efficiency Analysis)</i>", self.styles['Normal'])
                 caption_table = Table([[caption_para]], colWidths=[18*cm])
                 caption_table.setStyle(TableStyle([
                     ('ALIGN', (0, 0), (-1, -1), 'CENTER'),

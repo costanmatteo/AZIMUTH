@@ -848,7 +848,7 @@ def analyze_structural_bias_from_training(
         'process_analysis': {},
         'aggregate': {},
         'theoretical_bounds': {},
-        'gap_decomposition': {}
+        'loss_comparison': {}
     }
 
     # Carica risultati finali
@@ -971,59 +971,74 @@ def compute_theoretical_bounds_for_controller(
     return results
 
 
-def decompose_controller_gap(
+def compare_loss_with_theoretical_bound(
+    L_actual: float,
+    L_min: float,
     F_star: float,
     F_actual: float,
-    E_F_theoretical: float,
     verbose: bool = True
 ) -> Dict:
     """
-    Decompone il gap F* - F_actual in:
-    1. Structural bias: F* - E[F] (irriducibile, dovuto all'incertezza)
-    2. Policy error: E[F] - F_actual (riducibile, dovuto alla policy non ottimale)
+    Confronta la loss effettiva con il limite teorico L_min = Var(F).
+
+    La loss L = (F - F*)² ha un minimo irriducibile dovuto alla varianza:
+    - L_min = Var(F) = limite teorico (irraggiungibile se σ² > 0)
+    - L_actual = loss effettiva del controller
+
+    Efficienza = L_min / L_actual (1 = ottimale, <1 = margine di miglioramento)
 
     Args:
-        F_star: Target reliability
-        F_actual: Actual achieved reliability
-        E_F_theoretical: Expected F under perfect policy (from theory)
+        L_actual: Loss effettiva del controller
+        L_min: Loss minima teorica (Var(F))
+        F_star: F* dalla traiettoria target
+        F_actual: F raggiunto dal controller
         verbose: Se stampare
 
     Returns:
-        Dict con la decomposizione
+        Dict con l'analisi
     """
-    total_gap = F_star - F_actual
-    structural_bias = F_star - E_F_theoretical  # Irriducibile
-    policy_error = E_F_theoretical - F_actual   # Riducibile
-
-    # Percentuali
-    if total_gap > 0:
-        structural_pct = (structural_bias / total_gap) * 100
-        policy_pct = (policy_error / total_gap) * 100
+    # Calcola metriche
+    if L_actual > 0:
+        efficiency = min(L_min / L_actual, 1.0)  # Cap a 1.0
+        excess_loss = L_actual - L_min
+        excess_pct = (excess_loss / L_actual) * 100 if L_actual > 0 else 0
     else:
-        structural_pct = 0
-        policy_pct = 0
+        efficiency = 1.0
+        excess_loss = 0
+        excess_pct = 0
+
+    # Gap in F
+    F_gap = F_star - F_actual
 
     results = {
-        'total_gap': total_gap,
-        'structural_bias': structural_bias,
-        'policy_error': policy_error,
-        'structural_bias_pct': structural_pct,
-        'policy_error_pct': policy_pct
+        'L_actual': L_actual,
+        'L_min': L_min,
+        'efficiency': efficiency,
+        'excess_loss': excess_loss,
+        'excess_loss_pct': excess_pct,
+        'F_star': F_star,
+        'F_actual': F_actual,
+        'F_gap': F_gap
     }
 
     if verbose:
         print("\n" + "-"*70)
-        print("Decomposizione del Gap (F* - F_actual):")
+        print("Confronto Loss Effettiva vs Limite Teorico:")
         print("-"*70)
-        print(f"  Gap totale:        {total_gap:.6f} (100%)")
-        print(f"  ├─ Structural Bias: {structural_bias:.6f} ({structural_pct:.1f}%) [IRRIDUCIBILE]")
-        print(f"  │   (dovuto all'incertezza intrinseca dei processi)")
-        print(f"  └─ Policy Error:    {policy_error:.6f} ({policy_pct:.1f}%) [RIDUCIBILE]")
-        print(f"      (dovuto a policy non ottimale)")
+        print(f"  L_actual (loss controller):  {L_actual:.6f}")
+        print(f"  L_min (limite teorico):      {L_min:.6f}")
+        print(f"  Efficienza:                  {efficiency*100:.1f}%")
+        print(f"  Loss in eccesso:             {excess_loss:.6f} ({excess_pct:.1f}%)")
+        print(f"\n  F* (target traiettoria):     {F_star:.6f}")
+        print(f"  F (controller):              {F_actual:.6f}")
+        print(f"  Gap (F* - F):                {F_gap:.6f}")
 
-        if policy_error < 0:
-            print(f"\n  NOTA: Policy error < 0 significa che F_actual > E[F]!")
-            print(f"        Il controller sta performando MEGLIO del teoricamente atteso.")
+        if efficiency >= 0.9:
+            print(f"\n  ✓ Controller vicino al limite teorico! (efficienza ≥ 90%)")
+        elif efficiency >= 0.5:
+            print(f"\n  → Margine di miglioramento: {(1-efficiency)*100:.1f}% della loss è riducibile")
+        else:
+            print(f"\n  ⚠ Controller lontano dal limite teorico (efficienza < 50%)")
 
     return results
 
@@ -1032,17 +1047,20 @@ def create_real_data_analysis_plot(
     sigma2_estimates: Dict[str, float],
     F_star: float,
     F_actual: float,
+    L_actual: float,
     process_scales: Dict[str, float],
     output_dir: Path
 ) -> Path:
     """
     Crea un grafico che mostra l'analisi con dati reali.
+
+    Confronta Loss effettiva vs L_min teorica per ogni processo.
     """
     output_dir = Path(output_dir)
 
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
-    # Plot 1: Confronto per processo
+    # Plot 1: L_min per processo
     ax1 = axes[0]
     processes = list(sigma2_estimates.keys())
     x = np.arange(len(processes))
@@ -1050,61 +1068,72 @@ def create_real_data_analysis_plot(
 
     sigma2_vals = [sigma2_estimates[p] for p in processes]
     scales = [process_scales.get(p, 1.0) for p in processes]
-    E_F_vals = [E_F_theoretical(0, 0, s, sig2) for s, sig2 in zip(scales, sigma2_vals)]
-    L_min_vals = [Loss_min_theoretical(s, sig2)[0] for s, sig2 in zip(scales, sigma2_vals)]
+    Var_F_vals = [Var_F_theoretical(0, 0, s, sig2) for s, sig2 in zip(scales, sigma2_vals)]
 
-    bars1 = ax1.bar(x - width/2, sigma2_vals, width, label=r'$\sigma^2$ (varianza)', color='steelblue', alpha=0.8)
-    bars2 = ax1.bar(x + width/2, L_min_vals, width, label=r'$L_{min}$ teorica', color='coral', alpha=0.8)
+    bars1 = ax1.bar(x - width/2, sigma2_vals, width, label=r'$\sigma^2$ (incertezza)', color='steelblue', alpha=0.8)
+    bars2 = ax1.bar(x + width/2, Var_F_vals, width, label=r'$Var(F) = L_{min}$', color='coral', alpha=0.8)
 
     ax1.set_xlabel('Processo')
     ax1.set_ylabel('Valore')
-    ax1.set_title('Varianza e Loss Minima Teorica per Processo')
+    ax1.set_title('Incertezza e Loss Minima Teorica per Processo')
     ax1.set_xticks(x)
     ax1.set_xticklabels(processes)
     ax1.legend()
     ax1.grid(True, alpha=0.3)
 
-    # Aggiungi valori sopra le barre
+    # Valori sopra le barre
     for bar, val in zip(bars1, sigma2_vals):
         ax1.annotate(f'{val:.3f}', xy=(bar.get_x() + bar.get_width()/2, bar.get_height()),
                     xytext=(0, 3), textcoords='offset points', ha='center', fontsize=9)
-    for bar, val in zip(bars2, L_min_vals):
-        ax1.annotate(f'{val:.3f}', xy=(bar.get_x() + bar.get_width()/2, bar.get_height()),
+    for bar, val in zip(bars2, Var_F_vals):
+        ax1.annotate(f'{val:.4f}', xy=(bar.get_x() + bar.get_width()/2, bar.get_height()),
                     xytext=(0, 3), textcoords='offset points', ha='center', fontsize=9)
 
-    # Plot 2: Decomposizione del gap
+    # Plot 2: Confronto Loss
     ax2 = axes[1]
 
-    # Calcola E[F] medio
-    avg_E_F = np.mean(E_F_vals)
+    # Calcola L_min totale (media delle Var(F))
+    avg_L_min = np.mean(Var_F_vals)
 
-    # Valori per il bar chart
-    categories = ['F*\n(Target)', 'E[F]\n(Teorico)', 'F\n(Actual)']
-    values = [F_star, avg_E_F, F_actual]
-    colors = ['green', 'orange', 'red']
+    # Loss confronto
+    categories = ['L_actual\n(Controller)', 'L_min\n(Teorico)']
+    values = [L_actual, avg_L_min]
+    bar_colors = ['#e74c3c', '#27ae60']  # rosso, verde
 
-    bars = ax2.bar(categories, values, color=colors, alpha=0.7, edgecolor='black')
+    bars = ax2.bar(categories, values, color=bar_colors, alpha=0.8, edgecolor='black', linewidth=1.5)
 
-    # Aggiungi annotazioni per i gap
-    ax2.annotate('', xy=(0.5, F_star), xytext=(0.5, avg_E_F),
-                arrowprops=dict(arrowstyle='<->', color='blue', lw=2))
-    ax2.text(0.7, (F_star + avg_E_F)/2, f'Structural\nBias\n{F_star - avg_E_F:.3f}',
-            fontsize=9, color='blue', ha='left')
+    # Calcola efficienza
+    if L_actual > 0:
+        efficiency = min(avg_L_min / L_actual, 1.0) * 100
+        excess = max(L_actual - avg_L_min, 0)
+    else:
+        efficiency = 100
+        excess = 0
 
-    ax2.annotate('', xy=(1.5, avg_E_F), xytext=(1.5, F_actual),
-                arrowprops=dict(arrowstyle='<->', color='purple', lw=2))
-    ax2.text(1.7, (avg_E_F + F_actual)/2, f'Policy\nError\n{avg_E_F - F_actual:.3f}',
-            fontsize=9, color='purple', ha='left')
+    # Annotazione efficienza
+    ax2.axhline(y=avg_L_min, color='green', linestyle='--', alpha=0.7, label=f'Limite teorico')
 
-    ax2.set_ylabel('Reliability F')
-    ax2.set_title('Decomposizione Gap: Structural Bias vs Policy Error')
-    ax2.set_ylim(0, 1.1)
+    # Aggiungi freccia per excess loss se significativa
+    if excess > 0.001:
+        ax2.annotate('', xy=(0, avg_L_min), xytext=(0, L_actual),
+                    arrowprops=dict(arrowstyle='<->', color='purple', lw=2))
+        ax2.text(0.25, (L_actual + avg_L_min)/2, f'Excess\n{excess:.4f}',
+                fontsize=10, color='purple', ha='left', fontweight='bold')
+
+    ax2.set_ylabel('Loss')
+    ax2.set_title(f'Loss Effettiva vs Limite Teorico (Efficienza: {efficiency:.1f}%)')
     ax2.grid(True, alpha=0.3, axis='y')
 
     # Valori sopra le barre
     for bar, val in zip(bars, values):
-        ax2.annotate(f'{val:.3f}', xy=(bar.get_x() + bar.get_width()/2, bar.get_height()),
-                    xytext=(0, 3), textcoords='offset points', ha='center', fontsize=10, fontweight='bold')
+        ax2.annotate(f'{val:.4f}', xy=(bar.get_x() + bar.get_width()/2, bar.get_height()),
+                    xytext=(0, 5), textcoords='offset points', ha='center', fontsize=11, fontweight='bold')
+
+    # Aggiungi info F* e F_actual
+    info_text = f'F* (target): {F_star:.4f}\nF (actual): {F_actual:.4f}'
+    ax2.text(0.98, 0.98, info_text, transform=ax2.transAxes, fontsize=9,
+            verticalalignment='top', horizontalalignment='right',
+            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
 
     fig.tight_layout()
     plot_path = output_dir / 'structural_bias_real_data_analysis.png'
@@ -1119,17 +1148,21 @@ def run_real_data_analysis(
     sigma2_estimates: Dict[str, float] = None,
     F_star: float = None,
     F_actual: float = None,
+    L_actual: float = None,
     process_names: List[str] = None,
     verbose: bool = True
 ) -> Dict:
     """
     Esegue l'analisi completa della structural bias con dati reali.
 
+    Confronta la loss effettiva del controller con il limite teorico L_min = Var(F).
+
     Args:
         checkpoint_dir: Directory dei checkpoint
         sigma2_estimates: Stime di σ² per processo (se None, usa valori di default)
-        F_star: F* medio (se None, legge da file)
-        F_actual: F medio raggiunto (se None, legge da file)
+        F_star: F* medio dalla traiettoria target (se None, legge da file)
+        F_actual: F medio raggiunto dal controller (se None, legge da file)
+        L_actual: Loss effettiva del controller (se None, calcola da F)
         process_names: Lista processi
         verbose: Se stampare
 
@@ -1144,15 +1177,14 @@ def run_real_data_analysis(
         process_names = ['laser', 'plasma', 'galvanic']
 
     # Valori di default per σ² se non specificati
-    # Questi sono valori tipici normalizzati
     if sigma2_estimates is None:
         sigma2_estimates = {
-            'laser': 0.05,    # Bassa incertezza
-            'plasma': 0.15,   # Media incertezza
-            'galvanic': 0.10  # Media-bassa incertezza
+            'laser': 0.05,
+            'plasma': 0.15,
+            'galvanic': 0.10
         }
 
-    # Leggi F_star e F_actual dai risultati se non specificati
+    # Leggi valori dai risultati se non specificati
     final_results_file = checkpoint_dir / 'final_results.json'
     if final_results_file.exists():
         with open(final_results_file) as f:
@@ -1161,23 +1193,29 @@ def run_real_data_analysis(
                 F_star = final_results.get('F_star_mean', 1.0)
             if F_actual is None:
                 F_actual = final_results.get('F_actual_mean', 0.5)
+            if L_actual is None:
+                L_actual = final_results.get('final_total_loss', None)
 
     # Valori di default
     if F_star is None:
         F_star = 1.0
     if F_actual is None:
         F_actual = 0.5
+    # Se L_actual non disponibile, stima da (F - F*)²
+    if L_actual is None:
+        L_actual = (F_actual - F_star) ** 2
 
     results = {
         'inputs': {
             'sigma2_estimates': sigma2_estimates,
             'F_star': F_star,
             'F_actual': F_actual,
+            'L_actual': L_actual,
             'process_scales': PROCESS_SCALES
         }
     }
 
-    # 1. Calcola bounds teorici
+    # 1. Calcola bounds teorici per processo
     bounds = compute_theoretical_bounds_for_controller(
         sigma2_estimates=sigma2_estimates,
         process_scales=PROCESS_SCALES,
@@ -1187,19 +1225,20 @@ def run_real_data_analysis(
     )
     results['theoretical_bounds'] = bounds
 
-    # 2. Calcola E[F] teorico medio
-    E_F_values = [bounds['per_process'][p]['E_F'] for p in sigma2_estimates.keys()]
-    avg_E_F = np.mean(E_F_values)
-    results['avg_E_F_theoretical'] = avg_E_F
+    # 2. Calcola L_min totale (media delle Var(F))
+    Var_F_values = [bounds['per_process'][p]['Var_F'] for p in sigma2_estimates.keys()]
+    avg_L_min = np.mean(Var_F_values)
+    results['avg_L_min'] = avg_L_min
 
-    # 3. Decomponi il gap
-    decomposition = decompose_controller_gap(
+    # 3. Confronta Loss effettiva vs limite teorico
+    loss_comparison = compare_loss_with_theoretical_bound(
+        L_actual=L_actual,
+        L_min=avg_L_min,
         F_star=F_star,
         F_actual=F_actual,
-        E_F_theoretical=avg_E_F,
         verbose=verbose
     )
-    results['gap_decomposition'] = decomposition
+    results['loss_comparison'] = loss_comparison
 
     # 4. Crea grafico
     if verbose:
@@ -1208,6 +1247,7 @@ def run_real_data_analysis(
         sigma2_estimates=sigma2_estimates,
         F_star=F_star,
         F_actual=F_actual,
+        L_actual=L_actual,
         process_scales=PROCESS_SCALES,
         output_dir=checkpoint_dir
     )
@@ -1217,23 +1257,25 @@ def run_real_data_analysis(
 
     # 5. Sommario finale
     if verbose:
+        efficiency = loss_comparison['efficiency']
         print("\n" + "="*70)
         print("SOMMARIO ANALISI STRUCTURAL BIAS")
         print("="*70)
-        print(f"\nPerformance Controller:")
-        print(f"  F* (target):       {F_star:.4f}")
-        print(f"  E[F] (teorico):    {avg_E_F:.4f}  <- massimo raggiungibile con policy perfetta")
-        print(f"  F (actual):        {F_actual:.4f}")
+        print(f"\nLoss Analysis:")
+        print(f"  L_actual (controller):   {L_actual:.6f}")
+        print(f"  L_min (limite teorico):  {avg_L_min:.6f}")
+        print(f"  Efficienza:              {efficiency*100:.1f}%")
+        print(f"\nReliability:")
+        print(f"  F* (target traiettoria): {F_star:.4f}")
+        print(f"  F (controller):          {F_actual:.4f}")
         print(f"\nInterpretazione:")
-        if F_actual >= avg_E_F:
-            print(f"  ✓ Il controller performa al livello teorico o meglio!")
-            print(f"    (possibile grazie a fluttuazioni favorevoli o δ≠0)")
+        if efficiency >= 0.9:
+            print(f"  ✓ Controller al limite teorico! La loss residua è dovuta")
+            print(f"    all'incertezza intrinseca (Var(F)), non migliorabile.")
         else:
-            improvement_potential = avg_E_F - F_actual
-            print(f"  → Margine di miglioramento: {improvement_potential:.4f}")
-            print(f"    (ottimizzando ulteriormente la policy)")
-        print(f"\n  → Gap IRRIDUCIBILE (structural bias): {F_star - avg_E_F:.4f}")
-        print(f"    (dovuto all'incertezza, non eliminabile)")
+            excess = L_actual - avg_L_min
+            print(f"  → Loss in eccesso: {excess:.6f} ({(1-efficiency)*100:.1f}%)")
+            print(f"    Questa porzione è riducibile ottimizzando la policy.")
 
     return results
 

@@ -849,13 +849,13 @@ def main():
             status = "VERIFIED" if structural_bias_results['all_verified'] else "SOME FAILURES"
             print(f"  ✓ Structural bias verification: {status}")
 
-            # Mostra decomposizione del gap se disponibile
+            # Mostra confronto Loss se disponibile
             if structural_bias_results.get('real_data_analysis'):
-                gap_info = structural_bias_results['real_data_analysis'].get('gap_decomposition', {})
-                if gap_info:
-                    struct_pct = gap_info.get('structural_bias_pct', 0)
-                    policy_pct = gap_info.get('policy_error_pct', 0)
-                    print(f"    Gap decomposition: {struct_pct:.1f}% structural bias, {policy_pct:.1f}% policy error")
+                loss_info = structural_bias_results['real_data_analysis'].get('loss_comparison', {})
+                if loss_info:
+                    efficiency = loss_info.get('efficiency', 0) * 100
+                    excess_pct = loss_info.get('excess_loss_pct', 0)
+                    print(f"    Loss analysis: {efficiency:.1f}% efficiency, {excess_pct:.1f}% reducible loss")
         except Exception as e:
             print(f"  ✗ Warning: Structural bias verification failed: {e}")
 
