@@ -824,16 +824,9 @@ def main():
         structural_bias_results = None
         try:
             print("  Running structural bias verification...")
-            # Stime di σ² per processo (valori tipici normalizzati basati sui dati di training)
-            # Questi valori possono essere raffinati in base ai dati effettivi degli uncertainty predictor
-            sigma2_estimates = {
-                'laser': 0.05,    # Bassa incertezza (processo ben controllato)
-                'plasma': 0.15,   # Media incertezza
-                'galvanic': 0.10  # Media-bassa incertezza
-            }
-            # Filtra solo i processi attivi
-            active_sigma2 = {p: sigma2_estimates[p] for p in CONTROLLER_CONFIG['process_names']
-                           if p in sigma2_estimates}
+
+            # Calcola Loss effettiva
+            L_actual = float(np.mean((F_actual_per_sample - F_star_mean) ** 2))
 
             structural_bias_results = run_structural_bias_verification(
                 output_dir=checkpoint_dir,
@@ -841,10 +834,15 @@ def main():
                 seed=CONTROLLER_CONFIG.get('misc', {}).get('random_seed', 42),
                 verbose=False,
                 # Passa dati reali dal controller per l'analisi
-                sigma2_estimates=active_sigma2,
+                sigma2_estimates=None,  # Sarà estratto dalle traiettorie
                 F_star=F_star_mean,
                 F_actual=F_actual_mean,
-                run_real_analysis=True
+                L_actual=L_actual,
+                run_real_analysis=True,
+                # Passa traiettorie e campioni F per verifica empirica
+                trajectories=actual_trajectories,
+                F_samples=F_actual_per_sample,
+                F_star_samples=F_star_array
             )
             status = "VERIFIED" if structural_bias_results['all_verified'] else "SOME FAILURES"
             print(f"  ✓ Structural bias verification: {status}")
@@ -856,8 +854,18 @@ def main():
                     efficiency = loss_info.get('efficiency', 0) * 100
                     excess_pct = loss_info.get('excess_loss_pct', 0)
                     print(f"    Loss analysis: {efficiency:.1f}% efficiency, {excess_pct:.1f}% reducible loss")
+
+            # Mostra verifica empirica se disponibile
+            if structural_bias_results.get('empirical_verification'):
+                emp_info = structural_bias_results['empirical_verification'].get('comparison', {})
+                if emp_info:
+                    E_F_err = emp_info.get('E_F_error_pct', 0)
+                    Var_F_err = emp_info.get('Var_F_error_pct', 0)
+                    print(f"    Empirical verification: E[F] error {E_F_err:.1f}%, Var(F) error {Var_F_err:.1f}%")
         except Exception as e:
             print(f"  ✗ Warning: Structural bias verification failed: {e}")
+            import traceback
+            traceback.print_exc()
 
         # Generate report
         try:

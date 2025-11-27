@@ -846,6 +846,100 @@ class ControllerReportGenerator:
                 ]))
                 self.story.append(caption_table)
 
+        # Empirical verification section (if available)
+        empirical = bias_results.get('empirical_verification')
+        if empirical:
+            self.story.append(Spacer(1, 0.3*cm))
+            self.story.append(Paragraph("<b>Empirical Formula Verification (Real Training Data)</b>", self.styles['SectionTitle']))
+            self.story.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=4))
+
+            comparison = empirical.get('comparison', {})
+            emp_data = empirical.get('empirical', {})
+            th_data = empirical.get('theoretical', {})
+
+            E_F_err = comparison.get('E_F_error_pct', 0)
+            Var_F_err = comparison.get('Var_F_error_pct', 0)
+            Loss_err = comparison.get('Loss_error_pct', 0)
+
+            # Determine status colors
+            E_F_color = "green" if E_F_err < 10 else ("orange" if E_F_err < 20 else "red")
+            Var_F_color = "green" if Var_F_err < 20 else ("orange" if Var_F_err < 50 else "red")
+
+            emp_text = f"""<b>Confronto Empirico vs Teorico:</b><br/>
+• <b>E[F]:</b> Empirico={emp_data.get('E_F', 0):.6f}, Teorico={th_data.get('E_F', 0):.6f}, <font color="{E_F_color}">Errore={E_F_err:.1f}%</font><br/>
+• <b>Var(F):</b> Empirico={emp_data.get('Var_F', 0):.6f}, Teorico={th_data.get('Var_F', 0):.6f}, <font color="{Var_F_color}">Errore={Var_F_err:.1f}%</font><br/>
+• <b>Loss:</b> Empirico={emp_data.get('Loss', 0):.6f}, Teorico={th_data.get('Loss', 0):.6f}, Errore={Loss_err:.1f}%<br/>
+• <b>Campioni analizzati:</b> {emp_data.get('n_samples', 0)}
+"""
+            self.story.append(Paragraph(emp_text, self.styles['BodyText']))
+            self.story.append(Spacer(1, 0.2*cm))
+
+            # Per-process statistics table
+            per_process = empirical.get('per_process', {})
+            if per_process:
+                self.story.append(Paragraph("<b>Statistiche per Processo:</b>", self.styles['BodyText']))
+                self.story.append(Spacer(1, 0.1*cm))
+
+                headers = ['Processo', 'μ medio', 'σ² medio', 'τ (target)', 'δ', 'E[F] teorico']
+                data = [headers]
+
+                for proc_name, proc_data in per_process.items():
+                    row = [
+                        proc_name.capitalize(),
+                        f"{proc_data.get('mu_mean', 0):.4f}",
+                        f"{proc_data.get('sigma2_mean', 0):.4f}",
+                        f"{proc_data.get('tau', 0):.2f}",
+                        f"{proc_data.get('delta', 0):.4f}",
+                        f"{proc_data.get('E_F_theoretical', 0):.4f}"
+                    ]
+                    data.append(row)
+
+                col_widths = [2.5*cm, 2.5*cm, 2.5*cm, 2.5*cm, 2.5*cm, 2.5*cm]
+                table = Table(data, colWidths=col_widths)
+                table.setStyle(TableStyle([
+                    ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
+                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                    ('FONTSIZE', (0, 0), (-1, -1), 7),
+                    ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
+                    ('TOPPADDING', (0, 0), (-1, 0), 6),
+                    ('LINEABOVE', (0, 0), (-1, 0), 1, colors.black),
+                    ('LINEABOVE', (0, 1), (-1, 1), 0.5, colors.black),
+                    ('LINEBELOW', (0, -1), (-1, -1), 1, colors.black),
+                    ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                ]))
+                self.story.append(table)
+                self.story.append(Spacer(1, 0.3*cm))
+
+            # Empirical verification plot
+            emp_plot = checkpoint_dir / 'structural_bias_empirical_verification.png'
+            if emp_plot.exists():
+                img = Image(str(emp_plot))
+                img_width, img_height = img.imageWidth, img.imageHeight
+                aspect_ratio = img_height / img_width
+
+                new_width = 16*cm
+                new_height = new_width * aspect_ratio
+                if new_height > 10*cm:
+                    new_height = 10*cm
+                    new_width = new_height / aspect_ratio
+
+                img.drawWidth = new_width
+                img.drawHeight = new_height
+
+                img_table = Table([[img]], colWidths=[18*cm])
+                img_table.setStyle(TableStyle([
+                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ]))
+                self.story.append(img_table)
+
+                caption_para = Paragraph("<i>Verifica Empirica: Confronto Dati Reali vs Formule Teoriche</i>", self.styles['Normal'])
+                caption_table = Table([[caption_para]], colWidths=[18*cm])
+                caption_table.setStyle(TableStyle([
+                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ]))
+                self.story.append(caption_table)
+
     def add_plots_stacked(self, checkpoint_dir):
         """Add controller optimization plots stacked vertically"""
         self.add_section_title("Training Visualization")

@@ -1281,6 +1281,334 @@ def run_real_data_analysis(
 
 
 # ==============================================================================
+# Verifica Empirica con Dati Reali del Training
+# ==============================================================================
+
+def extract_trajectory_statistics(
+    trajectories: List[Dict],
+    process_names: List[str] = None
+) -> Dict[str, Dict[str, float]]:
+    """
+    Estrae statistiche (μ medio, σ² medio) dalle traiettorie del controller.
+
+    Args:
+        trajectories: Lista di traiettorie (una per scenario), ogni traiettoria è
+                     un dict {process_name: {'inputs', 'outputs_mean', 'outputs_var'}}
+        process_names: Lista dei nomi dei processi (opzionale)
+
+    Returns:
+        Dict per processo con mu_mean, sigma2_mean, mu_std, sigma2_std
+    """
+    import torch
+
+    if process_names is None:
+        # Infer from first trajectory
+        process_names = list(trajectories[0].keys())
+
+    # Accumula valori per ogni processo
+    process_stats = {p: {'mu_values': [], 'sigma2_values': []} for p in process_names}
+
+    for trajectory in trajectories:
+        for process_name in process_names:
+            if process_name not in trajectory:
+                continue
+
+            data = trajectory[process_name]
+
+            # outputs_mean e outputs_var sono tensori (batch_size, output_dim)
+            if 'outputs_mean' in data:
+                mu = data['outputs_mean']
+                if torch.is_tensor(mu):
+                    mu = mu.detach().cpu().numpy()
+                # Media su batch e output_dim
+                process_stats[process_name]['mu_values'].extend(mu.flatten().tolist())
+
+            if 'outputs_var' in data:
+                var = data['outputs_var']
+                if torch.is_tensor(var):
+                    var = var.detach().cpu().numpy()
+                process_stats[process_name]['sigma2_values'].extend(var.flatten().tolist())
+
+    # Calcola statistiche finali
+    results = {}
+    for process_name, stats in process_stats.items():
+        mu_vals = np.array(stats['mu_values'])
+        sigma2_vals = np.array(stats['sigma2_values'])
+
+        results[process_name] = {
+            'mu_mean': float(np.mean(mu_vals)) if len(mu_vals) > 0 else 0.0,
+            'mu_std': float(np.std(mu_vals)) if len(mu_vals) > 0 else 0.0,
+            'sigma2_mean': float(np.mean(sigma2_vals)) if len(sigma2_vals) > 0 else 0.0,
+            'sigma2_std': float(np.std(sigma2_vals)) if len(sigma2_vals) > 0 else 0.0,
+            'n_samples': len(mu_vals)
+        }
+
+    return results
+
+
+def verify_formulas_with_real_data(
+    F_samples: np.ndarray,
+    F_star_samples: np.ndarray,
+    trajectory_stats: Dict[str, Dict[str, float]],
+    process_scales: Dict[str, float] = None,
+    verbose: bool = True
+) -> Dict:
+    """
+    Verifica le formule teoriche usando dati reali del training.
+
+    Confronta:
+    - E[F] empirico (dalla media dei campioni F) vs E[F] teorico (dalla formula)
+    - Var(F) empirico vs Var(F) teorico
+    - Loss empirica vs Loss teorica
+
+    Args:
+        F_samples: Array di valori F dal controller (n_scenarios × batch_size)
+        F_star_samples: Array di valori F* target (n_scenarios)
+        trajectory_stats: Statistiche estratte dalle traiettorie (da extract_trajectory_statistics)
+        process_scales: Scale per ogni processo (default: usa PROCESS_SCALES)
+        verbose: Se stampare risultati
+
+    Returns:
+        Dict con confronto empirico vs teorico per ogni processo e aggregato
+    """
+    if process_scales is None:
+        process_scales = PROCESS_SCALES
+
+    # Metriche empiriche aggregate
+    E_F_empirical = float(np.mean(F_samples))
+    Var_F_empirical = float(np.var(F_samples))
+    F_star_mean = float(np.mean(F_star_samples))
+
+    # Loss empirica: E[(F - F*)²]
+    # Nota: F_star potrebbe essere diverso per scenario, ma usiamo media per semplificare
+    Loss_empirical = float(np.mean((F_samples - F_star_mean) ** 2))
+
+    results = {
+        'empirical': {
+            'E_F': E_F_empirical,
+            'Var_F': Var_F_empirical,
+            'Loss': Loss_empirical,
+            'F_star_mean': F_star_mean,
+            'n_samples': len(F_samples)
+        },
+        'theoretical': {},
+        'per_process': {},
+        'comparison': {}
+    }
+
+    if verbose:
+        print("\n" + "="*70)
+        print("VERIFICA EMPIRICA DELLE FORMULE TEORICHE")
+        print("="*70)
+        print(f"\nCampioni analizzati: {len(F_samples)}")
+        print(f"F* medio (target): {F_star_mean:.6f}")
+
+    # Per ogni processo, calcola valori teorici e confronta
+    # Nota: F totale è il prodotto/media pesata dei Q per processo
+    # Per semplificare, calcoliamo E[F] teorico assumendo processi indipendenti
+
+    if verbose:
+        print("\n" + "-"*70)
+        print("Statistiche per Processo (estratte dalle traiettorie):")
+        print("-"*70)
+        print(f"{'Processo':<12} | {'μ medio':>10} | {'σ² medio':>10} | {'scale (s)':>10}")
+        print("-"*70)
+
+    # Calcola valori teorici per processo
+    E_F_per_process = []
+    Var_F_per_process = []
+
+    for process_name, stats in trajectory_stats.items():
+        mu_mean = stats['mu_mean']
+        sigma2_mean = stats['sigma2_mean']
+        s = process_scales.get(process_name, 1.0)
+
+        # Target adattivo - per semplicità usiamo il target base
+        # (in realtà τ dipende dagli output dei processi precedenti)
+        tau = PROCESS_SCALES.get(process_name, {})
+        if process_name == 'laser':
+            tau = 0.8
+        elif process_name == 'plasma':
+            tau = 3.0  # base target
+        elif process_name == 'galvanic':
+            tau = 10.0  # base target
+        elif process_name == 'microetch':
+            tau = 20.0  # base target
+        else:
+            tau = mu_mean  # fallback: assume on-target
+
+        # Calcola delta = μ - τ
+        delta = mu_mean - tau
+
+        # Valori teorici per questo processo
+        E_F_proc = E_F_theoretical(mu_mean, tau, s, sigma2_mean)
+        Var_F_proc = Var_F_theoretical(mu_mean, tau, s, sigma2_mean)
+
+        E_F_per_process.append(E_F_proc)
+        Var_F_per_process.append(Var_F_proc)
+
+        results['per_process'][process_name] = {
+            'mu_mean': mu_mean,
+            'sigma2_mean': sigma2_mean,
+            'tau': tau,
+            'delta': delta,
+            's': s,
+            'E_F_theoretical': E_F_proc,
+            'Var_F_theoretical': Var_F_proc
+        }
+
+        if verbose:
+            print(f"{process_name:<12} | {mu_mean:>10.4f} | {sigma2_mean:>10.4f} | {s:>10.2f}")
+
+    # Calcola E[F] teorico aggregato (media dei E[F] per processo)
+    # Nota: questo è un'approssimazione, F reale è più complesso
+    E_F_theoretical_agg = float(np.mean(E_F_per_process))
+    Var_F_theoretical_agg = float(np.mean(Var_F_per_process))
+
+    # Loss teorica (approssimata)
+    Loss_theoretical_agg = Var_F_theoretical_agg + (E_F_theoretical_agg - F_star_mean) ** 2
+
+    results['theoretical'] = {
+        'E_F': E_F_theoretical_agg,
+        'Var_F': Var_F_theoretical_agg,
+        'Loss': Loss_theoretical_agg
+    }
+
+    # Confronto
+    E_F_error = abs(E_F_empirical - E_F_theoretical_agg) / max(E_F_empirical, 1e-10) * 100
+    Var_F_error = abs(Var_F_empirical - Var_F_theoretical_agg) / max(Var_F_empirical, 1e-10) * 100
+    Loss_error = abs(Loss_empirical - Loss_theoretical_agg) / max(Loss_empirical, 1e-10) * 100
+
+    results['comparison'] = {
+        'E_F_error_pct': E_F_error,
+        'Var_F_error_pct': Var_F_error,
+        'Loss_error_pct': Loss_error,
+        'E_F_verified': E_F_error < 20,  # Soglia più alta per dati reali
+        'Var_F_verified': Var_F_error < 50,
+        'Loss_verified': Loss_error < 50
+    }
+
+    if verbose:
+        print("\n" + "-"*70)
+        print("Confronto Empirico vs Teorico:")
+        print("-"*70)
+        print(f"{'Metrica':<15} | {'Empirico':>12} | {'Teorico':>12} | {'Errore%':>10} | {'OK'}")
+        print("-"*70)
+
+        E_F_ok = "✓" if results['comparison']['E_F_verified'] else "✗"
+        Var_F_ok = "✓" if results['comparison']['Var_F_verified'] else "✗"
+        Loss_ok = "✓" if results['comparison']['Loss_verified'] else "✗"
+
+        print(f"{'E[F]':<15} | {E_F_empirical:>12.6f} | {E_F_theoretical_agg:>12.6f} | {E_F_error:>9.1f}% | {E_F_ok}")
+        print(f"{'Var(F)':<15} | {Var_F_empirical:>12.6f} | {Var_F_theoretical_agg:>12.6f} | {Var_F_error:>9.1f}% | {Var_F_ok}")
+        print(f"{'Loss':<15} | {Loss_empirical:>12.6f} | {Loss_theoretical_agg:>12.6f} | {Loss_error:>9.1f}% | {Loss_ok}")
+
+        print("\n" + "-"*70)
+        print("Interpretazione:")
+        print("-"*70)
+
+        if E_F_error < 10:
+            print("  ✓ E[F] teorico molto accurato - formula validata")
+        elif E_F_error < 20:
+            print("  ~ E[F] teorico ragionevolmente accurato")
+        else:
+            print("  ✗ E[F] teorico diverge - target adattivi o correlazioni non modellate")
+
+        if Var_F_error < 20:
+            print("  ✓ Var(F) teorico accurato - incertezza ben stimata")
+        else:
+            print("  ~ Var(F) teorico diverge - correlazioni tra processi non considerate")
+
+    return results
+
+
+def create_empirical_verification_plot(
+    empirical_results: Dict,
+    output_dir: Path
+) -> Path:
+    """
+    Crea grafico che confronta valori empirici vs teorici.
+    """
+    output_dir = Path(output_dir)
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    # Plot 1: Confronto E[F], Var(F), Loss
+    ax1 = axes[0]
+
+    metrics = ['E[F]', 'Var(F)', 'Loss']
+    empirical_vals = [
+        empirical_results['empirical']['E_F'],
+        empirical_results['empirical']['Var_F'],
+        empirical_results['empirical']['Loss']
+    ]
+    theoretical_vals = [
+        empirical_results['theoretical']['E_F'],
+        empirical_results['theoretical']['Var_F'],
+        empirical_results['theoretical']['Loss']
+    ]
+
+    x = np.arange(len(metrics))
+    width = 0.35
+
+    bars1 = ax1.bar(x - width/2, empirical_vals, width, label='Empirico (dati reali)', color='steelblue', alpha=0.8)
+    bars2 = ax1.bar(x + width/2, theoretical_vals, width, label='Teorico (formule)', color='coral', alpha=0.8)
+
+    ax1.set_xlabel('Metrica')
+    ax1.set_ylabel('Valore')
+    ax1.set_title('Verifica Empirica: Dati Reali vs Formule Teoriche')
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(metrics)
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+
+    # Aggiungi errore percentuale sopra le barre
+    comparison = empirical_results['comparison']
+    errors = [comparison['E_F_error_pct'], comparison['Var_F_error_pct'], comparison['Loss_error_pct']]
+    for i, (bar1, bar2, err) in enumerate(zip(bars1, bars2, errors)):
+        height = max(bar1.get_height(), bar2.get_height())
+        ax1.annotate(f'Δ{err:.1f}%', xy=(x[i], height), xytext=(0, 5),
+                    textcoords='offset points', ha='center', fontsize=9, fontweight='bold')
+
+    # Plot 2: Statistiche per processo
+    ax2 = axes[1]
+
+    per_process = empirical_results.get('per_process', {})
+    if per_process:
+        processes = list(per_process.keys())
+        sigma2_vals = [per_process[p]['sigma2_mean'] for p in processes]
+        E_F_vals = [per_process[p]['E_F_theoretical'] for p in processes]
+
+        x2 = np.arange(len(processes))
+
+        ax2_twin = ax2.twinx()
+
+        bars_sigma = ax2.bar(x2 - width/2, sigma2_vals, width, label=r'$\sigma^2$ medio', color='purple', alpha=0.7)
+        bars_EF = ax2_twin.bar(x2 + width/2, E_F_vals, width, label=r'$E[F]$ teorico', color='green', alpha=0.7)
+
+        ax2.set_xlabel('Processo')
+        ax2.set_ylabel(r'$\sigma^2$ (incertezza)', color='purple')
+        ax2_twin.set_ylabel(r'$E[F]$ teorico', color='green')
+        ax2.set_title('Statistiche per Processo')
+        ax2.set_xticks(x2)
+        ax2.set_xticklabels(processes)
+
+        # Combine legends
+        lines1, labels1 = ax2.get_legend_handles_labels()
+        lines2, labels2 = ax2_twin.get_legend_handles_labels()
+        ax2.legend(lines1 + lines2, labels1 + labels2, loc='upper right')
+
+        ax2.grid(True, alpha=0.3)
+
+    fig.tight_layout()
+    plot_path = output_dir / 'structural_bias_empirical_verification.png'
+    fig.savefig(plot_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+
+    return plot_path
+
+
+# ==============================================================================
 # Funzione principale
 # ==============================================================================
 
@@ -1293,7 +1621,12 @@ def run_structural_bias_verification(
     sigma2_estimates: Optional[Dict[str, float]] = None,
     F_star: Optional[float] = None,
     F_actual: Optional[float] = None,
-    run_real_analysis: bool = True
+    run_real_analysis: bool = True,
+    # Parametri per verifica empirica con traiettorie
+    trajectories: Optional[List[Dict]] = None,
+    F_samples: Optional[np.ndarray] = None,
+    F_star_samples: Optional[np.ndarray] = None,
+    L_actual: Optional[float] = None
 ) -> Dict:
     """
     Esegue la verifica completa della bias strutturale.
@@ -1307,6 +1640,10 @@ def run_structural_bias_verification(
         F_star: F* medio dal controller (opzionale)
         F_actual: F medio raggiunto (opzionale)
         run_real_analysis: Se eseguire analisi con dati reali (default: True)
+        trajectories: Lista di traiettorie dal controller (per verifica empirica)
+        F_samples: Array di valori F dal controller (per verifica empirica)
+        F_star_samples: Array di valori F* target (per verifica empirica)
+        L_actual: Loss effettiva del controller
 
     Returns:
         Dizionario con tutti i risultati e i percorsi dei grafici
@@ -1371,6 +1708,7 @@ def run_structural_bias_verification(
                 sigma2_estimates=sigma2_estimates,
                 F_star=F_star,
                 F_actual=F_actual,
+                L_actual=L_actual,
                 verbose=verbose
             )
             if real_data_analysis.get('plot_path'):
@@ -1379,6 +1717,44 @@ def run_structural_bias_verification(
             if verbose:
                 print(f"\n  Nota: Analisi dati reali non disponibile ({e})")
 
+    # Verifica empirica con traiettorie reali (se disponibili)
+    empirical_verification = None
+    if trajectories is not None and F_samples is not None:
+        try:
+            if verbose:
+                print("\nEsecuzione verifica empirica con dati del training...")
+
+            # Estrai statistiche dalle traiettorie
+            trajectory_stats = extract_trajectory_statistics(trajectories)
+
+            # Se sigma2_estimates non fornito, usa quelli estratti
+            if sigma2_estimates is None:
+                sigma2_estimates = {p: stats['sigma2_mean'] for p, stats in trajectory_stats.items()}
+
+            # Se F_star_samples non fornito, usa array costante
+            if F_star_samples is None:
+                F_star_samples = np.full_like(F_samples, F_star if F_star else np.mean(F_samples))
+
+            # Esegui verifica empirica
+            empirical_verification = verify_formulas_with_real_data(
+                F_samples=F_samples,
+                F_star_samples=F_star_samples,
+                trajectory_stats=trajectory_stats,
+                verbose=verbose
+            )
+
+            # Crea grafico
+            emp_plot_path = create_empirical_verification_plot(empirical_verification, output_dir)
+            plot_paths.append(emp_plot_path)
+            if verbose:
+                print(f"  Salvato: {emp_plot_path}")
+
+        except Exception as e:
+            if verbose:
+                print(f"\n  Nota: Verifica empirica non disponibile ({e})")
+                import traceback
+                traceback.print_exc()
+
     return {
         'experiment_a': exp_a,
         'experiment_b': exp_b,
@@ -1386,6 +1762,7 @@ def run_structural_bias_verification(
         'experiment_d': exp_d,
         'plot_paths': plot_paths,
         'real_data_analysis': real_data_analysis,
+        'empirical_verification': empirical_verification,
         'all_verified': all_passed,
         'n_samples': n_samples,
         'seed': seed
