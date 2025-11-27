@@ -1,0 +1,598 @@
+\documentclass[11pt,a4paper]{article}
+
+% Packages
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{mathtools}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{cleveref}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{float}
+
+% Page geometry
+\geometry{margin=2.5cm}
+
+% Theorem environments
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{corollary}[theorem]{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{remark}[theorem]{Remark}
+
+% Custom commands
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Var}{\mathrm{Var}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\N}{\mathcal{N}}
+
+% Title
+\title{On the Structural Bias in Reliability Loss Functions\\with Stochastic Reparameterization}
+\author{Technical Analysis Document}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This document provides a rigorous mathematical analysis of a fundamental limitation in training neural network policies using reliability-based loss functions combined with the reparameterization trick. We demonstrate that when the quality function is concave (as is the case with Gaussian-shaped reliability metrics), Jensen's inequality implies that the expected value of the stochastic reliability is strictly less than the deterministic target reliability. This creates an irreducible bias in the loss function, making the target fundamentally unreachable. We derive closed-form expressions for both the bias and variance components of the loss, and provide numerical estimates for typical system parameters.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+%==============================================================================
+\section{Introduction}
+%==============================================================================
+
+In many industrial process control applications, the goal is to train a policy network that maximizes a reliability metric $F$. A common approach involves:
+
+\begin{enumerate}
+    \item An \textbf{Uncertainty Predictor} that outputs a distribution over process outputs, characterized by a mean $\mu$ and variance $\sigma^2$.
+    \item A \textbf{reparameterization trick} that samples from this distribution to enable gradient-based optimization.
+    \item A \textbf{reliability function} $F$ that measures how close the sampled outputs are to desired targets.
+    \item A \textbf{loss function} that penalizes deviations from a target reliability $F^*$.
+\end{enumerate}
+
+A critical issue arises when the target reliability $F^*$ is computed deterministically (without sampling), while the actual reliability $F$ during training is computed on stochastic samples. This document proves that this asymmetry creates an irreducible gap between the achievable expected reliability and the target.
+
+%==============================================================================
+\section{Problem Setup}
+%==============================================================================
+
+\subsection{The Quality Function}
+
+\begin{definition}[Process Quality Function]
+For a single process, the quality function is defined as:
+\begin{equation}
+    Q(o) = \exp\left(-\frac{(o - \tau)^2}{s}\right)
+\end{equation}
+where:
+\begin{itemize}
+    \item $o \in \R$ is the process output
+    \item $\tau \in \R$ is the target output value
+    \item $s > 0$ is a scale parameter controlling the width of the quality peak
+\end{itemize}
+\end{definition}
+
+\begin{remark}
+The function $Q(o)$ is a Gaussian-shaped curve centered at $\tau$ with maximum value $Q(\tau) = 1$. It represents the quality or reliability of a process output, with perfect quality achieved when $o = \tau$.
+\end{remark}
+
+\subsection{The Stochastic Output Model}
+
+The Uncertainty Predictor models the process output as a Gaussian random variable:
+\begin{equation}
+    o \sim \N(\mu, \sigma^2)
+\end{equation}
+where $\mu$ is the predicted mean output and $\sigma^2$ is the predicted variance (epistemic and/or aleatoric uncertainty).
+
+\begin{definition}[Reparameterization Trick]
+To enable gradient flow through the stochastic sampling, we express the output as:
+\begin{equation}
+    o = \mu + \sigma\varepsilon, \quad \text{where } \varepsilon \sim \N(0, 1)
+\end{equation}
+\end{definition}
+
+\subsection{Target vs. Training Reliability}
+
+\begin{definition}[Target Reliability $F^*$]
+The target reliability is computed deterministically, using only the mean prediction with zero variance:
+\begin{equation}
+    F^* = Q(\mu) = \exp\left(-\frac{(\mu - \tau)^2}{s}\right)
+\end{equation}
+\end{definition}
+
+\begin{definition}[Training Reliability $F$]
+During training, the reliability is computed on sampled outputs:
+\begin{equation}
+    F = Q(\mu + \sigma\varepsilon) = \exp\left(-\frac{(\mu + \sigma\varepsilon - \tau)^2}{s}\right)
+\end{equation}
+This is a random variable depending on $\varepsilon$.
+\end{definition}
+
+\subsection{The Loss Function}
+
+The loss function penalizes deviations from the target reliability:
+\begin{equation}
+    \mathcal{L} = \E\left[(F - F^*)^2\right]
+\end{equation}
+where the expectation is taken over $\varepsilon \sim \N(0, 1)$.
+
+In practice, this expectation is approximated via Monte Carlo sampling over a mini-batch.
+
+%==============================================================================
+\section{Bias-Variance Decomposition of the Loss}
+%==============================================================================
+
+\begin{theorem}[Bias-Variance Decomposition]
+\label{thm:bias-variance}
+The loss function admits the decomposition:
+\begin{equation}
+    \mathcal{L} = \Var(F) + \left(\E[F] - F^*\right)^2
+\end{equation}
+where $\Var(F)$ is the variance of the stochastic reliability and $\E[F] - F^*$ is the bias.
+\end{theorem}
+
+\begin{proof}
+Expanding the squared term:
+\begin{align}
+    \mathcal{L} &= \E\left[(F - F^*)^2\right] \\
+    &= \E\left[F^2 - 2F \cdot F^* + (F^*)^2\right]
+\end{align}
+
+Since $F^*$ is a constant (it does not depend on $\varepsilon$):
+\begin{equation}
+    \mathcal{L} = \E[F^2] - 2F^* \cdot \E[F] + (F^*)^2
+\end{equation}
+
+Using the identity $\E[F^2] = \Var(F) + (\E[F])^2$:
+\begin{align}
+    \mathcal{L} &= \Var(F) + (\E[F])^2 - 2F^* \cdot \E[F] + (F^*)^2 \\
+    &= \Var(F) + \left((\E[F])^2 - 2F^* \cdot \E[F] + (F^*)^2\right) \\
+    &= \Var(F) + \left(\E[F] - F^*\right)^2
+\end{align}
+\end{proof}
+
+\begin{corollary}
+The minimum achievable loss is:
+\begin{equation}
+    \mathcal{L}_{\min} = \Var(F) + \mathrm{Bias}^2
+\end{equation}
+where $\mathrm{Bias} = \E[F] - F^*$. Both terms must be analyzed to understand the fundamental limitations.
+\end{corollary}
+
+%==============================================================================
+\section{Analysis of the Expected Reliability}
+%==============================================================================
+
+\subsection{Reformulation}
+
+Define the deviation from target:
+\begin{equation}
+    \delta \coloneqq \mu - \tau
+\end{equation}
+
+Then:
+\begin{equation}
+    o - \tau = \mu + \sigma\varepsilon - \tau = \delta + \sigma\varepsilon
+\end{equation}
+
+The stochastic reliability becomes:
+\begin{align}
+    F &= \exp\left(-\frac{(\delta + \sigma\varepsilon)^2}{s}\right) \\
+    &= \exp\left(-\frac{\delta^2 + 2\delta\sigma\varepsilon + \sigma^2\varepsilon^2}{s}\right) \\
+    &= \exp\left(-\frac{\delta^2}{s}\right) \cdot \exp\left(-\frac{2\delta\sigma\varepsilon}{s}\right) \cdot \exp\left(-\frac{\sigma^2\varepsilon^2}{s}\right)
+\end{align}
+
+Recognizing $F^* = \exp(-\delta^2/s)$:
+\begin{equation}
+    F = F^* \cdot \exp\left(-\frac{2\delta\sigma\varepsilon}{s} - \frac{\sigma^2\varepsilon^2}{s}\right)
+\end{equation}
+
+\subsection{Key Lemma}
+
+\begin{lemma}[Exponential-Quadratic Gaussian Integral]
+\label{lem:gaussian-integral}
+Let $\varepsilon \sim \N(0, 1)$ and let $a \in \R$, $b > 0$. Then:
+\begin{equation}
+    \E\left[\exp\left(-a\varepsilon - b\varepsilon^2\right)\right] = \frac{1}{\sqrt{1 + 2b}} \exp\left(\frac{a^2}{2(1 + 2b)}\right)
+\end{equation}
+\end{lemma}
+
+\begin{proof}
+By definition of expectation:
+\begin{equation}
+    \E\left[e^{-a\varepsilon - b\varepsilon^2}\right] = \int_{-\infty}^{+\infty} e^{-a\varepsilon - b\varepsilon^2} \cdot \frac{1}{\sqrt{2\pi}} e^{-\varepsilon^2/2} \, d\varepsilon
+\end{equation}
+
+Combining the exponentials:
+\begin{equation}
+    = \frac{1}{\sqrt{2\pi}} \int_{-\infty}^{+\infty} \exp\left(-\left(b + \frac{1}{2}\right)\varepsilon^2 - a\varepsilon\right) d\varepsilon
+\end{equation}
+
+Define $c \coloneqq b + \frac{1}{2} = \frac{1 + 2b}{2}$:
+\begin{equation}
+    = \frac{1}{\sqrt{2\pi}} \int_{-\infty}^{+\infty} \exp\left(-c\varepsilon^2 - a\varepsilon\right) d\varepsilon
+\end{equation}
+
+Complete the square in the exponent:
+\begin{equation}
+    -c\varepsilon^2 - a\varepsilon = -c\left(\varepsilon + \frac{a}{2c}\right)^2 + \frac{a^2}{4c}
+\end{equation}
+
+Substituting:
+\begin{equation}
+    = \frac{1}{\sqrt{2\pi}} \exp\left(\frac{a^2}{4c}\right) \int_{-\infty}^{+\infty} \exp\left(-c\left(\varepsilon + \frac{a}{2c}\right)^2\right) d\varepsilon
+\end{equation}
+
+The integral is a Gaussian integral with result $\sqrt{\pi/c}$:
+\begin{equation}
+    = \frac{1}{\sqrt{2\pi}} \exp\left(\frac{a^2}{4c}\right) \cdot \sqrt{\frac{\pi}{c}} = \frac{1}{\sqrt{2c}} \exp\left(\frac{a^2}{4c}\right)
+\end{equation}
+
+Substituting $c = \frac{1 + 2b}{2}$:
+\begin{equation}
+    = \frac{1}{\sqrt{1 + 2b}} \exp\left(\frac{a^2}{2(1 + 2b)}\right)
+\end{equation}
+\end{proof}
+
+\subsection{Expected Reliability}
+
+\begin{theorem}[Expected Reliability]
+\label{thm:expected-F}
+The expected reliability is:
+\begin{equation}
+    \E[F] = \frac{F^*}{\sqrt{1 + \frac{2\sigma^2}{s}}} \cdot \exp\left(\frac{2\delta^2\sigma^2}{s(s + 2\sigma^2)}\right)
+\end{equation}
+\end{theorem}
+
+\begin{proof}
+From the factorization of $F$:
+\begin{equation}
+    \E[F] = F^* \cdot \E\left[\exp\left(-\frac{2\delta\sigma\varepsilon}{s} - \frac{\sigma^2\varepsilon^2}{s}\right)\right]
+\end{equation}
+
+Applying \Cref{lem:gaussian-integral} with $a = \frac{2\delta\sigma}{s}$ and $b = \frac{\sigma^2}{s}$:
+\begin{equation}
+    \E[F] = F^* \cdot \frac{1}{\sqrt{1 + \frac{2\sigma^2}{s}}} \cdot \exp\left(\frac{\frac{4\delta^2\sigma^2}{s^2}}{2\left(1 + \frac{2\sigma^2}{s}\right)}\right)
+\end{equation}
+
+Simplifying the exponent:
+\begin{equation}
+    \frac{a^2}{2(1 + 2b)} = \frac{\frac{4\delta^2\sigma^2}{s^2}}{2 \cdot \frac{s + 2\sigma^2}{s}} = \frac{4\delta^2\sigma^2}{s^2} \cdot \frac{s}{2(s + 2\sigma^2)} = \frac{2\delta^2\sigma^2}{s(s + 2\sigma^2)}
+\end{equation}
+\end{proof}
+
+%==============================================================================
+\section{The Perfect Policy Case}
+%==============================================================================
+
+\begin{definition}[Perfect Policy]
+A policy is called \emph{perfect} if it produces the exact target mean, i.e., $\mu = \tau$, which implies $\delta = 0$.
+\end{definition}
+
+\begin{corollary}[Expected Reliability under Perfect Policy]
+\label{cor:perfect-policy}
+When $\delta = 0$:
+\begin{equation}
+    F^* = \exp(0) = 1
+\end{equation}
+and
+\begin{equation}
+    \E[F]\big|_{\delta=0} = \frac{1}{\sqrt{1 + \frac{2\sigma^2}{s}}}
+\end{equation}
+\end{corollary}
+
+\begin{theorem}[Irreducible Bias]
+\label{thm:irreducible-bias}
+For any $\sigma^2 > 0$, even with a perfect policy:
+\begin{equation}
+    \E[F] < F^*
+\end{equation}
+The bias is:
+\begin{equation}
+    \mathrm{Bias} = \E[F] - F^* = \frac{1}{\sqrt{1 + \frac{2\sigma^2}{s}}} - 1 < 0
+\end{equation}
+\end{theorem}
+
+\begin{proof}
+Since $\sigma^2 > 0$ and $s > 0$:
+\begin{equation}
+    1 + \frac{2\sigma^2}{s} > 1 \implies \sqrt{1 + \frac{2\sigma^2}{s}} > 1 \implies \frac{1}{\sqrt{1 + \frac{2\sigma^2}{s}}} < 1
+\end{equation}
+Therefore $\E[F] < 1 = F^*$.
+\end{proof}
+
+\begin{remark}[Jensen's Inequality Interpretation]
+This result is a direct consequence of Jensen's inequality. The function $Q(o) = \exp(-(o-\tau)^2/s)$ is strictly concave in a neighborhood of $o = \tau$ (specifically, for $|o - \tau| < \sqrt{s/2}$). For a concave function $f$ and a random variable $X$:
+\begin{equation}
+    \E[f(X)] \leq f(\E[X])
+\end{equation}
+with strict inequality when $X$ has non-zero variance and $f$ is strictly concave at $\E[X]$.
+\end{remark}
+
+%==============================================================================
+\section{Analysis of the Variance}
+%==============================================================================
+
+\begin{theorem}[Variance of Reliability]
+\label{thm:variance-F}
+The variance of the stochastic reliability is:
+\begin{equation}
+    \Var(F) = \E[F^2] - (\E[F])^2
+\end{equation}
+where $\E[F^2]$ is computed as follows.
+\end{theorem}
+
+\begin{lemma}[Second Moment of Reliability]
+\begin{equation}
+    F^2 = \exp\left(-\frac{2(\delta + \sigma\varepsilon)^2}{s}\right)
+\end{equation}
+This has the same form as $F$ but with the scale parameter $s$ replaced by $s/2$.
+\end{lemma}
+
+\begin{proof}
+\begin{equation}
+    F^2 = \left[\exp\left(-\frac{(\delta + \sigma\varepsilon)^2}{s}\right)\right]^2 = \exp\left(-\frac{2(\delta + \sigma\varepsilon)^2}{s}\right)
+\end{equation}
+\end{proof}
+
+\begin{corollary}[Expected Value of $F^2$]
+Applying \Cref{thm:expected-F} with $s \to s/2$:
+\begin{equation}
+    \E[F^2] = \frac{(F^*)^2}{\sqrt{1 + \frac{4\sigma^2}{s}}} \cdot \exp\left(\frac{4\delta^2\sigma^2}{s(s/2 + 2\sigma^2)}\right)
+\end{equation}
+\end{corollary}
+
+\begin{corollary}[Variance under Perfect Policy]
+When $\delta = 0$ and $F^* = 1$:
+\begin{equation}
+    \E[F^2]\big|_{\delta=0} = \frac{1}{\sqrt{1 + \frac{4\sigma^2}{s}}}
+\end{equation}
+\begin{equation}
+    \Var(F)\big|_{\delta=0} = \frac{1}{\sqrt{1 + \frac{4\sigma^2}{s}}} - \frac{1}{1 + \frac{2\sigma^2}{s}}
+\end{equation}
+\end{corollary}
+
+\begin{theorem}[Positive Variance]
+\label{thm:positive-variance}
+For any $\sigma^2 > 0$:
+\begin{equation}
+    \Var(F)\big|_{\delta=0} > 0
+\end{equation}
+\end{theorem}
+
+\begin{proof}
+Define $x \coloneqq \frac{2\sigma^2}{s} > 0$. We need to show:
+\begin{equation}
+    \frac{1}{\sqrt{1 + 2x}} > \frac{1}{1 + x}
+\end{equation}
+
+This is equivalent to:
+\begin{equation}
+    1 + x > \sqrt{1 + 2x}
+\end{equation}
+
+Squaring both sides (both are positive):
+\begin{equation}
+    (1 + x)^2 > 1 + 2x
+\end{equation}
+\begin{equation}
+    1 + 2x + x^2 > 1 + 2x
+\end{equation}
+\begin{equation}
+    x^2 > 0
+\end{equation}
+
+This is true for any $x > 0$.
+\end{proof}
+
+%==============================================================================
+\section{The Minimum Achievable Loss}
+%==============================================================================
+
+\begin{theorem}[Minimum Loss]
+\label{thm:min-loss}
+The minimum achievable loss, attained by a perfect policy ($\delta = 0$), is:
+\begin{equation}
+    \mathcal{L}_{\min} = \Var(F)\big|_{\delta=0} + \mathrm{Bias}^2\big|_{\delta=0}
+\end{equation}
+
+Explicitly:
+\begin{equation}
+    \mathcal{L}_{\min} = \underbrace{\frac{1}{\sqrt{1 + \frac{4\sigma^2}{s}}} - \frac{1}{1 + \frac{2\sigma^2}{s}}}_{\text{Variance term } > 0} + \underbrace{\left(\frac{1}{\sqrt{1 + \frac{2\sigma^2}{s}}} - 1\right)^2}_{\text{Bias}^2 \text{ term } > 0}
+\end{equation}
+
+Both terms are strictly positive when $\sigma^2 > 0$.
+\end{theorem}
+
+\begin{corollary}[Unreachable Target]
+The loss $\mathcal{L} = 0$ is \textbf{structurally unreachable} when $\sigma^2 > 0$. The only way to achieve $\mathcal{L} = 0$ is to set $\sigma^2 = 0$, i.e., to eliminate the stochastic sampling entirely.
+\end{corollary}
+
+%==============================================================================
+\section{Numerical Example}
+%==============================================================================
+
+Consider typical system parameters:
+\begin{itemize}
+    \item Scale parameter: $s = 2.0$
+    \item Predicted variance: $\sigma^2 = 0.05$
+\end{itemize}
+
+\subsection{Intermediate Calculations}
+
+\begin{align}
+    \frac{2\sigma^2}{s} &= \frac{2 \times 0.05}{2.0} = 0.05 \\
+    1 + \frac{2\sigma^2}{s} &= 1.05 \\
+    \sqrt{1.05} &\approx 1.0247 \\
+    1 + \frac{4\sigma^2}{s} &= 1.10 \\
+    \sqrt{1.10} &\approx 1.0488
+\end{align}
+
+\subsection{Expected Reliability (Perfect Policy)}
+
+\begin{equation}
+    \E[F] = \frac{1}{\sqrt{1.05}} \approx 0.9759
+\end{equation}
+
+\subsection{Bias}
+
+\begin{equation}
+    \mathrm{Bias} = 0.9759 - 1 = -0.0241
+\end{equation}
+\begin{equation}
+    \mathrm{Bias}^2 \approx 0.000581
+\end{equation}
+
+\subsection{Variance}
+
+\begin{align}
+    \E[F^2] &= \frac{1}{\sqrt{1.10}} \approx 0.9535 \\
+    (\E[F])^2 &\approx 0.9524 \\
+    \Var(F) &= 0.9535 - 0.9524 \approx 0.0011
+\end{align}
+
+\subsection{Minimum Loss}
+
+\begin{equation}
+    \mathcal{L}_{\min} = 0.0011 + 0.000581 \approx 0.00168
+\end{equation}
+
+\subsection{Interpretation}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lcc}
+\toprule
+\textbf{Quantity} & \textbf{Value} & \textbf{Contribution to Loss} \\
+\midrule
+$F^*$ (Target) & 1.000 & --- \\
+$\E[F]$ (Achievable) & 0.976 & --- \\
+Gap ($F^* - \E[F]$) & 0.024 & 2.4\% relative \\
+\midrule
+Variance term & 0.0011 & 65\% of $\mathcal{L}_{\min}$ \\
+Bias$^2$ term & 0.0006 & 35\% of $\mathcal{L}_{\min}$ \\
+\midrule
+$\mathcal{L}_{\min}$ & 0.00168 & Irreducible \\
+\bottomrule
+\end{tabular}
+\caption{Breakdown of the minimum achievable loss.}
+\end{table}
+
+%==============================================================================
+\section{Implications for Training}
+%==============================================================================
+
+\subsection{Observed Behavior}
+
+The theoretical analysis explains the empirical observation that training stalls at a reliability value below the target:
+
+\begin{itemize}
+    \item \textbf{Target reliability}: $F^* \approx 0.908$
+    \item \textbf{Achieved reliability}: $F \approx 0.865$
+    \item \textbf{Gap}: $\approx 0.043$ (4.7\%)
+\end{itemize}
+
+This gap is not due to suboptimal policy learning but is a \textbf{structural limitation} of the loss formulation.
+
+\subsection{Why the Gap Appears Larger in Practice}
+
+The numerical example assumed a single process. In a multi-process chain:
+
+\begin{enumerate}
+    \item Each process contributes its own bias and variance
+    \item Uncertainties compound through the chain
+    \item Adaptive targets introduce additional variability
+\end{enumerate}
+
+The total reliability $F = \sum_k w_k Q_k / \sum_k w_k$ aggregates these effects.
+
+\subsection{Potential Solutions}
+
+\subsubsection{Option 1: Consistent Target Computation}
+Compute $F^*$ using the same stochastic sampling as $F$:
+\begin{equation}
+    F^* = \E\left[Q(\mu^* + \sigma^*\varepsilon)\right]
+\end{equation}
+This makes $F^*$ and $\E[F]$ comparable, eliminating the bias when the policy matches the target distribution.
+
+\subsubsection{Option 2: Deterministic Training}
+Use the mean output directly without sampling:
+\begin{equation}
+    F = Q(\mu) \quad \text{(no reparameterization)}
+\end{equation}
+This eliminates both bias and variance but loses the ability to propagate uncertainty.
+
+\subsubsection{Option 3: Bias-Corrected Loss}
+Modify the loss to account for the expected bias:
+\begin{equation}
+    \mathcal{L} = \E\left[\left(F - F^* \cdot \frac{1}{\sqrt{1 + \frac{2\sigma^2}{s}}}\right)^2\right]
+\end{equation}
+
+\subsubsection{Option 4: Direct Reliability Maximization}
+Instead of minimizing $(F - F^*)^2$, directly maximize $\E[F]$:
+\begin{equation}
+    \mathcal{L} = -\E[F]
+\end{equation}
+This sidesteps the bias issue entirely.
+
+%==============================================================================
+\section{Conclusion}
+%==============================================================================
+
+We have rigorously demonstrated that:
+
+\begin{enumerate}
+    \item The combination of a concave quality function and stochastic sampling via the reparameterization trick creates an \textbf{irreducible bias} due to Jensen's inequality.
+
+    \item The loss function $\mathcal{L} = \E[(F - F^*)^2]$ decomposes into variance and bias$^2$ terms, both of which are strictly positive when $\sigma^2 > 0$.
+
+    \item The minimum achievable loss is:
+    \begin{equation}
+        \mathcal{L}_{\min} = \Var(F) + \left(\E[F] - F^*\right)^2 > 0
+    \end{equation}
+
+    \item This explains the observed training plateau where the achieved reliability remains below the target despite continued optimization.
+\end{enumerate}
+
+The fundamental issue is an \textbf{asymmetry} between how $F^*$ (deterministic) and $F$ (stochastic) are computed. Resolving this requires either making both computations consistent or reformulating the optimization objective.
+
+%==============================================================================
+\appendix
+\section{Concavity of the Gaussian Quality Function}
+%==============================================================================
+
+\begin{proposition}
+The function $Q(o) = \exp(-(o-\tau)^2/s)$ is strictly concave for $|o - \tau| < \sqrt{s/2}$ and strictly convex for $|o - \tau| > \sqrt{s/2}$.
+\end{proposition}
+
+\begin{proof}
+Let $u = o - \tau$. Then $Q = e^{-u^2/s}$.
+
+First derivative:
+\begin{equation}
+    \frac{dQ}{du} = -\frac{2u}{s} e^{-u^2/s}
+\end{equation}
+
+Second derivative:
+\begin{equation}
+    \frac{d^2Q}{du^2} = -\frac{2}{s} e^{-u^2/s} + \frac{4u^2}{s^2} e^{-u^2/s} = \frac{2}{s} e^{-u^2/s} \left(\frac{2u^2}{s} - 1\right)
+\end{equation}
+
+The sign of the second derivative is determined by $\frac{2u^2}{s} - 1$:
+\begin{itemize}
+    \item $\frac{d^2Q}{du^2} < 0$ (concave) when $u^2 < s/2$, i.e., $|u| < \sqrt{s/2}$
+    \item $\frac{d^2Q}{du^2} > 0$ (convex) when $u^2 > s/2$, i.e., $|u| > \sqrt{s/2}$
+\end{itemize}
+\end{proof}
+
+Since we are optimizing to achieve $o \approx \tau$ (i.e., $u \approx 0$), we are operating in the concave region where Jensen's inequality applies with the direction $\E[Q] < Q(\E[\cdot])$.
+
+\end{document}
