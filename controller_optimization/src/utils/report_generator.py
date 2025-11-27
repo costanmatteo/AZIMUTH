@@ -736,6 +736,99 @@ class ControllerReportGenerator:
                 self.story.append(caption_table)
                 self.story.append(Spacer(1, 0.2*cm))
 
+        # Real data analysis section (if available)
+        real_data = bias_results.get('real_data_analysis')
+        if real_data:
+            self.story.append(PageBreak())
+            self.add_section_title("Controller Performance Analysis")
+
+            # Gap decomposition
+            gap_decomp = real_data.get('gap_decomposition', {})
+            if gap_decomp:
+                inputs = real_data.get('inputs', {})
+                F_star = inputs.get('F_star', 1.0)
+                F_actual = inputs.get('F_actual', 0.5)
+                avg_E_F = real_data.get('avg_E_F_theoretical', 0.7)
+
+                decomp_text = f"""<b>Gap Decomposition (F* - F_actual):</b><br/>
+• <b>F* (target):</b> {F_star:.4f}<br/>
+• <b>E[F] (theoretical max with perfect policy):</b> {avg_E_F:.4f}<br/>
+• <b>F (actual achieved):</b> {F_actual:.4f}<br/><br/>
+<b>Gap Analysis:</b><br/>
+• Total Gap: {gap_decomp.get('total_gap', 0):.4f} (100%)<br/>
+• Structural Bias: {gap_decomp.get('structural_bias', 0):.4f} ({gap_decomp.get('structural_bias_pct', 0):.1f}%) - <i>IRREDUCIBLE</i><br/>
+• Policy Error: {gap_decomp.get('policy_error', 0):.4f} ({gap_decomp.get('policy_error_pct', 0):.1f}%) - <i>REDUCIBLE</i>
+"""
+                self.story.append(Paragraph(decomp_text, self.styles['BodyText']))
+                self.story.append(Spacer(1, 0.3*cm))
+
+            # Per-process bounds table
+            bounds = real_data.get('theoretical_bounds', {})
+            per_process = bounds.get('per_process', {})
+            if per_process:
+                self.story.append(Paragraph("<b>Theoretical Bounds per Process:</b>", self.styles['BodyText']))
+                self.story.append(Spacer(1, 0.1*cm))
+
+                headers = ['Process', 'σ²', 's', 'E[F]', 'Var(F)', 'L_min']
+                data = [headers]
+
+                for proc_name, proc_data in per_process.items():
+                    row = [
+                        proc_name.capitalize(),
+                        f"{proc_data.get('sigma2', 0):.4f}",
+                        f"{proc_data.get('scale', 1):.2f}",
+                        f"{proc_data.get('E_F', 0):.4f}",
+                        f"{proc_data.get('Var_F', 0):.4f}",
+                        f"{proc_data.get('L_min', 0):.4f}"
+                    ]
+                    data.append(row)
+
+                col_widths = [3*cm, 2*cm, 2*cm, 2.5*cm, 2.5*cm, 2.5*cm]
+                table = Table(data, colWidths=col_widths)
+                table.setStyle(TableStyle([
+                    ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
+                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                    ('FONTSIZE', (0, 0), (-1, -1), 8),
+                    ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
+                    ('TOPPADDING', (0, 0), (-1, 0), 6),
+                    ('LINEABOVE', (0, 0), (-1, 0), 1, colors.black),
+                    ('LINEABOVE', (0, 1), (-1, 1), 0.5, colors.black),
+                    ('LINEBELOW', (0, -1), (-1, -1), 1, colors.black),
+                    ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                ]))
+                self.story.append(table)
+                self.story.append(Spacer(1, 0.3*cm))
+
+            # Real data analysis plot
+            real_data_plot = checkpoint_dir / 'structural_bias_real_data_analysis.png'
+            if real_data_plot.exists():
+                img = Image(str(real_data_plot))
+                img_width, img_height = img.imageWidth, img.imageHeight
+                aspect_ratio = img_height / img_width
+
+                new_width = 16*cm
+                new_height = new_width * aspect_ratio
+                if new_height > 10*cm:
+                    new_height = 10*cm
+                    new_width = new_height / aspect_ratio
+
+                img.drawWidth = new_width
+                img.drawHeight = new_height
+
+                img_table = Table([[img]], colWidths=[18*cm])
+                img_table.setStyle(TableStyle([
+                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ]))
+                self.story.append(img_table)
+
+                caption_para = Paragraph("<i>Controller Performance: Structural Bias vs Policy Error</i>", self.styles['Normal'])
+                caption_table = Table([[caption_para]], colWidths=[18*cm])
+                caption_table.setStyle(TableStyle([
+                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ]))
+                self.story.append(caption_table)
+
     def add_plots_stacked(self, checkpoint_dir):
         """Add controller optimization plots stacked vertically"""
         self.add_section_title("Training Visualization")

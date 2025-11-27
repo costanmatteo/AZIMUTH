@@ -820,18 +820,42 @@ def main():
                 import traceback
                 traceback.print_exc()
 
-        # Run structural bias verification
+        # Run structural bias verification with real data from controller
         structural_bias_results = None
         try:
             print("  Running structural bias verification...")
+            # Stime di σ² per processo (valori tipici normalizzati basati sui dati di training)
+            # Questi valori possono essere raffinati in base ai dati effettivi degli uncertainty predictor
+            sigma2_estimates = {
+                'laser': 0.05,    # Bassa incertezza (processo ben controllato)
+                'plasma': 0.15,   # Media incertezza
+                'galvanic': 0.10  # Media-bassa incertezza
+            }
+            # Filtra solo i processi attivi
+            active_sigma2 = {p: sigma2_estimates[p] for p in CONTROLLER_CONFIG['process_names']
+                           if p in sigma2_estimates}
+
             structural_bias_results = run_structural_bias_verification(
                 output_dir=checkpoint_dir,
                 n_samples=100000,
                 seed=CONTROLLER_CONFIG.get('misc', {}).get('random_seed', 42),
-                verbose=False
+                verbose=False,
+                # Passa dati reali dal controller per l'analisi
+                sigma2_estimates=active_sigma2,
+                F_star=F_star_mean,
+                F_actual=F_actual_mean,
+                run_real_analysis=True
             )
             status = "VERIFIED" if structural_bias_results['all_verified'] else "SOME FAILURES"
             print(f"  ✓ Structural bias verification: {status}")
+
+            # Mostra decomposizione del gap se disponibile
+            if structural_bias_results.get('real_data_analysis'):
+                gap_info = structural_bias_results['real_data_analysis'].get('gap_decomposition', {})
+                if gap_info:
+                    struct_pct = gap_info.get('structural_bias_pct', 0)
+                    policy_pct = gap_info.get('policy_error_pct', 0)
+                    print(f"    Gap decomposition: {struct_pct:.1f}% structural bias, {policy_pct:.1f}% policy error")
         except Exception as e:
             print(f"  ✗ Warning: Structural bias verification failed: {e}")
 
