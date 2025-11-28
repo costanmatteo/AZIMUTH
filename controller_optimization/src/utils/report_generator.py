@@ -429,6 +429,168 @@ class ControllerReportGenerator:
         self.story.append(Paragraph(reliability_text, self.styles['BodyText']))
         self.story.append(Spacer(1, 0.2*cm))
 
+    def add_theoretical_analysis_section(self, checkpoint_dir, theoretical_data=None):
+        """Add theoretical loss analysis section to PDF report.
+
+        Args:
+            checkpoint_dir: Path to checkpoint directory (contains plots)
+            theoretical_data: Dictionary from TheoreticalLossTracker.to_dict() (optional)
+        """
+        checkpoint_dir = Path(checkpoint_dir)
+
+        # Check if theoretical analysis plots exist
+        theoretical_plots = [
+            'loss_vs_L_min.png',
+            'training_efficiency.png',
+            'loss_decomposition.png',
+            'loss_scatter.png',
+            'theoretical_analysis_summary.png'
+        ]
+
+        available_plots = [p for p in theoretical_plots if (checkpoint_dir / p).exists()]
+
+        if len(available_plots) == 0 and theoretical_data is None:
+            return  # No theoretical analysis to add
+
+        self.story.append(PageBreak())
+        self.add_section_title("Theoretical Loss Analysis")
+
+        # Add description
+        description = Paragraph(
+            "Analysis comparing observed loss with theoretical minimum (L_min). "
+            "The theoretical minimum represents the irreducible loss due to stochastic sampling. "
+            "L_min = Var[F] + Bias², where F is the reliability computed with sampling uncertainty.",
+            self.styles['Normal']
+        )
+        self.story.append(description)
+        self.story.append(Spacer(1, 0.3*cm))
+
+        # Add summary table if theoretical data is provided
+        if theoretical_data and 'summary' in theoretical_data:
+            summary = theoretical_data['summary']
+
+            # Create summary metrics table
+            summary_data = [
+                ['Metrica', 'Valore'],
+                ['Loss Finale', f"{summary.get('final_loss', 0):.6f}"],
+                ['L_min Teorico', f"{summary.get('final_L_min', 0):.6f}"],
+                ['Gap (Riducibile)', f"{summary.get('final_gap', 0):.6f}"],
+                ['Efficienza', f"{summary.get('final_efficiency', 0)*100:.1f}%"],
+                ['Migliore Efficienza', f"{summary.get('best_efficiency', 0)*100:.1f}%"],
+                ['Violazioni Teoriche', f"{summary.get('n_violations', 0)}/{summary.get('total_epochs', 0)}"]
+            ]
+
+            table = Table(summary_data, colWidths=[8*cm, 6*cm])
+            table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, -1), 8),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
+                ('TOPPADDING', (0, 0), (-1, 0), 6),
+                ('LINEABOVE', (0, 0), (-1, 0), 1.5, colors.black),
+                ('LINEABOVE', (0, 1), (-1, 1), 0.5, colors.black),
+                ('LINEBELOW', (0, -1), (-1, -1), 1.5, colors.black),
+            ]))
+            self.story.append(table)
+            self.story.append(Spacer(1, 0.3*cm))
+
+            # Add decomposition table
+            if 'theoretical_Var_F' in theoretical_data and len(theoretical_data['theoretical_Var_F']) > 0:
+                var_f = theoretical_data['theoretical_Var_F'][-1]
+                bias2 = theoretical_data['theoretical_Bias2'][-1]
+                gap = theoretical_data['gap'][-1]
+                L_min = var_f + bias2
+                total = var_f + bias2 + gap
+
+                decomp_data = [
+                    ['Componente', 'Valore', '% di L_min', '% di Loss'],
+                    ['Var(F) (Irreducibile)', f"{var_f:.6f}",
+                     f"{100*var_f/L_min:.1f}%" if L_min > 0 else "-",
+                     f"{100*var_f/total:.1f}%" if total > 0 else "-"],
+                    ['Bias² (Irreducibile)', f"{bias2:.6f}",
+                     f"{100*bias2/L_min:.1f}%" if L_min > 0 else "-",
+                     f"{100*bias2/total:.1f}%" if total > 0 else "-"],
+                    ['Gap (Riducibile)', f"{gap:.6f}", "-",
+                     f"{100*gap/total:.1f}%" if total > 0 else "-"],
+                ]
+
+                table2 = Table(decomp_data, colWidths=[5*cm, 4*cm, 4*cm, 4*cm])
+                table2.setStyle(TableStyle([
+                    ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
+                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                    ('FONTSIZE', (0, 0), (-1, -1), 8),
+                    ('LINEABOVE', (0, 0), (-1, 0), 1.5, colors.black),
+                    ('LINEABOVE', (0, 1), (-1, 1), 0.5, colors.black),
+                    ('LINEBELOW', (0, -1), (-1, -1), 1.5, colors.black),
+                ]))
+                self.story.append(Paragraph("<b>Loss Decomposition</b>", self.styles['SectionTitle']))
+                self.story.append(table2)
+                self.story.append(Spacer(1, 0.3*cm))
+
+        # Add theoretical analysis summary plot (2x2 grid)
+        summary_plot = checkpoint_dir / 'theoretical_analysis_summary.png'
+        if summary_plot.exists():
+            img = Image(str(summary_plot))
+            img_width, img_height = img.imageWidth, img.imageHeight
+            aspect_ratio = img_height / img_width
+
+            new_width = 17*cm
+            new_height = new_width * aspect_ratio
+            if new_height > 14*cm:
+                new_height = 14*cm
+                new_width = new_height / aspect_ratio
+
+            img.drawWidth = new_width
+            img.drawHeight = new_height
+
+            img_table = Table([[img]], colWidths=[18*cm])
+            img_table.setStyle(TableStyle([
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ]))
+            self.story.append(img_table)
+
+            caption = Paragraph("<i>Theoretical Analysis: Loss vs L_min, Efficiency, Decomposition, Scatter</i>",
+                               self.styles['Normal'])
+            caption_table = Table([[caption]], colWidths=[18*cm])
+            caption_table.setStyle(TableStyle([
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ]))
+            self.story.append(caption_table)
+            self.story.append(Spacer(1, 0.3*cm))
+
+        # Add individual plots if summary not available
+        elif 'loss_vs_L_min.png' in available_plots:
+            # Loss vs L_min plot
+            loss_plot = checkpoint_dir / 'loss_vs_L_min.png'
+            img = Image(str(loss_plot))
+            img_width, img_height = img.imageWidth, img.imageHeight
+            aspect_ratio = img_height / img_width
+
+            new_width = 15*cm
+            new_height = new_width * aspect_ratio
+            if new_height > 10*cm:
+                new_height = 10*cm
+                new_width = new_height / aspect_ratio
+
+            img.drawWidth = new_width
+            img.drawHeight = new_height
+
+            img_table = Table([[img]], colWidths=[18*cm])
+            img_table.setStyle(TableStyle([
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ]))
+            self.story.append(img_table)
+
+            caption = Paragraph("<i>Loss vs Theoretical Minimum (L_min)</i>", self.styles['Normal'])
+            caption_table = Table([[caption]], colWidths=[18*cm])
+            caption_table.setStyle(TableStyle([('ALIGN', (0, 0), (-1, -1), 'CENTER')]))
+            self.story.append(caption_table)
+            self.story.append(Spacer(1, 0.2*cm))
+
     def add_embedding_plots(self, checkpoint_dir):
         """Add scenario embedding visualization plots"""
         checkpoint_dir = Path(checkpoint_dir)
@@ -716,7 +878,7 @@ class ControllerReportGenerator:
 
     def generate(self, config, training_history, final_metrics, process_metrics,
                  F_star, F_baseline, F_actual, timestamp, n_scenarios=None, advanced_metrics=None,
-                 trajectory_values=None):
+                 trajectory_values=None, theoretical_data=None):
         """Generate the complete PDF
 
         Args:
@@ -733,6 +895,7 @@ class ControllerReportGenerator:
                     'F_baseline': float,
                     'F_actual': float
                 }
+            theoretical_data: Dictionary from TheoreticalLossTracker.to_dict() (optional)
         """
 
         # Add all sections in logical order
@@ -764,6 +927,12 @@ class ControllerReportGenerator:
 
         # Visualizations
         self.add_plots_stacked(Path(config['training']['checkpoint_dir']))
+
+        # Theoretical analysis section (if available)
+        self.add_theoretical_analysis_section(
+            Path(config['training']['checkpoint_dir']),
+            theoretical_data=theoretical_data
+        )
 
         # Embedding visualizations (if scenario encoder is enabled)
         self.add_embedding_plots(Path(config['training']['checkpoint_dir']))
@@ -856,7 +1025,8 @@ def generate_controller_report(
     timestamp=None,
     n_scenarios=None,
     advanced_metrics=None,
-    trajectory_values=None
+    trajectory_values=None,
+    theoretical_data=None
 ):
     """
     Generate a LaTeX-style controller optimization training report
@@ -874,6 +1044,7 @@ def generate_controller_report(
         n_scenarios: Number of scenarios (for multi-scenario training)
         advanced_metrics: Advanced metrics dictionary (optional)
         trajectory_values: Dictionary with trajectory comparison data (optional)
+        theoretical_data: Dictionary from TheoreticalLossTracker.to_dict() (optional)
 
     Returns:
         Path to the generated PDF report
@@ -892,7 +1063,8 @@ def generate_controller_report(
         generator = ControllerReportGenerator(temp_report_path)
         generator.generate(config, training_history, final_metrics, process_metrics,
                           F_star, F_baseline, F_actual, timestamp, n_scenarios=n_scenarios,
-                          advanced_metrics=advanced_metrics, trajectory_values=trajectory_values)
+                          advanced_metrics=advanced_metrics, trajectory_values=trajectory_values,
+                          theoretical_data=theoretical_data)
 
         # Convert to 2-up format
         try:
@@ -911,7 +1083,8 @@ def generate_controller_report(
         generator = ControllerReportGenerator(final_report_path)
         generator.generate(config, training_history, final_metrics, process_metrics,
                           F_star, F_baseline, F_actual, timestamp, n_scenarios=n_scenarios,
-                          advanced_metrics=advanced_metrics, trajectory_values=trajectory_values)
+                          advanced_metrics=advanced_metrics, trajectory_values=trajectory_values,
+                          theoretical_data=theoretical_data)
 
     return final_report_path
 

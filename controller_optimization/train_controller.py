@@ -55,6 +55,15 @@ from controller_optimization.src.utils.visualization import (
 from controller_optimization.src.utils.report_generator import generate_controller_report
 from controller_optimization.src.utils.model_utils import convert_numpy_to_tensor
 from controller_optimization.src.utils.scm_validation import validate_all_processes
+from controller_optimization.src.analysis import (
+    TheoreticalLossTracker,
+    compute_theoretical_L_min,
+    estimate_effective_params_simple,
+    generate_all_theoretical_plots,
+    generate_full_report,
+    save_report_txt,
+    save_report_json
+)
 
 
 def main():
@@ -261,6 +270,39 @@ def main():
     # Enable gradient debugging for first epoch
     trainer._debug_gradients = True
     trainer._debug_bc_loss = True
+
+    # Initialize theoretical loss tracker
+    print("\n[5.5/9] Initializing theoretical loss tracker...")
+    theoretical_tracker = TheoreticalLossTracker(loss_scale=CONTROLLER_CONFIG['training']['reliability_loss_scale'])
+
+    # Get process configs from surrogate for theoretical analysis
+    from controller_optimization.src.models.surrogate import ProTSurrogate
+    for proc_name, proc_config in ProTSurrogate.PROCESS_CONFIGS.items():
+        theoretical_tracker.process_configs[proc_name] = {
+            'tau': proc_config['target'],
+            's': proc_config['scale']
+        }
+        theoretical_tracker.process_weights[proc_name] = proc_config.get('weight', 1.0)
+
+    # Compute effective s (weighted average for the active processes)
+    active_processes = [p['name'] for p in selected_processes]
+    total_weight = sum(theoretical_tracker.process_weights.get(p, 1.0) for p in active_processes
+                       if theoretical_tracker.process_weights.get(p, 0) > 0)
+    if total_weight > 0:
+        effective_s = sum(
+            theoretical_tracker.process_configs.get(p, {}).get('s', 1.0) * theoretical_tracker.process_weights.get(p, 1.0)
+            for p in active_processes if theoretical_tracker.process_weights.get(p, 0) > 0
+        ) / total_weight
+    else:
+        effective_s = 1.0
+
+    print(f"  Effective scale parameter (s): {effective_s:.4f}")
+    print(f"  Active processes with weights > 0:")
+    for p in active_processes:
+        w = theoretical_tracker.process_weights.get(p, 0)
+        if w > 0:
+            cfg = theoretical_tracker.process_configs.get(p, {})
+            print(f"    {p}: tau={cfg.get('tau', 'N/A')}, s={cfg.get('s', 'N/A')}, weight={w}")
 
     # 6. Training
     print("\n[6/9] Starting training...")
@@ -692,6 +734,9 @@ def main():
 
     print("  ✓ Advanced visualizations generated")
 
+    # Initialize theoretical_data before the conditional block
+    theoretical_data = None
+
     # 8b. Generate PDF report (if enabled)
     if CONTROLLER_CONFIG['report']['generate_pdf']:
         print("\n  Generating PDF report...")
@@ -819,7 +864,125 @@ def main():
                 import traceback
                 traceback.print_exc()
 
-        # Generate report
+        # 8.6. Theoretical Loss Analysis
+        print("\n[8.6/9] Running theoretical loss analysis...")
+
+        try:
+            # Populate the theoretical tracker with training history data
+            # We need to estimate sigma2 (mean predicted variance) from the trajectories
+
+            # Run validation sampling to get empirical E[F] and Var[F]
+            print("  Running validation sampling for empirical statistics...")
+            n_validation_samples = 50
+
+            F_samples_all = []
+            sigma2_samples = []
+
+            with torch.no_grad():
+                process_chain.eval()
+                for sample_idx in range(n_validation_samples):
+                    # Use first few scenarios
+                    for scenario_idx in range(min(5, n_scenarios)):
+                        trajectory = process_chain.forward(batch_size=1, scenario_idx=scenario_idx)
+                        F = surrogate.compute_reliability(trajectory).item()
+                        F_samples_all.append(F)
+
+                        # Collect sigma2 from all processes
+                        for proc_name, data in trajectory.items():
+                            sigma2_samples.append(data['outputs_var'].mean().item())
+
+            F_samples_array = np.array(F_samples_all)
+            mean_sigma2 = np.mean(sigma2_samples) if sigma2_samples else 0.01
+
+            print(f"  Validation samples: {len(F_samples_array)}")
+            print(f"  Empirical E[F]: {np.mean(F_samples_array):.6f}")
+            print(f"  Empirical Var[F]: {np.var(F_samples_array):.8f}")
+            print(f"  Mean sigma2: {mean_sigma2:.6f}")
+
+            # Estimate delta from F_star
+            # F* = exp(-delta^2/s) => delta = sqrt(-s * ln(F*))
+            if F_star_mean > 0 and F_star_mean < 1:
+                estimated_delta = np.sqrt(-effective_s * np.log(F_star_mean))
+            else:
+                estimated_delta = 0.0
+
+            print(f"  Estimated delta: {estimated_delta:.6f}")
+
+            # Populate tracker with data from training history
+            reliability_loss_history = history.get('reliability_loss', [])
+            F_values_history = history.get('F_values', [])
+
+            for epoch_idx, (rel_loss, F_val) in enumerate(zip(reliability_loss_history, F_values_history)):
+                epoch = epoch_idx + 1
+                # Use reliability loss (already scaled)
+                observed_loss = rel_loss
+
+                # F_samples for this epoch (use F_val as representative)
+                # For a more accurate estimate, we'd need per-epoch sampling
+                F_samples_epoch = np.array([F_val])
+
+                theoretical_tracker.update(
+                    epoch=epoch,
+                    observed_loss_value=observed_loss,
+                    F_star=F_star_mean,
+                    F_samples=F_samples_epoch,
+                    sigma2_mean=mean_sigma2,
+                    delta=estimated_delta,
+                    s=effective_s
+                )
+
+            # Get theoretical data for report
+            theoretical_data = theoretical_tracker.to_dict()
+
+            # Generate theoretical analysis plots
+            print("  Generating theoretical analysis plots...")
+            theoretical_plots = generate_all_theoretical_plots(
+                tracker_data=theoretical_data,
+                checkpoint_dir=checkpoint_dir,
+                verbose=True
+            )
+
+            # Generate and save text report
+            print("  Generating theoretical analysis text report...")
+            process_params_for_report = {}
+            for proc_name in active_processes:
+                if theoretical_tracker.process_weights.get(proc_name, 0) > 0:
+                    cfg = theoretical_tracker.process_configs.get(proc_name, {})
+                    process_params_for_report[proc_name] = {
+                        'F_star': F_star_mean,  # Use overall F_star
+                        'sigma2': mean_sigma2,
+                        'delta': estimated_delta,
+                        's': cfg.get('s', effective_s)
+                    }
+
+            text_report = generate_full_report(
+                tracker_data=theoretical_data,
+                process_params=process_params_for_report
+            )
+
+            # Save text report
+            save_report_txt(text_report, checkpoint_dir / 'theoretical_analysis_report.txt')
+
+            # Save JSON data
+            save_report_json(theoretical_data, checkpoint_dir / 'theoretical_analysis_data.json')
+
+            # Print summary
+            summary = theoretical_data.get('summary', {})
+            print(f"\n  THEORETICAL ANALYSIS SUMMARY:")
+            print(f"    Final Loss:        {summary.get('final_loss', 0):.6f}")
+            print(f"    Theoretical L_min: {summary.get('final_L_min', 0):.6f}")
+            print(f"    Gap (reducible):   {summary.get('final_gap', 0):.6f}")
+            print(f"    Efficiency:        {summary.get('final_efficiency', 0)*100:.1f}%")
+            print(f"    Violations:        {summary.get('n_violations', 0)}/{summary.get('total_epochs', 0)}")
+
+            print("  ✓ Theoretical analysis completed")
+
+        except Exception as e:
+            print(f"  ✗ Warning: Failed to run theoretical analysis: {e}")
+            import traceback
+            traceback.print_exc()
+
+        # Generate PDF report
         try:
             report_path = generate_controller_report(
                 config=CONTROLLER_CONFIG,
@@ -833,7 +996,8 @@ def main():
                 timestamp=datetime.now(),
                 n_scenarios=n_scenarios,
                 advanced_metrics=advanced_metrics_for_report,
-                trajectory_values=trajectory_values_for_report
+                trajectory_values=trajectory_values_for_report,
+                theoretical_data=theoretical_data
             )
             print(f"  ✓ PDF report generated: {report_path}")
         except Exception as e:
@@ -916,6 +1080,9 @@ def main():
 
         # Training history
         'history': history_serializable,
+
+        # Theoretical analysis (if available)
+        'theoretical_analysis': theoretical_data.get('summary', {}) if theoretical_data else {},
     }
 
     results_path = checkpoint_dir / 'final_results.json'
@@ -932,6 +1099,9 @@ def main():
     print("  - training_history.json            : Training history")
     print("  - final_results.json               : All metrics (with per-scenario data)")
     print("  - *.png                            : Visualization plots")
+    print("  - theoretical_analysis_report.txt  : Theoretical analysis text report")
+    print("  - theoretical_analysis_data.json   : Theoretical analysis data")
+    print("  - theoretical_analysis_summary.png : Theoretical analysis plots")
     print(f"\nController trained on {n_scenarios} diverse scenarios")
     print(f"  → Generalizes across varying structural conditions")
     print(f"  → Robustness: {F_actual_std:.6f} (std across scenarios)")
