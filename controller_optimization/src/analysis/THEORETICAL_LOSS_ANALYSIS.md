@@ -75,9 +75,19 @@ E[Q] = F* × (1/√(1 + 2σ²/s)) × exp(2δ²σ² / (s(s + 2σ²)))
 
 ### 2.3 Expected Value of Quality Squared
 
+From Corollary 16 of the theoretical document:
+
+Since Q² = exp(-2(δ+σε)²/s) has effective scale s/2, applying Lemma 9
+with a=4δσ/s and b=2σ²/s gives:
+
 ```
-E[Q²] = F*² × (1/√(1 + 4σ²/s)) × exp(4δ²σ² / (s(s + 4σ²)))
+E[Q²] = F*² × (1/√(1 + 4σ²/s)) × exp(8δ²σ² / (s(s + 4σ²)))
 ```
+
+**Note**: The exponent numerator is **8** (not 4). This is because:
+- a² = (4δσ/s)² = 16δ²σ²/s²
+- 1 + 2b = 1 + 4σ²/s = (s + 4σ²)/s
+- a²/(2(1+2b)) = 16δ²σ²/s² × s/(2(s + 4σ²)) = 8δ²σ² / (s(s + 4σ²))
 
 ### 2.4 Minimum Achievable Loss
 

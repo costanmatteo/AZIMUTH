@@ -121,6 +121,13 @@ class ControllerReportGenerator:
         if n_scenarios is not None and n_scenarios > 1:
             config_text += f"<br/>• <b>Training Scenarios:</b> {n_scenarios}"
 
+        # Add seed information from scenarios config
+        scenarios_config = config.get('scenarios', {})
+        seed_target = scenarios_config.get('seed_target', 'N/A')
+        seed_baseline = scenarios_config.get('seed_baseline', 'N/A')
+        config_text += f"<br/>• <b>Seed Target:</b> {seed_target}"
+        config_text += f"<br/>• <b>Seed Baseline:</b> {seed_baseline}"
+
         left_col.append(Paragraph(config_text, self.styles['BodyText']))
         left_col.append(Spacer(1, 0.15*cm))
 

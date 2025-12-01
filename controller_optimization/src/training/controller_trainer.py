@@ -509,6 +509,9 @@ class ControllerTrainer:
         if self.curriculum_config['enabled']:
             warmup_epochs = int(epochs * self.curriculum_config['warmup_fraction'])
 
+        # Reset patience activation flag (for cases where train() is called multiple times)
+        self._patience_activated = False
+
         if verbose:
             print(f"\n{'='*70}")
             print("STARTING CONTROLLER TRAINING")
@@ -527,6 +530,7 @@ class ControllerTrainer:
                 print(f"    Phase 2 - Curriculum: Epochs {warmup_epochs + 1}-{epochs} (gradual reliability)")
                 print(f"    Lambda BC schedule: {self.curriculum_config['lambda_bc_start']:.3f} → {self.curriculum_config['lambda_bc_end']:.6f}")
                 print(f"    Reliability weight curve: {self.curriculum_config['reliability_weight_curve']}")
+                print(f"    Patience: starts after warm-up AND reliability_weight >= 0.9")
 
         # Save embedding snapshot at epoch 1 (initial state)
         if hasattr(self.process_chain, 'scenario_encoder') and self.process_chain.scenario_encoder is not None:
@@ -585,10 +589,28 @@ class ControllerTrainer:
                 print("WARM-UP COMPLETED! Starting curriculum learning phase...")
                 print(f"{'='*70}")
 
+            # Print message when patience becomes active (reliability_weight >= 0.9)
+            if verbose and self.curriculum_config['enabled'] and reliability_weight >= 0.9:
+                if not hasattr(self, '_patience_activated') or not self._patience_activated:
+                    self._patience_activated = True
+                    print(f"\n{'='*70}")
+                    print(f"PATIENCE ACTIVATED! (reliability_weight={reliability_weight:.3f} >= 0.9)")
+                    print(f"Early stopping will now monitor loss improvements (patience={patience})")
+                    print(f"{'='*70}")
+
             # Check for improvement (based on LOSS, not F value)
             # We want F to become more similar to F*, i.e., loss to decrease
-            # IMPORTANT: During warm-up, reliability loss is random, so we skip early stopping
-            if avg_total_loss < self.best_loss:
+            # IMPORTANT: During warm-up and early curriculum phase, reliability loss is
+            # not yet dominant, so we skip early stopping until reliability_weight >= 0.9
+
+            # Patience only starts counting when:
+            # 1. Warm-up is finished (epoch > warmup_epochs)
+            # 2. Reliability weight has reached 0.9 (loss is now reliability-dominated)
+            patience_active = epoch > warmup_epochs and reliability_weight >= 0.9
+
+            # Best model saving only when patience is active
+            # (avoids saving models optimized for BC loss instead of reliability)
+            if patience_active and avg_total_loss < self.best_loss:
                 self.best_loss = avg_total_loss
                 self.best_F = avg_F  # Track best F for information
                 self.epochs_without_improvement = 0
@@ -600,14 +622,16 @@ class ControllerTrainer:
                     print(f"  ✓ New best loss: {self.best_loss:.6f} (F: {self.best_F:.6f})")
 
             else:
-                self.epochs_without_improvement += 1
+                # Only count epochs without improvement when patience is active
+                if patience_active:
+                    self.epochs_without_improvement += 1
 
-                # Early stopping: ONLY after warm-up period
-                # During warm-up, reliability is random and shouldn't trigger early stopping
-                if epoch > warmup_epochs and self.epochs_without_improvement >= patience:
+                # Early stopping: ONLY when patience is active and threshold reached
+                if patience_active and self.epochs_without_improvement >= patience:
                     if verbose:
                         print(f"\n  Early stopping triggered (patience={patience})")
                         print(f"  Loss has not improved for {patience} epochs")
+                        print(f"  (Patience was active since reliability_weight >= 0.9)")
                     break
 
         # Save final model

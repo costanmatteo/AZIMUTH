@@ -1,8 +1,9 @@
 """
 Theoretical Loss Analysis for Reliability-based Controller Optimization.
 
-Implements the theoretical framework for computing the minimum achievable loss (L_min)
-when using stochastic sampling from the UncertaintyPredictor.
+Implements the theoretical framework from "On the Structural Bias in Reliability
+Loss Functions with Stochastic Reparameterization" for computing the minimum
+achievable loss (L_min) when using stochastic sampling from the UncertaintyPredictor.
 
 Theory:
 The loss function L = (F - F*)^2 where:
@@ -11,10 +12,13 @@ The loss function L = (F - F*)^2 where:
 
 When sampling is stochastic (sigma^2 > 0), there's an irreducible minimum L_min > 0.
 
-Formulas:
+Formulas (from Theorem 10 and Corollary 16):
 - E[F] = F* * (1/sqrt(1 + 2*sigma^2/s)) * exp(2*delta^2*sigma^2 / (s*(s + 2*sigma^2)))
-- E[F^2] = F*^2 * (1/sqrt(1 + 4*sigma^2/s)) * exp(4*delta^2*sigma^2 / (s*(s + 4*sigma^2)))
+- E[F^2] = F*^2 * (1/sqrt(1 + 4*sigma^2/s)) * exp(8*delta^2*sigma^2 / (s*(s + 4*sigma^2)))
 - L_min = Var[F] + Bias^2 = (E[F^2] - E[F]^2) + (E[F] - F*)^2
+
+Note on E[F^2]: The exponent numerator is 8 (not 4) because F^2 = exp(-2(δ+σε)^2/s)
+has effective scale s/2, and applying Lemma 9 with a=4δσ/s, b=2σ²/s yields 8δ²σ².
 
 Where:
 - sigma^2 = predicted variance from UncertaintyPredictor
@@ -99,7 +103,18 @@ def compute_theoretical_E_F2(F_star: float, delta: float, sigma2: float, s: floa
     """
     Compute theoretical expected value of F^2.
 
-    E[F^2] = F*^2 * (1/sqrt(1 + 4*sigma^2/s)) * exp(4*delta^2*sigma^2 / (s*(s + 4*sigma^2)))
+    Derivation (Corollario 16 from theoretical document):
+        F² = [exp(-(δ + σε)²/s)]² = exp(-2(δ + σε)²/s)
+
+        This has the SAME FORM as F but with scale s replaced by s/2.
+        Applying Lemma 9 with a = 4δσ/s and b = 2σ²/s:
+
+        E[F²] = (F*)² × (1/√(1 + 4σ²/s)) × exp(8δ²σ² / (s(s + 4σ²)))
+
+    Note: The exponent numerator is 8 (not 4) because:
+        a² / (2(1+2b)) = (4δσ/s)² / (2(1 + 4σ²/s))
+                       = 16δ²σ²/s² × s / (2(s + 4σ²))
+                       = 8δ²σ² / (s(s + 4σ²))
 
     Args:
         F_star: Target reliability
@@ -121,8 +136,9 @@ def compute_theoretical_E_F2(F_star: float, delta: float, sigma2: float, s: floa
     # Compute the two factors
     factor1 = 1.0 / np.sqrt(1 + 4 * sigma2 / s)
 
-    # Exponent term
-    numerator = 4 * delta**2 * sigma2
+    # Exponent term - CORRECTED: numerator is 8, not 4
+    # From Corollario 16: 8δ²σ² / (s(s + 4σ²))
+    numerator = 8 * delta**2 * sigma2
     denominator = s * (s + 4 * sigma2)
     factor2 = np.exp(numerator / denominator) if denominator > 0 else 1.0
 
@@ -190,10 +206,14 @@ def compute_per_process_Q_stats(
     """
     Compute E[Q_i], E[Q_i²], and Var[Q_i] for a single process.
 
-    Formulas:
-        E[Q_i] = Q_i* / √(1 + 2σ²/s) · exp(2δ²σ² / (s(s + 2σ²)))
-        E[Q_i²] = Q_i*² / √(1 + 4σ²/s) · exp(4δ²σ² / (s(s + 4σ²)))
+    Formulas (from theoretical document):
+        E[Q_i] = Q_i* / √(1 + 2σ²/s) · exp(2δ²σ² / (s(s + 2σ²)))     [Theorem 10]
+        E[Q_i²] = Q_i*² / √(1 + 4σ²/s) · exp(8δ²σ² / (s(s + 4σ²)))  [Corollary 16]
         Var[Q_i] = E[Q_i²] - E[Q_i]²
+
+    Note: The exponent in E[Q²] is 8δ²σ² (not 4δ²σ²) because Q² has
+    effective scale s/2, and applying Lemma 9 with a=4δσ/s, b=2σ²/s gives:
+        a²/(2(1+2b)) = 16δ²σ²/s² / (2(s+4σ²)/s) = 8δ²σ² / (s(s+4σ²))
 
     Args:
         Q_star: Target quality for this process (Q_i* = exp(-δ²/s))
@@ -208,16 +228,16 @@ def compute_per_process_Q_stats(
         # Deterministic case
         return Q_star, Q_star**2, 0.0
 
-    # E[Q_i]
+    # E[Q_i] - Theorem 10
     factor1 = 1.0 / np.sqrt(1 + 2 * sigma2 / s)
     num1 = 2 * delta**2 * sigma2
     den1 = s * (s + 2 * sigma2)
     factor2 = np.exp(num1 / den1) if den1 > 0 else 1.0
     E_Q = Q_star * factor1 * factor2
 
-    # E[Q_i²]
+    # E[Q_i²] - Corollary 16: exponent numerator is 8, not 4
     factor1_sq = 1.0 / np.sqrt(1 + 4 * sigma2 / s)
-    num2 = 4 * delta**2 * sigma2
+    num2 = 8 * delta**2 * sigma2  # CORRECTED: was 4, should be 8
     den2 = s * (s + 4 * sigma2)
     factor2_sq = np.exp(num2 / den2) if den2 > 0 else 1.0
     E_Q2 = Q_star**2 * factor1_sq * factor2_sq
@@ -228,10 +248,127 @@ def compute_per_process_Q_stats(
     return E_Q, E_Q2, Var_Q
 
 
+def compute_cross_moment(
+    Q_star_i: float, delta_i: float, sigma2_i: float, s_i: float,
+    Q_star_j: float, delta_j: float, sigma2_j: float, s_j: float,
+    rho: float
+) -> float:
+    """
+    Compute E[QᵢQⱼ] for two correlated processes (Theorem 45).
+
+    Formula:
+        E[QᵢQⱼ] = (Q*ᵢ × Q*ⱼ / √det(M)) × exp(½ aᵀ M⁻¹ R a)
+
+    Where:
+        aᵢ = 2δᵢσᵢ/sᵢ,  aⱼ = 2δⱼσⱼ/sⱼ
+        bᵢ = σ²ᵢ/sᵢ,    bⱼ = σ²ⱼ/sⱼ
+        R = [[1, ρ], [ρ, 1]]  (correlation matrix)
+        M = I + 2RB
+        det(M) = (1 + 2bᵢ)(1 + 2bⱼ) - 4ρ²bᵢbⱼ  (Corollary 40)
+
+    From Corollary 43:
+        aᵀM⁻¹Ra = (1/det(M)) × [aᵢ²(1+2bⱼ(1-ρ²)) + 2ρaᵢaⱼ + aⱼ²(1+2bᵢ(1-ρ²))]
+
+    Args:
+        Q_star_i, delta_i, sigma2_i, s_i: Parameters for process i
+        Q_star_j, delta_j, sigma2_j, s_j: Parameters for process j
+        rho: Correlation coefficient between εᵢ and εⱼ, ρ ∈ [-1, 1]
+
+    Returns:
+        E[QᵢQⱼ]: Cross-moment of the two quality functions
+    """
+    # Handle edge cases
+    if sigma2_i <= 0 or sigma2_j <= 0 or s_i <= 0 or s_j <= 0:
+        # Deterministic case: E[QᵢQⱼ] = Q*ᵢ × Q*ⱼ
+        return Q_star_i * Q_star_j
+
+    # Compute a and b parameters
+    # Note: sigma_i = sqrt(sigma2_i), so a_i = 2*delta_i*sigma_i/s_i
+    sigma_i = np.sqrt(sigma2_i)
+    sigma_j = np.sqrt(sigma2_j)
+
+    a_i = 2 * delta_i * sigma_i / s_i
+    a_j = 2 * delta_j * sigma_j / s_j
+    b_i = sigma2_i / s_i
+    b_j = sigma2_j / s_j
+
+    # Compute det(M) = (1 + 2bᵢ)(1 + 2bⱼ) - 4ρ²bᵢbⱼ  (Corollary 40)
+    det_M = (1 + 2 * b_i) * (1 + 2 * b_j) - 4 * rho**2 * b_i * b_j
+
+    # Check for numerical stability
+    if det_M <= 0:
+        # This shouldn't happen for valid correlation |ρ| ≤ 1
+        # Fall back to independent case
+        E_Qi, _, _ = compute_per_process_Q_stats(Q_star_i, delta_i, sigma2_i, s_i)
+        E_Qj, _, _ = compute_per_process_Q_stats(Q_star_j, delta_j, sigma2_j, s_j)
+        return E_Qi * E_Qj
+
+    # Compute aᵀM⁻¹Ra (Corollary 43)
+    # = (1/det(M)) × [aᵢ²(1+2bⱼ(1-ρ²)) + 2ρaᵢaⱼ + aⱼ²(1+2bᵢ(1-ρ²))]
+    term1 = a_i**2 * (1 + 2 * b_j * (1 - rho**2))
+    term2 = 2 * rho * a_i * a_j
+    term3 = a_j**2 * (1 + 2 * b_i * (1 - rho**2))
+
+    quadratic_form = (term1 + term2 + term3) / det_M
+
+    # E[QᵢQⱼ] = (Q*ᵢ × Q*ⱼ / √det(M)) × exp(½ aᵀM⁻¹Ra)
+    E_QiQj = (Q_star_i * Q_star_j / np.sqrt(det_M)) * np.exp(0.5 * quadratic_form)
+
+    return E_QiQj
+
+
+def compute_covariance(
+    params_i: Dict[str, float],
+    params_j: Dict[str, float],
+    rho: float
+) -> float:
+    """
+    Compute Cov(Qᵢ, Qⱼ) for two processes (Corollary 46).
+
+    Formula:
+        Cov(Qᵢ, Qⱼ) = E[QᵢQⱼ] - E[Qᵢ]E[Qⱼ]
+
+    Args:
+        params_i: Dict with 'F_star', 'delta', 'sigma2', 's' for process i
+        params_j: Dict with 'F_star', 'delta', 'sigma2', 's' for process j
+        rho: Correlation coefficient between processes
+
+    Returns:
+        Cov(Qᵢ, Qⱼ): Covariance between the two quality functions
+    """
+    # Extract parameters
+    Q_star_i = params_i['F_star']
+    delta_i = params_i['delta']
+    sigma2_i = params_i['sigma2']
+    s_i = params_i['s']
+
+    Q_star_j = params_j['F_star']
+    delta_j = params_j['delta']
+    sigma2_j = params_j['sigma2']
+    s_j = params_j['s']
+
+    # Compute E[QᵢQⱼ] using Theorem 45
+    E_QiQj = compute_cross_moment(
+        Q_star_i, delta_i, sigma2_i, s_i,
+        Q_star_j, delta_j, sigma2_j, s_j,
+        rho
+    )
+
+    # Compute E[Qᵢ] and E[Qⱼ] using Theorem 10
+    E_Qi, _, _ = compute_per_process_Q_stats(Q_star_i, delta_i, sigma2_i, s_i)
+    E_Qj, _, _ = compute_per_process_Q_stats(Q_star_j, delta_j, sigma2_j, s_j)
+
+    # Cov(Qᵢ, Qⱼ) = E[QᵢQⱼ] - E[Qᵢ]E[Qⱼ]
+    cov = E_QiQj - E_Qi * E_Qj
+
+    return cov
+
+
 def compute_multi_process_L_min(
     process_params: Dict[str, Dict[str, float]],
     process_weights: Dict[str, float],
-    loss_scale: float = 1.0
+    loss_scale: float = 1.0,
+    correlation_matrix: Optional[Dict[Tuple[str, str], float]] = None
 ) -> Tuple[TheoreticalLossComponents, Dict[str, TheoreticalLossComponents]]:
     """
     Compute theoretical L_min for a multi-process system.
@@ -240,8 +377,11 @@ def compute_multi_process_L_min(
         F = Σ(w_i × Q_i) / W    where W = Σw_i
         F* = Σ(w_i × Q_i*) / W
 
-    The variance propagates through the weighted average (assuming independence):
+    Variance propagation (Theorem 27):
         E[F] = Σ(w_i × E[Q_i]) / W
+        Var[F] = (1/W²) Σᵢ Σⱼ wᵢwⱼ Cov(Qᵢ, Qⱼ)
+
+    When correlation_matrix is None (independence assumed, Theorem 31):
         Var[F] = Σ(w_i² × Var[Q_i]) / W²
 
     The minimum achievable loss is:
@@ -252,6 +392,9 @@ def compute_multi_process_L_min(
                         Note: F_star here is Q_i* (per-process target quality)
         process_weights: Dict mapping process_name to weight
         loss_scale: Scale factor for the loss
+        correlation_matrix: Optional dict mapping (process_i, process_j) to ρᵢⱼ
+                           If None, assumes independence (ρᵢⱼ = 0 for i ≠ j)
+                           Example: {('laser', 'plasma'): 0.3, ('plasma', 'laser'): 0.3}
 
     Returns:
         Tuple of (combined L_min components, dict of per-process components)
@@ -285,26 +428,58 @@ def compute_multi_process_L_min(
         per_process_components[process_name] = components
 
     # Step 2: Compute combined F* and E[F] using correct weighted average
-    W = sum(process_weights.get(name, 1.0) for name in process_params.keys())
+    process_names = list(process_params.keys())
+    W = sum(process_weights.get(name, 1.0) for name in process_names)
 
     if W > 0:
         # F* = Σ(w_i × Q_i*) / W
         combined_F_star = sum(
             per_process_Q_stats[name]['Q_star'] * process_weights.get(name, 1.0)
-            for name in process_params.keys()
+            for name in process_names
         ) / W
 
         # E[F] = Σ(w_i × E[Q_i]) / W
         combined_E_F = sum(
             per_process_Q_stats[name]['E_Q'] * process_weights.get(name, 1.0)
-            for name in process_params.keys()
+            for name in process_names
         ) / W
 
-        # Step 3: Var[F] = Σ(w_i² × Var[Q_i]) / W²  (assuming independence)
-        combined_Var_F = sum(
-            per_process_Q_stats[name]['Var_Q'] * (process_weights.get(name, 1.0) ** 2)
-            for name in process_params.keys()
-        ) / (W ** 2)
+        # Step 3: Compute Var[F] using full covariance formula (Theorem 27)
+        # Var[F] = (1/W²) Σᵢ Σⱼ wᵢwⱼ Cov(Qᵢ, Qⱼ)
+        if correlation_matrix is not None:
+            # Use full covariance with correlations
+            combined_Var_F = 0.0
+            for i, name_i in enumerate(process_names):
+                for j, name_j in enumerate(process_names):
+                    w_i = process_weights.get(name_i, 1.0)
+                    w_j = process_weights.get(name_j, 1.0)
+
+                    if i == j:
+                        # Diagonal: Cov(Qᵢ, Qᵢ) = Var(Qᵢ)
+                        cov_ij = per_process_Q_stats[name_i]['Var_Q']
+                    else:
+                        # Off-diagonal: use correlation from matrix
+                        rho = correlation_matrix.get((name_i, name_j), 0.0)
+                        if rho == 0.0:
+                            # Independent: Cov = 0
+                            cov_ij = 0.0
+                        else:
+                            # Correlated: compute using Corollary 46
+                            cov_ij = compute_covariance(
+                                process_params[name_i],
+                                process_params[name_j],
+                                rho
+                            )
+
+                    combined_Var_F += w_i * w_j * cov_ij
+
+            combined_Var_F /= (W ** 2)
+        else:
+            # Independent case (Theorem 31): Var[F] = Σ(w_i² × Var[Q_i]) / W²
+            combined_Var_F = sum(
+                per_process_Q_stats[name]['Var_Q'] * (process_weights.get(name, 1.0) ** 2)
+                for name in process_names
+            ) / (W ** 2)
 
         # Step 4: Bias² = (E[F] - F*)²
         combined_Bias2 = (combined_E_F - combined_F_star) ** 2
