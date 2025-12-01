@@ -28,6 +28,8 @@ from src.analysis.theoretical_loss_analysis import (
     compute_theoretical_E_F2,
     compute_theoretical_L_min,
     compute_per_process_Q_stats,
+    compute_cross_moment,
+    compute_covariance,
     compute_multi_process_L_min,
     TheoreticalLossComponents
 )
@@ -439,6 +441,133 @@ class TestEdgeCases:
             components = compute_theoretical_L_min(F_star, delta, sigma2, s)
             assert components.L_min > 0, f"L_min should be > 0 for s={s}"
             assert 0 < components.E_F <= 1, f"E[F] should be in (0,1] for s={s}"
+
+
+class TestCorrelatedProcesses:
+    """Test correlated process formulas (Theorems 45, 46, 27)."""
+
+    def test_proposition_44_rho_zero_equals_independent(self):
+        """When ρ=0, E[QᵢQⱼ] = E[Qᵢ] × E[Qⱼ] (Proposition 44)."""
+        Q_star_i, delta_i, sigma2_i, s_i = 0.95, 0.05, 0.01, 0.1
+        Q_star_j, delta_j, sigma2_j, s_j = 0.90, 0.10, 0.02, 2.0
+
+        # E[QᵢQⱼ] with ρ=0
+        E_QiQj = compute_cross_moment(
+            Q_star_i, delta_i, sigma2_i, s_i,
+            Q_star_j, delta_j, sigma2_j, s_j,
+            rho=0.0
+        )
+
+        # E[Qᵢ] × E[Qⱼ] (independent)
+        E_Qi, _, _ = compute_per_process_Q_stats(Q_star_i, delta_i, sigma2_i, s_i)
+        E_Qj, _, _ = compute_per_process_Q_stats(Q_star_j, delta_j, sigma2_j, s_j)
+
+        assert np.isclose(E_QiQj, E_Qi * E_Qj, rtol=1e-8), \
+            f"E[QᵢQⱼ] = {E_QiQj}, E[Qᵢ]×E[Qⱼ] = {E_Qi * E_Qj}"
+
+    def test_covariance_zero_when_independent(self):
+        """Cov(Qᵢ, Qⱼ) = 0 when ρ = 0."""
+        params_i = {'F_star': 0.95, 'delta': 0.05, 'sigma2': 0.01, 's': 0.1}
+        params_j = {'F_star': 0.90, 'delta': 0.10, 'sigma2': 0.02, 's': 2.0}
+
+        cov = compute_covariance(params_i, params_j, rho=0.0)
+        assert np.isclose(cov, 0.0, atol=1e-10), f"Cov should be 0 when ρ=0, got {cov}"
+
+    def test_positive_correlation_increases_variance(self):
+        """Positive correlation (ρ > 0) increases Var[F]."""
+        params = {
+            'laser': {'F_star': 0.95, 'delta': 0.05, 'sigma2': 0.01, 's': 0.1},
+            'plasma': {'F_star': 0.90, 'delta': 0.10, 'sigma2': 0.02, 's': 2.0},
+        }
+        weights = {'laser': 1.0, 'plasma': 1.0}
+
+        # Independent case
+        combined_indep, _ = compute_multi_process_L_min(params, weights, loss_scale=1.0)
+
+        # Positive correlation
+        corr_pos = {('laser', 'plasma'): 0.5, ('plasma', 'laser'): 0.5}
+        combined_pos, _ = compute_multi_process_L_min(
+            params, weights, loss_scale=1.0, correlation_matrix=corr_pos
+        )
+
+        assert combined_pos.Var_F > combined_indep.Var_F, \
+            f"Var with ρ>0 ({combined_pos.Var_F}) should be > Var indep ({combined_indep.Var_F})"
+
+    def test_negative_correlation_decreases_variance(self):
+        """Negative correlation (ρ < 0) decreases Var[F]."""
+        params = {
+            'laser': {'F_star': 0.95, 'delta': 0.05, 'sigma2': 0.01, 's': 0.1},
+            'plasma': {'F_star': 0.90, 'delta': 0.10, 'sigma2': 0.02, 's': 2.0},
+        }
+        weights = {'laser': 1.0, 'plasma': 1.0}
+
+        # Independent case
+        combined_indep, _ = compute_multi_process_L_min(params, weights, loss_scale=1.0)
+
+        # Negative correlation
+        corr_neg = {('laser', 'plasma'): -0.5, ('plasma', 'laser'): -0.5}
+        combined_neg, _ = compute_multi_process_L_min(
+            params, weights, loss_scale=1.0, correlation_matrix=corr_neg
+        )
+
+        assert combined_neg.Var_F < combined_indep.Var_F, \
+            f"Var with ρ<0 ({combined_neg.Var_F}) should be < Var indep ({combined_indep.Var_F})"
+
+    def test_explicit_rho_zero_equals_none(self):
+        """correlation_matrix with all ρ=0 equals correlation_matrix=None."""
+        params = {
+            'laser': {'F_star': 0.95, 'delta': 0.05, 'sigma2': 0.01, 's': 0.1},
+            'plasma': {'F_star': 0.90, 'delta': 0.10, 'sigma2': 0.02, 's': 2.0},
+        }
+        weights = {'laser': 1.0, 'plasma': 1.0}
+
+        # No correlation matrix (assumes independence)
+        combined_none, _ = compute_multi_process_L_min(params, weights, loss_scale=1.0)
+
+        # Explicit ρ=0
+        corr_zero = {('laser', 'plasma'): 0.0, ('plasma', 'laser'): 0.0}
+        combined_zero, _ = compute_multi_process_L_min(
+            params, weights, loss_scale=1.0, correlation_matrix=corr_zero
+        )
+
+        assert np.isclose(combined_none.Var_F, combined_zero.Var_F, rtol=1e-8), \
+            f"Var_F mismatch: None={combined_none.Var_F}, zero={combined_zero.Var_F}"
+        assert np.isclose(combined_none.L_min, combined_zero.L_min, rtol=1e-8), \
+            f"L_min mismatch: None={combined_none.L_min}, zero={combined_zero.L_min}"
+
+    def test_cross_moment_symmetric(self):
+        """E[QᵢQⱼ] = E[QⱼQᵢ] (commutativity)."""
+        Q_star_i, delta_i, sigma2_i, s_i = 0.95, 0.05, 0.01, 0.1
+        Q_star_j, delta_j, sigma2_j, s_j = 0.90, 0.10, 0.02, 2.0
+        rho = 0.3
+
+        E_QiQj = compute_cross_moment(
+            Q_star_i, delta_i, sigma2_i, s_i,
+            Q_star_j, delta_j, sigma2_j, s_j,
+            rho
+        )
+        E_QjQi = compute_cross_moment(
+            Q_star_j, delta_j, sigma2_j, s_j,
+            Q_star_i, delta_i, sigma2_i, s_i,
+            rho
+        )
+
+        assert np.isclose(E_QiQj, E_QjQi, rtol=1e-8), \
+            f"E[QᵢQⱼ] = {E_QiQj}, E[QⱼQᵢ] = {E_QjQi}"
+
+    def test_determinant_positive_for_valid_rho(self):
+        """det(M) > 0 for |ρ| ≤ 1."""
+        sigma2_i, s_i = 0.1, 1.0
+        sigma2_j, s_j = 0.2, 1.0
+
+        b_i = sigma2_i / s_i
+        b_j = sigma2_j / s_j
+
+        for rho in [-1.0, -0.5, 0.0, 0.5, 1.0]:
+            det_M = (1 + 2 * b_i) * (1 + 2 * b_j) - 4 * rho**2 * b_i * b_j
+            # For |ρ| < 1, det_M should be positive
+            if abs(rho) < 1:
+                assert det_M > 0, f"det(M) = {det_M} should be > 0 for ρ = {rho}"
 
 
 if __name__ == '__main__':
