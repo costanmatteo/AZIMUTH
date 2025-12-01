@@ -1,8 +1,9 @@
 """
 Theoretical Loss Analysis for Reliability-based Controller Optimization.
 
-Implements the theoretical framework for computing the minimum achievable loss (L_min)
-when using stochastic sampling from the UncertaintyPredictor.
+Implements the theoretical framework from "On the Structural Bias in Reliability
+Loss Functions with Stochastic Reparameterization" for computing the minimum
+achievable loss (L_min) when using stochastic sampling from the UncertaintyPredictor.
 
 Theory:
 The loss function L = (F - F*)^2 where:
@@ -11,10 +12,13 @@ The loss function L = (F - F*)^2 where:
 
 When sampling is stochastic (sigma^2 > 0), there's an irreducible minimum L_min > 0.
 
-Formulas:
+Formulas (from Theorem 10 and Corollary 16):
 - E[F] = F* * (1/sqrt(1 + 2*sigma^2/s)) * exp(2*delta^2*sigma^2 / (s*(s + 2*sigma^2)))
-- E[F^2] = F*^2 * (1/sqrt(1 + 4*sigma^2/s)) * exp(4*delta^2*sigma^2 / (s*(s + 4*sigma^2)))
+- E[F^2] = F*^2 * (1/sqrt(1 + 4*sigma^2/s)) * exp(8*delta^2*sigma^2 / (s*(s + 4*sigma^2)))
 - L_min = Var[F] + Bias^2 = (E[F^2] - E[F]^2) + (E[F] - F*)^2
+
+Note on E[F^2]: The exponent numerator is 8 (not 4) because F^2 = exp(-2(δ+σε)^2/s)
+has effective scale s/2, and applying Lemma 9 with a=4δσ/s, b=2σ²/s yields 8δ²σ².
 
 Where:
 - sigma^2 = predicted variance from UncertaintyPredictor
@@ -99,7 +103,18 @@ def compute_theoretical_E_F2(F_star: float, delta: float, sigma2: float, s: floa
     """
     Compute theoretical expected value of F^2.
 
-    E[F^2] = F*^2 * (1/sqrt(1 + 4*sigma^2/s)) * exp(4*delta^2*sigma^2 / (s*(s + 4*sigma^2)))
+    Derivation (Corollario 16 from theoretical document):
+        F² = [exp(-(δ + σε)²/s)]² = exp(-2(δ + σε)²/s)
+
+        This has the SAME FORM as F but with scale s replaced by s/2.
+        Applying Lemma 9 with a = 4δσ/s and b = 2σ²/s:
+
+        E[F²] = (F*)² × (1/√(1 + 4σ²/s)) × exp(8δ²σ² / (s(s + 4σ²)))
+
+    Note: The exponent numerator is 8 (not 4) because:
+        a² / (2(1+2b)) = (4δσ/s)² / (2(1 + 4σ²/s))
+                       = 16δ²σ²/s² × s / (2(s + 4σ²))
+                       = 8δ²σ² / (s(s + 4σ²))
 
     Args:
         F_star: Target reliability
@@ -121,8 +136,9 @@ def compute_theoretical_E_F2(F_star: float, delta: float, sigma2: float, s: floa
     # Compute the two factors
     factor1 = 1.0 / np.sqrt(1 + 4 * sigma2 / s)
 
-    # Exponent term
-    numerator = 4 * delta**2 * sigma2
+    # Exponent term - CORRECTED: numerator is 8, not 4
+    # From Corollario 16: 8δ²σ² / (s(s + 4σ²))
+    numerator = 8 * delta**2 * sigma2
     denominator = s * (s + 4 * sigma2)
     factor2 = np.exp(numerator / denominator) if denominator > 0 else 1.0
 
@@ -190,10 +206,14 @@ def compute_per_process_Q_stats(
     """
     Compute E[Q_i], E[Q_i²], and Var[Q_i] for a single process.
 
-    Formulas:
-        E[Q_i] = Q_i* / √(1 + 2σ²/s) · exp(2δ²σ² / (s(s + 2σ²)))
-        E[Q_i²] = Q_i*² / √(1 + 4σ²/s) · exp(4δ²σ² / (s(s + 4σ²)))
+    Formulas (from theoretical document):
+        E[Q_i] = Q_i* / √(1 + 2σ²/s) · exp(2δ²σ² / (s(s + 2σ²)))     [Theorem 10]
+        E[Q_i²] = Q_i*² / √(1 + 4σ²/s) · exp(8δ²σ² / (s(s + 4σ²)))  [Corollary 16]
         Var[Q_i] = E[Q_i²] - E[Q_i]²
+
+    Note: The exponent in E[Q²] is 8δ²σ² (not 4δ²σ²) because Q² has
+    effective scale s/2, and applying Lemma 9 with a=4δσ/s, b=2σ²/s gives:
+        a²/(2(1+2b)) = 16δ²σ²/s² / (2(s+4σ²)/s) = 8δ²σ² / (s(s+4σ²))
 
     Args:
         Q_star: Target quality for this process (Q_i* = exp(-δ²/s))
@@ -208,16 +228,16 @@ def compute_per_process_Q_stats(
         # Deterministic case
         return Q_star, Q_star**2, 0.0
 
-    # E[Q_i]
+    # E[Q_i] - Theorem 10
     factor1 = 1.0 / np.sqrt(1 + 2 * sigma2 / s)
     num1 = 2 * delta**2 * sigma2
     den1 = s * (s + 2 * sigma2)
     factor2 = np.exp(num1 / den1) if den1 > 0 else 1.0
     E_Q = Q_star * factor1 * factor2
 
-    # E[Q_i²]
+    # E[Q_i²] - Corollary 16: exponent numerator is 8, not 4
     factor1_sq = 1.0 / np.sqrt(1 + 4 * sigma2 / s)
-    num2 = 4 * delta**2 * sigma2
+    num2 = 8 * delta**2 * sigma2  # CORRECTED: was 4, should be 8
     den2 = s * (s + 4 * sigma2)
     factor2_sq = np.exp(num2 / den2) if den2 > 0 else 1.0
     E_Q2 = Q_star**2 * factor1_sq * factor2_sq
