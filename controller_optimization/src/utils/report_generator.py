@@ -591,6 +591,151 @@ class ControllerReportGenerator:
             self.story.append(caption_table)
             self.story.append(Spacer(1, 0.2*cm))
 
+    def add_per_controller_analysis_section(self, theoretical_data=None):
+        """Add per-controller theoretical analysis section.
+
+        Each controller (Policy[i] controlling Process[i+1]) gets its own
+        independent analysis section with L_min, Var[F], Bias², etc.
+
+        Args:
+            theoretical_data: Dictionary containing 'per_controller_L_min' list
+        """
+        if theoretical_data is None:
+            return
+
+        per_controller = theoretical_data.get('per_controller_L_min', [])
+        if not per_controller:
+            return
+
+        self.story.append(PageBreak())
+        self.add_section_title("Per-Controller Theoretical Analysis")
+
+        # Introduction
+        intro = Paragraph(
+            "Each controller is analyzed independently. Policy[i] controls Process[i+1]. "
+            "L_min represents the minimum achievable loss for each controller given the "
+            "stochastic uncertainty (σ²) of the controlled process outputs.",
+            self.styles['Normal']
+        )
+        self.story.append(intro)
+        self.story.append(Spacer(1, 0.3*cm))
+
+        # Summary table with all controllers
+        summary_header = ['Controller', 'Source → Target', 'σ²', 'δ', 'F*', 'L_min', 'Var[F]', 'Bias²']
+        summary_rows = [summary_header]
+
+        for ctrl in per_controller:
+            row = [
+                f"Controller {ctrl['controller_idx']}",
+                f"{ctrl['source_process']} → {ctrl['target_process']}",
+                f"{ctrl['sigma2']:.4f}",
+                f"{ctrl['delta']:.4f}",
+                f"{ctrl['F_star']:.4f}",
+                f"{ctrl['L_min']:.4f}",
+                f"{ctrl['Var_F']:.4f}",
+                f"{ctrl['Bias2']:.4f}"
+            ]
+            summary_rows.append(row)
+
+        # Add total row
+        total_L_min = theoretical_data.get('total_L_min', sum(c['L_min'] for c in per_controller))
+        total_Var_F = sum(c['Var_F'] for c in per_controller)
+        total_Bias2 = sum(c['Bias2'] for c in per_controller)
+        summary_rows.append([
+            'TOTAL', '-', '-', '-', '-',
+            f"{total_L_min:.4f}",
+            f"{total_Var_F:.4f}",
+            f"{total_Bias2:.4f}"
+        ])
+
+        summary_table = Table(summary_rows, colWidths=[2.2*cm, 3.5*cm, 1.5*cm, 1.5*cm, 1.5*cm, 2*cm, 2*cm, 2*cm])
+        summary_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
+            ('BACKGROUND', (0, -1), (-1, -1), colors.Color(0.9, 0.95, 1.0)),  # Light blue for total
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 7),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 4),
+            ('TOPPADDING', (0, 0), (-1, 0), 4),
+            ('LINEABOVE', (0, 0), (-1, 0), 1.5, colors.black),
+            ('LINEABOVE', (0, 1), (-1, 1), 0.5, colors.black),
+            ('LINEABOVE', (0, -1), (-1, -1), 1, colors.black),
+            ('LINEBELOW', (0, -1), (-1, -1), 1.5, colors.black),
+            ('GRID', (0, 0), (-1, -1), 0.25, colors.grey),
+        ]))
+
+        self.story.append(Paragraph("<b>Controller Summary</b>", self.styles['SectionTitle']))
+        self.story.append(summary_table)
+        self.story.append(Spacer(1, 0.5*cm))
+
+        # Individual controller details
+        for ctrl in per_controller:
+            self.story.append(Spacer(1, 0.3*cm))
+
+            # Controller header
+            ctrl_title = Paragraph(
+                f"<b>Controller {ctrl['controller_idx']}: {ctrl['source_process']} → {ctrl['target_process']}</b>",
+                self.styles['SectionTitle']
+            )
+            self.story.append(ctrl_title)
+
+            # Controller description
+            ctrl_desc = Paragraph(
+                f"Policy {ctrl['controller_idx']} receives outputs from <b>{ctrl['source_process']}</b> "
+                f"and generates inputs for <b>{ctrl['target_process']}</b>. "
+                f"All theoretical parameters refer to the controlled process ({ctrl['target_process']}).",
+                self.styles['Normal']
+            )
+            self.story.append(ctrl_desc)
+            self.story.append(Spacer(1, 0.2*cm))
+
+            # Create detailed table for this controller
+            detail_data = [
+                ['Parameter', 'Value', 'Description'],
+                ['σ² (sigma²)', f"{ctrl['sigma2']:.6f}", f"Predicted variance of {ctrl['target_process']} outputs"],
+                ['δ (delta)', f"{ctrl['delta']:.6f}", f"μ_target - τ for {ctrl['target_process']}"],
+                ['s (scale)', f"{ctrl['s']:.6f}", f"Quality function scale for {ctrl['target_process']}"],
+                ['F* (target)', f"{ctrl['F_star']:.6f}", f"Target reliability = exp(-δ²/s)"],
+                ['E[F]', f"{ctrl['E_F']:.6f}", "Expected reliability under stochastic sampling"],
+                ['E[F²]', f"{ctrl['E_F2']:.6f}", "Expected squared reliability"],
+                ['Var[F]', f"{ctrl['Var_F']:.6f}", "Variance component of L_min (irreducible)"],
+                ['Bias²', f"{ctrl['Bias2']:.6f}", "Bias component of L_min (irreducible)"],
+                ['L_min', f"{ctrl['L_min']:.6f}", "Minimum achievable loss = Var[F] + Bias²"],
+            ]
+
+            detail_table = Table(detail_data, colWidths=[3*cm, 3*cm, 10*cm])
+            detail_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
+                ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+                ('ALIGN', (1, 0), (1, -1), 'CENTER'),
+                ('ALIGN', (2, 0), (2, -1), 'LEFT'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, -1), 7),
+                ('LINEABOVE', (0, 0), (-1, 0), 1, colors.black),
+                ('LINEABOVE', (0, 1), (-1, 1), 0.5, colors.black),
+                ('LINEBELOW', (0, -1), (-1, -1), 1, colors.black),
+                ('GRID', (0, 0), (-1, -1), 0.25, colors.grey),
+            ]))
+            self.story.append(detail_table)
+
+            # Add L_min decomposition visual
+            L_min = ctrl['L_min']
+            Var_F = ctrl['Var_F']
+            Bias2 = ctrl['Bias2']
+
+            if L_min > 0:
+                var_pct = 100 * Var_F / L_min
+                bias_pct = 100 * Bias2 / L_min
+
+                decomp_text = Paragraph(
+                    f"<b>L_min Decomposition:</b> Var[F] = {var_pct:.1f}% | Bias² = {bias_pct:.1f}%",
+                    self.styles['Normal']
+                )
+                self.story.append(Spacer(1, 0.15*cm))
+                self.story.append(decomp_text)
+
     def add_embedding_plots(self, checkpoint_dir):
         """Add scenario embedding visualization plots"""
         checkpoint_dir = Path(checkpoint_dir)
@@ -933,6 +1078,9 @@ class ControllerReportGenerator:
             Path(config['training']['checkpoint_dir']),
             theoretical_data=theoretical_data
         )
+
+        # Per-controller analysis section (if available)
+        self.add_per_controller_analysis_section(theoretical_data=theoretical_data)
 
         # Embedding visualizations (if scenario encoder is enabled)
         self.add_embedding_plots(Path(config['training']['checkpoint_dir']))
