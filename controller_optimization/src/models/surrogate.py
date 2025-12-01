@@ -205,20 +205,12 @@ class ProTSurrogate:
             quality_scores['microetch'] = microetch_quality
 
         # COMBINE QUALITY SCORES WITH WEIGHTED AVERAGE
-        # Weights reflect relative importance of each process
-        weights = {
-            'laser': 0.1,
-            'plasma': 1.0,
-            'galvanic': 0.0,    # Most important (final product quality)
-            'microetch': 0.0
-        }
-
-        # Only use weights for processes that are actually present
+        # Use weights from PROCESS_CONFIGS for consistency with L_min calculation
         total_weighted_quality = 0.0
         total_weight = 0.0
 
         for process_name, quality in quality_scores.items():
-            weight = weights.get(process_name, 1.0)
+            weight = self.PROCESS_CONFIGS.get(process_name, {}).get('weight', 1.0)
             total_weighted_quality += quality * weight
             total_weight += weight
 
