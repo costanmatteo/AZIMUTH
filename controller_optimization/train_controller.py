@@ -867,57 +867,114 @@ def main():
         print("\n[8.6/9] Running theoretical loss analysis...")
 
         try:
-            # Populate the theoretical tracker with training history data
-            # We need to estimate sigma2 (mean predicted variance) from the trajectories
+            # Compute per-process theoretical parameters from target_trajectory
+            print("  Computing per-process theoretical parameters...")
 
-            # Run validation sampling to get empirical E[F] and Var[F]
+            # Get process configs from surrogate
+            process_configs_surrogate = ProTSurrogate.PROCESS_CONFIGS
+
+            # Run validation sampling to collect per-process sigma2
             print("  Running validation sampling for empirical statistics...")
             n_validation_samples = 50
 
             F_samples_all = []
-            sigma2_samples = []
+            sigma2_per_process = {proc_name: [] for proc_name in active_processes}
 
             with torch.no_grad():
                 process_chain.eval()
                 for sample_idx in range(n_validation_samples):
-                    # Use first few scenarios
                     for scenario_idx in range(min(5, n_scenarios)):
                         trajectory = process_chain.forward(batch_size=1, scenario_idx=scenario_idx)
                         F = surrogate.compute_reliability(trajectory).item()
                         F_samples_all.append(F)
 
-                        # Collect sigma2 from all processes
+                        # Collect sigma2 PER PROCESS
                         for proc_name, data in trajectory.items():
-                            sigma2_samples.append(data['outputs_var'].mean().item())
+                            if proc_name in sigma2_per_process:
+                                sigma2_per_process[proc_name].append(data['outputs_var'].mean().item())
 
             F_samples_array = np.array(F_samples_all)
-            mean_sigma2 = np.mean(sigma2_samples) if sigma2_samples else 0.01
-
             print(f"  Validation samples: {len(F_samples_array)}")
             print(f"  Empirical E[F]: {np.mean(F_samples_array):.6f}")
             print(f"  Empirical Var[F]: {np.var(F_samples_array):.8f}")
-            print(f"  Mean sigma2: {mean_sigma2:.6f}")
 
-            # Estimate delta from F_star
-            # F* = exp(-delta^2/s) => delta = sqrt(-s * ln(F*))
-            if F_star_mean > 0 and F_star_mean < 1:
-                estimated_delta = np.sqrt(-effective_s * np.log(F_star_mean))
-            else:
-                estimated_delta = 0.0
+            # Compute per-process parameters correctly
+            process_params_for_L_min = {}
+            print("\n  Per-process theoretical parameters:")
 
-            print(f"  Estimated delta: {estimated_delta:.6f}")
+            for proc_name in active_processes:
+                if proc_name not in process_configs_surrogate:
+                    continue
+
+                cfg = process_configs_surrogate[proc_name]
+                tau = cfg['target']  # Process optimum
+                s = cfg['scale']     # Quality scale
+                weight = cfg.get('weight', 1.0)
+
+                # Get target output from target_trajectory (μ_target)
+                if proc_name in target_trajectory:
+                    target_outputs = target_trajectory[proc_name]['outputs']
+                    if isinstance(target_outputs, torch.Tensor):
+                        mu_target = target_outputs.mean().item()
+                    else:
+                        mu_target = np.mean(target_outputs)
+                else:
+                    mu_target = tau  # Fallback: assume target is at optimum
+
+                # CORRECT delta calculation: δ = μ_target - τ
+                delta = mu_target - tau
+
+                # F* for this process: F*_i = exp(-δ²/s)
+                F_star_i = np.exp(-delta**2 / s)
+
+                # Mean sigma2 for this process
+                if sigma2_per_process[proc_name]:
+                    sigma2_i = np.mean(sigma2_per_process[proc_name])
+                else:
+                    sigma2_i = 0.01  # Fallback
+
+                process_params_for_L_min[proc_name] = {
+                    'F_star': F_star_i,
+                    'delta': delta,
+                    'sigma2': sigma2_i,
+                    's': s
+                }
+
+                print(f"    {proc_name}:")
+                print(f"      τ (target) = {tau:.4f}, μ_target = {mu_target:.4f}")
+                print(f"      δ = μ_target - τ = {delta:.4f}")
+                print(f"      σ² = {sigma2_i:.6f}, s = {s:.4f}")
+                print(f"      F*_i = exp(-δ²/s) = {F_star_i:.6f}")
+
+                # Update tracker process configs
+                theoretical_tracker.process_configs[proc_name] = {'tau': tau, 's': s}
+                theoretical_tracker.process_weights[proc_name] = weight
+
+            # Compute combined L_min using multi-process formula
+            from controller_optimization.src.analysis import compute_multi_process_L_min
+            combined_components, per_process_components = compute_multi_process_L_min(
+                process_params=process_params_for_L_min,
+                process_weights={p: process_configs_surrogate[p].get('weight', 1.0)
+                                for p in process_params_for_L_min.keys()},
+                loss_scale=CONTROLLER_CONFIG['training']['reliability_loss_scale']
+            )
+
+            print(f"\n  Combined theoretical L_min: {combined_components.L_min:.6f}")
+            print(f"    Var[F] component: {combined_components.Var_F:.6f}")
+            print(f"    Bias² component:  {combined_components.Bias2:.6f}")
 
             # Populate tracker with data from training history
             reliability_loss_history = history.get('reliability_loss', [])
             F_values_history = history.get('F_values', [])
 
+            # Use combined parameters for tracker updates
+            combined_sigma2 = combined_components.sigma2
+            combined_delta = np.sqrt(combined_components.Bias2 / CONTROLLER_CONFIG['training']['reliability_loss_scale']) if combined_components.Bias2 > 0 else 0.0
+            combined_s = np.mean([p['s'] for p in process_params_for_L_min.values()]) if process_params_for_L_min else 1.0
+
             for epoch_idx, (rel_loss, F_val) in enumerate(zip(reliability_loss_history, F_values_history)):
                 epoch = epoch_idx + 1
-                # Use reliability loss (already scaled)
                 observed_loss = rel_loss
-
-                # F_samples for this epoch (use F_val as representative)
-                # For a more accurate estimate, we'd need per-epoch sampling
                 F_samples_epoch = np.array([F_val])
 
                 theoretical_tracker.update(
@@ -925,13 +982,19 @@ def main():
                     observed_loss_value=observed_loss,
                     F_star=F_star_mean,
                     F_samples=F_samples_epoch,
-                    sigma2_mean=mean_sigma2,
-                    delta=estimated_delta,
-                    s=effective_s
+                    sigma2_mean=combined_sigma2,
+                    delta=combined_delta,
+                    s=combined_s
                 )
 
             # Get theoretical data for report
             theoretical_data = theoretical_tracker.to_dict()
+
+            # Add per-process L_min data to theoretical_data
+            theoretical_data['per_process_L_min'] = {
+                proc_name: comp.to_dict() for proc_name, comp in per_process_components.items()
+            }
+            theoretical_data['combined_L_min'] = combined_components.to_dict()
 
             # Generate theoretical analysis plots
             print("  Generating theoretical analysis plots...")
@@ -943,16 +1006,7 @@ def main():
 
             # Generate and save text report
             print("  Generating theoretical analysis text report...")
-            process_params_for_report = {}
-            for proc_name in active_processes:
-                if theoretical_tracker.process_weights.get(proc_name, 0) > 0:
-                    cfg = theoretical_tracker.process_configs.get(proc_name, {})
-                    process_params_for_report[proc_name] = {
-                        'F_star': F_star_mean,  # Use overall F_star
-                        'sigma2': mean_sigma2,
-                        'delta': estimated_delta,
-                        's': cfg.get('s', effective_s)
-                    }
+            process_params_for_report = process_params_for_L_min
 
             text_report = generate_full_report(
                 tracker_data=theoretical_data,
