@@ -276,7 +276,6 @@ def main():
     theoretical_tracker = TheoreticalLossTracker(loss_scale=CONTROLLER_CONFIG['training']['reliability_loss_scale'])
 
     # Get process configs from surrogate for theoretical analysis
-    from controller_optimization.src.models.surrogate import ProTSurrogate
     for proc_name, proc_config in ProTSurrogate.PROCESS_CONFIGS.items():
         theoretical_tracker.process_configs[proc_name] = {
             'tau': proc_config['target'],
