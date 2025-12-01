@@ -961,7 +961,7 @@ def main():
 
             # Compute L_min for each controller separately
             print("\n  Per-controller L_min analysis:")
-            print("  (Policy[i] controls Process[i+1], using σ² from Process[i])")
+            print("  (Policy[i] controls Process[i+1], all params from controlled process)")
 
             controller_L_min_list = compute_per_controller_L_min(
                 process_names=active_processes,
@@ -974,9 +974,9 @@ def main():
             total_L_min = 0.0
             for ctrl in controller_L_min_list:
                 print(f"\n    Controller {ctrl.controller_idx}: {ctrl.source_process} → {ctrl.target_process}")
-                print(f"      σ² (from {ctrl.source_process}): {ctrl.sigma2:.6f}")
-                print(f"      δ (for {ctrl.target_process}): {ctrl.delta:.4f}")
-                print(f"      F* (for {ctrl.target_process}): {ctrl.F_star:.6f}")
+                print(f"      σ² (of {ctrl.target_process}): {ctrl.sigma2:.6f}")
+                print(f"      δ (of {ctrl.target_process}): {ctrl.delta:.4f}")
+                print(f"      F* (of {ctrl.target_process}): {ctrl.F_star:.6f}")
                 print(f"      E[F]: {ctrl.E_F:.6f}")
                 print(f"      Var[F]: {ctrl.Var_F:.6f}")
                 print(f"      Bias²: {ctrl.Bias2:.6f}")

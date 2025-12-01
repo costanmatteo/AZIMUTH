@@ -65,11 +65,13 @@ class ControllerLossComponents:
     L_min analysis for a single controller.
 
     Architecture: Policy[i] controls Process[i+1]
-    - Controller i receives outputs from Process i (with variance sigma2)
+    - Controller i receives outputs from Process i
     - Controller i produces inputs for Process i+1
-    - L_min for Controller i depends on:
-      - sigma2 from Process i (the uncertainty the controller must handle)
-      - delta, s, F_star from Process i+1 (the target the controller is trying to achieve)
+    - L_min for Controller i depends on parameters of Process[i+1] (the controlled process):
+      - sigma2: predicted variance of Process[i+1] outputs
+      - delta: distance of target output from process optimum (mu_target - tau)
+      - s: scale parameter of quality function
+      - F_star: target reliability = exp(-delta^2/s)
     """
     controller_idx: int          # Controller index (0-based)
     source_process: str          # Process providing inputs to controller (Process i)
@@ -80,7 +82,7 @@ class ControllerLossComponents:
     Var_F: float                 # Variance of F
     Bias2: float                 # Bias squared
     F_star: float                # Target reliability (for target process)
-    sigma2: float                # Variance from source process
+    sigma2: float                # Predicted variance of target process outputs
     delta: float                 # Distance from target process optimum
     s: float                     # Scale parameter of target process
 
@@ -326,9 +328,10 @@ def compute_per_controller_L_min(
     - Process[0] is NOT controlled (inputs come from target trajectory)
     - Controller[i] receives outputs from Process[i] and controls Process[i+1]
 
-    For Controller[i]:
-    - sigma2 comes from Process[i] (the uncertainty the controller must handle)
-    - delta, s, F_star come from Process[i+1] (the target process being controlled)
+    For Controller[i], all parameters come from Process[i+1] (the controlled process):
+    - sigma2: predicted variance of Process[i+1] outputs
+    - delta: distance of target output from process optimum
+    - s, F_star: quality function parameters for Process[i+1]
 
     Args:
         process_names: Ordered list of process names [process_0, process_1, ..., process_n]
@@ -345,13 +348,10 @@ def compute_per_controller_L_min(
 
     # Controller i controls Process[i+1], receives from Process[i]
     for i in range(n_processes - 1):
-        source_process = process_names[i]      # Process providing inputs (with uncertainty)
+        source_process = process_names[i]      # Process providing inputs to controller
         target_process = process_names[i + 1]  # Process being controlled
 
-        # sigma2 from source process (the uncertainty controller must handle)
-        sigma2 = sigma2_per_process.get(source_process, 0.01)
-
-        # Parameters from target process (what controller is trying to achieve)
+        # All parameters come from target process (the controlled process)
         if target_process not in process_params:
             continue
 
@@ -359,6 +359,9 @@ def compute_per_controller_L_min(
         F_star = target_params['F_star']
         delta = target_params['delta']
         s = target_params['s']
+
+        # sigma2 from target process (variance of the controlled process outputs)
+        sigma2 = sigma2_per_process.get(target_process, 0.01)
 
         # Compute theoretical values for this controller
         E_F = compute_theoretical_E_F(F_star, delta, sigma2, s)
