@@ -137,7 +137,7 @@ CONTROLLER_CONFIG = {
             'warmup_fraction': 0.1,  # First 10% of epochs = warm-up (BC only)
             'lambda_bc_start': 1.0,  # High BC weight during warm-up
             'lambda_bc_end': 0.1,  # Low BC weight at end of training
-            'reliability_weight_curve': 'exponential',  # 'exponential', 'linear', 'sigmoid'
+            'reliability_weight_curve': 'linear',  # 'linear', 'exponential', 'sigmoid' - linear syncs with BC decay
         },
     },
 

@@ -49,7 +49,7 @@ class ControllerTrainer:
             'warmup_fraction': 0.1,
             'lambda_bc_start': 10.0,
             'lambda_bc_end': 0.001,
-            'reliability_weight_curve': 'exponential'
+            'reliability_weight_curve': 'linear'
         }
 
         # Optimizer SOLO per policy generators (uncertainty predictors sono frozen)
