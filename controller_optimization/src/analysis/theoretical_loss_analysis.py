@@ -59,6 +59,49 @@ class TheoreticalLossComponents:
         }
 
 
+@dataclass
+class ControllerLossComponents:
+    """
+    L_min analysis for a single controller.
+
+    Architecture: Policy[i] controls Process[i+1]
+    - Controller i receives outputs from Process i (with variance sigma2)
+    - Controller i produces inputs for Process i+1
+    - L_min for Controller i depends on:
+      - sigma2 from Process i (the uncertainty the controller must handle)
+      - delta, s, F_star from Process i+1 (the target the controller is trying to achieve)
+    """
+    controller_idx: int          # Controller index (0-based)
+    source_process: str          # Process providing inputs to controller (Process i)
+    target_process: str          # Process controlled by this controller (Process i+1)
+    L_min: float                 # Minimum achievable loss for this controller
+    E_F: float                   # Expected value of F for target process
+    E_F2: float                  # Expected value of F^2
+    Var_F: float                 # Variance of F
+    Bias2: float                 # Bias squared
+    F_star: float                # Target reliability (for target process)
+    sigma2: float                # Variance from source process
+    delta: float                 # Distance from target process optimum
+    s: float                     # Scale parameter of target process
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary."""
+        return {
+            'controller_idx': self.controller_idx,
+            'source_process': self.source_process,
+            'target_process': self.target_process,
+            'L_min': self.L_min,
+            'E_F': self.E_F,
+            'E_F2': self.E_F2,
+            'Var_F': self.Var_F,
+            'Bias2': self.Bias2,
+            'F_star': self.F_star,
+            'sigma2': self.sigma2,
+            'delta': self.delta,
+            's': self.s
+        }
+
+
 def compute_theoretical_E_F(F_star: float, delta: float, sigma2: float, s: float) -> float:
     """
     Compute theoretical expected value of F.
@@ -268,6 +311,163 @@ def compute_multi_process_L_min(
     )
 
     return combined_components, per_process_components
+
+
+def compute_per_controller_L_min(
+    process_names: List[str],
+    process_params: Dict[str, Dict[str, float]],
+    sigma2_per_process: Dict[str, float],
+    loss_scale: float = 1.0
+) -> List[ControllerLossComponents]:
+    """
+    Compute theoretical L_min for each controller separately.
+
+    Architecture: Policy[i] controls Process[i+1]
+    - Process[0] is NOT controlled (inputs come from target trajectory)
+    - Controller[i] receives outputs from Process[i] and controls Process[i+1]
+
+    For Controller[i]:
+    - sigma2 comes from Process[i] (the uncertainty the controller must handle)
+    - delta, s, F_star come from Process[i+1] (the target process being controlled)
+
+    Args:
+        process_names: Ordered list of process names [process_0, process_1, ..., process_n]
+        process_params: Dict mapping process_name to {'F_star', 'delta', 's', 'tau', 'mu_target'}
+                       For each CONTROLLED process (all except first)
+        sigma2_per_process: Dict mapping process_name to mean predicted variance
+        loss_scale: Scale factor for the loss
+
+    Returns:
+        List of ControllerLossComponents, one per controller (len = n_processes - 1)
+    """
+    controllers = []
+    n_processes = len(process_names)
+
+    # Controller i controls Process[i+1], receives from Process[i]
+    for i in range(n_processes - 1):
+        source_process = process_names[i]      # Process providing inputs (with uncertainty)
+        target_process = process_names[i + 1]  # Process being controlled
+
+        # sigma2 from source process (the uncertainty controller must handle)
+        sigma2 = sigma2_per_process.get(source_process, 0.01)
+
+        # Parameters from target process (what controller is trying to achieve)
+        if target_process not in process_params:
+            continue
+
+        target_params = process_params[target_process]
+        F_star = target_params['F_star']
+        delta = target_params['delta']
+        s = target_params['s']
+
+        # Compute theoretical values for this controller
+        E_F = compute_theoretical_E_F(F_star, delta, sigma2, s)
+        E_F2 = compute_theoretical_E_F2(F_star, delta, sigma2, s)
+
+        Var_F = max(E_F2 - E_F**2, 0.0)
+        Bias2 = (E_F - F_star)**2
+
+        L_min = (Var_F + Bias2) * loss_scale
+
+        controller = ControllerLossComponents(
+            controller_idx=i,
+            source_process=source_process,
+            target_process=target_process,
+            L_min=L_min,
+            E_F=E_F,
+            E_F2=E_F2,
+            Var_F=Var_F * loss_scale,
+            Bias2=Bias2 * loss_scale,
+            F_star=F_star,
+            sigma2=sigma2,
+            delta=delta,
+            s=s
+        )
+        controllers.append(controller)
+
+    return controllers
+
+
+def compute_controlled_process_params(
+    trajectory: Dict,
+    target_trajectory: Dict,
+    process_configs: Dict[str, Dict[str, float]],
+    process_names: List[str]
+) -> Tuple[Dict[str, Dict[str, float]], Dict[str, float]]:
+    """
+    Compute theoretical parameters ONLY for controlled processes (all except first).
+
+    Process[0] is NOT controlled by any policy, so we skip it.
+    For each controlled process (i >= 1):
+    - delta = mu_target - tau (from target trajectory)
+    - F_star = exp(-delta^2/s)
+    - sigma2 is collected separately per source process
+
+    Args:
+        trajectory: Output from process_chain.forward()
+        target_trajectory: Target trajectory tensors
+        process_configs: From surrogate.PROCESS_CONFIGS {'process_name': {'target': tau, 'scale': s, 'weight': w}}
+        process_names: Ordered list of process names
+
+    Returns:
+        Tuple of:
+        - process_params: Dict mapping controlled_process_name to {'F_star', 'delta', 's', 'tau', 'mu_target'}
+        - sigma2_per_process: Dict mapping ALL process names to mean predicted variance
+    """
+    process_params = {}
+    sigma2_per_process = {}
+
+    # Collect sigma2 from ALL processes (needed for source process variance)
+    for process_name, data in trajectory.items():
+        if isinstance(data['outputs_var'], torch.Tensor):
+            sigma2 = data['outputs_var'].detach().cpu().numpy().mean()
+        else:
+            sigma2 = np.mean(data['outputs_var'])
+        sigma2_per_process[process_name] = float(sigma2)
+
+    # Compute parameters ONLY for controlled processes (skip first)
+    for i, process_name in enumerate(process_names):
+        if i == 0:
+            # Process[0] is NOT controlled - skip it
+            continue
+
+        if process_name not in process_configs:
+            continue
+
+        config = process_configs[process_name]
+        tau = config['target']
+        s = config['scale']
+
+        # Get target output for this process from target trajectory
+        if process_name in target_trajectory:
+            target_data = target_trajectory[process_name]
+            if isinstance(target_data['outputs'], torch.Tensor):
+                mu_target = target_data['outputs'].detach().cpu().numpy().mean()
+            else:
+                mu_target = np.mean(target_data['outputs'])
+        else:
+            # Fallback: use predicted mean
+            data = trajectory[process_name]
+            if isinstance(data['outputs_mean'], torch.Tensor):
+                mu_target = data['outputs_mean'].detach().cpu().numpy().mean()
+            else:
+                mu_target = np.mean(data['outputs_mean'])
+
+        # Compute delta (distance from process optimum)
+        delta = mu_target - tau
+
+        # Compute F_star (quality at target)
+        F_star = np.exp(-(mu_target - tau)**2 / s)
+
+        process_params[process_name] = {
+            'F_star': float(F_star),
+            'delta': float(delta),
+            's': float(s),
+            'tau': float(tau),
+            'mu_target': float(mu_target)
+        }
+
+    return process_params, sigma2_per_process
 
 
 @dataclass
