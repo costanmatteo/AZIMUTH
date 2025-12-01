@@ -9,7 +9,11 @@ from pathlib import Path
 
 def plot_training_history(history, save_path=None):
     """
-    Plot training history (total loss, reliability loss, BC loss, F values, curriculum weights).
+    Plot training history with combined loss/weight graph and separate reliability graph.
+
+    Layout:
+    - Top: Combined graph with losses (left Y-axis) and weights (right Y-axis)
+    - Bottom: Reliability Evolution (F values)
 
     Args:
         history (dict): Training history
@@ -18,72 +22,45 @@ def plot_training_history(history, save_path=None):
     # Check if curriculum learning weights are available
     has_curriculum_weights = 'lambda_bc' in history and 'reliability_weight' in history
 
-    # Create figure with appropriate number of subplots
+    # Create figure with 2 rows: combined losses/weights on top, reliability on bottom
+    fig, axes = plt.subplots(2, 1, figsize=(14, 10))
+
+    # ============ TOP PLOT: Combined Losses and Weights ============
+    ax_loss = axes[0]
+
+    epochs = range(len(history['total_loss']))
+
+    # Plot losses on primary Y-axis (left)
+    line_total, = ax_loss.plot(epochs, history['total_loss'], label='Total Loss', color='blue', linewidth=2)
+    line_rel, = ax_loss.plot(epochs, history['reliability_loss'], label='Reliability Loss', color='red', linewidth=2)
+    line_bc, = ax_loss.plot(epochs, history['bc_loss'], label='BC Loss', color='green', linewidth=2)
+
+    ax_loss.set_xlabel('Epoch', fontsize=12)
+    ax_loss.set_ylabel('Loss', fontsize=12, color='black')
+    ax_loss.tick_params(axis='y', labelcolor='black')
+    ax_loss.grid(True, alpha=0.3)
+
+    lines = [line_total, line_rel, line_bc]
+    labels = ['Total Loss', 'Reliability Loss', 'BC Loss']
+
+    # Plot weights on secondary Y-axis (right) if available
     if has_curriculum_weights:
-        fig, axes = plt.subplots(2, 3, figsize=(18, 10))
-    else:
-        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+        ax_weight = ax_loss.twinx()
 
-    axes = axes.flatten()
+        line_lambda, = ax_weight.plot(epochs, history['lambda_bc'], label='λ_BC', color='orange',
+                                       linewidth=2, linestyle='--')
+        line_relw, = ax_weight.plot(epochs, history['reliability_weight'], label='Reliability Weight',
+                                     color='brown', linewidth=2, linestyle='--')
 
-    # Total loss
-    axes[0].plot(history['total_loss'], label='Total Loss', color='blue')
-    axes[0].set_xlabel('Epoch')
-    axes[0].set_ylabel('Loss')
-    axes[0].set_title('Total Loss')
-    axes[0].legend()
-    axes[0].grid(True, alpha=0.3)
+        ax_weight.set_ylabel('Weight', fontsize=12, color='gray')
+        ax_weight.tick_params(axis='y', labelcolor='gray')
+        ax_weight.set_ylim(-0.05, max(max(history['lambda_bc']), 1.0) * 1.1)
 
-    # Reliability loss
-    axes[1].plot(history['reliability_loss'], label='Reliability Loss', color='red')
-    axes[1].set_xlabel('Epoch')
-    axes[1].set_ylabel('Loss')
-    axes[1].set_title('Reliability Loss (F - F*)²')
-    axes[1].legend()
-    axes[1].grid(True, alpha=0.3)
+        lines += [line_lambda, line_relw]
+        labels += ['λ_BC', 'Reliability Weight']
 
-    # BC loss
-    axes[2].plot(history['bc_loss'], label='Behavior Cloning Loss', color='green')
-    axes[2].set_xlabel('Epoch')
-    axes[2].set_ylabel('Loss')
-    axes[2].set_title('Behavior Cloning Loss')
-    axes[2].legend()
-    axes[2].grid(True, alpha=0.3)
-
-    # F values
-    if 'F_values' in history:
-        axes[3].plot(history['F_values'], label='F (Actual)', color='purple')
-        if 'F_star' in history:
-            axes[3].axhline(y=history['F_star'], color='gold', linestyle='--', label='F* (Target)')
-        axes[3].set_xlabel('Epoch')
-        axes[3].set_ylabel('Reliability F')
-        axes[3].set_title('Reliability Evolution')
-        axes[3].legend()
-        axes[3].grid(True, alpha=0.3)
-
-    # Curriculum learning weights (if available)
-    if has_curriculum_weights:
-        # Lambda BC (log scale)
-        axes[4].plot(history['lambda_bc'], label='λ_BC', color='orange', linewidth=2)
-        axes[4].set_xlabel('Epoch')
-        axes[4].set_ylabel('λ_BC')
-        axes[4].set_title('Behavior Cloning Weight (λ_BC)')
-        axes[4].set_yscale('log')
-        axes[4].legend()
-        axes[4].grid(True, alpha=0.3, which='both')
-
-        # Reliability weight
-        axes[5].plot(history['reliability_weight'], label='Reliability Weight', color='brown', linewidth=2)
-        axes[5].set_xlabel('Epoch')
-        axes[5].set_ylabel('Reliability Weight')
-        axes[5].set_title('Reliability Loss Weight Schedule')
-        axes[5].set_ylim(-0.05, 1.05)
-        axes[5].legend()
-        axes[5].grid(True, alpha=0.3)
-
-        # Add vertical line at end of warm-up (where reliability_weight starts to increase)
+        # Add vertical line at end of warm-up
         if len(history['reliability_weight']) > 0:
-            # Find first epoch where reliability_weight > 0
             warmup_end = 0
             for i, w in enumerate(history['reliability_weight']):
                 if w > 0:
@@ -91,8 +68,39 @@ def plot_training_history(history, save_path=None):
                     break
 
             if warmup_end > 0:
-                axes[4].axvline(x=warmup_end, color='red', linestyle='--', alpha=0.5, label='Warm-up End')
-                axes[5].axvline(x=warmup_end, color='red', linestyle='--', alpha=0.5, label='Warm-up End')
+                ax_loss.axvline(x=warmup_end, color='gray', linestyle=':', alpha=0.7, linewidth=2)
+                # Add annotation for warm-up end
+                y_pos = ax_loss.get_ylim()[1] * 0.95
+                ax_loss.annotate('Warm-up End', xy=(warmup_end, y_pos), fontsize=9,
+                                ha='left', va='top', color='gray')
+
+    # Combined legend
+    ax_loss.legend(lines, labels, loc='upper right', fontsize=10, framealpha=0.9)
+    ax_loss.set_title('Training Losses and Weights', fontsize=14, fontweight='bold')
+
+    # ============ BOTTOM PLOT: Reliability Evolution ============
+    ax_rel = axes[1]
+
+    if 'F_values' in history:
+        ax_rel.plot(epochs, history['F_values'], label='F (Actual)', color='purple', linewidth=2)
+        if 'F_star' in history:
+            ax_rel.axhline(y=history['F_star'], color='gold', linestyle='--', linewidth=2, label='F* (Target)')
+
+        # Add warm-up end marker if curriculum weights available
+        if has_curriculum_weights and len(history['reliability_weight']) > 0:
+            warmup_end = 0
+            for i, w in enumerate(history['reliability_weight']):
+                if w > 0:
+                    warmup_end = i
+                    break
+            if warmup_end > 0:
+                ax_rel.axvline(x=warmup_end, color='gray', linestyle=':', alpha=0.7, linewidth=2)
+
+    ax_rel.set_xlabel('Epoch', fontsize=12)
+    ax_rel.set_ylabel('Reliability F', fontsize=12)
+    ax_rel.set_title('Reliability Evolution', fontsize=14, fontweight='bold')
+    ax_rel.legend(loc='best', fontsize=10)
+    ax_rel.grid(True, alpha=0.3)
 
     plt.tight_layout()
 
