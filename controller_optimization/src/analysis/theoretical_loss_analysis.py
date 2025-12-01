@@ -181,6 +181,53 @@ def compute_theoretical_L_min(
     )
 
 
+def compute_per_process_Q_stats(
+    Q_star: float,
+    delta: float,
+    sigma2: float,
+    s: float
+) -> Tuple[float, float, float]:
+    """
+    Compute E[Q_i], E[Q_i²], and Var[Q_i] for a single process.
+
+    Formulas:
+        E[Q_i] = Q_i* / √(1 + 2σ²/s) · exp(2δ²σ² / (s(s + 2σ²)))
+        E[Q_i²] = Q_i*² / √(1 + 4σ²/s) · exp(4δ²σ² / (s(s + 4σ²)))
+        Var[Q_i] = E[Q_i²] - E[Q_i]²
+
+    Args:
+        Q_star: Target quality for this process (Q_i* = exp(-δ²/s))
+        delta: μ_target - τ (distance from process optimum)
+        sigma2: Predicted variance for this process
+        s: Scale parameter of quality function
+
+    Returns:
+        Tuple of (E[Q_i], E[Q_i²], Var[Q_i])
+    """
+    if sigma2 <= 0 or s <= 0:
+        # Deterministic case
+        return Q_star, Q_star**2, 0.0
+
+    # E[Q_i]
+    factor1 = 1.0 / np.sqrt(1 + 2 * sigma2 / s)
+    num1 = 2 * delta**2 * sigma2
+    den1 = s * (s + 2 * sigma2)
+    factor2 = np.exp(num1 / den1) if den1 > 0 else 1.0
+    E_Q = Q_star * factor1 * factor2
+
+    # E[Q_i²]
+    factor1_sq = 1.0 / np.sqrt(1 + 4 * sigma2 / s)
+    num2 = 4 * delta**2 * sigma2
+    den2 = s * (s + 4 * sigma2)
+    factor2_sq = np.exp(num2 / den2) if den2 > 0 else 1.0
+    E_Q2 = Q_star**2 * factor1_sq * factor2_sq
+
+    # Var[Q_i]
+    Var_Q = max(E_Q2 - E_Q**2, 0.0)
+
+    return E_Q, E_Q2, Var_Q
+
+
 def compute_multi_process_L_min(
     process_params: Dict[str, Dict[str, float]],
     process_weights: Dict[str, float],
@@ -189,11 +236,20 @@ def compute_multi_process_L_min(
     """
     Compute theoretical L_min for a multi-process system.
 
-    The reliability F is a weighted average of per-process quality scores.
-    This function computes L_min for each process and combines them.
+    The reliability F is a weighted average of per-process quality scores:
+        F = Σ(w_i × Q_i) / W    where W = Σw_i
+        F* = Σ(w_i × Q_i*) / W
+
+    The variance propagates through the weighted average (assuming independence):
+        E[F] = Σ(w_i × E[Q_i]) / W
+        Var[F] = Σ(w_i² × Var[Q_i]) / W²
+
+    The minimum achievable loss is:
+        L_min = Var[F] + (E[F] - F*)²
 
     Args:
         process_params: Dict mapping process_name to {'F_star', 'delta', 'sigma2', 's'}
+                        Note: F_star here is Q_i* (per-process target quality)
         process_weights: Dict mapping process_name to weight
         loss_scale: Scale factor for the loss
 
@@ -201,66 +257,88 @@ def compute_multi_process_L_min(
         Tuple of (combined L_min components, dict of per-process components)
     """
     per_process_components = {}
+    per_process_Q_stats = {}  # Store E[Q_i], Var[Q_i] for each process
 
-    # Compute for each process
+    # Step 1: Compute Q stats for each process
     for process_name, params in process_params.items():
+        Q_star = params['F_star']  # This is Q_i* (per-process)
+        delta = params['delta']
+        sigma2 = params['sigma2']
+        s = params['s']
+
+        E_Q, E_Q2, Var_Q = compute_per_process_Q_stats(Q_star, delta, sigma2, s)
+        per_process_Q_stats[process_name] = {
+            'Q_star': Q_star,
+            'E_Q': E_Q,
+            'E_Q2': E_Q2,
+            'Var_Q': Var_Q
+        }
+
+        # Also store per-process components for backward compatibility
         components = compute_theoretical_L_min(
-            F_star=params['F_star'],
-            delta=params['delta'],
-            sigma2=params['sigma2'],
-            s=params['s'],
+            F_star=Q_star,
+            delta=delta,
+            sigma2=sigma2,
+            s=s,
             loss_scale=loss_scale
         )
         per_process_components[process_name] = components
 
-    # Combine using weights
-    total_weight = sum(process_weights.get(name, 1.0) for name in process_params.keys())
+    # Step 2: Compute combined F* and E[F] using correct weighted average
+    W = sum(process_weights.get(name, 1.0) for name in process_params.keys())
 
-    if total_weight > 0:
-        # Weighted average of L_min
-        combined_L_min = sum(
-            components.L_min * process_weights.get(name, 1.0)
-            for name, components in per_process_components.items()
-        ) / total_weight
-
-        combined_E_F = sum(
-            components.E_F * process_weights.get(name, 1.0)
-            for name, components in per_process_components.items()
-        ) / total_weight
-
-        combined_Var_F = sum(
-            components.Var_F * process_weights.get(name, 1.0)
-            for name, components in per_process_components.items()
-        ) / total_weight
-
-        combined_Bias2 = sum(
-            components.Bias2 * process_weights.get(name, 1.0)
-            for name, components in per_process_components.items()
-        ) / total_weight
-
+    if W > 0:
+        # F* = Σ(w_i × Q_i*) / W
         combined_F_star = sum(
-            components.F_star * process_weights.get(name, 1.0)
-            for name, components in per_process_components.items()
-        ) / total_weight
+            per_process_Q_stats[name]['Q_star'] * process_weights.get(name, 1.0)
+            for name in process_params.keys()
+        ) / W
 
+        # E[F] = Σ(w_i × E[Q_i]) / W
+        combined_E_F = sum(
+            per_process_Q_stats[name]['E_Q'] * process_weights.get(name, 1.0)
+            for name in process_params.keys()
+        ) / W
+
+        # Step 3: Var[F] = Σ(w_i² × Var[Q_i]) / W²  (assuming independence)
+        combined_Var_F = sum(
+            per_process_Q_stats[name]['Var_Q'] * (process_weights.get(name, 1.0) ** 2)
+            for name in process_params.keys()
+        ) / (W ** 2)
+
+        # Step 4: Bias² = (E[F] - F*)²
+        combined_Bias2 = (combined_E_F - combined_F_star) ** 2
+
+        # Step 5: L_min = Var[F] + Bias²
+        combined_L_min = (combined_Var_F + combined_Bias2) * loss_scale
+
+        # Scale variance and bias for consistency
+        combined_Var_F_scaled = combined_Var_F * loss_scale
+        combined_Bias2_scaled = combined_Bias2 * loss_scale
+
+        # E[F²] = Var[F] + E[F]²
+        combined_E_F2 = combined_Var_F + combined_E_F**2
+
+        # Mean sigma2 (for informational purposes)
         combined_sigma2 = sum(
-            components.sigma2 * process_weights.get(name, 1.0)
-            for name, components in per_process_components.items()
-        ) / total_weight
+            params['sigma2'] * process_weights.get(name, 1.0)
+            for name, params in process_params.items()
+        ) / W
     else:
         combined_L_min = 0.0
         combined_E_F = 0.0
-        combined_Var_F = 0.0
-        combined_Bias2 = 0.0
+        combined_E_F2 = 0.0
+        combined_Var_F_scaled = 0.0
+        combined_Bias2_scaled = 0.0
         combined_F_star = 0.0
         combined_sigma2 = 0.0
 
     combined_components = TheoreticalLossComponents(
         L_min=combined_L_min,
         E_F=combined_E_F,
-        E_F2=combined_E_F**2 + combined_Var_F / loss_scale,  # Reconstruct E[F^2]
-        Var_F=combined_Var_F,
-        Bias2=combined_Bias2,
+        E_F2=combined_E_F2,
+        Var_F=combined_Var_F_scaled,
+        Bias2=combined_Bias2_scaled,
         F_star=combined_F_star,
         sigma2=combined_sigma2,
         delta=0.0,  # Not meaningful for combined
