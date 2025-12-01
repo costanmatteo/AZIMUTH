@@ -608,7 +608,9 @@ class ControllerTrainer:
             # 2. Reliability weight has reached 0.9 (loss is now reliability-dominated)
             patience_active = epoch > warmup_epochs and reliability_weight >= 0.9
 
-            if avg_total_loss < self.best_loss:
+            # Best model saving only when patience is active
+            # (avoids saving models optimized for BC loss instead of reliability)
+            if patience_active and avg_total_loss < self.best_loss:
                 self.best_loss = avg_total_loss
                 self.best_F = avg_F  # Track best F for information
                 self.epochs_without_improvement = 0
