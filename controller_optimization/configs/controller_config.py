@@ -103,7 +103,7 @@ CONTROLLER_CONFIG = {
     'training': {
         'epochs': 1500,  # Each epoch cycles through all training scenarios once
         'batch_size': 2000,  # Replicas per scenario (same inputs, different dropout/stochasticity)
-        'learning_rate': 0.0001,
+        'learning_rate': 0.0005,
         'weight_decay': 0.001,
         'lambda_bc': 0.001,  # Behavior cloning weight
         'reliability_loss_scale': 1.0,  # Scale factor for reliability loss (F - F*)^2
@@ -136,7 +136,7 @@ CONTROLLER_CONFIG = {
             'enabled': True,  # Enable curriculum learning strategy
             'warmup_fraction': 0.1,  # First 10% of epochs = warm-up (BC only)
             'lambda_bc_start': 1.0,  # High BC weight during warm-up
-            'lambda_bc_end': 0.05,  # Low BC weight at end of training
+            'lambda_bc_end': 0.01,  # Low BC weight at end of training
             'reliability_weight_curve': 'exponential',  # 'exponential', 'linear', 'sigmoid'
         },
     },
@@ -145,8 +145,8 @@ CONTROLLER_CONFIG = {
     'scenarios': {
         'n_train': 1,         # Training scenarios (diverse operating conditions)
         'n_test': 1,          # Test scenarios (final evaluation, never seen during training)
-        'seed_target': 84,     # Seed for target trajectory generation (train)
-        'seed_baseline': 81,   # Seed for baseline process noise (same inputs, different noise)
+        'seed_target': 64,     # Seed for target trajectory generation (train)
+        'seed_baseline': 134,   # Seed for baseline process noise (same inputs, different noise)
         'test_seed_offset': 1000,  # Offset added to seeds for test scenarios (ensures different from train)
     },
 
