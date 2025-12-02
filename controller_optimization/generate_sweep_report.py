@@ -98,49 +98,80 @@ def aggregate_results(sweep_dir: Path) -> pd.DataFrame:
 
 def plot_target_baseline_actual_scatter(df: pd.DataFrame, save_path: Path):
     """
-    Create scatter plot of F_star (target), F_baseline, and F_actual for all runs.
-    Each run is a point on x-axis, y-axis shows F values.
+    Scatter plot: F_star (target) vs F_baseline and F_actual for all runs.
+
+    Style matches single training report:
+    - Y-axis: F_star (target reliability)
+    - X-axis: F (baseline in red, actual in blue)
+    - Diagonal line shows perfect match (F = F*)
     """
-    fig, ax = plt.subplots(figsize=(14, 6))
+    fig, ax = plt.subplots(figsize=(12, 8))
 
-    n_runs = len(df)
-    x = np.arange(n_runs)
+    F_star = df['F_star_train'].values
+    F_baseline = df['F_baseline_train'].values
+    F_actual = df['F_actual_train'].values
 
-    # Plot F_star (target) - green diamonds
-    ax.scatter(x, df['F_star_train'].values, c='green', marker='D', s=50,
-               label='F* (Target)', alpha=0.8, zorder=3)
+    # Baseline points (red squares)
+    ax.scatter(F_baseline, F_star,
+               c='red',
+               s=120,
+               alpha=0.6,
+               edgecolors='darkred',
+               linewidths=2,
+               label='Baseline (no controller)',
+               marker='s')
 
-    # Plot F_baseline - red squares
-    ax.scatter(x, df['F_baseline_train'].values, c='red', marker='s', s=50,
-               label="F' (Baseline)", alpha=0.8, zorder=2)
+    # Controller points (blue circles)
+    ax.scatter(F_actual, F_star,
+               c='blue',
+               s=120,
+               alpha=0.6,
+               edgecolors='darkblue',
+               linewidths=2,
+               label='Controller',
+               marker='o')
 
-    # Plot F_actual - blue circles
-    ax.scatter(x, df['F_actual_train'].values, c='blue', marker='o', s=50,
-               label='F (Actual)', alpha=0.8, zorder=4)
+    # Diagonal line (perfect match: F = F*)
+    all_values = np.concatenate([F_star, F_baseline, F_actual])
+    min_val = all_values.min()
+    max_val = all_values.max()
+    margin = (max_val - min_val) * 0.1
 
-    # Connect points with thin lines for each run
-    for i in range(n_runs):
-        ax.plot([i, i, i],
-                [df['F_baseline_train'].iloc[i], df['F_actual_train'].iloc[i], df['F_star_train'].iloc[i]],
-                'k-', alpha=0.2, linewidth=0.5)
+    ax.plot([min_val - margin, max_val + margin],
+            [min_val - margin, max_val + margin],
+            'k--', linewidth=2, label='Perfect Match (F = F*)', alpha=0.5)
 
-    # Add mean lines
-    ax.axhline(df['F_star_train'].mean(), color='green', linestyle='--', alpha=0.5,
-               label=f'Mean F* = {df["F_star_train"].mean():.4f}')
-    ax.axhline(df['F_baseline_train'].mean(), color='red', linestyle='--', alpha=0.5,
-               label=f"Mean F' = {df['F_baseline_train'].mean():.4f}")
-    ax.axhline(df['F_actual_train'].mean(), color='blue', linestyle='--', alpha=0.5,
-               label=f'Mean F = {df["F_actual_train"].mean():.4f}')
+    # Axis labels and title
+    ax.set_xlabel('F (Reliability)', fontsize=14, fontweight='bold')
+    ax.set_ylabel('F* (Target Reliability)', fontsize=14, fontweight='bold')
+    ax.set_title('Target vs Baseline & Controller Reliability (All Sweep Runs)', fontsize=16, fontweight='bold')
 
-    ax.set_xlabel('Run Index', fontsize=12)
-    ax.set_ylabel('Reliability (F)', fontsize=12)
-    ax.set_title('Target vs Baseline vs Actual Reliability Across All Sweep Runs', fontsize=14)
-    ax.legend(loc='upper right', fontsize=9)
+    # Grid and legend
     ax.grid(True, alpha=0.3)
+    ax.legend(loc='lower right', fontsize=11, framealpha=0.9)
 
-    # Set x-ticks to show every 10th run
-    tick_positions = np.arange(0, n_runs, max(1, n_runs // 10))
-    ax.set_xticks(tick_positions)
+    # Set limits with margin
+    ax.set_xlim(min_val - margin, max_val + margin)
+    ax.set_ylim(min_val - margin, max_val + margin)
+
+    # Statistics: gap = F* - F (smaller gap = better)
+    n_runs = len(df)
+    gap_baseline = F_star - F_baseline  # Gap for baseline
+    gap_actual = F_star - F_actual      # Gap for controller
+
+    # Count how many times controller beats baseline
+    controller_wins = np.sum(gap_actual < gap_baseline)
+
+    stats_text = (f'Runs: {n_runs}\n'
+                  f'Controller better: {controller_wins}/{n_runs} ({100*controller_wins/n_runs:.1f}%)\n'
+                  f'Gap range (Baseline): [{gap_baseline.min():.4f}, {gap_baseline.max():.4f}]\n'
+                  f'Gap range (Controller): [{gap_actual.min():.4f}, {gap_actual.max():.4f}]')
+
+    ax.text(0.02, 0.98, stats_text,
+            transform=ax.transAxes,
+            fontsize=10,
+            verticalalignment='top',
+            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.7))
 
     plt.tight_layout()
     plt.savefig(save_path, dpi=150, bbox_inches='tight')
@@ -150,34 +181,49 @@ def plot_target_baseline_actual_scatter(df: pd.DataFrame, save_path: Path):
 
 
 def plot_improvement_distribution(df: pd.DataFrame, save_path: Path):
-    """Plot distribution of improvement percentages."""
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    """
+    Plot distribution of gaps: F* - F (smaller is better).
 
-    # Train improvement distribution
+    Shows how close the controller gets to the target compared to baseline.
+    """
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    # Calculate gaps (F* - F, smaller = better)
+    gap_baseline_train = df['F_star_train'] - df['F_baseline_train']
+    gap_actual_train = df['F_star_train'] - df['F_actual_train']
+
+    # Left plot: Gap distribution comparison (Train)
     ax1 = axes[0]
-    ax1.hist(df['improvement_train'].dropna(), bins=20, color='steelblue', edgecolor='black', alpha=0.7)
-    ax1.axvline(df['improvement_train'].mean(), color='red', linestyle='--',
-                label=f'Mean: {df["improvement_train"].mean():.2f}%')
-    ax1.axvline(df['improvement_train'].median(), color='orange', linestyle=':',
-                label=f'Median: {df["improvement_train"].median():.2f}%')
-    ax1.set_xlabel('Improvement (%)', fontsize=11)
+    bins = np.linspace(
+        min(gap_baseline_train.min(), gap_actual_train.min()),
+        max(gap_baseline_train.max(), gap_actual_train.max()),
+        25
+    )
+    ax1.hist(gap_baseline_train, bins=bins, color='red', edgecolor='darkred',
+             alpha=0.5, label='Baseline Gap (F* - F\')')
+    ax1.hist(gap_actual_train, bins=bins, color='blue', edgecolor='darkblue',
+             alpha=0.5, label='Controller Gap (F* - F)')
+    ax1.axvline(0, color='green', linestyle='-', linewidth=2, label='Perfect (gap = 0)')
+    ax1.set_xlabel('Gap (F* - F)', fontsize=11)
     ax1.set_ylabel('Count', fontsize=11)
-    ax1.set_title('Train Improvement Distribution', fontsize=12)
+    ax1.set_title('Gap Distribution: Baseline vs Controller (Train)', fontsize=12)
     ax1.legend()
     ax1.grid(True, alpha=0.3)
 
-    # Test improvement distribution
+    # Right plot: Gap reduction (how much controller improved over baseline)
     ax2 = axes[1]
-    test_imp = df['improvement_test'].dropna()
-    if len(test_imp) > 0:
-        ax2.hist(test_imp, bins=20, color='forestgreen', edgecolor='black', alpha=0.7)
-        ax2.axvline(test_imp.mean(), color='red', linestyle='--',
-                    label=f'Mean: {test_imp.mean():.2f}%')
-        ax2.axvline(test_imp.median(), color='orange', linestyle=':',
-                    label=f'Median: {test_imp.median():.2f}%')
-    ax2.set_xlabel('Improvement (%)', fontsize=11)
+    gap_reduction = gap_baseline_train - gap_actual_train  # Positive = controller better
+    ax2.hist(gap_reduction, bins=25, color='forestgreen', edgecolor='black', alpha=0.7)
+    ax2.axvline(0, color='red', linestyle='--', linewidth=2, label='No improvement')
+
+    # Count wins/losses
+    wins = (gap_reduction > 0).sum()
+    losses = (gap_reduction < 0).sum()
+    ties = (gap_reduction == 0).sum()
+
+    ax2.set_xlabel('Gap Reduction (positive = controller better)', fontsize=11)
     ax2.set_ylabel('Count', fontsize=11)
-    ax2.set_title('Test Improvement Distribution', fontsize=12)
+    ax2.set_title(f'Controller Improvement: {wins} wins, {losses} losses', fontsize=12)
     ax2.legend()
     ax2.grid(True, alpha=0.3)
 
@@ -188,15 +234,33 @@ def plot_improvement_distribution(df: pd.DataFrame, save_path: Path):
     return save_path
 
 
-def plot_seed_heatmap(df: pd.DataFrame, metric: str, save_path: Path, title: str = None):
-    """Plot heatmap of metric as function of seed_target and seed_baseline."""
+def plot_seed_heatmap(df: pd.DataFrame, save_path: Path):
+    """Plot heatmap of gap reduction by seed combination.
+
+    Gap reduction = baseline_gap - controller_gap
+    Positive = controller better (green)
+    Negative = baseline better (red)
+    """
     fig, ax = plt.subplots(figsize=(10, 8))
 
-    # Create pivot table
-    pivot = df.pivot_table(values=metric, index='seed_baseline', columns='seed_target', aggfunc='mean')
+    # Calculate gap reduction
+    df = df.copy()
+    df['gap_reduction'] = (df['F_star_train'] - df['F_baseline_train']) - (df['F_star_train'] - df['F_actual_train'])
 
-    # Plot heatmap
-    im = ax.imshow(pivot.values, cmap='RdYlGn', aspect='auto')
+    # Create pivot table
+    pivot = df.pivot_table(values='gap_reduction', index='seed_baseline', columns='seed_target', aggfunc='first')
+
+    # Handle case with single value
+    if pivot.shape[0] < 2 or pivot.shape[1] < 2:
+        ax.text(0.5, 0.5, 'Not enough data for heatmap\n(need multiple seed values)',
+                ha='center', va='center', fontsize=12, transform=ax.transAxes)
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        plt.close()
+        return save_path
+
+    # Plot heatmap - use diverging colormap centered at 0
+    vmax = max(abs(pivot.values.min()), abs(pivot.values.max()))
+    im = ax.imshow(pivot.values, cmap='RdYlGn', aspect='auto', vmin=-vmax, vmax=vmax)
 
     # Set ticks
     ax.set_xticks(np.arange(len(pivot.columns)))
@@ -206,20 +270,20 @@ def plot_seed_heatmap(df: pd.DataFrame, metric: str, save_path: Path, title: str
 
     # Add colorbar
     cbar = plt.colorbar(im, ax=ax)
-    cbar.set_label(metric, fontsize=11)
+    cbar.set_label('Gap Reduction (positive = controller better)', fontsize=11)
 
     # Add value annotations
     for i in range(len(pivot.index)):
         for j in range(len(pivot.columns)):
             val = pivot.values[i, j]
             if not np.isnan(val):
-                text_color = 'white' if val < pivot.values.mean() else 'black'
-                ax.text(j, i, f'{val:.2f}', ha='center', va='center',
+                text_color = 'white' if abs(val) > vmax * 0.5 else 'black'
+                ax.text(j, i, f'{val:.3f}', ha='center', va='center',
                         color=text_color, fontsize=8)
 
     ax.set_xlabel('seed_target', fontsize=12)
     ax.set_ylabel('seed_baseline', fontsize=12)
-    ax.set_title(title or f'{metric} by Seed Combination', fontsize=14)
+    ax.set_title('Gap Reduction by Seed Combination\n(Green = Controller Better, Red = Baseline Better)', fontsize=14)
 
     plt.tight_layout()
     plt.savefig(save_path, dpi=150, bbox_inches='tight')
@@ -229,31 +293,33 @@ def plot_seed_heatmap(df: pd.DataFrame, metric: str, save_path: Path, title: str
 
 
 def plot_f_values_boxplot(df: pd.DataFrame, save_path: Path):
-    """Create boxplot comparing F_star, F_baseline, F_actual distributions."""
-    fig, ax = plt.subplots(figsize=(8, 6))
+    """Create boxplot comparing gap distributions: F* - F' (baseline) vs F* - F (controller)."""
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    # Calculate gaps (smaller = better, closer to target)
+    gap_baseline = df['F_star_train'] - df['F_baseline_train']
+    gap_controller = df['F_star_train'] - df['F_actual_train']
 
     data = [
-        df['F_star_train'].dropna(),
-        df['F_baseline_train'].dropna(),
-        df['F_actual_train'].dropna()
+        gap_baseline.dropna(),
+        gap_controller.dropna()
     ]
-    labels = ['F* (Target)', "F' (Baseline)", 'F (Actual)']
-    colors_list = ['green', 'red', 'blue']
+    labels = ['Baseline Gap\n(F* - F\')', 'Controller Gap\n(F* - F)']
+    colors_list = ['red', 'blue']
 
-    bp = ax.boxplot(data, labels=labels, patch_artist=True)
+    bp = ax.boxplot(data, tick_labels=labels, patch_artist=True)
 
     for patch, color in zip(bp['boxes'], colors_list):
         patch.set_facecolor(color)
         patch.set_alpha(0.6)
 
-    ax.set_ylabel('Reliability (F)', fontsize=12)
-    ax.set_title('Distribution of Reliability Values Across Sweep', fontsize=14)
-    ax.grid(True, alpha=0.3, axis='y')
+    # Add horizontal line at 0 (perfect match)
+    ax.axhline(0, color='green', linestyle='--', linewidth=2, label='Perfect (gap = 0)')
 
-    # Add mean markers
-    means = [d.mean() for d in data]
-    ax.scatter([1, 2, 3], means, marker='D', color='black', s=50, zorder=5, label='Mean')
-    ax.legend()
+    ax.set_ylabel('Gap (F* - F)', fontsize=12)
+    ax.set_title('Gap Distribution: Baseline vs Controller\n(smaller gap = better)', fontsize=14)
+    ax.grid(True, alpha=0.3, axis='y')
+    ax.legend(loc='upper right')
 
     plt.tight_layout()
     plt.savefig(save_path, dpi=150, bbox_inches='tight')
@@ -263,44 +329,40 @@ def plot_f_values_boxplot(df: pd.DataFrame, save_path: Path):
 
 
 def generate_summary_stats(df: pd.DataFrame) -> dict:
-    """Compute summary statistics from sweep results."""
+    """Compute summary statistics from sweep results using gaps (F* - F)."""
+
+    # Calculate gaps
+    gap_baseline = df['F_star_train'] - df['F_baseline_train']
+    gap_controller = df['F_star_train'] - df['F_actual_train']
+    gap_reduction = gap_baseline - gap_controller  # Positive = controller better
+
+    # Count wins (controller gap < baseline gap)
+    controller_wins = (gap_controller < gap_baseline).sum()
+
     stats = {
         'n_runs': len(df),
-        'n_successful': len(df[df['improvement_train'] > 0]),
+        'controller_wins': controller_wins,
+        'controller_win_rate': 100 * controller_wins / len(df) if len(df) > 0 else 0,
 
-        # F_star statistics
-        'F_star_mean': df['F_star_train'].mean(),
-        'F_star_std': df['F_star_train'].std(),
-        'F_star_min': df['F_star_train'].min(),
-        'F_star_max': df['F_star_train'].max(),
+        # Gap statistics (F* - F, smaller is better)
+        'gap_baseline_min': gap_baseline.min(),
+        'gap_baseline_max': gap_baseline.max(),
+        'gap_baseline_median': gap_baseline.median(),
 
-        # F_baseline statistics
-        'F_baseline_mean': df['F_baseline_train'].mean(),
-        'F_baseline_std': df['F_baseline_train'].std(),
-        'F_baseline_min': df['F_baseline_train'].min(),
-        'F_baseline_max': df['F_baseline_train'].max(),
+        'gap_controller_min': gap_controller.min(),
+        'gap_controller_max': gap_controller.max(),
+        'gap_controller_median': gap_controller.median(),
 
-        # F_actual statistics
-        'F_actual_mean': df['F_actual_train'].mean(),
-        'F_actual_std': df['F_actual_train'].std(),
-        'F_actual_min': df['F_actual_train'].min(),
-        'F_actual_max': df['F_actual_train'].max(),
+        # Gap reduction (baseline_gap - controller_gap, positive = improvement)
+        'gap_reduction_min': gap_reduction.min(),
+        'gap_reduction_max': gap_reduction.max(),
+        'gap_reduction_median': gap_reduction.median(),
 
-        # Improvement statistics
-        'improvement_mean': df['improvement_train'].mean(),
-        'improvement_std': df['improvement_train'].std(),
-        'improvement_min': df['improvement_train'].min(),
-        'improvement_max': df['improvement_train'].max(),
-        'improvement_median': df['improvement_train'].median(),
-
-        # Success rate
-        'success_rate_mean': df['success_rate_train'].mean() if 'success_rate_train' in df else None,
-
-        # Best and worst runs
-        'best_run': df.loc[df['improvement_train'].idxmax(), 'run_name'] if len(df) > 0 else None,
-        'best_improvement': df['improvement_train'].max(),
-        'worst_run': df.loc[df['improvement_train'].idxmin(), 'run_name'] if len(df) > 0 else None,
-        'worst_improvement': df['improvement_train'].min(),
+        # Best and worst runs based on controller gap
+        'best_run': df.loc[gap_controller.idxmin(), 'run_name'] if len(df) > 0 else None,
+        'best_gap': gap_controller.min(),
+        'worst_run': df.loc[gap_controller.idxmax(), 'run_name'] if len(df) > 0 else None,
+        'worst_gap': gap_controller.max(),
     }
 
     return stats
@@ -365,29 +427,28 @@ class SweepReportGenerator:
         self.story.append(line)
 
     def add_summary_table(self, stats: dict):
-        """Add summary statistics table."""
+        """Add summary statistics table using gap-based metrics."""
         self.add_section("Summary Statistics")
 
         data = [
             ['Metric', 'Value'],
             ['Total Runs', f"{stats['n_runs']}"],
-            ['Successful Runs (improvement > 0)', f"{stats['n_successful']} ({100*stats['n_successful']/stats['n_runs']:.1f}%)"],
+            ['Controller Wins', f"{stats['controller_wins']}/{stats['n_runs']} ({stats['controller_win_rate']:.1f}%)"],
             ['', ''],
-            ['F* (Target) Mean ± Std', f"{stats['F_star_mean']:.4f} ± {stats['F_star_std']:.4f}"],
-            ['F* Range', f"[{stats['F_star_min']:.4f}, {stats['F_star_max']:.4f}]"],
+            ['Baseline Gap (F* - F\')', '(smaller = better)'],
+            ['  Range', f"[{stats['gap_baseline_min']:.4f}, {stats['gap_baseline_max']:.4f}]"],
+            ['  Median', f"{stats['gap_baseline_median']:.4f}"],
             ['', ''],
-            ["F' (Baseline) Mean ± Std", f"{stats['F_baseline_mean']:.4f} ± {stats['F_baseline_std']:.4f}"],
-            ["F' Range", f"[{stats['F_baseline_min']:.4f}, {stats['F_baseline_max']:.4f}]"],
+            ['Controller Gap (F* - F)', '(smaller = better)'],
+            ['  Range', f"[{stats['gap_controller_min']:.4f}, {stats['gap_controller_max']:.4f}]"],
+            ['  Median', f"{stats['gap_controller_median']:.4f}"],
             ['', ''],
-            ['F (Actual) Mean ± Std', f"{stats['F_actual_mean']:.4f} ± {stats['F_actual_std']:.4f}"],
-            ['F Range', f"[{stats['F_actual_min']:.4f}, {stats['F_actual_max']:.4f}]"],
+            ['Gap Reduction', '(positive = controller better)'],
+            ['  Range', f"[{stats['gap_reduction_min']:.4f}, {stats['gap_reduction_max']:.4f}]"],
+            ['  Median', f"{stats['gap_reduction_median']:.4f}"],
             ['', ''],
-            ['Improvement Mean ± Std', f"{stats['improvement_mean']:.2f}% ± {stats['improvement_std']:.2f}%"],
-            ['Improvement Median', f"{stats['improvement_median']:.2f}%"],
-            ['Improvement Range', f"[{stats['improvement_min']:.2f}%, {stats['improvement_max']:.2f}%]"],
-            ['', ''],
-            ['Best Run', f"{stats['best_run']} ({stats['best_improvement']:.2f}%)"],
-            ['Worst Run', f"{stats['worst_run']} ({stats['worst_improvement']:.2f}%)"],
+            ['Best Run (smallest gap)', f"{stats['best_run']} (gap: {stats['best_gap']:.4f})"],
+            ['Worst Run (largest gap)', f"{stats['worst_run']} (gap: {stats['worst_gap']:.4f})"],
         ]
 
         table = Table(data, colWidths=[3*inch, 3*inch])
@@ -416,28 +477,35 @@ class SweepReportGenerator:
             self.story.append(Spacer(1, 0.3*cm))
 
     def add_runs_table(self, df: pd.DataFrame):
-        """Add table with all runs sorted by improvement."""
-        self.add_section("All Runs (sorted by improvement)")
+        """Add table with all runs sorted by controller gap (smallest = best)."""
+        self.add_section("All Runs (sorted by controller gap, smallest first)")
 
-        # Sort by improvement
-        df_sorted = df.sort_values('improvement_train', ascending=False)
+        # Calculate gaps and sort
+        df = df.copy()
+        df['gap_baseline'] = df['F_star_train'] - df['F_baseline_train']
+        df['gap_controller'] = df['F_star_train'] - df['F_actual_train']
+        df_sorted = df.sort_values('gap_controller', ascending=True)
 
         # Create table data
-        data = [['Run', 'seed_t', 'seed_b', 'F*', "F'", 'F', 'Improvement']]
+        data = [['Run', 'seed_t', 'seed_b', 'F*', 'Gap Baseline', 'Gap Controller', 'Winner']]
 
         for _, row in df_sorted.iterrows():
+            gap_b = row['gap_baseline']
+            gap_c = row['gap_controller']
+            winner = '✓ Ctrl' if gap_c < gap_b else '✗ Base'
+
             data.append([
                 row['run_name'][:15],
                 int(row['seed_target']) if pd.notna(row['seed_target']) else 'N/A',
                 int(row['seed_baseline']) if pd.notna(row['seed_baseline']) else 'N/A',
                 f"{row['F_star_train']:.4f}" if pd.notna(row['F_star_train']) else 'N/A',
-                f"{row['F_baseline_train']:.4f}" if pd.notna(row['F_baseline_train']) else 'N/A',
-                f"{row['F_actual_train']:.4f}" if pd.notna(row['F_actual_train']) else 'N/A',
-                f"{row['improvement_train']:.2f}%" if pd.notna(row['improvement_train']) else 'N/A',
+                f"{gap_b:.4f}" if pd.notna(gap_b) else 'N/A',
+                f"{gap_c:.4f}" if pd.notna(gap_c) else 'N/A',
+                winner,
             ])
 
         # Create table with smaller font
-        table = Table(data, colWidths=[1.2*inch, 0.6*inch, 0.6*inch, 0.8*inch, 0.8*inch, 0.8*inch, 1*inch])
+        table = Table(data, colWidths=[1.2*inch, 0.6*inch, 0.6*inch, 0.8*inch, 0.9*inch, 0.9*inch, 0.7*inch])
         table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
@@ -497,11 +565,8 @@ def generate_sweep_report(sweep_dir: Path, output_path: Path = None):
     print("  - F values boxplot...")
     boxplot_path = plot_f_values_boxplot(df, plots_dir / 'f_values_boxplot.png')
 
-    print("  - Improvement heatmap...")
-    heatmap_path = plot_seed_heatmap(
-        df, 'improvement_train', plots_dir / 'improvement_heatmap.png',
-        title='Improvement (%) by Seed Combination'
-    )
+    print("  - Gap reduction heatmap...")
+    heatmap_path = plot_seed_heatmap(df, plots_dir / 'gap_reduction_heatmap.png')
 
     # Generate PDF report
     if output_path is None:
@@ -516,26 +581,26 @@ def generate_sweep_report(sweep_dir: Path, output_path: Path = None):
     # Add scatter plot
     report.add_section("Target vs Baseline vs Actual (All Runs)")
     report.add_image(scatter_path, width=6.5*inch,
-                     caption="Figure 1: F* (target), F' (baseline), and F (actual) for each sweep run")
+                     caption="Figure 1: Scatter plot showing controller (blue) vs baseline (red). Points on diagonal = perfect match with target F*.")
 
     report.story.append(PageBreak())
 
     # Add boxplot
-    report.add_section("Reliability Distribution")
+    report.add_section("Gap Distribution")
     report.add_image(boxplot_path, width=5*inch,
-                     caption="Figure 2: Distribution of reliability values across all runs")
+                     caption="Figure 2: Gap distribution (F* - F). Smaller gap = better. Green line = perfect (gap=0).")
 
-    # Add improvement distribution
-    report.add_section("Improvement Distribution")
+    # Add gap distribution
+    report.add_section("Gap Comparison: Baseline vs Controller")
     report.add_image(dist_path, width=6*inch,
-                     caption="Figure 3: Distribution of improvement percentages")
+                     caption="Figure 3: Left: overlapping gap distributions. Right: gap reduction (positive = controller wins).")
 
     report.story.append(PageBreak())
 
     # Add heatmap
-    report.add_section("Seed Combination Heatmap")
+    report.add_section("Gap Reduction by Seed Combination")
     report.add_image(heatmap_path, width=5.5*inch,
-                     caption="Figure 4: Improvement as a function of seed_target and seed_baseline")
+                     caption="Figure 4: Gap reduction by seed combination. Green = controller better, Red = baseline better.")
 
     report.story.append(PageBreak())
 
