@@ -25,7 +25,15 @@ TRAINING:
                          Typical values: 100.0 (default), 1000.0 for very small deltas
 - patience: Early stopping patience (epochs without improvement)
 - gradient_clip_norm: Max gradient norm (None=no clipping, 1.0=typical value)
-- lr_scheduler: Learning rate decay schedule (None or dict with 'type', 'step_size', 'gamma')
+- lr_scheduler: Learning rate decay schedule (None or dict). Supported types:
+                * 'step': {'type': 'step', 'step_size': 50, 'gamma': 0.5}
+                          LR = LR * gamma every step_size epochs
+                * 'exponential': {'type': 'exponential', 'gamma': 0.99}
+                          LR = LR * gamma every epoch
+                * 'cosine': {'type': 'cosine', 'T_max': 1500, 'eta_min': 0}
+                          Cosine annealing from initial LR to eta_min over T_max epochs
+                * 'reduce_on_plateau': {'type': 'reduce_on_plateau', 'factor': 0.5, 'patience': 10}
+                          Reduce LR by factor when loss stops improving for patience epochs
 - early_stopping_metric: 'F' (reliability, maximize) or 'loss' (minimize)
 - eval_all_scenarios_every: Evaluate on all scenarios every N epochs (None=only at end)
 
@@ -120,9 +128,12 @@ CONTROLLER_CONFIG = {
         # Gradient clipping (helps with training stability)
         'gradient_clip_norm': 3.0,  # None = no clipping, or float (e.g., 1.0)
 
-        # Learning rate scheduler
-        'lr_scheduler': None,  # None, or {'type': 'step', 'step_size': 30, 'gamma': 0.1}
-                               # Options: 'step', 'exponential', 'cosine', 'reduce_on_plateau'
+        # Learning rate scheduler (see docstring for full options)
+        # Examples:
+        #   {'type': 'step', 'step_size': 50, 'gamma': 0.5}           - Reduce LR by 0.5 every 50 epochs
+        #   {'type': 'cosine', 'T_max': 1500}                         - Cosine annealing over 1500 epochs
+        #   {'type': 'reduce_on_plateau', 'factor': 0.5, 'patience': 50}  - Reduce on plateau
+        'lr_scheduler': None,  # None = constant LR, or dict with scheduler config
 
         # Early stopping
         'early_stopping_metric': 'F',  # 'F' (maximize) or 'loss' (minimize)

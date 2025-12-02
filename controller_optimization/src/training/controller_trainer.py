@@ -12,6 +12,7 @@ Where:
 
 import torch
 import torch.optim as optim
+from torch.optim import lr_scheduler as torch_lr_scheduler
 import numpy as np
 from pathlib import Path
 import json
@@ -35,7 +36,7 @@ class ControllerTrainer:
     def __init__(self, process_chain, surrogate, lambda_bc=0.1,
                  learning_rate=0.001, weight_decay=0.01,
                  reliability_loss_scale=100.0, device='cpu',
-                 curriculum_config=None):
+                 curriculum_config=None, lr_scheduler_config=None):
 
         self.process_chain = process_chain
         self.surrogate = surrogate
@@ -52,6 +53,9 @@ class ControllerTrainer:
             'reliability_weight_curve': 'exponential'
         }
 
+        # Learning rate scheduler configuration
+        self.lr_scheduler_config = lr_scheduler_config
+
         # Optimizer SOLO per policy generators (uncertainty predictors sono frozen)
         trainable_params = [p for p in process_chain.parameters() if p.requires_grad]
 
@@ -64,6 +68,9 @@ class ControllerTrainer:
             weight_decay=weight_decay
         )
 
+        # Create learning rate scheduler if configured
+        self.scheduler = self._create_scheduler()
+
         # Tracking
         self.history = {
             'total_loss': [],
@@ -72,6 +79,7 @@ class ControllerTrainer:
             'F_values': [],  # Reliability values durante training
             'lambda_bc': [],  # Track lambda_bc per epoch
             'reliability_weight': [],  # Track reliability_weight per epoch
+            'learning_rate': [],  # Track learning rate per epoch
         }
 
         # Embedding tracking (if scenario encoder is enabled)
@@ -122,6 +130,80 @@ class ControllerTrainer:
             }
 
         print(f"  Input normalization stats computed for {len(self.input_stats)} processes")
+
+    def _create_scheduler(self):
+        """
+        Create learning rate scheduler based on configuration.
+
+        Supported scheduler types:
+        - 'step': StepLR - reduces LR by gamma every step_size epochs
+        - 'exponential': ExponentialLR - reduces LR by gamma every epoch
+        - 'cosine': CosineAnnealingLR - cosine annealing to T_max epochs
+        - 'reduce_on_plateau': ReduceLROnPlateau - reduces LR when metric stops improving
+
+        Returns:
+            scheduler or None if not configured
+        """
+        if self.lr_scheduler_config is None:
+            return None
+
+        scheduler_type = self.lr_scheduler_config.get('type', 'step')
+
+        if scheduler_type == 'step':
+            # StepLR: LR = LR * gamma every step_size epochs
+            step_size = self.lr_scheduler_config.get('step_size', 50)
+            gamma = self.lr_scheduler_config.get('gamma', 0.5)
+            scheduler = torch_lr_scheduler.StepLR(
+                self.optimizer,
+                step_size=step_size,
+                gamma=gamma
+            )
+            print(f"  LR Scheduler: StepLR (step_size={step_size}, gamma={gamma})")
+
+        elif scheduler_type == 'exponential':
+            # ExponentialLR: LR = LR * gamma every epoch
+            gamma = self.lr_scheduler_config.get('gamma', 0.99)
+            scheduler = torch_lr_scheduler.ExponentialLR(
+                self.optimizer,
+                gamma=gamma
+            )
+            print(f"  LR Scheduler: ExponentialLR (gamma={gamma})")
+
+        elif scheduler_type == 'cosine':
+            # CosineAnnealingLR: cosine annealing
+            T_max = self.lr_scheduler_config.get('T_max', 1000)
+            eta_min = self.lr_scheduler_config.get('eta_min', 0)
+            scheduler = torch_lr_scheduler.CosineAnnealingLR(
+                self.optimizer,
+                T_max=T_max,
+                eta_min=eta_min
+            )
+            print(f"  LR Scheduler: CosineAnnealingLR (T_max={T_max}, eta_min={eta_min})")
+
+        elif scheduler_type == 'reduce_on_plateau':
+            # ReduceLROnPlateau: reduce when metric stops improving
+            mode = self.lr_scheduler_config.get('mode', 'min')  # 'min' for loss
+            factor = self.lr_scheduler_config.get('factor', 0.5)
+            patience = self.lr_scheduler_config.get('patience', 10)
+            threshold = self.lr_scheduler_config.get('threshold', 1e-4)
+            scheduler = torch_lr_scheduler.ReduceLROnPlateau(
+                self.optimizer,
+                mode=mode,
+                factor=factor,
+                patience=patience,
+                threshold=threshold
+            )
+            print(f"  LR Scheduler: ReduceLROnPlateau (factor={factor}, patience={patience})")
+
+        else:
+            print(f"  Warning: Unknown scheduler type '{scheduler_type}', no scheduler created")
+            return None
+
+        return scheduler
+
+    def get_current_lr(self):
+        """Get current learning rate from optimizer."""
+        return self.optimizer.param_groups[0]['lr']
 
     def get_loss_weights(self, epoch, total_epochs):
         """
@@ -557,12 +639,23 @@ class ControllerTrainer:
             )
 
             # Track history
+            current_lr = self.get_current_lr()
             self.history['total_loss'].append(avg_total_loss)
             self.history['reliability_loss'].append(avg_rel_loss)
             self.history['bc_loss'].append(avg_bc_loss)
             self.history['F_values'].append(avg_F)
             self.history['lambda_bc'].append(lambda_bc)
             self.history['reliability_weight'].append(reliability_weight)
+            self.history['learning_rate'].append(current_lr)
+
+            # Step the learning rate scheduler
+            if self.scheduler is not None:
+                if isinstance(self.scheduler, torch_lr_scheduler.ReduceLROnPlateau):
+                    # ReduceLROnPlateau needs the metric value
+                    self.scheduler.step(avg_total_loss)
+                else:
+                    # All other schedulers just step
+                    self.scheduler.step()
 
             # Save training progression snapshots every epoch
             self._save_training_progression_snapshot(epoch, lambda_bc, reliability_weight, phase)
@@ -576,7 +669,7 @@ class ControllerTrainer:
             if verbose and (epoch % 10 == 0 or epoch == 1):
                 phase_label = "[WARM-UP]" if phase == 'warmup' else "[CURRICULUM]" if phase == 'curriculum' else ""
                 print(f"\nEpoch {epoch}/{epochs} {phase_label}")
-                print(f"  λ_BC: {lambda_bc:.6f}, Rel Weight: {reliability_weight:.3f}")
+                print(f"  λ_BC: {lambda_bc:.6f}, Rel Weight: {reliability_weight:.3f}, LR: {current_lr:.2e}")
                 print(f"  Total Loss:       {avg_total_loss:.6f}")
                 print(f"  Reliability Loss: {avg_rel_loss:.6f} {'(ignored)' if reliability_weight == 0 else ''}")
                 print(f"  BC Loss:          {avg_bc_loss:.6f}")

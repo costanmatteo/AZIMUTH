@@ -256,6 +256,9 @@ def main():
         'reliability_weight_curve': 'exponential'
     })
 
+    # Get lr_scheduler config (backward compatible)
+    lr_scheduler_config = CONTROLLER_CONFIG['training'].get('lr_scheduler', None)
+
     trainer = ControllerTrainer(
         process_chain=process_chain,
         surrogate=surrogate,
@@ -264,7 +267,8 @@ def main():
         weight_decay=CONTROLLER_CONFIG['training']['weight_decay'],
         reliability_loss_scale=CONTROLLER_CONFIG['training']['reliability_loss_scale'],
         device=device,
-        curriculum_config=curriculum_config
+        curriculum_config=curriculum_config,
+        lr_scheduler_config=lr_scheduler_config
     )
 
     # Enable gradient debugging for first epoch
