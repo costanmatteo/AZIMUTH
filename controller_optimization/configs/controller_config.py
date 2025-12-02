@@ -114,7 +114,7 @@ CONTROLLER_CONFIG = {
         'learning_rate': 0.0001,
         'weight_decay': 0.001,
         'lambda_bc': 0.001,  # Behavior cloning weight
-        'reliability_loss_scale': 1.0,  # Scale factor for reliability loss (F - F*)^2
+        'reliability_loss_scale': 100.0,  # Scale factor for reliability loss (F - F*)^2
         'patience': 1200,
         'device': 'auto',
         'checkpoint_dir': 'controller_optimization/checkpoints/controller',
@@ -133,7 +133,7 @@ CONTROLLER_CONFIG = {
         #   {'type': 'step', 'step_size': 50, 'gamma': 0.5}           - Reduce LR by 0.5 every 50 epochs
         #   {'type': 'cosine', 'T_max': 1500}                         - Cosine annealing over 1500 epochs
         #   {'type': 'reduce_on_plateau', 'factor': 0.5, 'patience': 50}  - Reduce on plateau
-        'lr_scheduler': None,  # None = constant LR, or dict with scheduler config
+        'lr_scheduler': {'type': 'cosine', 'T_max': 2000} ,  # None = constant LR, or dict with scheduler config
 
         # Early stopping
         'early_stopping_metric': 'F',  # 'F' (maximize) or 'loss' (minimize)
@@ -156,8 +156,8 @@ CONTROLLER_CONFIG = {
     'scenarios': {
         'n_train': 1,         # Training scenarios (diverse operating conditions)
         'n_test': 1,          # Test scenarios (final evaluation, never seen during training)
-        'seed_target': 84,     # Seed for target trajectory generation (train)
-        'seed_baseline': 81,   # Seed for baseline process noise (same inputs, different noise)
+        'seed_target': 64,     # Seed for target trajectory generation (train)
+        'seed_baseline': 134,   # Seed for baseline process noise (same inputs, different noise)
         'test_seed_offset': 1000,  # Offset added to seeds for test scenarios (ensures different from train)
     },
 
