@@ -25,7 +25,15 @@ TRAINING:
                          Typical values: 100.0 (default), 1000.0 for very small deltas
 - patience: Early stopping patience (epochs without improvement)
 - gradient_clip_norm: Max gradient norm (None=no clipping, 1.0=typical value)
-- lr_scheduler: Learning rate decay schedule (None or dict with 'type', 'step_size', 'gamma')
+- lr_scheduler: Learning rate decay schedule (None or dict). Supported types:
+                * 'step': {'type': 'step', 'step_size': 50, 'gamma': 0.5}
+                          LR = LR * gamma every step_size epochs
+                * 'exponential': {'type': 'exponential', 'gamma': 0.99}
+                          LR = LR * gamma every epoch
+                * 'cosine': {'type': 'cosine', 'T_max': 1500, 'eta_min': 0}
+                          Cosine annealing from initial LR to eta_min over T_max epochs
+                * 'reduce_on_plateau': {'type': 'reduce_on_plateau', 'factor': 0.5, 'patience': 10}
+                          Reduce LR by factor when loss stops improving for patience epochs
 - early_stopping_metric: 'F' (reliability, maximize) or 'loss' (minimize)
 - eval_all_scenarios_every: Evaluate on all scenarios every N epochs (None=only at end)
 
@@ -106,7 +114,7 @@ CONTROLLER_CONFIG = {
         'learning_rate': 0.0001,
         'weight_decay': 0.001,
         'lambda_bc': 0.001,  # Behavior cloning weight
-        'reliability_loss_scale': 1.0,  # Scale factor for reliability loss (F - F*)^2
+        'reliability_loss_scale': 100.0,  # Scale factor for reliability loss (F - F*)^2
         'patience': 1200,
         'device': 'auto',
         'checkpoint_dir': 'controller_optimization/checkpoints/controller',
@@ -120,9 +128,12 @@ CONTROLLER_CONFIG = {
         # Gradient clipping (helps with training stability)
         'gradient_clip_norm': 3.0,  # None = no clipping, or float (e.g., 1.0)
 
-        # Learning rate scheduler
-        'lr_scheduler': None,  # None, or {'type': 'step', 'step_size': 30, 'gamma': 0.1}
-                               # Options: 'step', 'exponential', 'cosine', 'reduce_on_plateau'
+        # Learning rate scheduler (see docstring for full options)
+        # Examples:
+        #   {'type': 'step', 'step_size': 50, 'gamma': 0.5}           - Reduce LR by 0.5 every 50 epochs
+        #   {'type': 'cosine', 'T_max': 1500}                         - Cosine annealing over 1500 epochs
+        #   {'type': 'reduce_on_plateau', 'factor': 0.5, 'patience': 50}  - Reduce on plateau
+        'lr_scheduler': {'type': 'cosine', 'T_max': 2000} ,  # None = constant LR, or dict with scheduler config
 
         # Early stopping
         'early_stopping_metric': 'F',  # 'F' (maximize) or 'loss' (minimize)
@@ -137,7 +148,9 @@ CONTROLLER_CONFIG = {
             'warmup_fraction': 0.1,  # First 10% of epochs = warm-up (BC only)
             'lambda_bc_start': 1.0,  # High BC weight during warm-up
             'lambda_bc_end': 0.05,  # Low BC weight at end of training
+            'decay_speed': 3.0,  # Speed of λ_BC decay: 1.0=normal, 2.0=2x faster, 3.0=3x faster
             'reliability_weight_curve': 'exponential',  # 'exponential', 'linear', 'sigmoid'
+            'reliability_speed': 1.0,  # Speed of reliability weight increase: 1.0=normal, 2.0=2x faster
         },
     },
 
@@ -145,8 +158,8 @@ CONTROLLER_CONFIG = {
     'scenarios': {
         'n_train': 1,         # Training scenarios (diverse operating conditions)
         'n_test': 1,          # Test scenarios (final evaluation, never seen during training)
-        'seed_target': 84,     # Seed for target trajectory generation (train)
-        'seed_baseline': 81,   # Seed for baseline process noise (same inputs, different noise)
+        'seed_target': 64,     # Seed for target trajectory generation (train)
+        'seed_baseline': 134,   # Seed for baseline process noise (same inputs, different noise)
         'test_seed_offset': 1000,  # Offset added to seeds for test scenarios (ensures different from train)
     },
 
