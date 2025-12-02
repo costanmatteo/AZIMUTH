@@ -343,12 +343,9 @@ class SweepReportGenerator:
             spaceBefore=12
         ))
 
-        self.styles.add(ParagraphStyle(
-            name='BodyText',
-            parent=self.styles['Normal'],
-            fontSize=9,
-            leading=11
-        ))
+        # Modify existing BodyText style instead of adding new one
+        self.styles['BodyText'].fontSize = 9
+        self.styles['BodyText'].leading = 11
 
     def add_title(self, timestamp: datetime):
         """Add report title."""
