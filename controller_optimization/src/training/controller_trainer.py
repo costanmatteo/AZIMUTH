@@ -249,19 +249,23 @@ class ControllerTrainer:
             lambda_bc = max(lambda_bc, lambda_bc_end)
 
             # Reliability weight: S-curve based on selected curve type
+            # reliability_speed controls how fast reliability weight increases:
+            #   1.0 = normal, 2.0 = twice as fast (reaches 1.0 at half training)
             curve_type = self.curriculum_config['reliability_weight_curve']
+            reliability_speed = self.curriculum_config.get('reliability_speed', 1.0)
+            accelerated_progress = min(1.0, reliability_speed * progress)
 
             if curve_type == 'exponential':
                 # S-curve: 1 - exp(-5 * progress)
                 # Fast growth at start, slows down later
-                reliability_weight = 1.0 - np.exp(-5.0 * progress)
+                reliability_weight = 1.0 - np.exp(-5.0 * accelerated_progress)
             elif curve_type == 'linear':
                 # Linear growth from 0 to 1
-                reliability_weight = progress
+                reliability_weight = accelerated_progress
             elif curve_type == 'sigmoid':
                 # Sigmoid curve: smooth S-shape
                 # Maps progress [0,1] to sigmoid range
-                x = 10 * (progress - 0.5)  # Center at 0.5, range ±5
+                x = 10 * (accelerated_progress - 0.5)  # Center at 0.5, range ±5
                 reliability_weight = 1.0 / (1.0 + np.exp(-x))
             else:
                 raise ValueError(f"Unknown reliability_weight_curve: {curve_type}")

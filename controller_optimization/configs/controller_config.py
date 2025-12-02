@@ -150,6 +150,7 @@ CONTROLLER_CONFIG = {
             'lambda_bc_end': 0.05,  # Low BC weight at end of training
             'decay_speed': 1.0,  # Speed of λ_BC decay: 1.0=normal, 2.0=2x faster, 3.0=3x faster
             'reliability_weight_curve': 'exponential',  # 'exponential', 'linear', 'sigmoid'
+            'reliability_speed': 1.0,  # Speed of reliability weight increase: 1.0=normal, 2.0=2x faster
         },
     },
 
