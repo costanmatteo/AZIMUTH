@@ -436,44 +436,28 @@ class ControllerReportGenerator:
         self.story.append(Paragraph(reliability_text, self.styles['BodyText']))
         self.story.append(Spacer(1, 0.2*cm))
 
-    def add_theoretical_analysis_section(self, checkpoint_dir, theoretical_data=None):
-        """Add theoretical loss analysis section to PDF report.
+    def add_theoretical_tables_section(self, theoretical_data=None):
+        """Add theoretical loss analysis tables to PDF report (for first page).
 
         Args:
-            checkpoint_dir: Path to checkpoint directory (contains plots)
             theoretical_data: Dictionary from TheoreticalLossTracker.to_dict() (optional)
         """
-        checkpoint_dir = Path(checkpoint_dir)
+        if not theoretical_data:
+            return
 
-        # Check if theoretical analysis plots exist
-        theoretical_plots = [
-            'loss_vs_L_min.png',
-            'training_efficiency.png',
-            'loss_decomposition.png',
-            'loss_scatter.png',
-            'theoretical_analysis_summary.png'
-        ]
-
-        available_plots = [p for p in theoretical_plots if (checkpoint_dir / p).exists()]
-
-        if len(available_plots) == 0 and theoretical_data is None:
-            return  # No theoretical analysis to add
-
-        self.story.append(PageBreak())
         self.add_section_title("Theoretical Loss Analysis")
 
         # Add description
         description = Paragraph(
             "Analysis comparing observed loss with theoretical minimum (L_min). "
-            "The theoretical minimum represents the irreducible loss due to stochastic sampling. "
             "L_min = Var[F] + Bias², where F is the reliability computed with sampling uncertainty.",
             self.styles['Normal']
         )
         self.story.append(description)
-        self.story.append(Spacer(1, 0.3*cm))
+        self.story.append(Spacer(1, 0.2*cm))
 
         # Add summary table if theoretical data is provided
-        if theoretical_data and 'summary' in theoretical_data:
+        if 'summary' in theoretical_data:
             summary = theoretical_data['summary']
 
             # Create summary metrics table
@@ -501,7 +485,7 @@ class ControllerReportGenerator:
                 ('LINEBELOW', (0, -1), (-1, -1), 1.5, colors.black),
             ]))
             self.story.append(table)
-            self.story.append(Spacer(1, 0.3*cm))
+            self.story.append(Spacer(1, 0.2*cm))
 
             # Add decomposition table
             if 'theoretical_Var_F' in theoretical_data and len(theoretical_data['theoretical_Var_F']) > 0:
@@ -535,7 +519,29 @@ class ControllerReportGenerator:
                 ]))
                 self.story.append(Paragraph("<b>Loss Decomposition</b>", self.styles['SectionTitle']))
                 self.story.append(table2)
-                self.story.append(Spacer(1, 0.3*cm))
+                self.story.append(Spacer(1, 0.2*cm))
+
+    def add_theoretical_analysis_plots(self, checkpoint_dir):
+        """Add theoretical loss analysis plots to PDF report.
+
+        Args:
+            checkpoint_dir: Path to checkpoint directory (contains plots)
+        """
+        checkpoint_dir = Path(checkpoint_dir)
+
+        # Check if theoretical analysis plots exist
+        theoretical_plots = [
+            'loss_vs_L_min.png',
+            'training_efficiency.png',
+            'loss_decomposition.png',
+            'loss_scatter.png',
+            'theoretical_analysis_summary.png'
+        ]
+
+        available_plots = [p for p in theoretical_plots if (checkpoint_dir / p).exists()]
+
+        if len(available_plots) == 0:
+            return  # No theoretical analysis plots to add
 
         # Add theoretical analysis summary plot (2x2 grid)
         summary_plot = checkpoint_dir / 'theoretical_analysis_summary.png'
@@ -878,17 +884,18 @@ class ControllerReportGenerator:
         if advanced_metrics:
             self.add_advanced_metrics_section(advanced_metrics)
 
+        # Theoretical loss analysis tables (on first page)
+        if theoretical_data:
+            self.add_theoretical_tables_section(theoretical_data)
+
         # Start new page for visualizations
         self.story.append(PageBreak())
 
         # Visualizations
         self.add_plots_stacked(Path(config['training']['checkpoint_dir']))
 
-        # Theoretical analysis section (if available)
-        self.add_theoretical_analysis_section(
-            Path(config['training']['checkpoint_dir']),
-            theoretical_data=theoretical_data
-        )
+        # Theoretical analysis plots (if available)
+        self.add_theoretical_analysis_plots(Path(config['training']['checkpoint_dir']))
 
         # Embedding visualizations (if scenario encoder is enabled)
         self.add_embedding_plots(Path(config['training']['checkpoint_dir']))
