@@ -239,9 +239,14 @@ class ControllerTrainer:
             progress = (epoch - curriculum_start_epoch) / curriculum_epochs
 
             # Lambda BC: exponential decay from start to end
+            # decay_speed controls how fast λ_BC decreases:
+            #   1.0 = normal, 2.0 = twice as fast, 3.0 = three times as fast
             lambda_bc_start = self.curriculum_config['lambda_bc_start']
             lambda_bc_end = self.curriculum_config['lambda_bc_end']
-            lambda_bc = lambda_bc_start * np.exp(np.log(lambda_bc_end / lambda_bc_start) * progress)
+            decay_speed = self.curriculum_config.get('decay_speed', 1.0)
+            lambda_bc = lambda_bc_start * np.exp(decay_speed * np.log(lambda_bc_end / lambda_bc_start) * progress)
+            # Clamp to end value (in case decay_speed > 1 causes undershoot)
+            lambda_bc = max(lambda_bc, lambda_bc_end)
 
             # Reliability weight: S-curve based on selected curve type
             curve_type = self.curriculum_config['reliability_weight_curve']

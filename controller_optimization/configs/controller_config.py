@@ -148,6 +148,7 @@ CONTROLLER_CONFIG = {
             'warmup_fraction': 0.1,  # First 10% of epochs = warm-up (BC only)
             'lambda_bc_start': 1.0,  # High BC weight during warm-up
             'lambda_bc_end': 0.05,  # Low BC weight at end of training
+            'decay_speed': 1.0,  # Speed of λ_BC decay: 1.0=normal, 2.0=2x faster, 3.0=3x faster
             'reliability_weight_curve': 'exponential',  # 'exponential', 'linear', 'sigmoid'
         },
     },
