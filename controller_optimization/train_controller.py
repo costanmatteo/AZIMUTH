@@ -487,8 +487,8 @@ def main(config=None):
     for p in active_processes:
         w = theoretical_tracker.process_weights.get(p, 0)
         if w > 0:
-            cfg = theoretical_tracker.process_configs.get(p, {})
-            print(f"    {p}: tau={cfg.get('tau', 'N/A')}, s={cfg.get('s', 'N/A')}, weight={w}")
+            process_cfg = theoretical_tracker.process_configs.get(p, {})
+            print(f"    {p}: tau={process_cfg.get('tau', 'N/A')}, s={process_cfg.get('s', 'N/A')}, weight={w}")
 
     # 6. Training
     print("\n[6/9] Starting training...")
