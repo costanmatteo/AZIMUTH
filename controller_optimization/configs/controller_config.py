@@ -115,7 +115,7 @@ CONTROLLER_CONFIG = {
         'weight_decay': 0.001,
         'lambda_bc': 0.001,  # Behavior cloning weight
         'reliability_loss_scale': 100.0,  # Scale factor for reliability loss (F - F*)^2
-        'patience': 1200,
+        'patience': 400,
         'device': 'auto',
         'checkpoint_dir': 'controller_optimization/checkpoints/controller',
 
@@ -151,7 +151,7 @@ CONTROLLER_CONFIG = {
             'lambda_bc_end': 0.05,  # Low BC weight at end of training
             'decay_speed': 3.0,  # Speed of λ_BC decay: 1.0=normal, 2.0=2x faster, 3.0=3x faster
             'reliability_weight_curve': 'exponential',  # 'exponential', 'linear', 'sigmoid'
-            'reliability_speed': 1.0,  # Speed of reliability weight increase: 1.0=normal, 2.0=2x faster
+            'reliability_speed': 2.0,  # Speed of reliability weight increase: 1.0=normal, 2.0=2x faster
         },
     },
 
