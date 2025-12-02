@@ -98,80 +98,78 @@ def aggregate_results(sweep_dir: Path) -> pd.DataFrame:
 
 def plot_target_baseline_actual_scatter(df: pd.DataFrame, save_path: Path):
     """
-    Scatter plot: F_star (target) vs F_baseline and F_actual for all runs.
-
-    Style matches single training report:
-    - Y-axis: F_star (target reliability)
-    - X-axis: F (baseline in red, actual in blue)
-    - Diagonal line shows perfect match (F = F*)
+    Two side-by-side scatter plots:
+    - Left: F* vs F_baseline (red)
+    - Right: F* vs F_actual (blue)
+    Both have diagonal line for perfect match.
     """
-    fig, ax = plt.subplots(figsize=(12, 8))
+    fig, axes = plt.subplots(1, 2, figsize=(16, 7))
 
     F_star = df['F_star_train'].values
     F_baseline = df['F_baseline_train'].values
     F_actual = df['F_actual_train'].values
 
-    # Baseline points (red squares)
-    ax.scatter(F_baseline, F_star,
-               c='red',
-               s=120,
-               alpha=0.6,
-               edgecolors='darkred',
-               linewidths=2,
-               label='Baseline (no controller)',
-               marker='s')
-
-    # Controller points (blue circles)
-    ax.scatter(F_actual, F_star,
-               c='blue',
-               s=120,
-               alpha=0.6,
-               edgecolors='darkblue',
-               linewidths=2,
-               label='Controller',
-               marker='o')
-
-    # Diagonal line (perfect match: F = F*)
+    # Common limits for both plots
     all_values = np.concatenate([F_star, F_baseline, F_actual])
     min_val = all_values.min()
     max_val = all_values.max()
     margin = (max_val - min_val) * 0.1
 
-    ax.plot([min_val - margin, max_val + margin],
-            [min_val - margin, max_val + margin],
-            'k--', linewidth=2, label='Perfect Match (F = F*)', alpha=0.5)
-
-    # Axis labels and title
-    ax.set_xlabel('F (Reliability)', fontsize=14, fontweight='bold')
-    ax.set_ylabel('F* (Target Reliability)', fontsize=14, fontweight='bold')
-    ax.set_title('Target vs Baseline & Controller Reliability (All Sweep Runs)', fontsize=16, fontweight='bold')
-
-    # Grid and legend
-    ax.grid(True, alpha=0.3)
-    ax.legend(loc='lower right', fontsize=11, framealpha=0.9)
-
-    # Set limits with margin
-    ax.set_xlim(min_val - margin, max_val + margin)
-    ax.set_ylim(min_val - margin, max_val + margin)
-
-    # Statistics: gap = F* - F (smaller gap = better)
-    n_runs = len(df)
-    gap_baseline = F_star - F_baseline  # Gap for baseline
-    gap_actual = F_star - F_actual      # Gap for controller
-
-    # Count how many times controller beats baseline
+    # Calculate gaps
+    gap_baseline = F_star - F_baseline
+    gap_actual = F_star - F_actual
     controller_wins = np.sum(gap_actual < gap_baseline)
+    n_runs = len(df)
 
-    stats_text = (f'Runs: {n_runs}\n'
-                  f'Controller better: {controller_wins}/{n_runs} ({100*controller_wins/n_runs:.1f}%)\n'
-                  f'Gap range (Baseline): [{gap_baseline.min():.4f}, {gap_baseline.max():.4f}]\n'
-                  f'Gap range (Controller): [{gap_actual.min():.4f}, {gap_actual.max():.4f}]')
+    # LEFT PLOT: Baseline
+    ax1 = axes[0]
+    ax1.scatter(F_baseline, F_star,
+                c='red', s=100, alpha=0.6,
+                edgecolors='darkred', linewidths=1.5,
+                marker='s')
+    ax1.plot([min_val - margin, max_val + margin],
+             [min_val - margin, max_val + margin],
+             'k--', linewidth=2, alpha=0.5, label='Perfect (F = F*)')
+    ax1.set_xlabel('F\' (Baseline Reliability)', fontsize=12, fontweight='bold')
+    ax1.set_ylabel('F* (Target Reliability)', fontsize=12, fontweight='bold')
+    ax1.set_title('Baseline (No Controller)', fontsize=14, fontweight='bold', color='darkred')
+    ax1.set_xlim(min_val - margin, max_val + margin)
+    ax1.set_ylim(min_val - margin, max_val + margin)
+    ax1.grid(True, alpha=0.3)
+    ax1.legend(loc='lower right')
+    ax1.set_aspect('equal')
 
-    ax.text(0.02, 0.98, stats_text,
-            transform=ax.transAxes,
-            fontsize=10,
-            verticalalignment='top',
-            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.7))
+    # Stats for baseline
+    stats1 = f'Gap range: [{gap_baseline.min():.4f}, {gap_baseline.max():.4f}]\nMedian gap: {np.median(gap_baseline):.4f}'
+    ax1.text(0.02, 0.98, stats1, transform=ax1.transAxes, fontsize=10,
+             verticalalignment='top', bbox=dict(boxstyle='round', facecolor='mistyrose', alpha=0.8))
+
+    # RIGHT PLOT: Controller
+    ax2 = axes[1]
+    ax2.scatter(F_actual, F_star,
+                c='blue', s=100, alpha=0.6,
+                edgecolors='darkblue', linewidths=1.5,
+                marker='o')
+    ax2.plot([min_val - margin, max_val + margin],
+             [min_val - margin, max_val + margin],
+             'k--', linewidth=2, alpha=0.5, label='Perfect (F = F*)')
+    ax2.set_xlabel('F (Controller Reliability)', fontsize=12, fontweight='bold')
+    ax2.set_ylabel('F* (Target Reliability)', fontsize=12, fontweight='bold')
+    ax2.set_title('Controller', fontsize=14, fontweight='bold', color='darkblue')
+    ax2.set_xlim(min_val - margin, max_val + margin)
+    ax2.set_ylim(min_val - margin, max_val + margin)
+    ax2.grid(True, alpha=0.3)
+    ax2.legend(loc='lower right')
+    ax2.set_aspect('equal')
+
+    # Stats for controller
+    stats2 = f'Gap range: [{gap_actual.min():.4f}, {gap_actual.max():.4f}]\nMedian gap: {np.median(gap_actual):.4f}'
+    ax2.text(0.02, 0.98, stats2, transform=ax2.transAxes, fontsize=10,
+             verticalalignment='top', bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
+
+    # Overall title
+    fig.suptitle(f'Target vs Reliability Comparison (n={n_runs}, Controller wins: {controller_wins}/{n_runs} = {100*controller_wins/n_runs:.1f}%)',
+                 fontsize=14, fontweight='bold', y=1.02)
 
     plt.tight_layout()
     plt.savefig(save_path, dpi=150, bbox_inches='tight')
