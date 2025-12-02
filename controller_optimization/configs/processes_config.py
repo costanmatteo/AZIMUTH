@@ -38,7 +38,7 @@ PROCESSES = [
             }
         },
 
-        'checkpoint_dir': 'checkpoints/laser',
+        'checkpoint_dir': 'controller_optimization/checkpoints/laser',
     },
 
     {
@@ -69,7 +69,7 @@ PROCESSES = [
             }
         },
 
-        'checkpoint_dir': 'checkpoints/plasma',
+        'checkpoint_dir': 'controller_optimization/checkpoints/plasma',
     },
 
     {
@@ -100,7 +100,7 @@ PROCESSES = [
             }
         },
 
-        'checkpoint_dir': 'checkpoints/galvanic',
+        'checkpoint_dir': 'controller_optimization/checkpoints/galvanic',
     },
 
     {
@@ -131,7 +131,7 @@ PROCESSES = [
             }
         },
 
-        'checkpoint_dir': 'checkpoints/microetch',
+        'checkpoint_dir': 'controller_optimization/checkpoints/microetch',
 
     },
 ]

@@ -3,7 +3,25 @@ Step 2: Training policy generators (controller).
 
 Prerequisito: uncertainty predictors già addestrati (train_processes.py)
 
-Usa: python train_controller.py
+Usa: python train_controller.py [options]
+
+Command-line options (override config values):
+    --learning_rate FLOAT      Learning rate (default: from config)
+    --epochs INT               Number of training epochs
+    --batch_size INT           Batch size per scenario
+    --lambda_bc FLOAT          Behavior cloning weight
+    --weight_decay FLOAT       Weight decay for optimizer
+    --reliability_loss_scale FLOAT  Scale factor for reliability loss
+    --dropout FLOAT            Dropout rate
+    --hidden_sizes INT [INT ...] Hidden layer sizes (e.g., 128 64 32)
+    --n_train INT              Number of training scenarios
+    --n_test INT               Number of test scenarios
+    --patience INT             Early stopping patience
+    --output_dir PATH          Output directory for results
+    --run_name STR             Name for this run (used in output path)
+    --seed INT                 Random seed (sets both seed_target and seed_baseline)
+    --seed_target INT          Seed for target trajectory generation
+    --seed_baseline INT        Seed for baseline trajectory generation
 
 Output:
 - Policy generators salvati
@@ -18,6 +36,8 @@ import sys
 from pathlib import Path
 import json
 from datetime import datetime
+import argparse
+import copy
 import torch
 import numpy as np
 
@@ -66,7 +86,152 @@ from controller_optimization.src.analysis import (
 )
 
 
-def main():
+def parse_args():
+    """Parse command-line arguments for parameter sweep."""
+    parser = argparse.ArgumentParser(
+        description='Train controller with optional parameter overrides for sweeps.',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+
+    # Training parameters
+    parser.add_argument('--learning_rate', type=float, default=None,
+                        help='Learning rate for optimizer')
+    parser.add_argument('--epochs', type=int, default=None,
+                        help='Number of training epochs')
+    parser.add_argument('--batch_size', type=int, default=None,
+                        help='Batch size per scenario')
+    parser.add_argument('--lambda_bc', type=float, default=None,
+                        help='Behavior cloning weight')
+    parser.add_argument('--weight_decay', type=float, default=None,
+                        help='Weight decay for optimizer')
+    parser.add_argument('--reliability_loss_scale', type=float, default=None,
+                        help='Scale factor for reliability loss')
+    parser.add_argument('--patience', type=int, default=None,
+                        help='Early stopping patience (epochs)')
+    parser.add_argument('--gradient_clip_norm', type=float, default=None,
+                        help='Max gradient norm for clipping')
+
+    # Policy generator architecture
+    parser.add_argument('--dropout', type=float, default=None,
+                        help='Dropout rate for policy generator')
+    parser.add_argument('--hidden_sizes', type=int, nargs='+', default=None,
+                        help='Hidden layer sizes (e.g., 128 64 32)')
+    parser.add_argument('--use_scenario_encoder', action='store_true', default=None,
+                        help='Enable scenario context encoding')
+    parser.add_argument('--scenario_embedding_dim', type=int, default=None,
+                        help='Dimension of scenario embedding')
+
+    # Scenarios
+    parser.add_argument('--n_train', type=int, default=None,
+                        help='Number of training scenarios')
+    parser.add_argument('--n_test', type=int, default=None,
+                        help='Number of test scenarios')
+    parser.add_argument('--seed', type=int, default=None,
+                        help='Random seed (affects all seeds)')
+    parser.add_argument('--seed_target', type=int, default=None,
+                        help='Seed for target trajectory generation')
+    parser.add_argument('--seed_baseline', type=int, default=None,
+                        help='Seed for baseline trajectory generation')
+
+    # Output paths
+    parser.add_argument('--output_dir', type=str, default=None,
+                        help='Base output directory for results')
+    parser.add_argument('--run_name', type=str, default=None,
+                        help='Name for this run (appended to output_dir)')
+
+    # Curriculum learning
+    parser.add_argument('--curriculum_enabled', action='store_true', default=None,
+                        help='Enable curriculum learning')
+    parser.add_argument('--no_curriculum', action='store_true', default=False,
+                        help='Disable curriculum learning')
+
+    # Misc
+    parser.add_argument('--no_pdf', action='store_true', default=False,
+                        help='Disable PDF report generation')
+    parser.add_argument('--quiet', action='store_true', default=False,
+                        help='Reduce verbosity')
+
+    return parser.parse_args()
+
+
+def apply_args_to_config(args, config):
+    """Apply command-line arguments to config, overriding defaults."""
+    # Create a deep copy to avoid modifying the original
+    cfg = copy.deepcopy(config)
+
+    # Training parameters
+    if args.learning_rate is not None:
+        cfg['training']['learning_rate'] = args.learning_rate
+    if args.epochs is not None:
+        cfg['training']['epochs'] = args.epochs
+    if args.batch_size is not None:
+        cfg['training']['batch_size'] = args.batch_size
+    if args.lambda_bc is not None:
+        cfg['training']['lambda_bc'] = args.lambda_bc
+    if args.weight_decay is not None:
+        cfg['training']['weight_decay'] = args.weight_decay
+    if args.reliability_loss_scale is not None:
+        cfg['training']['reliability_loss_scale'] = args.reliability_loss_scale
+    if args.patience is not None:
+        cfg['training']['patience'] = args.patience
+    if args.gradient_clip_norm is not None:
+        cfg['training']['gradient_clip_norm'] = args.gradient_clip_norm
+
+    # Policy generator architecture
+    if args.dropout is not None:
+        cfg['policy_generator']['dropout'] = args.dropout
+    if args.hidden_sizes is not None:
+        cfg['policy_generator']['hidden_sizes'] = args.hidden_sizes
+        cfg['policy_generator']['architecture'] = 'custom'
+    if args.use_scenario_encoder is not None:
+        cfg['policy_generator']['use_scenario_encoder'] = args.use_scenario_encoder
+    if args.scenario_embedding_dim is not None:
+        cfg['policy_generator']['scenario_embedding_dim'] = args.scenario_embedding_dim
+
+    # Scenarios
+    if args.n_train is not None:
+        cfg['scenarios']['n_train'] = args.n_train
+    if args.n_test is not None:
+        cfg['scenarios']['n_test'] = args.n_test
+    if args.seed is not None:
+        cfg['misc']['random_seed'] = args.seed
+        cfg['scenarios']['seed_target'] = args.seed
+        cfg['scenarios']['seed_baseline'] = args.seed + 100
+    # Individual seed overrides (take precedence over --seed)
+    if args.seed_target is not None:
+        cfg['scenarios']['seed_target'] = args.seed_target
+    if args.seed_baseline is not None:
+        cfg['scenarios']['seed_baseline'] = args.seed_baseline
+
+    # Output directory
+    if args.output_dir is not None:
+        base_dir = args.output_dir
+    else:
+        base_dir = cfg['training']['checkpoint_dir']
+
+    if args.run_name is not None:
+        cfg['training']['checkpoint_dir'] = str(Path(base_dir) / args.run_name)
+    else:
+        cfg['training']['checkpoint_dir'] = base_dir
+
+    # Curriculum learning
+    if args.no_curriculum:
+        cfg['training']['curriculum_learning']['enabled'] = False
+    elif args.curriculum_enabled is not None:
+        cfg['training']['curriculum_learning']['enabled'] = args.curriculum_enabled
+
+    # Report generation
+    if args.no_pdf:
+        cfg['report']['generate_pdf'] = False
+
+    # Verbosity
+    if args.quiet:
+        cfg['misc']['verbose'] = False
+
+    return cfg
+
+
+def main(config=None):
     """
     Pipeline completo:
 
@@ -84,14 +249,32 @@ def main():
        - Generate plots
        - Generate PDF report
     9. Save everything
+
+    Args:
+        config: Configuration dict. If None, uses CONTROLLER_CONFIG from file.
     """
+
+    # Use provided config or default
+    if config is None:
+        cfg = CONTROLLER_CONFIG
+    else:
+        cfg = config
 
     print("="*70)
     print("CONTROLLER OPTIMIZATION - POLICY GENERATOR TRAINING")
     print("="*70)
 
+    # Print active configuration overrides
+    print("\nActive configuration:")
+    print(f"  Learning rate:        {cfg['training']['learning_rate']}")
+    print(f"  Epochs:               {cfg['training']['epochs']}")
+    print(f"  Batch size:           {cfg['training']['batch_size']}")
+    print(f"  Lambda BC:            {cfg['training']['lambda_bc']}")
+    print(f"  Reliability scale:    {cfg['training']['reliability_loss_scale']}")
+    print(f"  Output dir:           {cfg['training']['checkpoint_dir']}")
+
     # Filter processes based on configuration
-    process_names = CONTROLLER_CONFIG.get('process_names', None)
+    process_names = cfg.get('process_names', None)
     selected_processes = get_filtered_processes(process_names)
     print(f"\nSelected processes: {[p['name'] for p in selected_processes]}")
     if process_names:
@@ -100,7 +283,7 @@ def main():
         print(f"  (using all PROCESSES, no filter applied)")
 
     # Device setup
-    device = CONTROLLER_CONFIG['training']['device']
+    device = cfg['training']['device']
     if device == 'auto':
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"\nDevice: {device}")
@@ -113,13 +296,13 @@ def main():
     print("="*70)
     validate_all_processes(selected_processes)
 
-    checkpoint_dir = Path(CONTROLLER_CONFIG['training']['checkpoint_dir'])
+    checkpoint_dir = Path(cfg['training']['checkpoint_dir'])
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. Generate TRAINING scenarios (diverse structural + zero process noise)
     print("\n[1/9] Generating training scenarios...")
-    n_train = CONTROLLER_CONFIG['scenarios']['n_train']
-    n_test = CONTROLLER_CONFIG['scenarios']['n_test']
+    n_train = cfg['scenarios']['n_train']
+    n_test = cfg['scenarios']['n_test']
     print(f"  Training scenarios: {n_train}")
     print(f"  Test scenarios: {n_test} (for future evaluation)")
 
@@ -128,7 +311,7 @@ def main():
     target_trajectory_train = generate_target_trajectory(
         process_configs=selected_processes,
         n_samples=n_train,
-        seed=CONTROLLER_CONFIG['scenarios']['seed_target']
+        seed=cfg['scenarios']['seed_target']
     )
 
     print("  Train target trajectory generated:")
@@ -144,7 +327,7 @@ def main():
         process_configs=selected_processes,
         target_trajectory=target_trajectory_train,
         n_samples=n_train,
-        seed=CONTROLLER_CONFIG['scenarios']['seed_baseline']
+        seed=cfg['scenarios']['seed_baseline']
     )
 
     print("  Train baseline trajectory generated:")
@@ -155,14 +338,14 @@ def main():
     print("\n[2/9] Generating test scenarios (not used in training)...")
 
     # Use seed offset from config to ensure test scenarios are truly unseen
-    test_seed_offset = CONTROLLER_CONFIG['scenarios']['test_seed_offset']
+    test_seed_offset = cfg['scenarios']['test_seed_offset']
 
     print(f"  Test seed offset: {test_seed_offset}")
     print(f"  Generating TEST target trajectory (a*)...")
     target_trajectory_test = generate_target_trajectory(
         process_configs=selected_processes,
         n_samples=n_test,
-        seed=CONTROLLER_CONFIG['scenarios']['seed_target'] + test_seed_offset
+        seed=cfg['scenarios']['seed_target'] + test_seed_offset
     )
 
     print("  Test target trajectory generated:")
@@ -174,7 +357,7 @@ def main():
         process_configs=selected_processes,
         target_trajectory=target_trajectory_test,
         n_samples=n_test,
-        seed=CONTROLLER_CONFIG['scenarios']['seed_baseline'] + test_seed_offset
+        seed=cfg['scenarios']['seed_baseline'] + test_seed_offset
     )
 
     print("  Test baseline trajectory generated:")
@@ -206,7 +389,7 @@ def main():
         process_chain = ProcessChain(
             processes_config=selected_processes,
             target_trajectory=target_trajectory,
-            policy_config=CONTROLLER_CONFIG['policy_generator'],
+            policy_config=cfg['policy_generator'],
             device=device
         )
         print(f"  ✓ Process chain created")
@@ -229,7 +412,7 @@ def main():
 
     # 4. Create Surrogate (computes F* for all scenarios)
     print("\n[4/9] Initializing surrogate model...")
-    use_deterministic_sampling = CONTROLLER_CONFIG.get('surrogate', {}).get('use_deterministic_sampling', True)
+    use_deterministic_sampling = cfg.get('surrogate', {}).get('use_deterministic_sampling', True)
     surrogate = ProTSurrogate(
         target_trajectory=target_trajectory,
         device=device,
@@ -248,7 +431,7 @@ def main():
     print("\n[5/9] Creating controller trainer...")
 
     # Get curriculum learning config (backward compatible)
-    curriculum_config = CONTROLLER_CONFIG['training'].get('curriculum_learning', {
+    curriculum_config = cfg['training'].get('curriculum_learning', {
         'enabled': False,
         'warmup_fraction': 0.1,
         'lambda_bc_start': 10.0,
@@ -257,15 +440,15 @@ def main():
     })
 
     # Get lr_scheduler config (backward compatible)
-    lr_scheduler_config = CONTROLLER_CONFIG['training'].get('lr_scheduler', None)
+    lr_scheduler_config = cfg['training'].get('lr_scheduler', None)
 
     trainer = ControllerTrainer(
         process_chain=process_chain,
         surrogate=surrogate,
-        lambda_bc=CONTROLLER_CONFIG['training']['lambda_bc'],
-        learning_rate=CONTROLLER_CONFIG['training']['learning_rate'],
-        weight_decay=CONTROLLER_CONFIG['training']['weight_decay'],
-        reliability_loss_scale=CONTROLLER_CONFIG['training']['reliability_loss_scale'],
+        lambda_bc=cfg['training']['lambda_bc'],
+        learning_rate=cfg['training']['learning_rate'],
+        weight_decay=cfg['training']['weight_decay'],
+        reliability_loss_scale=cfg['training']['reliability_loss_scale'],
         device=device,
         curriculum_config=curriculum_config,
         lr_scheduler_config=lr_scheduler_config
@@ -277,7 +460,7 @@ def main():
 
     # Initialize theoretical loss tracker
     print("\n[5.5/9] Initializing theoretical loss tracker...")
-    theoretical_tracker = TheoreticalLossTracker(loss_scale=CONTROLLER_CONFIG['training']['reliability_loss_scale'])
+    theoretical_tracker = TheoreticalLossTracker(loss_scale=cfg['training']['reliability_loss_scale'])
 
     # Get process configs from surrogate for theoretical analysis
     for proc_name, proc_config in ProTSurrogate.PROCESS_CONFIGS.items():
@@ -304,17 +487,17 @@ def main():
     for p in active_processes:
         w = theoretical_tracker.process_weights.get(p, 0)
         if w > 0:
-            cfg = theoretical_tracker.process_configs.get(p, {})
-            print(f"    {p}: tau={cfg.get('tau', 'N/A')}, s={cfg.get('s', 'N/A')}, weight={w}")
+            process_cfg = theoretical_tracker.process_configs.get(p, {})
+            print(f"    {p}: tau={process_cfg.get('tau', 'N/A')}, s={process_cfg.get('s', 'N/A')}, weight={w}")
 
     # 6. Training
     print("\n[6/9] Starting training...")
     print("-"*70)
 
     history = trainer.train(
-        epochs=CONTROLLER_CONFIG['training']['epochs'],
-        batch_size=CONTROLLER_CONFIG['training']['batch_size'],
-        patience=CONTROLLER_CONFIG['training']['patience'],
+        epochs=cfg['training']['epochs'],
+        batch_size=cfg['training']['batch_size'],
+        patience=cfg['training']['patience'],
         save_dir=checkpoint_dir,
         verbose=True
     )
@@ -328,10 +511,10 @@ def main():
     trainer.load_checkpoint(checkpoint_dir)
 
     # Determine batch size for evaluation (use same as training)
-    eval_batch_size = CONTROLLER_CONFIG['training']['batch_size']
+    eval_batch_size = cfg['training']['batch_size']
 
     # Get plotting option from config
-    plot_all_samples = CONTROLLER_CONFIG['report'].get('plot_all_batch_samples', True)
+    plot_all_samples = cfg['report'].get('plot_all_batch_samples', True)
 
     # Evaluate controller on all scenarios
     mode_str = f"{n_scenarios} scenarios × {eval_batch_size} samples" if plot_all_samples else f"{n_scenarios} scenarios (aggregated)"
@@ -562,7 +745,7 @@ def main():
         F_baseline_per_scenario_mean = F_baseline_array
 
     # Get success rate threshold from config
-    success_threshold = CONTROLLER_CONFIG['metrics']['success_rate_threshold']
+    success_threshold = cfg['metrics']['success_rate_threshold']
 
     # Worst-case gap (train and test) - using scenario-level aggregates
     worst_case_train = compute_worst_case_gap(F_star_per_scenario_mean, F_actual_per_scenario_mean)
@@ -741,7 +924,7 @@ def main():
     theoretical_data = None
 
     # 8b. Generate PDF report (if enabled)
-    if CONTROLLER_CONFIG['report']['generate_pdf']:
+    if cfg['report']['generate_pdf']:
         print("\n  Generating PDF report...")
 
         # Prepare F values in dict format for multi-scenario
@@ -791,7 +974,7 @@ def main():
         embedding_plots = {}
 
         # Check if scenario encoder is enabled in config
-        use_scenario_encoder = CONTROLLER_CONFIG['policy_generator'].get('use_scenario_encoder', False)
+        use_scenario_encoder = cfg['policy_generator'].get('use_scenario_encoder', False)
 
         if not use_scenario_encoder:
             print("  ⚠ Scenario encoder is disabled in config. Skipping embedding plots.")
@@ -960,7 +1143,7 @@ def main():
                 process_params=process_params_for_L_min,
                 process_weights={p: process_configs_surrogate[p].get('weight', 1.0)
                                 for p in process_params_for_L_min.keys()},
-                loss_scale=CONTROLLER_CONFIG['training']['reliability_loss_scale']
+                loss_scale=cfg['training']['reliability_loss_scale']
             )
 
             print(f"\n  Combined theoretical L_min: {combined_components.L_min:.6f}")
@@ -973,7 +1156,7 @@ def main():
 
             # Use combined parameters for tracker updates
             combined_sigma2 = combined_components.sigma2
-            combined_delta = np.sqrt(combined_components.Bias2 / CONTROLLER_CONFIG['training']['reliability_loss_scale']) if combined_components.Bias2 > 0 else 0.0
+            combined_delta = np.sqrt(combined_components.Bias2 / cfg['training']['reliability_loss_scale']) if combined_components.Bias2 > 0 else 0.0
             combined_s = np.mean([p['s'] for p in process_params_for_L_min.values()]) if process_params_for_L_min else 1.0
 
             for epoch_idx, (rel_loss, F_val) in enumerate(zip(reliability_loss_history, F_values_history)):
@@ -1042,7 +1225,7 @@ def main():
         # Generate PDF report
         try:
             report_path = generate_controller_report(
-                config=CONTROLLER_CONFIG,
+                config=cfg,
                 training_history=history,
                 final_metrics=report_final_metrics,
                 process_metrics=process_metrics,
@@ -1070,7 +1253,7 @@ def main():
 
     final_results = {
         'timestamp': datetime.now().isoformat(),
-        'config': CONTROLLER_CONFIG,
+        'config': cfg,
         'n_train_scenarios': int(n_scenarios),
         'n_test_scenarios': int(n_test),
 
@@ -1167,4 +1350,11 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    # Parse command-line arguments
+    args = parse_args()
+
+    # Apply argument overrides to config
+    config = apply_args_to_config(args, CONTROLLER_CONFIG)
+
+    # Run main with the configured settings
+    main(config)
