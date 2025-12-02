@@ -19,7 +19,9 @@ Command-line options (override config values):
     --patience INT             Early stopping patience
     --output_dir PATH          Output directory for results
     --run_name STR             Name for this run (used in output path)
-    --seed INT                 Random seed
+    --seed INT                 Random seed (sets both seed_target and seed_baseline)
+    --seed_target INT          Seed for target trajectory generation
+    --seed_baseline INT        Seed for baseline trajectory generation
 
 Output:
 - Policy generators salvati
@@ -126,6 +128,10 @@ def parse_args():
                         help='Number of test scenarios')
     parser.add_argument('--seed', type=int, default=None,
                         help='Random seed (affects all seeds)')
+    parser.add_argument('--seed_target', type=int, default=None,
+                        help='Seed for target trajectory generation')
+    parser.add_argument('--seed_baseline', type=int, default=None,
+                        help='Seed for baseline trajectory generation')
 
     # Output paths
     parser.add_argument('--output_dir', type=str, default=None,
@@ -191,6 +197,11 @@ def apply_args_to_config(args, config):
         cfg['misc']['random_seed'] = args.seed
         cfg['scenarios']['seed_target'] = args.seed
         cfg['scenarios']['seed_baseline'] = args.seed + 100
+    # Individual seed overrides (take precedence over --seed)
+    if args.seed_target is not None:
+        cfg['scenarios']['seed_target'] = args.seed_target
+    if args.seed_baseline is not None:
+        cfg['scenarios']['seed_baseline'] = args.seed_baseline
 
     # Output directory
     if args.output_dir is not None:

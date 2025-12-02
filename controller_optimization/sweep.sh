@@ -9,22 +9,26 @@
 #SBATCH --gres=gpumem:16g
 #SBATCH --output=logs/sweep_%A_%a.out
 #SBATCH --error=logs/sweep_%A_%a.err
-#SBATCH --array=0-11
+#SBATCH --array=0-99
 
 # ============================================================================
-# Controller Parameter Sweep - Euler HPC (ETH Zurich)
+# Controller Seed Sweep - Euler HPC (ETH Zurich)
 # ============================================================================
 #
+# This sweep tests 100 combinations of seed_target and seed_baseline
+# to evaluate controller robustness across different random initializations.
+#
 # Usage:
-#   1. Customize sweep_params.txt with desired parameter combinations
-#   2. Update --array=0-N where N = number of lines in sweep_params.txt - 1
-#   3. Submit: sbatch sweep.sh
+#   1. Submit: sbatch sweep.sh
+#   2. After completion, generate report: python generate_sweep_report.py
 #
 # Monitor:
 #   squeue -u $USER                    # Check job status
 #   tail -f logs/sweep_<jobid>_<taskid>.out  # Follow output
 #
-# Results saved to: controller_optimization/checkpoints/sweep/<run_name>/
+# Results:
+#   - Individual runs: controller_optimization/checkpoints/sweep/<run_name>/
+#   - Aggregated report: controller_optimization/checkpoints/sweep/sweep_report.pdf
 # ============================================================================
 
 # Exit on error
