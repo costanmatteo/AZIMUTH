@@ -1,22 +1,22 @@
 #!/bin/bash
 #SBATCH --job-name=ctrl_sweep
 #SBATCH --account=es_mohr
-#SBATCH --time=04:00:00
+#SBATCH --time=00:10:00
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem-per-cpu=8G
-#SBATCH --gpus=1
-#SBATCH --gres=gpumem:16g
+#SBATCH --cpus-per-task=1
+#SBATCH --mem-per-cpu=2G
 #SBATCH --output=logs/sweep_%A_%a.out
 #SBATCH --error=logs/sweep_%A_%a.err
-#SBATCH --array=0-99
+#SBATCH --array=0-249
 
 # ============================================================================
 # Controller Seed Sweep - Euler HPC (ETH Zurich)
 # ============================================================================
 #
-# This sweep tests 100 combinations of seed_target and seed_baseline
+# This sweep tests 250 combinations of seed_target and seed_baseline
 # to evaluate controller robustness across different random initializations.
+#
+# Resources: CPU only, 1 core, 2GB RAM, 10 min per job
 #
 # Usage:
 #   1. Submit: sbatch sweep.sh
