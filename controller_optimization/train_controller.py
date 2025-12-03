@@ -1093,10 +1093,10 @@ def main(config=None):
                 if proc_name not in process_configs_surrogate:
                     continue
 
-                cfg = process_configs_surrogate[proc_name]
-                tau = cfg['target']  # Process optimum
-                s = cfg['scale']     # Quality scale
-                weight = cfg.get('weight', 1.0)
+                proc_cfg = process_configs_surrogate[proc_name]
+                tau = proc_cfg['target']  # Process optimum
+                s = proc_cfg['scale']     # Quality scale
+                weight = proc_cfg.get('weight', 1.0)
 
                 # Get target output from target_trajectory (μ_target)
                 if proc_name in target_trajectory:
