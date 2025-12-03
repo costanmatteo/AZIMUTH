@@ -49,6 +49,10 @@ def load_run_results(run_dir: Path) -> dict:
         config = data.get('config', {})
         scenarios_config = config.get('scenarios', {})
 
+        # Extract per-scenario data
+        train_per_scenario = data.get('train_per_scenario_mean', {})
+        test_per_scenario = data.get('test_per_scenario', {})
+
         return {
             'run_name': run_dir.name,
             'seed_target': scenarios_config.get('seed_target'),
@@ -70,6 +74,13 @@ def load_run_results(run_dir: Path) -> dict:
             'success_rate_test': data.get('advanced_metrics', {}).get('success_rate_test', {}).get('success_rate_pct'),
             'worst_case_gap_train': data.get('advanced_metrics', {}).get('worst_case_gap_train', {}).get('worst_case_gap'),
             'worst_case_gap_test': data.get('advanced_metrics', {}).get('worst_case_gap_test', {}).get('worst_case_gap'),
+            # Per-scenario data (lists)
+            'F_star_per_scenario_train': train_per_scenario.get('F_star', []),
+            'F_baseline_per_scenario_train': train_per_scenario.get('F_baseline', []),
+            'F_actual_per_scenario_train': train_per_scenario.get('F_actual', []),
+            'F_star_per_scenario_test': test_per_scenario.get('F_star', []),
+            'F_baseline_per_scenario_test': test_per_scenario.get('F_baseline', []),
+            'F_actual_per_scenario_test': test_per_scenario.get('F_actual', []),
         }
     except Exception as e:
         print(f"Error loading {results_file}: {e}")
@@ -169,6 +180,122 @@ def plot_target_baseline_actual_scatter(df: pd.DataFrame, save_path: Path):
 
     # Overall title
     fig.suptitle(f'Target vs Reliability Comparison (n={n_runs}, Controller wins: {controller_wins}/{n_runs} = {100*controller_wins/n_runs:.1f}%)',
+                 fontsize=14, fontweight='bold', y=1.02)
+
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close()
+
+    return save_path
+
+
+def plot_per_scenario_scatter(df: pd.DataFrame, save_path: Path):
+    """
+    Scatter plot showing ALL individual scenarios from all runs.
+
+    Each point = one scenario (not aggregated mean).
+    Left: F* vs F_baseline (red)
+    Right: F* vs F_actual (blue)
+    """
+    fig, axes = plt.subplots(1, 2, figsize=(16, 7))
+
+    # Collect all per-scenario data from all runs
+    all_F_star = []
+    all_F_baseline = []
+    all_F_actual = []
+    run_labels = []
+
+    for _, row in df.iterrows():
+        F_star_list = row.get('F_star_per_scenario_train', [])
+        F_baseline_list = row.get('F_baseline_per_scenario_train', [])
+        F_actual_list = row.get('F_actual_per_scenario_train', [])
+
+        # Skip if no per-scenario data
+        if not F_star_list or not F_baseline_list or not F_actual_list:
+            continue
+
+        # Ensure all lists have same length
+        n_scenarios = min(len(F_star_list), len(F_baseline_list), len(F_actual_list))
+
+        all_F_star.extend(F_star_list[:n_scenarios])
+        all_F_baseline.extend(F_baseline_list[:n_scenarios])
+        all_F_actual.extend(F_actual_list[:n_scenarios])
+        run_labels.extend([row['run_name']] * n_scenarios)
+
+    if not all_F_star:
+        # No per-scenario data available
+        for ax in axes:
+            ax.text(0.5, 0.5, 'No per-scenario data available\n(n_train=1 or old results format)',
+                    ha='center', va='center', fontsize=12, transform=ax.transAxes)
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        plt.close()
+        return save_path
+
+    F_star = np.array(all_F_star)
+    F_baseline = np.array(all_F_baseline)
+    F_actual = np.array(all_F_actual)
+
+    # Common limits
+    all_values = np.concatenate([F_star, F_baseline, F_actual])
+    min_val = all_values.min()
+    max_val = all_values.max()
+    margin = (max_val - min_val) * 0.1
+
+    # Calculate gaps
+    gap_baseline = F_star - F_baseline
+    gap_actual = F_star - F_actual
+    controller_wins = np.sum(gap_actual < gap_baseline)
+    n_points = len(F_star)
+
+    # LEFT PLOT: Baseline (all scenarios)
+    ax1 = axes[0]
+    ax1.scatter(F_baseline, F_star,
+                c='red', s=50, alpha=0.4,
+                edgecolors='darkred', linewidths=0.5,
+                marker='s')
+    ax1.plot([min_val - margin, max_val + margin],
+             [min_val - margin, max_val + margin],
+             'k--', linewidth=2, alpha=0.5, label='Perfect (F = F*)')
+    ax1.set_xlabel('F\' (Baseline Reliability)', fontsize=12, fontweight='bold')
+    ax1.set_ylabel('F* (Target Reliability)', fontsize=12, fontweight='bold')
+    ax1.set_title('Baseline - All Scenarios', fontsize=14, fontweight='bold', color='darkred')
+    ax1.set_xlim(min_val - margin, max_val + margin)
+    ax1.set_ylim(min_val - margin, max_val + margin)
+    ax1.grid(True, alpha=0.3)
+    ax1.legend(loc='lower right')
+    ax1.set_aspect('equal')
+
+    # Stats
+    stats1 = f'n={n_points} scenarios\nGap: [{gap_baseline.min():.4f}, {gap_baseline.max():.4f}]\nMedian: {np.median(gap_baseline):.4f}'
+    ax1.text(0.02, 0.98, stats1, transform=ax1.transAxes, fontsize=10,
+             verticalalignment='top', bbox=dict(boxstyle='round', facecolor='mistyrose', alpha=0.8))
+
+    # RIGHT PLOT: Controller (all scenarios)
+    ax2 = axes[1]
+    ax2.scatter(F_actual, F_star,
+                c='blue', s=50, alpha=0.4,
+                edgecolors='darkblue', linewidths=0.5,
+                marker='o')
+    ax2.plot([min_val - margin, max_val + margin],
+             [min_val - margin, max_val + margin],
+             'k--', linewidth=2, alpha=0.5, label='Perfect (F = F*)')
+    ax2.set_xlabel('F (Controller Reliability)', fontsize=12, fontweight='bold')
+    ax2.set_ylabel('F* (Target Reliability)', fontsize=12, fontweight='bold')
+    ax2.set_title('Controller - All Scenarios', fontsize=14, fontweight='bold', color='darkblue')
+    ax2.set_xlim(min_val - margin, max_val + margin)
+    ax2.set_ylim(min_val - margin, max_val + margin)
+    ax2.grid(True, alpha=0.3)
+    ax2.legend(loc='lower right')
+    ax2.set_aspect('equal')
+
+    # Stats
+    stats2 = f'n={n_points} scenarios\nGap: [{gap_actual.min():.4f}, {gap_actual.max():.4f}]\nMedian: {np.median(gap_actual):.4f}'
+    ax2.text(0.02, 0.98, stats2, transform=ax2.transAxes, fontsize=10,
+             verticalalignment='top', bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
+
+    # Overall title
+    n_runs = df['run_name'].nunique()
+    fig.suptitle(f'Per-Scenario Scatter (n={n_points} scenarios from {n_runs} runs, Controller wins: {controller_wins}/{n_points} = {100*controller_wins/n_points:.1f}%)',
                  fontsize=14, fontweight='bold', y=1.02)
 
     plt.tight_layout()
@@ -566,6 +693,9 @@ def generate_sweep_report(sweep_dir: Path, output_path: Path = None):
     print("  - Gap reduction heatmap...")
     heatmap_path = plot_seed_heatmap(df, plots_dir / 'gap_reduction_heatmap.png')
 
+    print("  - Per-scenario scatter plot...")
+    per_scenario_path = plot_per_scenario_scatter(df, plots_dir / 'per_scenario_scatter.png')
+
     # Generate PDF report
     if output_path is None:
         output_path = sweep_dir / 'sweep_report.pdf'
@@ -576,29 +706,34 @@ def generate_sweep_report(sweep_dir: Path, output_path: Path = None):
     report.add_title(datetime.now())
     report.add_summary_table(stats)
 
-    # Add scatter plot
-    report.add_section("Target vs Baseline vs Actual (All Runs)")
+    # Add scatter plot (means)
+    report.add_section("Target vs Baseline vs Actual (Run Means)")
     report.add_image(scatter_path, width=6.5*inch,
-                     caption="Figure 1: Scatter plot showing controller (blue) vs baseline (red). Points on diagonal = perfect match with target F*.")
+                     caption="Figure 1: Scatter plot showing controller (blue) vs baseline (red) - MEAN per run. Points on diagonal = perfect match with target F*.")
+
+    # Add per-scenario scatter plot
+    report.add_section("Per-Scenario Scatter (All Individual Scenarios)")
+    report.add_image(per_scenario_path, width=6.5*inch,
+                     caption="Figure 2: Scatter plot showing ALL individual scenarios from all runs. Each point = one scenario.")
 
     report.story.append(PageBreak())
 
     # Add boxplot
     report.add_section("Gap Distribution")
     report.add_image(boxplot_path, width=5*inch,
-                     caption="Figure 2: Gap distribution (F* - F). Smaller gap = better. Green line = perfect (gap=0).")
+                     caption="Figure 3: Gap distribution (F* - F). Smaller gap = better. Green line = perfect (gap=0).")
 
     # Add gap distribution
     report.add_section("Gap Comparison: Baseline vs Controller")
     report.add_image(dist_path, width=6*inch,
-                     caption="Figure 3: Left: overlapping gap distributions. Right: gap reduction (positive = controller wins).")
+                     caption="Figure 4: Left: overlapping gap distributions. Right: gap reduction (positive = controller wins).")
 
     report.story.append(PageBreak())
 
     # Add heatmap
     report.add_section("Gap Reduction by Seed Combination")
     report.add_image(heatmap_path, width=5.5*inch,
-                     caption="Figure 4: Gap reduction by seed combination. Green = controller better, Red = baseline better.")
+                     caption="Figure 5: Gap reduction by seed combination. Green = controller better, Red = baseline better.")
 
     report.story.append(PageBreak())
 
