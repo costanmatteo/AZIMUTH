@@ -605,7 +605,7 @@ class ControllerReportGenerator:
             self.story.append(Spacer(1, 0.2*cm))
 
     def add_embedding_plots(self, checkpoint_dir):
-        """Add scenario embedding visualization plots"""
+        """Add scenario embedding visualization plots - all on same page in grid layout"""
         checkpoint_dir = Path(checkpoint_dir)
 
         # Check if any embedding plots exist
@@ -624,65 +624,92 @@ class ControllerReportGenerator:
 
         self.add_section_title("Scenario Encoder Analysis")
 
-        # Stack plots vertically for better visibility (not 2x2 grid)
-        # Exclude evolution plot as it's added separately at the end
-        plots_to_stack = [p for p in available_plots if p != 'embedding_evolution.png']
+        # Grid layout: 2x2 for first 4 plots + evolution at bottom
+        # Smaller dimensions to fit all on one page
+        grid_plot_width = 8.5*cm
+        grid_plot_height = 5.5*cm
 
-        # Larger dimensions for stacked layout
-        plot_width = 16*cm  # Much larger than 2x2 grid (was 9cm)
-        plot_height = 11*cm  # Much taller than 2x2 grid (was 7cm)
+        # Separate plots into grid plots and evolution
+        grid_plots = [p for p in available_plots if p != 'embedding_evolution.png']
+        has_evolution = 'embedding_evolution.png' in available_plots
 
-        for plot_name in plots_to_stack:
+        def create_plot_cell(plot_name, width, height):
+            """Create a table cell with image and caption"""
             plot_path = checkpoint_dir / plot_name
-
-            # Create image
             img = Image(str(plot_path))
             img_width, img_height = img.imageWidth, img.imageHeight
             aspect_ratio = img_height / img_width
 
             # Calculate dimensions maintaining aspect ratio
-            new_width = plot_width
+            new_width = width
             new_height = new_width * aspect_ratio
 
-            # Limit height if too tall
-            if new_height > plot_height:
-                new_height = plot_height
+            if new_height > height:
+                new_height = height
                 new_width = new_height / aspect_ratio
 
             img.drawWidth = new_width
             img.drawHeight = new_height
 
-            # Center the image
-            img_table = Table([[img]], colWidths=[18*cm])
-            img_table.setStyle(TableStyle([
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ]))
-            self.story.append(img_table)
-
-            # Create caption
+            # Caption
             caption_text = plot_name.replace('embedding_', '').replace('.png', '').replace('_', ' ').title()
             caption = Paragraph(f"<i>{caption_text}</i>", self.styles['Normal'])
-            caption_table = Table([[caption]], colWidths=[18*cm])
-            caption_table.setStyle(TableStyle([
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ]))
-            self.story.append(caption_table)
-            self.story.append(Spacer(1, 0.15*cm))
 
-        # Add evolution plot separately if it exists (usually wider)
-        if 'embedding_evolution.png' in available_plots:
+            return [img, caption]
+
+        # Create 2x2 grid for first 4 plots
+        if len(grid_plots) > 0:
+            # Build rows of 2 plots each
+            rows = []
+            for i in range(0, len(grid_plots), 2):
+                row_plots = grid_plots[i:i+2]
+                row_cells = []
+                for plot_name in row_plots:
+                    cell_content = create_plot_cell(plot_name, grid_plot_width, grid_plot_height)
+                    # Create inner table for each cell (image + caption stacked)
+                    cell_table = Table([[cell_content[0]], [cell_content[1]]],
+                                       colWidths=[grid_plot_width + 0.5*cm])
+                    cell_table.setStyle(TableStyle([
+                        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                    ]))
+                    row_cells.append(cell_table)
+
+                # If odd number of plots, add empty cell
+                while len(row_cells) < 2:
+                    row_cells.append('')
+
+                rows.append(row_cells)
+
+            # Create grid table
+            grid_table = Table(rows, colWidths=[9*cm, 9*cm])
+            grid_table.setStyle(TableStyle([
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                ('LEFTPADDING', (0, 0), (-1, -1), 0),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+                ('TOPPADDING', (0, 0), (-1, -1), 0.2*cm),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 0.2*cm),
+            ]))
+            self.story.append(grid_table)
+            self.story.append(Spacer(1, 0.3*cm))
+
+        # Add evolution plot at bottom (wider, centered)
+        if has_evolution:
             evol_path = checkpoint_dir / 'embedding_evolution.png'
             img_evol = Image(str(evol_path))
 
-            # Larger width for evolution plot
-            new_width = 17*cm
+            # Width for evolution plot - full width but constrained height
+            evol_width = 16*cm
+            evol_height = 5.5*cm
+
             img_width, img_height = img_evol.imageWidth, img_evol.imageHeight
             aspect_ratio = img_height / img_width
+            new_width = evol_width
             new_height = new_width * aspect_ratio
 
-            if new_height > 12*cm:
-                new_height = 12*cm
+            if new_height > evol_height:
+                new_height = evol_height
                 new_width = new_height / aspect_ratio
 
             img_evol.drawWidth = new_width
