@@ -605,7 +605,7 @@ class ControllerReportGenerator:
             self.story.append(Spacer(1, 0.2*cm))
 
     def add_embedding_plots(self, checkpoint_dir):
-        """Add scenario embedding visualization plots - two column layout on dedicated page"""
+        """Add scenario embedding visualization plots - split across two logical pages for 2-up layout"""
         checkpoint_dir = Path(checkpoint_dir)
 
         # Check if any embedding plots exist
@@ -622,30 +622,25 @@ class ControllerReportGenerator:
         if len(available_plots) == 0:
             return  # No embedding plots to add
 
-        # Start on a new page for embedding analysis
-        self.story.append(PageBreak())
-        self.add_section_title("Scenario Encoder Analysis")
+        # Split plots across two logical pages (will be side-by-side in 2-up PDF):
+        # Page 1 (left in 2-up): t-SNE, PCA, Distances
+        # Page 2 (right in 2-up): Correlations, Evolution
 
-        # Two-column layout:
-        # Left column: t-SNE, PCA, Distances (stacked vertically)
-        # Right column: Correlations, Evolution (stacked vertically)
-
-        left_plots = ['embedding_tsne.png', 'embedding_pca.png', 'embedding_distances.png']
-        right_plots = ['embedding_correlations.png', 'embedding_evolution.png']
+        page1_plots = ['embedding_tsne.png', 'embedding_pca.png', 'embedding_distances.png']
+        page2_plots = ['embedding_correlations.png', 'embedding_evolution.png']
 
         # Filter to only available plots
-        left_available = [p for p in left_plots if p in available_plots]
-        right_available = [p for p in right_plots if p in available_plots]
+        page1_available = [p for p in page1_plots if p in available_plots]
+        page2_available = [p for p in page2_plots if p in available_plots]
 
-        # Column dimensions - A4 usable width ~18cm, split into 2 columns
-        col_width = 8.5*cm
-        # Height per plot in left column (3 plots need to fit in ~24cm usable height)
-        left_plot_height = 7.5*cm
-        # Height per plot in right column (2 plots)
-        right_plot_height = 11.5*cm
+        # Dimensions for full-page layout
+        plot_width = 12*cm
+        # Height per plot: 3 plots on page 1, 2 plots on page 2
+        page1_plot_height = 8*cm
+        page2_plot_height = 12*cm
 
         def create_plot_with_caption(plot_name, width, height):
-            """Create image with caption below"""
+            """Create image with caption below, centered"""
             plot_path = checkpoint_dir / plot_name
             img = Image(str(plot_path))
             img_width, img_height = img.imageWidth, img.imageHeight
@@ -666,59 +661,40 @@ class ControllerReportGenerator:
             caption_text = plot_name.replace('embedding_', '').replace('.png', '').replace('_', ' ').title()
             caption = Paragraph(f"<i>{caption_text}</i>", self.styles['Normal'])
 
-            # Stack image and caption in a mini-table
-            cell_table = Table([[img], [caption]], colWidths=[width])
-            cell_table.setStyle(TableStyle([
+            # Center image in table
+            img_table = Table([[img]], colWidths=[14*cm])
+            img_table.setStyle(TableStyle([
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
                 ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                ('BOTTOMPADDING', (0, 0), (0, 0), 0.1*cm),
             ]))
-            return cell_table
 
-        # Build left column content (3 plots stacked)
-        left_cells = []
-        for plot_name in left_available:
-            cell = create_plot_with_caption(plot_name, col_width, left_plot_height)
-            left_cells.append([cell])
-
-        # Build right column content (2 plots stacked)
-        right_cells = []
-        for plot_name in right_available:
-            cell = create_plot_with_caption(plot_name, col_width, right_plot_height)
-            right_cells.append([cell])
-
-        # Create column tables
-        if left_cells:
-            left_table = Table(left_cells, colWidths=[col_width + 0.5*cm])
-            left_table.setStyle(TableStyle([
+            caption_table = Table([[caption]], colWidths=[14*cm])
+            caption_table.setStyle(TableStyle([
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-                ('TOPPADDING', (0, 0), (-1, -1), 0.15*cm),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 0.15*cm),
             ]))
-        else:
-            left_table = ''
 
-        if right_cells:
-            right_table = Table(right_cells, colWidths=[col_width + 0.5*cm])
-            right_table.setStyle(TableStyle([
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-                ('TOPPADDING', (0, 0), (-1, -1), 0.15*cm),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 0.15*cm),
-            ]))
-        else:
-            right_table = ''
+            return img_table, caption_table
 
-        # Create main two-column table
-        main_table = Table([[left_table, right_table]], colWidths=[9.5*cm, 9.5*cm])
-        main_table.setStyle(TableStyle([
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-            ('LEFTPADDING', (0, 0), (-1, -1), 0),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-        ]))
-        self.story.append(main_table)
+        # === PAGE 1: t-SNE, PCA, Distances ===
+        self.story.append(PageBreak())
+        self.add_section_title("Scenario Encoder Analysis")
+
+        for plot_name in page1_available:
+            img_table, caption_table = create_plot_with_caption(plot_name, plot_width, page1_plot_height)
+            self.story.append(img_table)
+            self.story.append(caption_table)
+            self.story.append(Spacer(1, 0.3*cm))
+
+        # === PAGE 2: Correlations, Evolution ===
+        if page2_available:
+            self.story.append(PageBreak())
+            self.add_section_title("Scenario Encoder Analysis (cont.)")
+
+            for plot_name in page2_available:
+                img_table, caption_table = create_plot_with_caption(plot_name, plot_width, page2_plot_height)
+                self.story.append(img_table)
+                self.story.append(caption_table)
+                self.story.append(Spacer(1, 0.4*cm))
 
     def add_plots_stacked(self, checkpoint_dir):
         """Add controller optimization plots stacked vertically"""
