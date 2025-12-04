@@ -691,7 +691,12 @@ class ControllerReportGenerator:
             self.add_section_title("Scenario Encoder Analysis (cont.)")
 
             for plot_name in page2_available:
-                img_table, caption_table = create_plot_with_caption(plot_name, plot_width, page2_plot_height)
+                # Evolution plot slightly smaller
+                if plot_name == 'embedding_evolution.png':
+                    height = 10*cm
+                else:
+                    height = page2_plot_height
+                img_table, caption_table = create_plot_with_caption(plot_name, plot_width, height)
                 self.story.append(img_table)
                 self.story.append(caption_table)
                 self.story.append(Spacer(1, 0.4*cm))
