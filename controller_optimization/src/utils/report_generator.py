@@ -605,7 +605,7 @@ class ControllerReportGenerator:
             self.story.append(Spacer(1, 0.2*cm))
 
     def add_embedding_plots(self, checkpoint_dir):
-        """Add scenario embedding visualization plots - all on dedicated page in grid layout"""
+        """Add scenario embedding visualization plots - two column layout on dedicated page"""
         checkpoint_dir = Path(checkpoint_dir)
 
         # Check if any embedding plots exist
@@ -626,17 +626,26 @@ class ControllerReportGenerator:
         self.story.append(PageBreak())
         self.add_section_title("Scenario Encoder Analysis")
 
-        # Grid layout: 2x2 for first 4 plots + evolution at bottom
-        # Larger dimensions since we have a dedicated page
-        grid_plot_width = 8.5*cm
-        grid_plot_height = 7*cm
+        # Two-column layout:
+        # Left column: t-SNE, PCA, Distances (stacked vertically)
+        # Right column: Correlations, Evolution (stacked vertically)
 
-        # Separate plots into grid plots and evolution
-        grid_plots = [p for p in available_plots if p != 'embedding_evolution.png']
-        has_evolution = 'embedding_evolution.png' in available_plots
+        left_plots = ['embedding_tsne.png', 'embedding_pca.png', 'embedding_distances.png']
+        right_plots = ['embedding_correlations.png', 'embedding_evolution.png']
 
-        def create_plot_cell(plot_name, width, height):
-            """Create a table cell with image and caption"""
+        # Filter to only available plots
+        left_available = [p for p in left_plots if p in available_plots]
+        right_available = [p for p in right_plots if p in available_plots]
+
+        # Column dimensions - A4 usable width ~18cm, split into 2 columns
+        col_width = 8.5*cm
+        # Height per plot in left column (3 plots need to fit in ~24cm usable height)
+        left_plot_height = 7.5*cm
+        # Height per plot in right column (2 plots)
+        right_plot_height = 11.5*cm
+
+        def create_plot_with_caption(plot_name, width, height):
+            """Create image with caption below"""
             plot_path = checkpoint_dir / plot_name
             img = Image(str(plot_path))
             img_width, img_height = img.imageWidth, img.imageHeight
@@ -657,81 +666,59 @@ class ControllerReportGenerator:
             caption_text = plot_name.replace('embedding_', '').replace('.png', '').replace('_', ' ').title()
             caption = Paragraph(f"<i>{caption_text}</i>", self.styles['Normal'])
 
-            return [img, caption]
-
-        # Create 2x2 grid for first 4 plots
-        if len(grid_plots) > 0:
-            # Build rows of 2 plots each
-            rows = []
-            for i in range(0, len(grid_plots), 2):
-                row_plots = grid_plots[i:i+2]
-                row_cells = []
-                for plot_name in row_plots:
-                    cell_content = create_plot_cell(plot_name, grid_plot_width, grid_plot_height)
-                    # Create inner table for each cell (image + caption stacked)
-                    cell_table = Table([[cell_content[0]], [cell_content[1]]],
-                                       colWidths=[grid_plot_width + 0.5*cm])
-                    cell_table.setStyle(TableStyle([
-                        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                    ]))
-                    row_cells.append(cell_table)
-
-                # If odd number of plots, add empty cell
-                while len(row_cells) < 2:
-                    row_cells.append('')
-
-                rows.append(row_cells)
-
-            # Create grid table
-            grid_table = Table(rows, colWidths=[9*cm, 9*cm])
-            grid_table.setStyle(TableStyle([
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-                ('LEFTPADDING', (0, 0), (-1, -1), 0),
-                ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-                ('TOPPADDING', (0, 0), (-1, -1), 0.3*cm),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 0.3*cm),
-            ]))
-            self.story.append(grid_table)
-            self.story.append(Spacer(1, 0.4*cm))
-
-        # Add evolution plot at bottom (wider, centered)
-        if has_evolution:
-            evol_path = checkpoint_dir / 'embedding_evolution.png'
-            img_evol = Image(str(evol_path))
-
-            # Width for evolution plot - full width but constrained height
-            evol_width = 17*cm
-            evol_height = 7*cm
-
-            img_width, img_height = img_evol.imageWidth, img_evol.imageHeight
-            aspect_ratio = img_height / img_width
-            new_width = evol_width
-            new_height = new_width * aspect_ratio
-
-            if new_height > evol_height:
-                new_height = evol_height
-                new_width = new_height / aspect_ratio
-
-            img_evol.drawWidth = new_width
-            img_evol.drawHeight = new_height
-
-            # Center the image
-            img_table = Table([[img_evol]], colWidths=[18*cm])
-            img_table.setStyle(TableStyle([
+            # Stack image and caption in a mini-table
+            cell_table = Table([[img], [caption]], colWidths=[width])
+            cell_table.setStyle(TableStyle([
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
                 ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ('BOTTOMPADDING', (0, 0), (0, 0), 0.1*cm),
             ]))
-            self.story.append(img_table)
+            return cell_table
 
-            caption = Paragraph("<i>Embedding Evolution During Training</i>", self.styles['Normal'])
-            caption_table = Table([[caption]], colWidths=[18*cm])
-            caption_table.setStyle(TableStyle([
+        # Build left column content (3 plots stacked)
+        left_cells = []
+        for plot_name in left_available:
+            cell = create_plot_with_caption(plot_name, col_width, left_plot_height)
+            left_cells.append([cell])
+
+        # Build right column content (2 plots stacked)
+        right_cells = []
+        for plot_name in right_available:
+            cell = create_plot_with_caption(plot_name, col_width, right_plot_height)
+            right_cells.append([cell])
+
+        # Create column tables
+        if left_cells:
+            left_table = Table(left_cells, colWidths=[col_width + 0.5*cm])
+            left_table.setStyle(TableStyle([
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                ('TOPPADDING', (0, 0), (-1, -1), 0.15*cm),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 0.15*cm),
             ]))
-            self.story.append(caption_table)
-            self.story.append(Spacer(1, 0.15*cm))
+        else:
+            left_table = ''
+
+        if right_cells:
+            right_table = Table(right_cells, colWidths=[col_width + 0.5*cm])
+            right_table.setStyle(TableStyle([
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                ('TOPPADDING', (0, 0), (-1, -1), 0.15*cm),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 0.15*cm),
+            ]))
+        else:
+            right_table = ''
+
+        # Create main two-column table
+        main_table = Table([[left_table, right_table]], colWidths=[9.5*cm, 9.5*cm])
+        main_table.setStyle(TableStyle([
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 0),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+        ]))
+        self.story.append(main_table)
 
     def add_plots_stacked(self, checkpoint_dir):
         """Add controller optimization plots stacked vertically"""
