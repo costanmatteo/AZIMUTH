@@ -633,8 +633,8 @@ class ControllerReportGenerator:
         page1_available = [p for p in page1_plots if p in available_plots]
         page2_available = [p for p in page2_plots if p in available_plots]
 
-        # Dimensions for full-page layout
-        plot_width = 14*cm
+        # Dimensions for full-page layout - use full page width
+        plot_width = 18*cm
         # Height per plot: 3 plots on page 1, 2 plots on page 2
         page1_plot_height = 8.5*cm
         page2_plot_height = 12*cm
@@ -661,14 +661,14 @@ class ControllerReportGenerator:
             caption_text = plot_name.replace('embedding_', '').replace('.png', '').replace('_', ' ').title()
             caption = Paragraph(f"<i>{caption_text}</i>", self.styles['Normal'])
 
-            # Center image in table
-            img_table = Table([[img]], colWidths=[16*cm])
+            # Center image in table - full page width
+            img_table = Table([[img]], colWidths=[18*cm])
             img_table.setStyle(TableStyle([
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
                 ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
             ]))
 
-            caption_table = Table([[caption]], colWidths=[16*cm])
+            caption_table = Table([[caption]], colWidths=[18*cm])
             caption_table.setStyle(TableStyle([
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
             ]))
