@@ -1093,10 +1093,10 @@ def main(config=None):
                 if proc_name not in process_configs_surrogate:
                     continue
 
-                cfg = process_configs_surrogate[proc_name]
-                tau = cfg['target']  # Process optimum
-                s = cfg['scale']     # Quality scale
-                weight = cfg.get('weight', 1.0)
+                proc_cfg = process_configs_surrogate[proc_name]
+                tau = proc_cfg['target']  # Process optimum
+                s = proc_cfg['scale']     # Quality scale
+                weight = proc_cfg.get('weight', 1.0)
 
                 # Get target output from target_trajectory (μ_target)
                 if proc_name in target_trajectory:
@@ -1143,7 +1143,7 @@ def main(config=None):
                 process_params=process_params_for_L_min,
                 process_weights={p: process_configs_surrogate[p].get('weight', 1.0)
                                 for p in process_params_for_L_min.keys()},
-                loss_scale=cfg['training']['reliability_loss_scale']
+                loss_scale=CONTROLLER_CONFIG['training']['reliability_loss_scale']
             )
 
             print(f"\n  Combined theoretical L_min: {combined_components.L_min:.6f}")
@@ -1156,7 +1156,7 @@ def main(config=None):
 
             # Use combined parameters for tracker updates
             combined_sigma2 = combined_components.sigma2
-            combined_delta = np.sqrt(combined_components.Bias2 / cfg['training']['reliability_loss_scale']) if combined_components.Bias2 > 0 else 0.0
+            combined_delta = np.sqrt(combined_components.Bias2 / CONTROLLER_CONFIG['training']['reliability_loss_scale']) if combined_components.Bias2 > 0 else 0.0
             combined_s = np.mean([p['s'] for p in process_params_for_L_min.values()]) if process_params_for_L_min else 1.0
 
             for epoch_idx, (rel_loss, F_val) in enumerate(zip(reliability_loss_history, F_values_history)):
@@ -1225,7 +1225,7 @@ def main(config=None):
         # Generate PDF report
         try:
             report_path = generate_controller_report(
-                config=cfg,
+                config=CONTROLLER_CONFIG,
                 training_history=history,
                 final_metrics=report_final_metrics,
                 process_metrics=process_metrics,
@@ -1253,7 +1253,7 @@ def main(config=None):
 
     final_results = {
         'timestamp': datetime.now().isoformat(),
-        'config': cfg,
+        'config': CONTROLLER_CONFIG,
         'n_train_scenarios': int(n_scenarios),
         'n_test_scenarios': int(n_test),
 
