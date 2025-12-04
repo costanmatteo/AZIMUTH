@@ -605,7 +605,7 @@ class ControllerReportGenerator:
             self.story.append(Spacer(1, 0.2*cm))
 
     def add_embedding_plots(self, checkpoint_dir):
-        """Add scenario embedding visualization plots - all on same page in grid layout"""
+        """Add scenario embedding visualization plots - all on dedicated page in grid layout"""
         checkpoint_dir = Path(checkpoint_dir)
 
         # Check if any embedding plots exist
@@ -622,12 +622,14 @@ class ControllerReportGenerator:
         if len(available_plots) == 0:
             return  # No embedding plots to add
 
+        # Start on a new page for embedding analysis
+        self.story.append(PageBreak())
         self.add_section_title("Scenario Encoder Analysis")
 
         # Grid layout: 2x2 for first 4 plots + evolution at bottom
-        # Smaller dimensions to fit all on one page
+        # Larger dimensions since we have a dedicated page
         grid_plot_width = 8.5*cm
-        grid_plot_height = 5.5*cm
+        grid_plot_height = 7*cm
 
         # Separate plots into grid plots and evolution
         grid_plots = [p for p in available_plots if p != 'embedding_evolution.png']
@@ -688,11 +690,11 @@ class ControllerReportGenerator:
                 ('VALIGN', (0, 0), (-1, -1), 'TOP'),
                 ('LEFTPADDING', (0, 0), (-1, -1), 0),
                 ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-                ('TOPPADDING', (0, 0), (-1, -1), 0.2*cm),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 0.2*cm),
+                ('TOPPADDING', (0, 0), (-1, -1), 0.3*cm),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 0.3*cm),
             ]))
             self.story.append(grid_table)
-            self.story.append(Spacer(1, 0.3*cm))
+            self.story.append(Spacer(1, 0.4*cm))
 
         # Add evolution plot at bottom (wider, centered)
         if has_evolution:
@@ -700,8 +702,8 @@ class ControllerReportGenerator:
             img_evol = Image(str(evol_path))
 
             # Width for evolution plot - full width but constrained height
-            evol_width = 16*cm
-            evol_height = 5.5*cm
+            evol_width = 17*cm
+            evol_height = 7*cm
 
             img_width, img_height = img_evol.imageWidth, img_evol.imageHeight
             aspect_ratio = img_height / img_width
