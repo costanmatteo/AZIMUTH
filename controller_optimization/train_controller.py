@@ -145,6 +145,12 @@ def parse_args():
     parser.add_argument('--no_curriculum', action='store_true', default=False,
                         help='Disable curriculum learning')
 
+    # Auxiliary losses (for vanishing gradient prevention)
+    parser.add_argument('--use_auxiliary_losses', action='store_true', default=None,
+                        help='Enable auxiliary losses for better gradient flow to all controllers')
+    parser.add_argument('--no_auxiliary_losses', action='store_true', default=False,
+                        help='Disable auxiliary losses')
+
     # Misc
     parser.add_argument('--no_pdf', action='store_true', default=False,
                         help='Disable PDF report generation')
@@ -219,6 +225,12 @@ def apply_args_to_config(args, config):
         cfg['training']['curriculum_learning']['enabled'] = False
     elif args.curriculum_enabled is not None:
         cfg['training']['curriculum_learning']['enabled'] = args.curriculum_enabled
+
+    # Auxiliary losses (for vanishing gradient prevention)
+    if args.no_auxiliary_losses:
+        cfg['training']['use_auxiliary_losses'] = False
+    elif args.use_auxiliary_losses is not None:
+        cfg['training']['use_auxiliary_losses'] = args.use_auxiliary_losses
 
     # Report generation
     if args.no_pdf:
@@ -442,6 +454,9 @@ def main(config=None):
     # Get lr_scheduler config (backward compatible)
     lr_scheduler_config = cfg['training'].get('lr_scheduler', None)
 
+    # Get auxiliary losses config (for vanishing gradient prevention)
+    use_auxiliary_losses = cfg['training'].get('use_auxiliary_losses', False)
+
     trainer = ControllerTrainer(
         process_chain=process_chain,
         surrogate=surrogate,
@@ -451,7 +466,8 @@ def main(config=None):
         reliability_loss_scale=cfg['training']['reliability_loss_scale'],
         device=device,
         curriculum_config=curriculum_config,
-        lr_scheduler_config=lr_scheduler_config
+        lr_scheduler_config=lr_scheduler_config,
+        use_auxiliary_losses=use_auxiliary_losses
     )
 
     # Enable gradient debugging for first epoch

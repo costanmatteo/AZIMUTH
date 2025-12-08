@@ -36,13 +36,15 @@ class ControllerTrainer:
     def __init__(self, process_chain, surrogate, lambda_bc=0.1,
                  learning_rate=0.001, weight_decay=0.01,
                  reliability_loss_scale=100.0, device='cpu',
-                 curriculum_config=None, lr_scheduler_config=None):
+                 curriculum_config=None, lr_scheduler_config=None,
+                 use_auxiliary_losses=False):
 
         self.process_chain = process_chain
         self.surrogate = surrogate
         self.lambda_bc = lambda_bc
         self.reliability_loss_scale = reliability_loss_scale
         self.device = device
+        self.use_auxiliary_losses = use_auxiliary_losses
 
         # Curriculum learning configuration
         self.curriculum_config = curriculum_config or {
@@ -76,6 +78,7 @@ class ControllerTrainer:
             'total_loss': [],
             'reliability_loss': [],
             'bc_loss': [],
+            'auxiliary_loss': [],  # Track auxiliary losses per epoch
             'F_values': [],  # Reliability values durante training
             'lambda_bc': [],  # Track lambda_bc per epoch
             'reliability_weight': [],  # Track reliability_weight per epoch
@@ -102,6 +105,9 @@ class ControllerTrainer:
         print(f"  Lambda BC: {lambda_bc}")
         print(f"  Reliability loss scale: {reliability_loss_scale}")
         print(f"  Device: {device}")
+        print(f"  Auxiliary Losses: {'ENABLED' if use_auxiliary_losses else 'DISABLED'}")
+        if use_auxiliary_losses:
+            print(f"    → Gradients flow directly to each controller (prevents vanishing gradients)")
         if self.curriculum_config['enabled']:
             print(f"  Curriculum Learning: ENABLED")
             print(f"    Warm-up fraction: {self.curriculum_config['warmup_fraction']}")
@@ -412,6 +418,7 @@ class ControllerTrainer:
 
         Returns:
             total_loss, reliability_loss, bc_loss, F
+            (if auxiliary losses enabled, also includes auxiliary_loss)
         """
         # Use provided lambda_bc or fall back to instance value
         if lambda_bc is None:
@@ -425,6 +432,28 @@ class ControllerTrainer:
         F_star_value = self.surrogate.F_star[scenario_idx]
         F_star_tensor = torch.tensor(F_star_value, dtype=torch.float32, device=self.device)
         reliability_loss = self.reliability_loss_scale * (F - F_star_tensor) ** 2
+
+        # AUXILIARY LOSSES: Per-process quality losses
+        # Each process gets direct gradient signal, preventing vanishing gradients
+        auxiliary_loss = torch.tensor(0.0, device=self.device)
+
+        if self.use_auxiliary_losses:
+            per_process = self.surrogate.compute_per_process_quality(trajectory)
+            qualities = per_process['qualities']
+            weights = per_process['weights']
+
+            # Compute auxiliary loss as weighted sum of (1 - quality)^2 for each process
+            # We want quality → 1, so loss = (1 - quality)^2
+            total_aux_weight = 0.0
+            for process_name, quality in qualities.items():
+                w = weights[process_name]
+                # Scale per-process loss to match reliability loss scale
+                process_aux_loss = self.reliability_loss_scale * (1.0 - quality) ** 2
+                auxiliary_loss = auxiliary_loss + w * torch.mean(process_aux_loss)
+                total_aux_weight += w
+
+            if total_aux_weight > 0:
+                auxiliary_loss = auxiliary_loss / total_aux_weight
 
         # Behavior cloning loss: mean( ||a_t - a_t*||^2 ) across all processes
         # Compare to the specific scenario's target inputs
@@ -461,9 +490,13 @@ class ControllerTrainer:
 
         # Total loss with dynamic weights
         # reliability_weight controls if reliability loss is active (0.0 during warm-up)
+        # Auxiliary loss is added when enabled (same weight as reliability loss)
         total_loss = reliability_weight * torch.mean(reliability_loss) + lambda_bc * bc_loss
 
-        return total_loss, torch.mean(reliability_loss).item(), bc_loss.item(), torch.mean(F).item()
+        if self.use_auxiliary_losses:
+            total_loss = total_loss + reliability_weight * auxiliary_loss
+
+        return total_loss, torch.mean(reliability_loss).item(), bc_loss.item(), torch.mean(F).item(), auxiliary_loss.item()
 
     def train_epoch(self, batch_size=32, reliability_weight=1.0, lambda_bc=None):
         """
@@ -494,6 +527,7 @@ class ControllerTrainer:
         epoch_total_loss = 0.0
         epoch_reliability_loss = 0.0
         epoch_bc_loss = 0.0
+        epoch_auxiliary_loss = 0.0
         epoch_F_values = []
 
         n_scenarios = len(self.surrogate.F_star)
@@ -510,7 +544,7 @@ class ControllerTrainer:
             )
 
             # Compute loss using scenario-specific F_star and dynamic weights
-            total_loss, rel_loss, bc_loss, F = self.compute_loss(
+            total_loss, rel_loss, bc_loss, F, aux_loss = self.compute_loss(
                 trajectory, scenario_idx,
                 reliability_weight=reliability_weight,
                 lambda_bc=lambda_bc
@@ -563,15 +597,17 @@ class ControllerTrainer:
             epoch_total_loss += total_loss.item()
             epoch_reliability_loss += rel_loss
             epoch_bc_loss += bc_loss
+            epoch_auxiliary_loss += aux_loss
             epoch_F_values.append(F)
 
         # Average over all scenarios
         avg_total_loss = epoch_total_loss / n_scenarios
         avg_reliability_loss = epoch_reliability_loss / n_scenarios
         avg_bc_loss = epoch_bc_loss / n_scenarios
+        avg_auxiliary_loss = epoch_auxiliary_loss / n_scenarios
         avg_F = np.mean(epoch_F_values)
 
-        return avg_total_loss, avg_reliability_loss, avg_bc_loss, avg_F
+        return avg_total_loss, avg_reliability_loss, avg_bc_loss, avg_F, avg_auxiliary_loss
 
     def train(self, epochs=100, batch_size=32,
               patience=20, save_dir='checkpoints/controller', verbose=True):
@@ -641,7 +677,7 @@ class ControllerTrainer:
             lambda_bc, reliability_weight, phase = self.get_loss_weights(epoch, epochs)
 
             # Train epoch with dynamic weights
-            avg_total_loss, avg_rel_loss, avg_bc_loss, avg_F = self.train_epoch(
+            avg_total_loss, avg_rel_loss, avg_bc_loss, avg_F, avg_aux_loss = self.train_epoch(
                 batch_size=batch_size,
                 reliability_weight=reliability_weight,
                 lambda_bc=lambda_bc
@@ -652,6 +688,7 @@ class ControllerTrainer:
             self.history['total_loss'].append(avg_total_loss)
             self.history['reliability_loss'].append(avg_rel_loss)
             self.history['bc_loss'].append(avg_bc_loss)
+            self.history['auxiliary_loss'].append(avg_aux_loss)
             self.history['F_values'].append(avg_F)
             self.history['lambda_bc'].append(lambda_bc)
             self.history['reliability_weight'].append(reliability_weight)
@@ -681,6 +718,8 @@ class ControllerTrainer:
                 print(f"  λ_BC: {lambda_bc:.6f}, Rel Weight: {reliability_weight:.3f}, LR: {current_lr:.2e}")
                 print(f"  Total Loss:       {avg_total_loss:.6f}")
                 print(f"  Reliability Loss: {avg_rel_loss:.6f} {'(ignored)' if reliability_weight == 0 else ''}")
+                if self.use_auxiliary_losses:
+                    print(f"  Auxiliary Loss:   {avg_aux_loss:.6f} {'(ignored)' if reliability_weight == 0 else ''}")
                 print(f"  BC Loss:          {avg_bc_loss:.6f}")
                 print(f"  F (actual):       {avg_F:.6f}")
                 print(f"  F* (target, mean):{np.mean(self.surrogate.F_star):.6f}")

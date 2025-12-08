@@ -223,6 +223,102 @@ class ProTSurrogate:
 
         return F
 
+    def compute_per_process_quality(self, trajectory):
+        """
+        Calcola quality scores per ogni processo individualmente.
+
+        Questa funzione è usata per le AUXILIARY LOSSES che permettono
+        ai gradienti di fluire direttamente a ogni controller, evitando
+        il problema del vanishing gradient nella catena di processi.
+
+        Args:
+            trajectory (dict): Trajectory con outputs per ogni processo
+
+        Returns:
+            dict: {
+                'qualities': {process_name: quality_tensor},
+                'targets': {process_name: target_value},
+                'weights': {process_name: weight}
+            }
+        """
+        # Use already sampled outputs if available, otherwise sample here
+        sampled_outputs = {}
+
+        for process_name, data in trajectory.items():
+            if 'outputs_sampled' in data:
+                sample = data['outputs_sampled']
+            else:
+                mean = data['outputs_mean']
+                var = data['outputs_var']
+
+                if self.use_deterministic_sampling:
+                    sample = mean
+                else:
+                    std = torch.sqrt(var + 1e-8)
+                    epsilon = torch.randn_like(mean)
+                    sample = mean + epsilon * std
+
+            sampled_outputs[process_name] = sample
+
+        # Extract outputs
+        outputs = {}
+        for process_name, sample in sampled_outputs.items():
+            outputs[process_name] = sample.squeeze()
+
+        # Compute per-process quality (same logic as compute_reliability)
+        qualities = {}
+        targets = {}
+        weights = {}
+
+        # LASER: First process, fixed target
+        if 'laser' in outputs:
+            laser_power = outputs['laser']
+            targets['laser'] = 0.8
+            qualities['laser'] = torch.exp(-((laser_power - targets['laser']) ** 2) / 0.1)
+            weights['laser'] = self.PROCESS_CONFIGS.get('laser', {}).get('weight', 1.0)
+
+        # PLASMA: Target depends on Laser
+        if 'plasma' in outputs:
+            plasma_rate = outputs['plasma']
+            plasma_target = 3.0
+            if 'laser' in outputs:
+                plasma_target = plasma_target + 2.0 * (outputs['laser'].detach() - 0.8)
+            targets['plasma'] = plasma_target
+            qualities['plasma'] = torch.exp(-((plasma_rate - plasma_target) ** 2) / 2.0)
+            weights['plasma'] = self.PROCESS_CONFIGS.get('plasma', {}).get('weight', 1.0)
+
+        # GALVANIC: Target depends on Laser AND Plasma
+        if 'galvanic' in outputs:
+            galvanic_thick = outputs['galvanic']
+            galvanic_target = 10.0
+            if 'plasma' in outputs:
+                galvanic_target = galvanic_target + 5.0 * (outputs['plasma'].detach() - 5.0)
+            if 'laser' in outputs:
+                galvanic_target = galvanic_target + 4.0 * (outputs['laser'].detach() - 0.5)
+            targets['galvanic'] = galvanic_target
+            qualities['galvanic'] = torch.exp(-((galvanic_thick - galvanic_target) ** 2) / 4.0)
+            weights['galvanic'] = self.PROCESS_CONFIGS.get('galvanic', {}).get('weight', 1.5)
+
+        # MICROETCH: Target depends on ALL previous processes
+        if 'microetch' in outputs:
+            microetch_depth = outputs['microetch']
+            microetch_target = 20.0
+            if 'laser' in outputs:
+                microetch_target = microetch_target + 15.0 * (outputs['laser'].detach() - 0.5)
+            if 'plasma' in outputs:
+                microetch_target = microetch_target + 3.0 * (outputs['plasma'].detach() - 5.0)
+            if 'galvanic' in outputs:
+                microetch_target = microetch_target - 1.5 * (outputs['galvanic'].detach() - 10.0)
+            targets['microetch'] = microetch_target
+            qualities['microetch'] = torch.exp(-((microetch_depth - microetch_target) ** 2) / 4.0)
+            weights['microetch'] = self.PROCESS_CONFIGS.get('microetch', {}).get('weight', 1.0)
+
+        return {
+            'qualities': qualities,
+            'targets': targets,
+            'weights': weights
+        }
+
     def compute_all_target_reliabilities(self):
         """
         Calcola F* (reliability target, fisso) per tutti gli n_scenarios.
