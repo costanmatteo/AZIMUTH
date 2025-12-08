@@ -548,10 +548,73 @@ def generate_optuna_report(study: optuna.Study, output_dir: Path, verbose: bool 
         print(f"  Warning: Could not generate PDF report: {e}")
 
 
+def create_2up_pdf(input_pdf_path: Path, output_pdf_path: Path):
+    """
+    Convert a PDF to 2-up format: 2 pages side-by-side on A4 landscape.
+    Same function used in controller report.
+
+    Args:
+        input_pdf_path: Path to the input PDF
+        output_pdf_path: Path to save the 2-up PDF
+    """
+    from reportlab.lib.pagesizes import A4, landscape
+
+    try:
+        from pypdf import PdfReader, PdfWriter, Transformation
+    except ImportError:
+        print("  Warning: pypdf not available, keeping standard layout")
+        import shutil
+        shutil.copy(input_pdf_path, output_pdf_path)
+        return
+
+    reader = PdfReader(str(input_pdf_path))
+    writer = PdfWriter()
+
+    # A4 landscape dimensions in points
+    a4_width, a4_height = landscape(A4)  # 842 x 595 points
+
+    # Process pages in pairs
+    num_pages = len(reader.pages)
+    for i in range(0, num_pages, 2):
+        # Create new blank page (A4 landscape)
+        blank_page = writer.add_blank_page(width=a4_width, height=a4_height)
+
+        # Calculate scaling to fit A5 size (half of A4 landscape width)
+        target_width = a4_width / 2
+        target_height = a4_height
+
+        # Get first page (left side)
+        page1 = reader.pages[i]
+        orig_width = float(page1.mediabox.width)
+        orig_height = float(page1.mediabox.height)
+        scale = min(target_width / orig_width, target_height / orig_height)
+
+        # Calculate centering offsets
+        scaled_width = orig_width * scale
+        scaled_height = orig_height * scale
+        offset_x_left = (target_width - scaled_width) / 2
+        offset_y = (target_height - scaled_height) / 2
+
+        # Create transformation for first page (left side)
+        transformation_left = Transformation().scale(sx=scale, sy=scale).translate(tx=offset_x_left, ty=offset_y)
+        blank_page.merge_transformed_page(page1, transformation_left, expand=False)
+
+        # Get second page (right side) if it exists
+        if i + 1 < num_pages:
+            page2 = reader.pages[i + 1]
+            offset_x_right = target_width + (target_width - scaled_width) / 2
+            transformation_right = Transformation().scale(sx=scale, sy=scale).translate(tx=offset_x_right, ty=offset_y)
+            blank_page.merge_transformed_page(page2, transformation_right, expand=False)
+
+    # Write output
+    with open(output_pdf_path, 'wb') as output_file:
+        writer.write(output_file)
+
+
 def generate_pdf_report(study: optuna.Study, output_dir: Path, verbose: bool = True):
     """
     Generate a PDF report with all Optuna visualizations.
-    Uses the same LaTeX-style as the controller report.
+    Uses the same LaTeX-style as the controller report with 2-up landscape layout.
 
     Args:
         study: Completed Optuna study
@@ -571,7 +634,8 @@ def generate_pdf_report(study: optuna.Study, output_dir: Path, verbose: bool = T
     from datetime import datetime
 
     output_dir = Path(output_dir)
-    pdf_path = output_dir / 'optuna_report.pdf'
+    temp_pdf_path = output_dir / 'optuna_report_temp.pdf'
+    final_pdf_path = output_dir / 'optuna_report.pdf'
 
     # Get completed trials
     completed_trials = [t for t in study.trials if t.state == TrialState.COMPLETE]
@@ -581,9 +645,9 @@ def generate_pdf_report(study: optuna.Study, output_dir: Path, verbose: bool = T
     if verbose:
         print("  Generating PDF report...")
 
-    # Create document
+    # Create document (A4 portrait, will be converted to 2-up landscape)
     doc = SimpleDocTemplate(
-        str(pdf_path),
+        str(temp_pdf_path),
         pagesize=A4,
         rightMargin=1.5*cm,
         leftMargin=1.5*cm,
@@ -591,7 +655,7 @@ def generate_pdf_report(study: optuna.Study, output_dir: Path, verbose: bool = T
         bottomMargin=1.5*cm
     )
 
-    # Styles (matching controller report style)
+    # Styles (matching controller report style exactly)
     styles = getSampleStyleSheet()
 
     title_style = ParagraphStyle(
@@ -640,7 +704,7 @@ def generate_pdf_report(study: optuna.Study, output_dir: Path, verbose: bool = T
     content.append(Paragraph(f"Study: {study.study_name} | Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", subtitle_style))
     content.append(Spacer(1, 0.2*cm))
 
-    # Two-column layout for statistics and best params
+    # Two-column layout for statistics and best params (using Table for layout only)
     left_col = []
     right_col = []
 
@@ -668,7 +732,7 @@ def generate_pdf_report(study: optuna.Study, output_dir: Path, verbose: bool = T
             params_text += f"• <b>{key}:</b> {value}<br/>"
     right_col.append(Paragraph(params_text, body_style))
 
-    # Create two-column table
+    # Create two-column table (layout container, not data table)
     col_table = Table([[left_col, right_col]], colWidths=[9*cm, 9*cm])
     col_table.setStyle(TableStyle([
         ('VALIGN', (0, 0), (-1, -1), 'TOP'),
@@ -678,46 +742,18 @@ def generate_pdf_report(study: optuna.Study, output_dir: Path, verbose: bool = T
     content.append(col_table)
     content.append(Spacer(1, 0.3*cm))
 
-    # Top 5 Trials Table (LaTeX style)
+    # Top 5 Trials section (formatted text, not data table)
     content.append(Paragraph("<b>Top 5 Trials</b>", section_style))
     content.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=4))
 
-    top5_data = [["Rank", "Trial #", "Loss", "Learning Rate", "Dropout", "Hidden Sizes"]]
     sorted_trials = sorted(completed_trials, key=lambda t: t.value)[:5]
     for i, trial in enumerate(sorted_trials, 1):
         lr = trial.params.get('learning_rate', 'N/A')
         dropout = trial.params.get('dropout', 'N/A')
         hidden = trial.params.get('hidden_sizes', 'N/A')
-        top5_data.append([
-            str(i),
-            f"#{trial.number}",
-            f"{trial.value:.6f}",
-            f"{lr:.6f}" if isinstance(lr, float) else str(lr),
-            f"{dropout:.4f}" if isinstance(dropout, float) else str(dropout),
-            str(hidden)
-        ])
 
-    top5_table = Table(top5_data, colWidths=[1.5*cm, 2*cm, 3*cm, 3.5*cm, 2.5*cm, 5*cm])
-    top5_table.setStyle(TableStyle([
-        # Header row
-        ('BACKGROUND', (0, 0), (-1, 0), colors.white),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
-        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, 0), 8),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
-        ('TOPPADDING', (0, 0), (-1, 0), 6),
-        # Data rows
-        ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-        ('FONTSIZE', (0, 1), (-1, -1), 7),
-        ('TOPPADDING', (0, 1), (-1, -1), 4),
-        ('BOTTOMPADDING', (0, 1), (-1, -1), 4),
-        # LaTeX-style lines
-        ('LINEABOVE', (0, 0), (-1, 0), 1.5, colors.black),
-        ('LINEABOVE', (0, 1), (-1, 1), 0.5, colors.black),
-        ('LINEBELOW', (0, -1), (-1, -1), 1.5, colors.black),
-    ]))
-    content.append(top5_table)
+        trial_text = f"""<b>#{i}</b> Trial {trial.number}: loss={trial.value:.6f} | lr={lr:.6f if isinstance(lr, float) else lr} | dropout={dropout:.4f if isinstance(dropout, float) else dropout} | hidden={hidden}"""
+        content.append(Paragraph(trial_text, body_style))
     content.append(Spacer(1, 0.3*cm))
 
     # Search Space Info
@@ -732,7 +768,7 @@ def generate_pdf_report(study: optuna.Study, output_dir: Path, verbose: bool = T
     content.append(Paragraph(search_space_text, body_style))
     content.append(Spacer(1, 0.3*cm))
 
-    # Visualizations
+    # Visualizations - Page 2
     content.append(PageBreak())
     content.append(Paragraph("<b>Optimization Visualizations</b>", section_style))
     content.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=4))
@@ -765,7 +801,7 @@ def generate_pdf_report(study: optuna.Study, output_dir: Path, verbose: bool = T
                 img.drawWidth = new_width
                 img.drawHeight = new_height
 
-                # Center the image
+                # Center the image using table as layout container
                 img_table = Table([[img]], colWidths=[18*cm])
                 img_table.setStyle(TableStyle([
                     ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
@@ -784,10 +820,25 @@ def generate_pdf_report(study: optuna.Study, output_dir: Path, verbose: bool = T
             except Exception as e:
                 content.append(Paragraph(f"Could not load image {img_file}: {e}", body_style))
 
-    # Build PDF
+    # Build temporary PDF (A4 portrait)
     doc.build(content)
 
-    return pdf_path
+    # Convert to 2-up landscape layout
+    if verbose:
+        print("  Converting to 2-up landscape layout...")
+
+    create_2up_pdf(temp_pdf_path, final_pdf_path)
+
+    # Remove temporary file
+    try:
+        temp_pdf_path.unlink()
+    except Exception:
+        pass
+
+    if verbose:
+        print(f"  2-up PDF report saved to {final_pdf_path}")
+
+    return final_pdf_path
 
 
 def print_study_status(study: optuna.Study):
