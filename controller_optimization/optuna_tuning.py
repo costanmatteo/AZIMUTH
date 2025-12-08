@@ -551,6 +551,7 @@ def generate_optuna_report(study: optuna.Study, output_dir: Path, verbose: bool 
 def generate_pdf_report(study: optuna.Study, output_dir: Path, verbose: bool = True):
     """
     Generate a PDF report with all Optuna visualizations.
+    Uses the same LaTeX-style as the controller report.
 
     Args:
         study: Completed Optuna study
@@ -566,6 +567,7 @@ def generate_pdf_report(study: optuna.Study, output_dir: Path, verbose: bool = T
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib import colors
     from reportlab.lib.enums import TA_CENTER, TA_LEFT
+    from reportlab.platypus.flowables import HRFlowable
     from datetime import datetime
 
     output_dir = Path(output_dir)
@@ -583,121 +585,157 @@ def generate_pdf_report(study: optuna.Study, output_dir: Path, verbose: bool = T
     doc = SimpleDocTemplate(
         str(pdf_path),
         pagesize=A4,
-        rightMargin=2*cm,
-        leftMargin=2*cm,
-        topMargin=2*cm,
-        bottomMargin=2*cm
+        rightMargin=1.5*cm,
+        leftMargin=1.5*cm,
+        topMargin=1.5*cm,
+        bottomMargin=1.5*cm
     )
 
-    # Styles
+    # Styles (matching controller report style)
     styles = getSampleStyleSheet()
+
     title_style = ParagraphStyle(
-        'CustomTitle',
+        'ReportTitle',
         parent=styles['Heading1'],
-        fontSize=24,
-        spaceAfter=30,
-        alignment=TA_CENTER
-    )
-    heading_style = ParagraphStyle(
-        'CustomHeading',
-        parent=styles['Heading2'],
         fontSize=16,
-        spaceBefore=20,
-        spaceAfter=10
+        leading=19,
+        alignment=TA_CENTER,
+        spaceAfter=3
     )
-    subheading_style = ParagraphStyle(
-        'CustomSubheading',
-        parent=styles['Heading3'],
-        fontSize=12,
-        spaceBefore=15,
-        spaceAfter=5
+
+    subtitle_style = ParagraphStyle(
+        'ReportSubtitle',
+        parent=styles['Normal'],
+        fontSize=10,
+        leading=12,
+        alignment=TA_CENTER,
+        spaceAfter=6
     )
+
+    section_style = ParagraphStyle(
+        'SectionTitle',
+        parent=styles['Heading2'],
+        fontSize=10,
+        leading=12,
+        fontName='Helvetica-Bold',
+        spaceAfter=1,
+        spaceBefore=4
+    )
+
+    body_style = ParagraphStyle(
+        'BodyText',
+        parent=styles['Normal'],
+        fontSize=8,
+        leading=10,
+        leftIndent=10
+    )
+
     normal_style = styles['Normal']
 
     # Build content
     content = []
 
     # Title
-    content.append(Paragraph("Optuna Hyperparameter Optimization Report", title_style))
-    content.append(Paragraph(f"Study: {study.study_name}", normal_style))
-    content.append(Paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", normal_style))
-    content.append(Spacer(1, 20))
+    content.append(Paragraph("<b>Optuna Hyperparameter Optimization Report</b>", title_style))
+    content.append(Paragraph(f"Study: {study.study_name} | Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", subtitle_style))
+    content.append(Spacer(1, 0.2*cm))
 
-    # Summary statistics
-    content.append(Paragraph("Study Statistics", heading_style))
+    # Two-column layout for statistics and best params
+    left_col = []
+    right_col = []
 
-    stats_data = [
-        ["Metric", "Value"],
-        ["Total trials", str(len(study.trials))],
-        ["Completed trials", str(len(completed_trials))],
-        ["Pruned trials", str(len(pruned_trials))],
-        ["Failed trials", str(len(failed_trials))],
-        ["Best loss", f"{study.best_trial.value:.6f}"],
-        ["Best trial", f"#{study.best_trial.number}"],
-    ]
+    # Left column: Study Statistics
+    left_col.append(Paragraph("<b>Study Statistics</b>", section_style))
+    left_col.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=4))
 
-    stats_table = Table(stats_data, colWidths=[8*cm, 6*cm])
-    stats_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, 0), 12),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-        ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-        ('GRID', (0, 0), (-1, -1), 1, colors.black),
-    ]))
-    content.append(stats_table)
-    content.append(Spacer(1, 20))
+    stats_text = f"""• <b>Total trials:</b> {len(study.trials)}<br/>
+• <b>Completed:</b> {len(completed_trials)}<br/>
+• <b>Pruned:</b> {len(pruned_trials)}<br/>
+• <b>Failed:</b> {len(failed_trials)}<br/>
+• <b>Best trial:</b> #{study.best_trial.number}<br/>
+• <b>Best loss:</b> {study.best_trial.value:.6f}"""
+    left_col.append(Paragraph(stats_text, body_style))
 
-    # Best hyperparameters
-    content.append(Paragraph("Best Hyperparameters", heading_style))
+    # Right column: Best Hyperparameters
+    right_col.append(Paragraph("<b>Best Hyperparameters</b>", section_style))
+    right_col.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=4))
 
-    best_params_data = [["Parameter", "Value"]]
+    params_text = ""
     for key, value in study.best_trial.params.items():
         if isinstance(value, float):
-            best_params_data.append([key, f"{value:.6f}"])
+            params_text += f"• <b>{key}:</b> {value:.6f}<br/>"
         else:
-            best_params_data.append([key, str(value)])
+            params_text += f"• <b>{key}:</b> {value}<br/>"
+    right_col.append(Paragraph(params_text, body_style))
 
-    params_table = Table(best_params_data, colWidths=[8*cm, 6*cm])
-    params_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.darkblue),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, 0), 12),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-        ('BACKGROUND', (0, 1), (-1, -1), colors.lightblue),
-        ('GRID', (0, 0), (-1, -1), 1, colors.black),
+    # Create two-column table
+    col_table = Table([[left_col, right_col]], colWidths=[9*cm, 9*cm])
+    col_table.setStyle(TableStyle([
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('LEFTPADDING', (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
     ]))
-    content.append(params_table)
-    content.append(Spacer(1, 20))
+    content.append(col_table)
+    content.append(Spacer(1, 0.3*cm))
 
-    # Top 5 trials
-    content.append(Paragraph("Top 5 Trials", heading_style))
+    # Top 5 Trials Table (LaTeX style)
+    content.append(Paragraph("<b>Top 5 Trials</b>", section_style))
+    content.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=4))
 
-    top5_data = [["Rank", "Trial #", "Loss"]]
+    top5_data = [["Rank", "Trial #", "Loss", "Learning Rate", "Dropout", "Hidden Sizes"]]
     sorted_trials = sorted(completed_trials, key=lambda t: t.value)[:5]
     for i, trial in enumerate(sorted_trials, 1):
-        top5_data.append([str(i), f"#{trial.number}", f"{trial.value:.6f}"])
+        lr = trial.params.get('learning_rate', 'N/A')
+        dropout = trial.params.get('dropout', 'N/A')
+        hidden = trial.params.get('hidden_sizes', 'N/A')
+        top5_data.append([
+            str(i),
+            f"#{trial.number}",
+            f"{trial.value:.6f}",
+            f"{lr:.6f}" if isinstance(lr, float) else str(lr),
+            f"{dropout:.4f}" if isinstance(dropout, float) else str(dropout),
+            str(hidden)
+        ])
 
-    top5_table = Table(top5_data, colWidths=[3*cm, 5*cm, 6*cm])
+    top5_table = Table(top5_data, colWidths=[1.5*cm, 2*cm, 3*cm, 3.5*cm, 2.5*cm, 5*cm])
     top5_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        # Header row
+        ('BACKGROUND', (0, 0), (-1, 0), colors.white),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, 0), 12),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-        ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-        ('GRID', (0, 0), (-1, -1), 1, colors.black),
+        ('FONTSIZE', (0, 0), (-1, 0), 8),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
+        ('TOPPADDING', (0, 0), (-1, 0), 6),
+        # Data rows
+        ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+        ('FONTSIZE', (0, 1), (-1, -1), 7),
+        ('TOPPADDING', (0, 1), (-1, -1), 4),
+        ('BOTTOMPADDING', (0, 1), (-1, -1), 4),
+        # LaTeX-style lines
+        ('LINEABOVE', (0, 0), (-1, 0), 1.5, colors.black),
+        ('LINEABOVE', (0, 1), (-1, 1), 0.5, colors.black),
+        ('LINEBELOW', (0, -1), (-1, -1), 1.5, colors.black),
     ]))
     content.append(top5_table)
+    content.append(Spacer(1, 0.3*cm))
 
-    # Add visualizations
+    # Search Space Info
+    content.append(Paragraph("<b>Search Space</b>", section_style))
+    content.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=4))
+
+    search_space_text = """• <b>hidden_sizes:</b> [32,16], [64,32], [128,64], [128,64,32], [256,128,64]<br/>
+• <b>dropout:</b> 0.0 - 0.4 (uniform)<br/>
+• <b>use_batchnorm:</b> True, False<br/>
+• <b>scenario_embedding_dim:</b> 8 - 64 (step 8)<br/>
+• <b>learning_rate:</b> 1e-5 - 1e-2 (log-uniform)"""
+    content.append(Paragraph(search_space_text, body_style))
+    content.append(Spacer(1, 0.3*cm))
+
+    # Visualizations
     content.append(PageBreak())
-    content.append(Paragraph("Visualizations", heading_style))
+    content.append(Paragraph("<b>Optimization Visualizations</b>", section_style))
+    content.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=4))
 
     # List of expected images
     image_files = [
@@ -708,19 +746,43 @@ def generate_pdf_report(study: optuna.Study, output_dir: Path, verbose: bool = T
         ('contour_lr_dropout.png', 'Contour Plot (Learning Rate vs Dropout)'),
     ]
 
-    page_width = A4[0] - 4*cm  # Available width
+    page_width = 16*cm
 
     for img_file, img_title in image_files:
         img_path = output_dir / img_file
         if img_path.exists():
-            content.append(Paragraph(img_title, subheading_style))
             try:
-                img = Image(str(img_path), width=page_width, height=page_width*0.6)
-                img.hAlign = 'CENTER'
-                content.append(img)
-                content.append(Spacer(1, 10))
+                img = Image(str(img_path))
+                img_width, img_height = img.imageWidth, img.imageHeight
+                aspect_ratio = img_height / img_width
+
+                new_width = page_width
+                new_height = new_width * aspect_ratio
+                if new_height > 10*cm:
+                    new_height = 10*cm
+                    new_width = new_height / aspect_ratio
+
+                img.drawWidth = new_width
+                img.drawHeight = new_height
+
+                # Center the image
+                img_table = Table([[img]], colWidths=[18*cm])
+                img_table.setStyle(TableStyle([
+                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                    ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ]))
+                content.append(img_table)
+
+                # Caption
+                caption = Paragraph(f"<i>{img_title}</i>", normal_style)
+                caption_table = Table([[caption]], colWidths=[18*cm])
+                caption_table.setStyle(TableStyle([
+                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ]))
+                content.append(caption_table)
+                content.append(Spacer(1, 0.4*cm))
             except Exception as e:
-                content.append(Paragraph(f"Could not load image: {e}", normal_style))
+                content.append(Paragraph(f"Could not load image {img_file}: {e}", body_style))
 
     # Build PDF
     doc.build(content)
