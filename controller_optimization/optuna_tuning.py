@@ -786,7 +786,9 @@ def generate_pdf_report(study: optuna.Study, output_dir: Path, verbose: bool = T
         ('contour_lr_dropout.png', 'Contour Plot (Learning Rate vs Dropout)'),
     ]
 
-    page_width = 16*cm
+    # Full column width (A4 width 21cm - 2*1.5cm margins = 18cm)
+    page_width = 18*cm
+    max_height = 22*cm  # Allow larger images
 
     for img_file, img_title in image_files:
         img_path = output_dir / img_file
@@ -796,17 +798,18 @@ def generate_pdf_report(study: optuna.Study, output_dir: Path, verbose: bool = T
                 img_width, img_height = img.imageWidth, img.imageHeight
                 aspect_ratio = img_height / img_width
 
+                # Use full column width
                 new_width = page_width
                 new_height = new_width * aspect_ratio
-                if new_height > 10*cm:
-                    new_height = 10*cm
+                if new_height > max_height:
+                    new_height = max_height
                     new_width = new_height / aspect_ratio
 
                 img.drawWidth = new_width
                 img.drawHeight = new_height
 
                 # Center the image using table as layout container
-                img_table = Table([[img]], colWidths=[18*cm])
+                img_table = Table([[img]], colWidths=[page_width])
                 img_table.setStyle(TableStyle([
                     ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
                     ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
@@ -815,12 +818,12 @@ def generate_pdf_report(study: optuna.Study, output_dir: Path, verbose: bool = T
 
                 # Caption
                 caption = Paragraph(f"<i>{img_title}</i>", normal_style)
-                caption_table = Table([[caption]], colWidths=[18*cm])
+                caption_table = Table([[caption]], colWidths=[page_width])
                 caption_table.setStyle(TableStyle([
                     ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
                 ]))
                 content.append(caption_table)
-                content.append(Spacer(1, 0.4*cm))
+                content.append(Spacer(1, 0.3*cm))
             except Exception as e:
                 content.append(Paragraph(f"Could not load image {img_file}: {e}", body_style))
 
