@@ -7,11 +7,19 @@ neural network. It supports both local execution and distributed execution on
 Euler HPC cluster.
 
 Hyperparameters optimized:
-- hidden_sizes: Architecture of the policy generator
-- dropout: Dropout rate for regularization
-- use_batchnorm: Whether to use batch normalization
-- scenario_embedding_dim: Dimension of scenario embedding
-- learning_rate: Learning rate for optimizer
+- learning_rate: Learning rate for optimizer (log-uniform)
+- lambda_bc: Behavior cloning weight (log-uniform)
+- reliability_loss_scale: Scale factor for reliability loss (log-uniform)
+- hidden_sizes: Architecture of the policy generator (categorical)
+- dropout: Dropout rate for regularization (uniform)
+- weight_decay: L2 regularization weight (log-uniform)
+- optimizer: Optimizer type (adam, adamw, sgd)
+- gradient_clip_norm: Max gradient norm (uniform or None)
+- curriculum_learning: Curriculum learning parameters
+
+Optimization Metric:
+- MSE between target trajectory and actual trajectory (minimize)
+- This measures how well the controller follows the target trajectory
 
 Usage:
     # Local execution (sequential)
@@ -68,6 +76,7 @@ from controller_optimization.src.utils.target_generation import (
 from controller_optimization.src.utils.process_chain import ProcessChain
 from controller_optimization.src.models.surrogate import ProTSurrogate
 from controller_optimization.src.training.controller_trainer import ControllerTrainer
+from controller_optimization.src.utils.metrics import compute_trajectory_distance
 
 
 # =============================================================================
@@ -75,17 +84,36 @@ from controller_optimization.src.training.controller_trainer import ControllerTr
 # =============================================================================
 
 SEARCH_SPACE = {
+    # Architecture
     'hidden_sizes': [
-        [32, 16],
         [64, 32],
         [128, 64],
         [128, 64, 32],
+        [256, 128],
         [256, 128, 64],
     ],
-    'dropout': (0.0, 0.4),  # Uniform range
-    'use_batchnorm': [True, False],
-    'scenario_embedding_dim': (8, 64, 8),  # (min, max, step)
+    'dropout': (0.0, 0.5),  # Uniform range
+
+    # Optimizer
+    'optimizer': ['adam', 'adamw', 'sgd'],
     'learning_rate': (1e-5, 1e-2),  # Log-uniform range
+    'weight_decay': (1e-6, 1e-2),  # Log-uniform range
+
+    # Loss weights
+    'lambda_bc': (1e-4, 1.0),  # Log-uniform range
+    'reliability_loss_scale': (10.0, 1000.0),  # Log-uniform range
+
+    # Gradient clipping
+    'gradient_clip_norm': (0.5, 10.0),  # Uniform range (None is also an option)
+
+    # Curriculum learning
+    'curriculum_enabled': [True, False],
+    'curriculum_warmup_fraction': (0.05, 0.3),  # Uniform range
+    'curriculum_lambda_bc_start': (0.5, 2.0),  # Uniform range
+    'curriculum_lambda_bc_end': (0.001, 0.2),  # Log-uniform range
+    'curriculum_decay_speed': (1.0, 5.0),  # Uniform range
+    'curriculum_reliability_speed': (1.0, 4.0),  # Uniform range
+    'curriculum_weight_curve': ['exponential', 'linear', 'sigmoid'],
 }
 
 
@@ -106,6 +134,9 @@ def create_objective(base_config: dict, device: str = 'auto',
 
     Returns:
         Callable objective function for Optuna
+
+    Optimization Metric:
+        MSE between target trajectory and actual trajectory (minimize)
     """
 
     def objective(trial: optuna.Trial) -> float:
@@ -116,7 +147,7 @@ def create_objective(base_config: dict, device: str = 'auto',
             trial: Optuna trial object
 
         Returns:
-            Final loss value to minimize
+            MSE between target and actual trajectory (to minimize)
         """
         # Create a deep copy of config
         cfg = copy.deepcopy(base_config)
@@ -125,41 +156,110 @@ def create_objective(base_config: dict, device: str = 'auto',
         # SUGGEST HYPERPARAMETERS
         # =================================================================
 
-        # Hidden sizes (categorical)
+        # --- Architecture ---
         hidden_sizes = trial.suggest_categorical(
             'hidden_sizes',
             [str(h) for h in SEARCH_SPACE['hidden_sizes']]
         )
         hidden_sizes = eval(hidden_sizes)  # Convert string back to list
 
-        # Dropout (float)
         dropout = trial.suggest_float(
             'dropout',
             SEARCH_SPACE['dropout'][0],
             SEARCH_SPACE['dropout'][1]
         )
 
-        # Batch normalization (categorical/boolean)
-        use_batchnorm = trial.suggest_categorical(
-            'use_batchnorm',
-            SEARCH_SPACE['use_batchnorm']
+        # --- Optimizer ---
+        optimizer_name = trial.suggest_categorical(
+            'optimizer',
+            SEARCH_SPACE['optimizer']
         )
 
-        # Scenario embedding dimension (int with step)
-        scenario_embedding_dim = trial.suggest_int(
-            'scenario_embedding_dim',
-            SEARCH_SPACE['scenario_embedding_dim'][0],
-            SEARCH_SPACE['scenario_embedding_dim'][1],
-            step=SEARCH_SPACE['scenario_embedding_dim'][2]
-        )
-
-        # Learning rate (log-uniform)
         learning_rate = trial.suggest_float(
             'learning_rate',
             SEARCH_SPACE['learning_rate'][0],
             SEARCH_SPACE['learning_rate'][1],
             log=True
         )
+
+        weight_decay = trial.suggest_float(
+            'weight_decay',
+            SEARCH_SPACE['weight_decay'][0],
+            SEARCH_SPACE['weight_decay'][1],
+            log=True
+        )
+
+        # --- Loss weights ---
+        lambda_bc = trial.suggest_float(
+            'lambda_bc',
+            SEARCH_SPACE['lambda_bc'][0],
+            SEARCH_SPACE['lambda_bc'][1],
+            log=True
+        )
+
+        reliability_loss_scale = trial.suggest_float(
+            'reliability_loss_scale',
+            SEARCH_SPACE['reliability_loss_scale'][0],
+            SEARCH_SPACE['reliability_loss_scale'][1],
+            log=True
+        )
+
+        # --- Gradient clipping ---
+        use_gradient_clip = trial.suggest_categorical('use_gradient_clip', [True, False])
+        if use_gradient_clip:
+            gradient_clip_norm = trial.suggest_float(
+                'gradient_clip_norm',
+                SEARCH_SPACE['gradient_clip_norm'][0],
+                SEARCH_SPACE['gradient_clip_norm'][1]
+            )
+        else:
+            gradient_clip_norm = None
+
+        # --- Curriculum learning ---
+        curriculum_enabled = trial.suggest_categorical(
+            'curriculum_enabled',
+            SEARCH_SPACE['curriculum_enabled']
+        )
+
+        if curriculum_enabled:
+            curriculum_warmup_fraction = trial.suggest_float(
+                'curriculum_warmup_fraction',
+                SEARCH_SPACE['curriculum_warmup_fraction'][0],
+                SEARCH_SPACE['curriculum_warmup_fraction'][1]
+            )
+            curriculum_lambda_bc_start = trial.suggest_float(
+                'curriculum_lambda_bc_start',
+                SEARCH_SPACE['curriculum_lambda_bc_start'][0],
+                SEARCH_SPACE['curriculum_lambda_bc_start'][1]
+            )
+            curriculum_lambda_bc_end = trial.suggest_float(
+                'curriculum_lambda_bc_end',
+                SEARCH_SPACE['curriculum_lambda_bc_end'][0],
+                SEARCH_SPACE['curriculum_lambda_bc_end'][1],
+                log=True
+            )
+            curriculum_decay_speed = trial.suggest_float(
+                'curriculum_decay_speed',
+                SEARCH_SPACE['curriculum_decay_speed'][0],
+                SEARCH_SPACE['curriculum_decay_speed'][1]
+            )
+            curriculum_reliability_speed = trial.suggest_float(
+                'curriculum_reliability_speed',
+                SEARCH_SPACE['curriculum_reliability_speed'][0],
+                SEARCH_SPACE['curriculum_reliability_speed'][1]
+            )
+            curriculum_weight_curve = trial.suggest_categorical(
+                'curriculum_weight_curve',
+                SEARCH_SPACE['curriculum_weight_curve']
+            )
+        else:
+            # Default values when curriculum is disabled
+            curriculum_warmup_fraction = 0.1
+            curriculum_lambda_bc_start = 1.0
+            curriculum_lambda_bc_end = 0.01
+            curriculum_decay_speed = 1.0
+            curriculum_reliability_speed = 1.0
+            curriculum_weight_curve = 'exponential'
 
         # =================================================================
         # UPDATE CONFIG WITH SUGGESTED HYPERPARAMETERS
@@ -168,10 +268,25 @@ def create_objective(base_config: dict, device: str = 'auto',
         cfg['policy_generator']['architecture'] = 'custom'
         cfg['policy_generator']['hidden_sizes'] = hidden_sizes
         cfg['policy_generator']['dropout'] = dropout
-        cfg['policy_generator']['use_batchnorm'] = use_batchnorm
-        cfg['policy_generator']['use_scenario_encoder'] = True  # Enable for embedding_dim
-        cfg['policy_generator']['scenario_embedding_dim'] = scenario_embedding_dim
+        cfg['policy_generator']['use_batchnorm'] = False  # Fixed for simplicity
+
         cfg['training']['learning_rate'] = learning_rate
+        cfg['training']['weight_decay'] = weight_decay
+        cfg['training']['lambda_bc'] = lambda_bc
+        cfg['training']['reliability_loss_scale'] = reliability_loss_scale
+        cfg['training']['optimizer'] = optimizer_name
+        cfg['training']['gradient_clip_norm'] = gradient_clip_norm
+
+        # Curriculum learning config
+        cfg['training']['curriculum_learning'] = {
+            'enabled': curriculum_enabled,
+            'warmup_fraction': curriculum_warmup_fraction,
+            'lambda_bc_start': curriculum_lambda_bc_start,
+            'lambda_bc_end': curriculum_lambda_bc_end,
+            'decay_speed': curriculum_decay_speed,
+            'reliability_speed': curriculum_reliability_speed,
+            'reliability_weight_curve': curriculum_weight_curve,
+        }
 
         # Reduce epochs for faster trials if specified
         if reduced_epochs is not None:
@@ -199,11 +314,24 @@ def create_objective(base_config: dict, device: str = 'auto',
             print(f"\n{'='*60}")
             print(f"TRIAL {trial.number}")
             print(f"{'='*60}")
-            print(f"  hidden_sizes: {hidden_sizes}")
-            print(f"  dropout: {dropout:.4f}")
-            print(f"  use_batchnorm: {use_batchnorm}")
-            print(f"  scenario_embedding_dim: {scenario_embedding_dim}")
-            print(f"  learning_rate: {learning_rate:.6f}")
+            print(f"  Architecture:")
+            print(f"    hidden_sizes: {hidden_sizes}")
+            print(f"    dropout: {dropout:.4f}")
+            print(f"  Optimizer:")
+            print(f"    optimizer: {optimizer_name}")
+            print(f"    learning_rate: {learning_rate:.6f}")
+            print(f"    weight_decay: {weight_decay:.6f}")
+            print(f"  Loss weights:")
+            print(f"    lambda_bc: {lambda_bc:.6f}")
+            print(f"    reliability_loss_scale: {reliability_loss_scale:.2f}")
+            print(f"  Gradient clipping: {gradient_clip_norm}")
+            print(f"  Curriculum learning: {curriculum_enabled}")
+            if curriculum_enabled:
+                print(f"    warmup_fraction: {curriculum_warmup_fraction:.2f}")
+                print(f"    lambda_bc: {curriculum_lambda_bc_start:.2f} → {curriculum_lambda_bc_end:.4f}")
+                print(f"    decay_speed: {curriculum_decay_speed:.2f}")
+                print(f"    reliability_speed: {curriculum_reliability_speed:.2f}")
+                print(f"    weight_curve: {curriculum_weight_curve}")
             print(f"  epochs: {cfg['training']['epochs']}")
             print(f"  device: {actual_device}")
 
@@ -270,6 +398,28 @@ def create_objective(base_config: dict, device: str = 'auto',
                 lr_scheduler_config=lr_scheduler_config
             )
 
+            # Replace optimizer based on suggested type
+            trainable_params = [p for p in process_chain.parameters() if p.requires_grad]
+            if optimizer_name == 'adam':
+                trainer.optimizer = torch.optim.Adam(
+                    trainable_params,
+                    lr=learning_rate,
+                    weight_decay=weight_decay
+                )
+            elif optimizer_name == 'adamw':
+                trainer.optimizer = torch.optim.AdamW(
+                    trainable_params,
+                    lr=learning_rate,
+                    weight_decay=weight_decay
+                )
+            elif optimizer_name == 'sgd':
+                trainer.optimizer = torch.optim.SGD(
+                    trainable_params,
+                    lr=learning_rate,
+                    momentum=0.9,
+                    weight_decay=weight_decay
+                )
+
             # =============================================================
             # TRAINING LOOP WITH PRUNING
             # =============================================================
@@ -283,19 +433,23 @@ def create_objective(base_config: dict, device: str = 'auto',
             if curriculum_config.get('enabled', False):
                 warmup_epochs = int(epochs * curriculum_config['warmup_fraction'])
 
-            best_loss = float('inf')
+            best_trajectory_mse = float('inf')
             epochs_without_improvement = 0
 
             for epoch in range(1, epochs + 1):
                 # Get dynamic loss weights
-                lambda_bc, reliability_weight, phase = trainer.get_loss_weights(epoch, epochs)
+                lambda_bc_epoch, reliability_weight, phase = trainer.get_loss_weights(epoch, epochs)
 
                 # Train one epoch
                 avg_total_loss, avg_rel_loss, avg_bc_loss, avg_F = trainer.train_epoch(
                     batch_size=batch_size,
                     reliability_weight=reliability_weight,
-                    lambda_bc=lambda_bc
+                    lambda_bc=lambda_bc_epoch
                 )
+
+                # Apply gradient clipping if configured
+                if gradient_clip_norm is not None:
+                    torch.nn.utils.clip_grad_norm_(trainable_params, gradient_clip_norm)
 
                 # Track history
                 trainer.history['total_loss'].append(avg_total_loss)
@@ -311,10 +465,15 @@ def create_objective(base_config: dict, device: str = 'auto',
                     else:
                         trainer.scheduler.step()
 
-                # Report intermediate value for pruning
-                # Only report after warm-up phase when reliability loss is active
-                if epoch > warmup_epochs:
-                    trial.report(avg_total_loss, epoch)
+                # Compute trajectory MSE for pruning (every 50 epochs to save time)
+                if epoch > warmup_epochs and epoch % 50 == 0:
+                    with torch.no_grad():
+                        actual_trajectory = process_chain.forward(batch_size=1)
+                        traj_distance = compute_trajectory_distance(actual_trajectory, target_trajectory)
+                        current_traj_mse = traj_distance['total_distance']
+
+                    # Report intermediate value for pruning
+                    trial.report(current_traj_mse, epoch)
 
                     # Check if trial should be pruned
                     if trial.should_prune():
@@ -322,43 +481,54 @@ def create_objective(base_config: dict, device: str = 'auto',
                             print(f"  Trial {trial.number} pruned at epoch {epoch}")
                         raise optuna.TrialPruned()
 
-                # Early stopping logic
-                patience_active = epoch > warmup_epochs and reliability_weight >= 0.9
+                    # Early stopping based on trajectory MSE
+                    if reliability_weight >= 0.9:
+                        if current_traj_mse < best_trajectory_mse:
+                            best_trajectory_mse = current_traj_mse
+                            epochs_without_improvement = 0
+                        else:
+                            epochs_without_improvement += 50  # Since we check every 50 epochs
 
-                if patience_active:
-                    if avg_total_loss < best_loss:
-                        best_loss = avg_total_loss
-                        epochs_without_improvement = 0
-                    else:
-                        epochs_without_improvement += 1
-
-                    if epochs_without_improvement >= patience:
-                        if verbose:
-                            print(f"  Early stopping at epoch {epoch}")
-                        break
+                        if epochs_without_improvement >= patience:
+                            if verbose:
+                                print(f"  Early stopping at epoch {epoch}")
+                            break
 
                 # Print progress occasionally
                 if verbose and epoch % 100 == 0:
                     print(f"  Epoch {epoch}/{epochs}: loss={avg_total_loss:.6f}, F={avg_F:.6f}")
 
             # =============================================================
-            # FINAL EVALUATION
+            # FINAL EVALUATION - Trajectory MSE
             # =============================================================
 
-            # Get final loss (average of last 10 epochs for stability)
-            final_losses = trainer.history['total_loss'][-10:]
-            final_loss = np.mean(final_losses)
+            # Generate actual trajectory with trained controller
+            with torch.no_grad():
+                actual_trajectory = process_chain.forward(batch_size=1)
+
+            # Compute trajectory distance (MSE between actual and target)
+            traj_distance = compute_trajectory_distance(actual_trajectory, target_trajectory)
+            trajectory_mse = traj_distance['total_distance']
+            input_mse = traj_distance['input_distance']
+            output_mse = traj_distance['output_distance']
+
+            # Also compute final F for reference
+            final_F = trainer.history['F_values'][-1] if trainer.history['F_values'] else 0.0
 
             if verbose:
-                print(f"  Final loss: {final_loss:.6f}")
-                print(f"  Final F: {trainer.history['F_values'][-1]:.6f}")
+                print(f"  Final trajectory MSE: {trajectory_mse:.6f}")
+                print(f"    Input MSE: {input_mse:.6f}")
+                print(f"    Output MSE: {output_mse:.6f}")
+                print(f"  Final F: {final_F:.6f}")
 
             # Save trial results
             trial_results = {
                 'trial_number': trial.number,
                 'params': trial.params,
-                'final_loss': float(final_loss),
-                'final_F': float(trainer.history['F_values'][-1]),
+                'trajectory_mse': float(trajectory_mse),
+                'input_mse': float(input_mse),
+                'output_mse': float(output_mse),
+                'final_F': float(final_F),
                 'epochs_run': len(trainer.history['total_loss']),
                 'history': {
                     'total_loss': [float(x) for x in trainer.history['total_loss']],
@@ -369,7 +539,8 @@ def create_objective(base_config: dict, device: str = 'auto',
             with open(trial_dir / 'trial_results.json', 'w') as f:
                 json.dump(trial_results, f, indent=2)
 
-            return final_loss
+            # Return trajectory MSE as the objective to minimize
+            return trajectory_mse
 
         except Exception as e:
             if verbose:
@@ -490,7 +661,7 @@ def generate_optuna_report(study: optuna.Study, output_dir: Path, verbose: bool 
 
         best_trial = study.best_trial
         f.write(f"Trial number: {best_trial.number}\n")
-        f.write(f"Best value (loss): {best_trial.value:.6f}\n\n")
+        f.write(f"Best value (trajectory MSE): {best_trial.value:.6f}\n\n")
 
         f.write("Best hyperparameters:\n")
         for key, value in best_trial.params.items():
@@ -502,7 +673,7 @@ def generate_optuna_report(study: optuna.Study, output_dir: Path, verbose: bool 
 
         sorted_trials = sorted(completed_trials, key=lambda t: t.value)[:5]
         for i, trial in enumerate(sorted_trials, 1):
-            f.write(f"{i}. Trial {trial.number}: loss={trial.value:.6f}\n")
+            f.write(f"{i}. Trial {trial.number}: trajectory_mse={trial.value:.6f}\n")
             for key, value in trial.params.items():
                 f.write(f"     {key}: {value}\n")
             f.write("\n")
@@ -516,7 +687,7 @@ def generate_optuna_report(study: optuna.Study, output_dir: Path, verbose: bool 
     best_params_path = output_dir / 'best_params.json'
     best_params = {
         'best_trial_number': study.best_trial.number,
-        'best_value': study.best_trial.value,
+        'best_trajectory_mse': study.best_trial.value,
         'best_params': study.best_trial.params,
         'study_stats': {
             'n_trials': len(study.trials),
@@ -533,7 +704,7 @@ def generate_optuna_report(study: optuna.Study, output_dir: Path, verbose: bool 
         print(f"\n{'='*70}")
         print("BEST HYPERPARAMETERS FOUND")
         print(f"{'='*70}")
-        print(f"Best loss: {study.best_trial.value:.6f}")
+        print(f"Best trajectory MSE: {study.best_trial.value:.6f}")
         for key, value in study.best_trial.params.items():
             print(f"  {key}: {value}")
 
@@ -717,7 +888,7 @@ def generate_pdf_report(study: optuna.Study, output_dir: Path, verbose: bool = T
 • <b>Pruned:</b> {len(pruned_trials)}<br/>
 • <b>Failed:</b> {len(failed_trials)}<br/>
 • <b>Best trial:</b> #{study.best_trial.number}<br/>
-• <b>Best loss:</b> {study.best_trial.value:.6f}"""
+• <b>Best trajectory MSE:</b> {study.best_trial.value:.6f}"""
     left_col.append(Paragraph(stats_text, body_style))
 
     # Right column: Best Hyperparameters
@@ -756,7 +927,7 @@ def generate_pdf_report(study: optuna.Study, output_dir: Path, verbose: bool = T
         lr_str = f"{lr:.6f}" if isinstance(lr, float) else str(lr)
         dropout_str = f"{dropout:.4f}" if isinstance(dropout, float) else str(dropout)
 
-        trial_text = f"<b>#{i}</b> Trial {trial.number}: loss={trial.value:.6f} | lr={lr_str} | dropout={dropout_str} | hidden={hidden}"
+        trial_text = f"<b>#{i}</b> Trial {trial.number}: traj_mse={trial.value:.6f} | lr={lr_str} | dropout={dropout_str} | hidden={hidden}"
         content.append(Paragraph(trial_text, body_style))
     content.append(Spacer(1, 0.3*cm))
 
@@ -764,11 +935,15 @@ def generate_pdf_report(study: optuna.Study, output_dir: Path, verbose: bool = T
     content.append(Paragraph("<b>Search Space</b>", section_style))
     content.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=4))
 
-    search_space_text = """• <b>hidden_sizes:</b> [32,16], [64,32], [128,64], [128,64,32], [256,128,64]<br/>
-• <b>dropout:</b> 0.0 - 0.4 (uniform)<br/>
-• <b>use_batchnorm:</b> True, False<br/>
-• <b>scenario_embedding_dim:</b> 8 - 64 (step 8)<br/>
-• <b>learning_rate:</b> 1e-5 - 1e-2 (log-uniform)"""
+    search_space_text = """• <b>hidden_sizes:</b> [64,32], [128,64], [128,64,32], [256,128], [256,128,64]<br/>
+• <b>dropout:</b> 0.0 - 0.5 (uniform)<br/>
+• <b>optimizer:</b> adam, adamw, sgd<br/>
+• <b>learning_rate:</b> 1e-5 - 1e-2 (log-uniform)<br/>
+• <b>weight_decay:</b> 1e-6 - 1e-2 (log-uniform)<br/>
+• <b>lambda_bc:</b> 1e-4 - 1.0 (log-uniform)<br/>
+• <b>reliability_loss_scale:</b> 10 - 1000 (log-uniform)<br/>
+• <b>gradient_clip_norm:</b> 0.5 - 10 or None<br/>
+• <b>curriculum_learning:</b> enabled/disabled + params"""
     content.append(Paragraph(search_space_text, body_style))
     content.append(Spacer(1, 0.3*cm))
 
@@ -874,7 +1049,7 @@ def print_study_status(study: optuna.Study):
     if len(completed) > 0:
         best_trial = study.best_trial
         print(f"\nBest trial so far:")
-        print(f"  Trial {best_trial.number}: loss={best_trial.value:.6f}")
+        print(f"  Trial {best_trial.number}: trajectory_mse={best_trial.value:.6f}")
         print(f"  Params: {best_trial.params}")
 
 
@@ -1021,7 +1196,7 @@ def main():
 
         study.optimize(objective, n_trials=1)
 
-        print(f"Trial completed. Current best: {study.best_trial.value:.6f}")
+        print(f"Trial completed. Current best trajectory MSE: {study.best_trial.value:.6f}")
         return
 
     # =================================================================
