@@ -6,6 +6,16 @@ This script uses Optuna to find optimal hyperparameters for the PolicyGenerator
 neural network. It supports both local execution and distributed execution on
 Euler HPC cluster.
 
+OPTIMIZATION METRIC:
+    Reliability Gap (%) = (F_target - F_actual) / F_target * 100
+
+    Where:
+    - F_target (F*): Target reliability from the surrogate model
+    - F_actual: Actual reliability achieved by the controller
+
+    Lower gap = better controller (closer to target reliability)
+    Goal: Minimize the gap to 0%
+
 Hyperparameters optimized:
 - hidden_sizes: Architecture of the policy generator
 - dropout: Dropout rate for regularization
@@ -112,11 +122,14 @@ def create_objective(base_config: dict, device: str = 'auto',
         """
         Objective function for a single Optuna trial.
 
+        Optimizes the reliability gap: (F_target - F_actual) / F_target * 100
+        Lower gap = better controller (closer to target reliability)
+
         Args:
             trial: Optuna trial object
 
         Returns:
-            Final loss value to minimize
+            Reliability gap (%) to minimize - lower is better
         """
         # Create a deep copy of config
         cfg = copy.deepcopy(base_config)
@@ -311,15 +324,22 @@ def create_objective(base_config: dict, device: str = 'auto',
                     else:
                         trainer.scheduler.step()
 
-                # Report intermediate value for pruning
+                # Report intermediate value for pruning (using reliability gap)
                 # Only report after warm-up phase when reliability loss is active
                 if epoch > warmup_epochs:
-                    trial.report(avg_total_loss, epoch)
+                    # Compute reliability gap for pruning
+                    F_star_mean = np.mean(surrogate.F_star)
+                    if F_star_mean > 0:
+                        intermediate_gap = (F_star_mean - avg_F) / F_star_mean * 100
+                    else:
+                        intermediate_gap = 100.0  # Worst case if F_star is 0
+
+                    trial.report(intermediate_gap, epoch)
 
                     # Check if trial should be pruned
                     if trial.should_prune():
                         if verbose:
-                            print(f"  Trial {trial.number} pruned at epoch {epoch}")
+                            print(f"  Trial {trial.number} pruned at epoch {epoch} (gap={intermediate_gap:.2f}%)")
                         raise optuna.TrialPruned()
 
                 # Early stopping logic
@@ -342,23 +362,35 @@ def create_objective(base_config: dict, device: str = 'auto',
                     print(f"  Epoch {epoch}/{epochs}: loss={avg_total_loss:.6f}, F={avg_F:.6f}")
 
             # =============================================================
-            # FINAL EVALUATION
+            # FINAL EVALUATION - RELIABILITY GAP
             # =============================================================
 
-            # Get final loss (average of last 10 epochs for stability)
-            final_losses = trainer.history['total_loss'][-10:]
-            final_loss = np.mean(final_losses)
+            # Get final F_actual (average of last 10 epochs for stability)
+            final_F_values = trainer.history['F_values'][-10:]
+            final_F_actual = np.mean(final_F_values)
+
+            # Get F_target (F_star) from surrogate
+            F_star_mean = np.mean(surrogate.F_star)
+
+            # Compute reliability gap: (F_target - F_actual) / F_target * 100
+            # Lower is better (0% = perfect match with target)
+            if F_star_mean > 0:
+                reliability_gap = (F_star_mean - final_F_actual) / F_star_mean * 100
+            else:
+                reliability_gap = 100.0  # Worst case if F_star is 0
 
             if verbose:
-                print(f"  Final loss: {final_loss:.6f}")
-                print(f"  Final F: {trainer.history['F_values'][-1]:.6f}")
+                print(f"  Final F_actual: {final_F_actual:.6f}")
+                print(f"  F_target (F*): {F_star_mean:.6f}")
+                print(f"  Reliability gap: {reliability_gap:.2f}%")
 
             # Save trial results
             trial_results = {
                 'trial_number': trial.number,
                 'params': trial.params,
-                'final_loss': float(final_loss),
-                'final_F': float(trainer.history['F_values'][-1]),
+                'final_F_actual': float(final_F_actual),
+                'F_target': float(F_star_mean),
+                'reliability_gap_pct': float(reliability_gap),
                 'epochs_run': len(trainer.history['total_loss']),
                 'history': {
                     'total_loss': [float(x) for x in trainer.history['total_loss']],
@@ -369,7 +401,7 @@ def create_objective(base_config: dict, device: str = 'auto',
             with open(trial_dir / 'trial_results.json', 'w') as f:
                 json.dump(trial_results, f, indent=2)
 
-            return final_loss
+            return reliability_gap
 
         except Exception as e:
             if verbose:
@@ -479,6 +511,7 @@ def generate_optuna_report(study: optuna.Study, output_dir: Path, verbose: bool 
 
         f.write(f"Study name: {study.study_name}\n")
         f.write(f"Direction: {study.direction.name}\n")
+        f.write(f"Metric: Reliability Gap (%) = (F_target - F_actual) / F_target * 100\n")
         f.write(f"Total trials: {len(study.trials)}\n")
         f.write(f"Completed trials: {len(completed_trials)}\n")
         f.write(f"Pruned trials: {len([t for t in study.trials if t.state == TrialState.PRUNED])}\n")
@@ -490,7 +523,7 @@ def generate_optuna_report(study: optuna.Study, output_dir: Path, verbose: bool 
 
         best_trial = study.best_trial
         f.write(f"Trial number: {best_trial.number}\n")
-        f.write(f"Best value (loss): {best_trial.value:.6f}\n\n")
+        f.write(f"Best reliability gap: {best_trial.value:.2f}%\n\n")
 
         f.write("Best hyperparameters:\n")
         for key, value in best_trial.params.items():
@@ -502,7 +535,7 @@ def generate_optuna_report(study: optuna.Study, output_dir: Path, verbose: bool 
 
         sorted_trials = sorted(completed_trials, key=lambda t: t.value)[:5]
         for i, trial in enumerate(sorted_trials, 1):
-            f.write(f"{i}. Trial {trial.number}: loss={trial.value:.6f}\n")
+            f.write(f"{i}. Trial {trial.number}: gap={trial.value:.2f}%\n")
             for key, value in trial.params.items():
                 f.write(f"     {key}: {value}\n")
             f.write("\n")
@@ -516,8 +549,9 @@ def generate_optuna_report(study: optuna.Study, output_dir: Path, verbose: bool 
     best_params_path = output_dir / 'best_params.json'
     best_params = {
         'best_trial_number': study.best_trial.number,
-        'best_value': study.best_trial.value,
+        'best_reliability_gap_pct': study.best_trial.value,
         'best_params': study.best_trial.params,
+        'metric': 'reliability_gap_pct = (F_target - F_actual) / F_target * 100',
         'study_stats': {
             'n_trials': len(study.trials),
             'n_completed': len(completed_trials),
@@ -533,7 +567,7 @@ def generate_optuna_report(study: optuna.Study, output_dir: Path, verbose: bool 
         print(f"\n{'='*70}")
         print("BEST HYPERPARAMETERS FOUND")
         print(f"{'='*70}")
-        print(f"Best loss: {study.best_trial.value:.6f}")
+        print(f"Best reliability gap: {study.best_trial.value:.2f}%")
         for key, value in study.best_trial.params.items():
             print(f"  {key}: {value}")
 
@@ -717,7 +751,7 @@ def generate_pdf_report(study: optuna.Study, output_dir: Path, verbose: bool = T
 • <b>Pruned:</b> {len(pruned_trials)}<br/>
 • <b>Failed:</b> {len(failed_trials)}<br/>
 • <b>Best trial:</b> #{study.best_trial.number}<br/>
-• <b>Best loss:</b> {study.best_trial.value:.6f}"""
+• <b>Best gap:</b> {study.best_trial.value:.2f}%"""
     left_col.append(Paragraph(stats_text, body_style))
 
     # Right column: Best Hyperparameters
@@ -756,7 +790,7 @@ def generate_pdf_report(study: optuna.Study, output_dir: Path, verbose: bool = T
         lr_str = f"{lr:.6f}" if isinstance(lr, float) else str(lr)
         dropout_str = f"{dropout:.4f}" if isinstance(dropout, float) else str(dropout)
 
-        trial_text = f"<b>#{i}</b> Trial {trial.number}: loss={trial.value:.6f} | lr={lr_str} | dropout={dropout_str} | hidden={hidden}"
+        trial_text = f"<b>#{i}</b> Trial {trial.number}: gap={trial.value:.2f}% | lr={lr_str} | dropout={dropout_str} | hidden={hidden}"
         content.append(Paragraph(trial_text, body_style))
     content.append(Spacer(1, 0.3*cm))
 
@@ -865,6 +899,7 @@ def print_study_status(study: optuna.Study):
     print(f"\n{'='*60}")
     print(f"STUDY STATUS: {study.study_name}")
     print(f"{'='*60}")
+    print(f"Metric: Reliability Gap (%) = (F_target - F_actual) / F_target * 100")
     print(f"Total trials:     {len(trials)}")
     print(f"Completed:        {len(completed)}")
     print(f"Running:          {len(running)}")
@@ -874,7 +909,7 @@ def print_study_status(study: optuna.Study):
     if len(completed) > 0:
         best_trial = study.best_trial
         print(f"\nBest trial so far:")
-        print(f"  Trial {best_trial.number}: loss={best_trial.value:.6f}")
+        print(f"  Trial {best_trial.number}: gap={best_trial.value:.2f}%")
         print(f"  Params: {best_trial.params}")
 
 
@@ -1021,7 +1056,7 @@ def main():
 
         study.optimize(objective, n_trials=1)
 
-        print(f"Trial completed. Current best: {study.best_trial.value:.6f}")
+        print(f"Trial completed. Current best gap: {study.best_trial.value:.2f}%")
         return
 
     # =================================================================
@@ -1030,6 +1065,7 @@ def main():
     print(f"{'='*70}")
     print("OPTUNA HYPERPARAMETER OPTIMIZATION")
     print(f"{'='*70}")
+    print(f"Metric: Reliability Gap (%) = (F_target - F_actual) / F_target * 100")
     print(f"Study name: {args.study_name}")
     print(f"Storage: {storage}")
     print(f"N trials: {args.n_trials}")
