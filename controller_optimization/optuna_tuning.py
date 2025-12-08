@@ -772,43 +772,27 @@ def generate_pdf_report(study: optuna.Study, output_dir: Path, verbose: bool = T
     content.append(Paragraph(search_space_text, body_style))
     content.append(Spacer(1, 0.3*cm))
 
-    # Visualizations - Page 2
-    content.append(PageBreak())
-    content.append(Paragraph("<b>Optimization Visualizations</b>", section_style))
-    content.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=4))
-
-    # List of expected images
-    image_files = [
-        ('optimization_history.png', 'Optimization History'),
-        ('param_importances.png', 'Parameter Importances'),
-        ('parallel_coordinate.png', 'Parallel Coordinate Plot'),
-        ('slice_plot.png', 'Slice Plot'),
-        ('contour_lr_dropout.png', 'Contour Plot (Learning Rate vs Dropout)'),
-    ]
-
     # Full column width (A4 width 21cm - 2*1.5cm margins = 18cm)
     page_width = 18*cm
-    max_height = 22*cm  # Allow larger images
 
-    for img_file, img_title in image_files:
+    # Helper function to add image
+    def add_image(img_file, img_title, width, max_h):
         img_path = output_dir / img_file
         if img_path.exists():
             try:
                 img = Image(str(img_path))
-                img_width, img_height = img.imageWidth, img.imageHeight
-                aspect_ratio = img_height / img_width
+                img_w, img_h = img.imageWidth, img.imageHeight
+                aspect_ratio = img_h / img_w
 
-                # Use full column width
-                new_width = page_width
+                new_width = width
                 new_height = new_width * aspect_ratio
-                if new_height > max_height:
-                    new_height = max_height
+                if new_height > max_h:
+                    new_height = max_h
                     new_width = new_height / aspect_ratio
 
                 img.drawWidth = new_width
                 img.drawHeight = new_height
 
-                # Center the image using table as layout container
                 img_table = Table([[img]], colWidths=[page_width])
                 img_table.setStyle(TableStyle([
                     ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
@@ -816,7 +800,6 @@ def generate_pdf_report(study: optuna.Study, output_dir: Path, verbose: bool = T
                 ]))
                 content.append(img_table)
 
-                # Caption
                 caption = Paragraph(f"<i>{img_title}</i>", normal_style)
                 caption_table = Table([[caption]], colWidths=[page_width])
                 caption_table.setStyle(TableStyle([
@@ -824,8 +807,31 @@ def generate_pdf_report(study: optuna.Study, output_dir: Path, verbose: bool = T
                 ]))
                 content.append(caption_table)
                 content.append(Spacer(1, 0.3*cm))
+                return True
             except Exception as e:
                 content.append(Paragraph(f"Could not load image {img_file}: {e}", body_style))
+        return False
+
+    # Optimization History on first page (below text info)
+    content.append(Paragraph("<b>Optimization History</b>", section_style))
+    content.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=4))
+    add_image('optimization_history.png', 'Optimization History', page_width, 12*cm)
+
+    # Page 2 - Parameter Importances (slightly smaller)
+    content.append(PageBreak())
+    content.append(Paragraph("<b>Parameter Analysis</b>", section_style))
+    content.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=4))
+    add_image('param_importances.png', 'Parameter Importances', 14*cm, 10*cm)
+
+    # Other visualizations
+    content.append(Spacer(1, 0.3*cm))
+    add_image('parallel_coordinate.png', 'Parallel Coordinate Plot', page_width, 12*cm)
+
+    content.append(PageBreak())
+    content.append(Paragraph("<b>Detailed Analysis</b>", section_style))
+    content.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=4))
+    add_image('slice_plot.png', 'Slice Plot', page_width, 14*cm)
+    add_image('contour_lr_dropout.png', 'Contour Plot (Learning Rate vs Dropout)', page_width, 14*cm)
 
     # Build temporary PDF (A4 portrait)
     doc.build(content)
