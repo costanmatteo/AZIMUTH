@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=optuna_hpo
 #SBATCH --account=es_mohr
-#SBATCH --time=00:30:00
+#SBATCH --time=04:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem-per-cpu=4G
@@ -24,7 +24,7 @@
 #   - scenario_embedding_dim: Dimension of scenario embedding
 #   - learning_rate: Learning rate for optimizer
 #
-# Resources: CPU only, 4 cores, 16GB RAM total, 30 min per job
+# Resources: CPU only, 4 cores, 16GB RAM total, 4 hours per job
 #
 # Usage:
 #   1. Create study (once):
