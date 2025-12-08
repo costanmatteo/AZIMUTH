@@ -752,7 +752,11 @@ def generate_pdf_report(study: optuna.Study, output_dir: Path, verbose: bool = T
         dropout = trial.params.get('dropout', 'N/A')
         hidden = trial.params.get('hidden_sizes', 'N/A')
 
-        trial_text = f"""<b>#{i}</b> Trial {trial.number}: loss={trial.value:.6f} | lr={lr:.6f if isinstance(lr, float) else lr} | dropout={dropout:.4f if isinstance(dropout, float) else dropout} | hidden={hidden}"""
+        # Format values properly
+        lr_str = f"{lr:.6f}" if isinstance(lr, float) else str(lr)
+        dropout_str = f"{dropout:.4f}" if isinstance(dropout, float) else str(dropout)
+
+        trial_text = f"<b>#{i}</b> Trial {trial.number}: loss={trial.value:.6f} | lr={lr_str} | dropout={dropout_str} | hidden={hidden}"
         content.append(Paragraph(trial_text, body_style))
     content.append(Spacer(1, 0.3*cm))
 
