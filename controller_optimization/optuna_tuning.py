@@ -602,14 +602,39 @@ def generate_optuna_report(study: optuna.Study, output_dir: Path, verbose: bool 
         print(f"  Warning: Could not generate parameter importances: {e}")
 
     # =================================================================
-    # 3. PARALLEL COORDINATE PLOT
+    # 3. PARALLEL COORDINATE PLOTS (grouped by parameter type)
     # =================================================================
+    # Define parameter groups for parallel coordinate plots
+    param_groups = {
+        'architecture': ['hidden_sizes', 'dropout'],
+        'optimizer': ['optimizer', 'learning_rate', 'weight_decay'],
+        'loss_weights': ['lambda_bc', 'reliability_loss_scale'],
+        'gradient': ['use_gradient_clip', 'gradient_clip_norm'],
+        'curriculum_main': ['curriculum_enabled', 'curriculum_warmup_fraction', 'curriculum_weight_curve'],
+        'curriculum_lambda': ['curriculum_lambda_bc_start', 'curriculum_lambda_bc_end', 'curriculum_decay_speed', 'curriculum_reliability_speed'],
+    }
+
+    # Generate individual parallel coordinate plots for each group
+    for group_name, params in param_groups.items():
+        try:
+            # Filter to only include params that exist in trials
+            available_params = [p for p in params if any(p in t.params for t in completed_trials)]
+            if len(available_params) >= 2:
+                fig = plot_parallel_coordinate(study, params=available_params)
+                fig.write_image(str(output_dir / f'parallel_coord_{group_name}.png'), scale=2)
+                if verbose:
+                    print(f"  - Parallel coordinate ({group_name}) saved")
+        except Exception as e:
+            if verbose:
+                print(f"  Warning: Could not generate parallel coordinate ({group_name}): {e}")
+
+    # Also generate full parallel coordinate plot
     try:
         fig = plot_parallel_coordinate(study)
         fig.write_image(str(output_dir / 'parallel_coordinate.png'), scale=2)
         fig.write_html(str(output_dir / 'parallel_coordinate.html'))
         if verbose:
-            print("  - Parallel coordinate plot saved")
+            print("  - Parallel coordinate plot (full) saved")
     except Exception as e:
         print(f"  Warning: Could not generate parallel coordinate plot: {e}")
 
@@ -987,10 +1012,10 @@ def generate_pdf_report(study: optuna.Study, output_dir: Path, verbose: bool = T
                 content.append(Paragraph(f"Could not load image {img_file}: {e}", body_style))
         return False
 
-    # Optimization History on first page (below text info)
+    # Optimization History on first page (below text info) - slightly smaller
     content.append(Paragraph("<b>Optimization History</b>", section_style))
     content.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=4))
-    add_image('optimization_history.png', 'Optimization History', page_width, 12*cm)
+    add_image('optimization_history.png', 'Optimization History', 15*cm, 10*cm)
 
     # Page 2 - Parameter Importances (slightly smaller)
     content.append(PageBreak())
@@ -998,9 +1023,80 @@ def generate_pdf_report(study: optuna.Study, output_dir: Path, verbose: bool = T
     content.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=4))
     add_image('param_importances.png', 'Parameter Importances', 14*cm, 10*cm)
 
-    # Other visualizations
+    # Parallel Coordinate Plots - arranged in rows of 3
     content.append(Spacer(1, 0.3*cm))
-    add_image('parallel_coordinate.png', 'Parallel Coordinate Plot', page_width, 12*cm)
+    content.append(Paragraph("<b>Parallel Coordinate Plots</b>", section_style))
+    content.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=4))
+
+    # Helper function to load image for grid
+    def load_grid_image(img_file, width, max_h):
+        img_path = output_dir / img_file
+        if img_path.exists():
+            try:
+                img = Image(str(img_path))
+                img_w, img_h = img.imageWidth, img.imageHeight
+                aspect_ratio = img_h / img_w
+                new_width = width
+                new_height = new_width * aspect_ratio
+                if new_height > max_h:
+                    new_height = max_h
+                    new_width = new_height / aspect_ratio
+                img.drawWidth = new_width
+                img.drawHeight = new_height
+                return img
+            except Exception:
+                return None
+        return None
+
+    # Parallel coordinate plot files
+    pc_plots = [
+        ('parallel_coord_architecture.png', 'Architecture'),
+        ('parallel_coord_optimizer.png', 'Optimizer'),
+        ('parallel_coord_loss_weights.png', 'Loss Weights'),
+        ('parallel_coord_gradient.png', 'Gradient'),
+        ('parallel_coord_curriculum_main.png', 'Curriculum Main'),
+        ('parallel_coord_curriculum_lambda.png', 'Curriculum Lambda'),
+    ]
+
+    # Width for 3 columns with spacing (18cm total, 3 cols = 5.5cm each with gaps)
+    col_width = 5.5*cm
+    max_img_height = 5*cm
+
+    # Create rows of 3 images
+    row_images = []
+    for img_file, title in pc_plots:
+        img = load_grid_image(img_file, col_width, max_img_height)
+        if img is not None:
+            # Create a mini-table with image and caption
+            caption = Paragraph(f"<i><font size='6'>{title}</font></i>", normal_style)
+            cell_content = Table([[img], [caption]], colWidths=[col_width])
+            cell_content.setStyle(TableStyle([
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ]))
+            row_images.append(cell_content)
+
+    # Arrange in rows of 3
+    if row_images:
+        rows = []
+        for i in range(0, len(row_images), 3):
+            row = row_images[i:i+3]
+            # Pad with empty cells if less than 3
+            while len(row) < 3:
+                row.append('')
+            rows.append(row)
+
+        grid_table = Table(rows, colWidths=[6*cm, 6*cm, 6*cm])
+        grid_table.setStyle(TableStyle([
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 2),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 2),
+            ('TOPPADDING', (0, 0), (-1, -1), 2),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ]))
+        content.append(grid_table)
+        content.append(Spacer(1, 0.3*cm))
 
     content.append(PageBreak())
     content.append(Paragraph("<b>Detailed Analysis</b>", section_style))
