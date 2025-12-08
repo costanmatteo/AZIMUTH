@@ -537,6 +537,196 @@ def generate_optuna_report(study: optuna.Study, output_dir: Path, verbose: bool 
         for key, value in study.best_trial.params.items():
             print(f"  {key}: {value}")
 
+    # =================================================================
+    # 8. GENERATE PDF REPORT
+    # =================================================================
+    try:
+        pdf_path = generate_pdf_report(study, output_dir, verbose)
+        if verbose and pdf_path:
+            print(f"  - PDF report saved to {pdf_path}")
+    except Exception as e:
+        print(f"  Warning: Could not generate PDF report: {e}")
+
+
+def generate_pdf_report(study: optuna.Study, output_dir: Path, verbose: bool = True):
+    """
+    Generate a PDF report with all Optuna visualizations.
+
+    Args:
+        study: Completed Optuna study
+        output_dir: Directory containing the PNG files
+        verbose: Print progress
+
+    Returns:
+        Path to the generated PDF
+    """
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import cm
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle, PageBreak
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT
+    from datetime import datetime
+
+    output_dir = Path(output_dir)
+    pdf_path = output_dir / 'optuna_report.pdf'
+
+    # Get completed trials
+    completed_trials = [t for t in study.trials if t.state == TrialState.COMPLETE]
+    pruned_trials = [t for t in study.trials if t.state == TrialState.PRUNED]
+    failed_trials = [t for t in study.trials if t.state == TrialState.FAIL]
+
+    if verbose:
+        print("  Generating PDF report...")
+
+    # Create document
+    doc = SimpleDocTemplate(
+        str(pdf_path),
+        pagesize=A4,
+        rightMargin=2*cm,
+        leftMargin=2*cm,
+        topMargin=2*cm,
+        bottomMargin=2*cm
+    )
+
+    # Styles
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        'CustomTitle',
+        parent=styles['Heading1'],
+        fontSize=24,
+        spaceAfter=30,
+        alignment=TA_CENTER
+    )
+    heading_style = ParagraphStyle(
+        'CustomHeading',
+        parent=styles['Heading2'],
+        fontSize=16,
+        spaceBefore=20,
+        spaceAfter=10
+    )
+    subheading_style = ParagraphStyle(
+        'CustomSubheading',
+        parent=styles['Heading3'],
+        fontSize=12,
+        spaceBefore=15,
+        spaceAfter=5
+    )
+    normal_style = styles['Normal']
+
+    # Build content
+    content = []
+
+    # Title
+    content.append(Paragraph("Optuna Hyperparameter Optimization Report", title_style))
+    content.append(Paragraph(f"Study: {study.study_name}", normal_style))
+    content.append(Paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", normal_style))
+    content.append(Spacer(1, 20))
+
+    # Summary statistics
+    content.append(Paragraph("Study Statistics", heading_style))
+
+    stats_data = [
+        ["Metric", "Value"],
+        ["Total trials", str(len(study.trials))],
+        ["Completed trials", str(len(completed_trials))],
+        ["Pruned trials", str(len(pruned_trials))],
+        ["Failed trials", str(len(failed_trials))],
+        ["Best loss", f"{study.best_trial.value:.6f}"],
+        ["Best trial", f"#{study.best_trial.number}"],
+    ]
+
+    stats_table = Table(stats_data, colWidths=[8*cm, 6*cm])
+    stats_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 12),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+        ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black),
+    ]))
+    content.append(stats_table)
+    content.append(Spacer(1, 20))
+
+    # Best hyperparameters
+    content.append(Paragraph("Best Hyperparameters", heading_style))
+
+    best_params_data = [["Parameter", "Value"]]
+    for key, value in study.best_trial.params.items():
+        if isinstance(value, float):
+            best_params_data.append([key, f"{value:.6f}"])
+        else:
+            best_params_data.append([key, str(value)])
+
+    params_table = Table(best_params_data, colWidths=[8*cm, 6*cm])
+    params_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.darkblue),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 12),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+        ('BACKGROUND', (0, 1), (-1, -1), colors.lightblue),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black),
+    ]))
+    content.append(params_table)
+    content.append(Spacer(1, 20))
+
+    # Top 5 trials
+    content.append(Paragraph("Top 5 Trials", heading_style))
+
+    top5_data = [["Rank", "Trial #", "Loss"]]
+    sorted_trials = sorted(completed_trials, key=lambda t: t.value)[:5]
+    for i, trial in enumerate(sorted_trials, 1):
+        top5_data.append([str(i), f"#{trial.number}", f"{trial.value:.6f}"])
+
+    top5_table = Table(top5_data, colWidths=[3*cm, 5*cm, 6*cm])
+    top5_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 12),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+        ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black),
+    ]))
+    content.append(top5_table)
+
+    # Add visualizations
+    content.append(PageBreak())
+    content.append(Paragraph("Visualizations", heading_style))
+
+    # List of expected images
+    image_files = [
+        ('optimization_history.png', 'Optimization History'),
+        ('param_importances.png', 'Parameter Importances'),
+        ('parallel_coordinate.png', 'Parallel Coordinate Plot'),
+        ('slice_plot.png', 'Slice Plot'),
+        ('contour_lr_dropout.png', 'Contour Plot (Learning Rate vs Dropout)'),
+    ]
+
+    page_width = A4[0] - 4*cm  # Available width
+
+    for img_file, img_title in image_files:
+        img_path = output_dir / img_file
+        if img_path.exists():
+            content.append(Paragraph(img_title, subheading_style))
+            try:
+                img = Image(str(img_path), width=page_width, height=page_width*0.6)
+                img.hAlign = 'CENTER'
+                content.append(img)
+                content.append(Spacer(1, 10))
+            except Exception as e:
+                content.append(Paragraph(f"Could not load image: {e}", normal_style))
+
+    # Build PDF
+    doc.build(content)
+
+    return pdf_path
+
 
 def print_study_status(study: optuna.Study):
     """Print current status of an Optuna study."""
