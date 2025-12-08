@@ -1,0 +1,186 @@
+================================================================================
+EULER HPC - COMANDI PER OPTUNA HYPERPARAMETER TUNING
+================================================================================
+
+--------------------------------------------------------------------------------
+LOGIN (da Windows Terminal)
+--------------------------------------------------------------------------------
+ssh mcostan@euler.ethz.ch
+
+--------------------------------------------------------------------------------
+ELIMINARE I FILE (da Euler)
+--------------------------------------------------------------------------------
+rm -rf ~/AZIMUTH
+
+--------------------------------------------------------------------------------
+AGGIORNARE I FILE (da Windows Terminal, se hai modificato il codice)
+--------------------------------------------------------------------------------
+scp -r "C:\AZIMUTH\AZIMUTH" mcostan@euler.ethz.ch:~/
+
+--------------------------------------------------------------------------------
+INSTALLARE OPTUNA (solo la prima volta)
+--------------------------------------------------------------------------------
+srun --cpus-per-task=2 --mem-per-cpu=4G --time=04:00:00 --pty bash
+module load stack/2024-05 gcc/13.2.0 python/3.11.6_cuda
+pip install --user optuna plotly kaleido
+exit
+
+--------------------------------------------------------------------------------
+TRAIN PROCESSES (solo la prima volta o se cambi modello)
+--------------------------------------------------------------------------------
+srun --cpus-per-task=2 --mem-per-cpu=4G --time=04:00:00 --pty bash
+module load stack/2024-05 gcc/13.2.0 python/3.11.6_cuda
+cd ~/AZIMUTH
+python controller_optimization/train_processes.py
+exit
+
+--------------------------------------------------------------------------------
+CREARE LO STUDY OPTUNA (una volta prima di lanciare i job)
+--------------------------------------------------------------------------------
+srun --cpus-per-task=1 --mem-per-cpu=2G --time=04:00:00 --pty bash
+module load stack/2024-05 gcc/13.2.0 python/3.11.6_cuda
+cd ~/AZIMUTH
+python controller_optimization/optuna_tuning.py --create-study --study-name "controller_hpo"
+exit
+
+--------------------------------------------------------------------------------
+LANCIARE OPTUNA SWEEP (50 trial in parallelo)
+--------------------------------------------------------------------------------
+cd ~/AZIMUTH
+sed -i 's/\r$//' controller_optimization/optuna_sweep.sh
+sbatch controller_optimization/optuna_sweep.sh
+
+--------------------------------------------------------------------------------
+CONTROLLARE LO STATO DEI JOB SLURM
+--------------------------------------------------------------------------------
+squeue -u $USER
+
+--------------------------------------------------------------------------------
+CONTROLLARE LO STATO DELLO STUDY OPTUNA
+--------------------------------------------------------------------------------
+module load stack/2024-05 gcc/13.2.0 python/3.11.6_cuda
+cd ~/AZIMUTH
+python controller_optimization/optuna_tuning.py --study-name "controller_hpo" --status
+
+--------------------------------------------------------------------------------
+GENERARE REPORT (quando i job sono finiti)
+--------------------------------------------------------------------------------
+srun --cpus-per-task=2 --mem-per-cpu=4G --time=04:00:00 --pty bash
+module load stack/2024-05 gcc/13.2.0 python/3.11.6_cuda
+cd ~/AZIMUTH
+python controller_optimization/optuna_tuning.py --study-name "controller_hpo" --report
+exit
+
+--------------------------------------------------------------------------------
+VEDERE I RISULTATI
+--------------------------------------------------------------------------------
+ls controller_optimization/optuna_results/controller_hpo/
+cat controller_optimization/optuna_results/controller_hpo/summary.txt
+cat controller_optimization/optuna_results/controller_hpo/best_params.json
+
+--------------------------------------------------------------------------------
+SCARICARE REPORT DA WINDOWS TERMINAL
+--------------------------------------------------------------------------------
+scp -r mcostan@euler.ethz.ch:~/AZIMUTH/controller_optimization/optuna_results/controller_hpo "C:\AZIMUTH\optuna_results"
+
+--------------------------------------------------------------------------------
+SCARICARE SOLO I FILE IMPORTANTI (alternativa)
+--------------------------------------------------------------------------------
+scp mcostan@euler.ethz.ch:~/AZIMUTH/controller_optimization/optuna_results/controller_hpo/best_params.json "C:\AZIMUTH\optuna_results\best_params.json"
+scp mcostan@euler.ethz.ch:~/AZIMUTH/controller_optimization/optuna_results/controller_hpo/summary.txt "C:\AZIMUTH\optuna_results\summary.txt"
+scp mcostan@euler.ethz.ch:~/AZIMUTH/controller_optimization/optuna_results/controller_hpo/*.png "C:\AZIMUTH\optuna_results\"
+
+================================================================================
+COMANDI UTILI
+================================================================================
+
+squeue -u $USER              # Vedi job in esecuzione
+scancel <job-id>             # Cancella un job specifico
+scancel -u $USER             # Cancella TUTTI i tuoi job
+cat logs/optuna_*_0.out      # Vedi output primo job
+cat logs/optuna_*_0.err      # Vedi errori primo job
+exit                         # Esci da nodo/sessione
+
+================================================================================
+CONFIGURAZIONE OPTUNA_SWEEP.SH
+================================================================================
+
+Nel file optuna_sweep.sh puoi modificare:
+
+#SBATCH --array=0-49         # Numero di trial (0-49 = 50 trial)
+#SBATCH --time=04:00:00      # Tempo massimo per trial (4 ore)
+REDUCED_EPOCHS=500           # Epoche ridotte per trial veloci
+                             # (lascia vuoto per training completo)
+
+================================================================================
+IPERPARAMETRI OTTIMIZZATI
+================================================================================
+
+- hidden_sizes:           [32,16], [64,32], [128,64], [128,64,32], [256,128,64]
+- dropout:                0.0 - 0.4
+- use_batchnorm:          True / False
+- scenario_embedding_dim: 8 - 64 (step 8)
+- learning_rate:          1e-5 - 1e-2 (log scale)
+
+================================================================================
+FILE GENERATI
+================================================================================
+
+optuna_results/controller_hpo/
+├── study.db                    # Database SQLite (contiene tutti i risultati)
+├── best_params.json            # Migliori iperparametri trovati
+├── summary.txt                 # Report testuale
+├── optimization_history.png    # Evoluzione loss nel tempo
+├── param_importances.png       # Importanza dei parametri
+├── parallel_coordinate.png     # Relazioni tra parametri
+├── slice_plot.png              # Effetto singoli parametri
+└── contour_lr_dropout.png      # Interazione lr vs dropout
+
+================================================================================
+ORDINE CORRETTO
+================================================================================
+
+1. Login su Euler
+2. (Se necessario) Aggiorna i file
+3. (Solo prima volta) Installa Optuna
+4. (Se necessario) Esegui train_processes.py
+5. Crea lo study Optuna
+6. Lancia sbatch optuna_sweep.sh
+7. Aspetta che finisca (squeue mostra lista vuota)
+8. Genera il report
+9. Scarica risultati su Windows
+
+================================================================================
+DIFFERENZE DA SWEEP NORMALE
+================================================================================
+
+SWEEP NORMALE (sweep.sh):
+- Grid search sui seed
+- Trial indipendenti
+- Nessun database condiviso
+
+OPTUNA (optuna_sweep.sh):
+- Ricerca intelligente (TPE sampler)
+- Trial comunicano tramite database SQLite
+- Pruning automatico (trial scarsi interrotti)
+- Visualizzazioni automatiche
+
+================================================================================
+TROUBLESHOOTING
+================================================================================
+
+Errore "Study not found":
+  → Assicurati di aver eseguito --create-study prima
+
+Errore "Database locked":
+  → Troppi job simultanei. Aspetta qualche secondo e riprova
+
+Trial tutti pruned:
+  → Aumenta REDUCED_EPOCHS in optuna_sweep.sh
+  → Oppure rimuovi la riga per usare training completo
+
+Job falliti:
+  → Controlla logs/optuna_*.err per dettagli
+  → Verifica che train_processes.py sia stato eseguito
+
+================================================================================
