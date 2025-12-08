@@ -625,8 +625,8 @@ def generate_pdf_report(study: optuna.Study, output_dir: Path, verbose: bool = T
     body_style = ParagraphStyle(
         'BodyText',
         parent=styles['Normal'],
-        fontSize=8,
-        leading=10,
+        fontSize=7,
+        leading=9,
         leftIndent=10
     )
 
