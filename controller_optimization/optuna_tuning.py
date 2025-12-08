@@ -630,6 +630,13 @@ def main():
         print(f"Creating new study: {args.study_name}")
         print(f"Storage: {storage}")
 
+        # Delete existing study directory if it exists
+        if output_dir.exists():
+            import shutil
+            print(f"Removing existing study directory: {output_dir}")
+            shutil.rmtree(output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+
         study = optuna.create_study(
             study_name=args.study_name,
             storage=storage,
