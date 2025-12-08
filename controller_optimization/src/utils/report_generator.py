@@ -605,7 +605,7 @@ class ControllerReportGenerator:
             self.story.append(Spacer(1, 0.2*cm))
 
     def add_embedding_plots(self, checkpoint_dir):
-        """Add scenario embedding visualization plots"""
+        """Add scenario embedding visualization plots - split across two logical pages for 2-up layout"""
         checkpoint_dir = Path(checkpoint_dir)
 
         # Check if any embedding plots exist
@@ -622,87 +622,84 @@ class ControllerReportGenerator:
         if len(available_plots) == 0:
             return  # No embedding plots to add
 
-        self.add_section_title("Scenario Encoder Analysis")
+        # Split plots across two logical pages (will be side-by-side in 2-up PDF):
+        # Page 1 (left in 2-up): t-SNE, PCA, Distances
+        # Page 2 (right in 2-up): Correlations, Evolution
 
-        # Stack plots vertically for better visibility (not 2x2 grid)
-        # Exclude evolution plot as it's added separately at the end
-        plots_to_stack = [p for p in available_plots if p != 'embedding_evolution.png']
+        page1_plots = ['embedding_tsne.png', 'embedding_pca.png', 'embedding_distances.png']
+        page2_plots = ['embedding_correlations.png', 'embedding_evolution.png']
 
-        # Larger dimensions for stacked layout
-        plot_width = 16*cm  # Much larger than 2x2 grid (was 9cm)
-        plot_height = 11*cm  # Much taller than 2x2 grid (was 7cm)
+        # Filter to only available plots
+        page1_available = [p for p in page1_plots if p in available_plots]
+        page2_available = [p for p in page2_plots if p in available_plots]
 
-        for plot_name in plots_to_stack:
+        # Dimensions for full-page layout - use full page width
+        plot_width = 18*cm
+        # Height per plot: 3 plots on page 1, 2 plots on page 2
+        page1_plot_height = 8.5*cm
+        page2_plot_height = 12*cm
+
+        def create_plot_with_caption(plot_name, width, height):
+            """Create image with caption below, centered"""
             plot_path = checkpoint_dir / plot_name
-
-            # Create image
             img = Image(str(plot_path))
             img_width, img_height = img.imageWidth, img.imageHeight
             aspect_ratio = img_height / img_width
 
             # Calculate dimensions maintaining aspect ratio
-            new_width = plot_width
+            new_width = width
             new_height = new_width * aspect_ratio
 
-            # Limit height if too tall
-            if new_height > plot_height:
-                new_height = plot_height
+            if new_height > height:
+                new_height = height
                 new_width = new_height / aspect_ratio
 
             img.drawWidth = new_width
             img.drawHeight = new_height
 
-            # Center the image
+            # Caption
+            caption_text = plot_name.replace('embedding_', '').replace('.png', '').replace('_', ' ').title()
+            caption = Paragraph(f"<i>{caption_text}</i>", self.styles['Normal'])
+
+            # Center image in table - full page width
             img_table = Table([[img]], colWidths=[18*cm])
             img_table.setStyle(TableStyle([
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
                 ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
             ]))
-            self.story.append(img_table)
 
-            # Create caption
-            caption_text = plot_name.replace('embedding_', '').replace('.png', '').replace('_', ' ').title()
-            caption = Paragraph(f"<i>{caption_text}</i>", self.styles['Normal'])
             caption_table = Table([[caption]], colWidths=[18*cm])
             caption_table.setStyle(TableStyle([
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
             ]))
-            self.story.append(caption_table)
-            self.story.append(Spacer(1, 0.15*cm))
 
-        # Add evolution plot separately if it exists (usually wider)
-        if 'embedding_evolution.png' in available_plots:
-            evol_path = checkpoint_dir / 'embedding_evolution.png'
-            img_evol = Image(str(evol_path))
+            return img_table, caption_table
 
-            # Larger width for evolution plot
-            new_width = 17*cm
-            img_width, img_height = img_evol.imageWidth, img_evol.imageHeight
-            aspect_ratio = img_height / img_width
-            new_height = new_width * aspect_ratio
+        # === PAGE 1: t-SNE, PCA, Distances ===
+        self.story.append(PageBreak())
+        self.add_section_title("Scenario Encoder Analysis")
 
-            if new_height > 12*cm:
-                new_height = 12*cm
-                new_width = new_height / aspect_ratio
-
-            img_evol.drawWidth = new_width
-            img_evol.drawHeight = new_height
-
-            # Center the image
-            img_table = Table([[img_evol]], colWidths=[18*cm])
-            img_table.setStyle(TableStyle([
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ]))
+        for plot_name in page1_available:
+            img_table, caption_table = create_plot_with_caption(plot_name, plot_width, page1_plot_height)
             self.story.append(img_table)
-
-            caption = Paragraph("<i>Embedding Evolution During Training</i>", self.styles['Normal'])
-            caption_table = Table([[caption]], colWidths=[18*cm])
-            caption_table.setStyle(TableStyle([
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ]))
             self.story.append(caption_table)
-            self.story.append(Spacer(1, 0.15*cm))
+            self.story.append(Spacer(1, 0.3*cm))
+
+        # === PAGE 2: Correlations, Evolution ===
+        if page2_available:
+            self.story.append(PageBreak())
+            self.add_section_title("Scenario Encoder Analysis (cont.)")
+
+            for plot_name in page2_available:
+                # Evolution plot slightly smaller
+                if plot_name == 'embedding_evolution.png':
+                    height = 10*cm
+                else:
+                    height = page2_plot_height
+                img_table, caption_table = create_plot_with_caption(plot_name, plot_width, height)
+                self.story.append(img_table)
+                self.story.append(caption_table)
+                self.story.append(Spacer(1, 0.4*cm))
 
     def add_plots_stacked(self, checkpoint_dir):
         """Add controller optimization plots stacked vertically"""
