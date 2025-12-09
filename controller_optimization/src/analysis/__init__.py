@@ -11,7 +11,17 @@ from .theoretical_loss_analysis import (
     estimate_effective_params_simple,
     run_validation_sampling,
     compute_z_score,
-    format_status
+    format_status,
+    # Multi-controller / empirical functions
+    compute_empirical_multi_process_L_min,
+    detect_significant_correlations,
+    sample_Q_from_trajectory,
+    compute_empirical_correlation_matrix,
+    compute_multi_controller_L_min,
+    # Low-level functions for correlations
+    compute_per_process_Q_stats,
+    compute_cross_moment,
+    compute_covariance
 )
 
 from .theoretical_visualization import (
@@ -48,6 +58,16 @@ __all__ = [
     'run_validation_sampling',
     'compute_z_score',
     'format_status',
+    # Multi-controller / empirical functions
+    'compute_empirical_multi_process_L_min',
+    'detect_significant_correlations',
+    'sample_Q_from_trajectory',
+    'compute_empirical_correlation_matrix',
+    'compute_multi_controller_L_min',
+    # Low-level functions for correlations
+    'compute_per_process_Q_stats',
+    'compute_cross_moment',
+    'compute_covariance',
     # Visualization
     'plot_loss_vs_L_min',
     'plot_efficiency_over_time',

@@ -28,7 +28,6 @@ Where:
 """
 
 import numpy as np
-import torch
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Any
 from pathlib import Path
@@ -523,6 +522,381 @@ def compute_multi_process_L_min(
     return combined_components, per_process_components
 
 
+def compute_empirical_multi_process_L_min(
+    Q_samples: Dict[str, np.ndarray],
+    process_weights: Dict[str, float],
+    F_star: float,
+    loss_scale: float = 1.0
+) -> Tuple[float, float, float, float]:
+    """
+    Compute L_min empirically from samples when correlations are unknown.
+
+    Empirical procedure (from theoretical document):
+    1. Generate N realizations of (Q₁⁽ᵏ⁾, ..., Qₙ⁽ᵏ⁾) for k = 1,...,N
+    2. For each realization compute F⁽ᵏ⁾ = (1/W) × Σᵢ wᵢQᵢ⁽ᵏ⁾
+    3. Estimate variance: Var_hat(F) = (1/(N-1)) × Σₖ(F⁽ᵏ⁾ - F̄)²
+    4. Estimate mean: E_hat[F] = F̄
+    5. Compute L_min_hat = Var_hat(F) + (E_hat[F] - F*)²
+
+    Args:
+        Q_samples: Dict mapping process_name to array of Q samples, shape (N,)
+                   All arrays must have the same length N (aligned samples)
+        process_weights: Dict mapping process_name to weight
+        F_star: Target reliability (combined F*)
+        loss_scale: Scale factor for the loss
+
+    Returns:
+        Tuple of (L_min_empirical, E_F_empirical, Var_F_empirical, N_samples)
+    """
+    process_names = list(Q_samples.keys())
+
+    if len(process_names) == 0:
+        return 0.0, 0.0, 0.0, 0
+
+    # Verify all samples have same length
+    N = len(Q_samples[process_names[0]])
+    for name in process_names:
+        if len(Q_samples[name]) != N:
+            raise ValueError(f"Sample arrays must have same length. "
+                           f"{process_names[0]} has {N}, {name} has {len(Q_samples[name])}")
+
+    # Compute total weight
+    W = sum(process_weights.get(name, 1.0) for name in process_names)
+
+    if W <= 0 or N < 2:
+        return 0.0, 0.0, 0.0, N
+
+    # Step 2: Compute F⁽ᵏ⁾ for each realization k
+    F_samples = np.zeros(N)
+    for k in range(N):
+        F_k = 0.0
+        for name in process_names:
+            w_i = process_weights.get(name, 1.0)
+            Q_i_k = Q_samples[name][k]
+            F_k += w_i * Q_i_k
+        F_samples[k] = F_k / W
+
+    # Step 3 & 4: Estimate mean and variance
+    E_F_empirical = np.mean(F_samples)
+    Var_F_empirical = np.var(F_samples, ddof=1)  # ddof=1 for unbiased estimator (N-1)
+
+    # Step 5: L_min = Var[F] + (E[F] - F*)²
+    Bias2_empirical = (E_F_empirical - F_star) ** 2
+    L_min_empirical = (Var_F_empirical + Bias2_empirical) * loss_scale
+
+    return L_min_empirical, E_F_empirical, Var_F_empirical * loss_scale, N
+
+
+def detect_significant_correlations(
+    Q_samples: Dict[str, np.ndarray],
+    process_params: Dict[str, Dict[str, float]],
+    process_weights: Dict[str, float],
+    F_star: float,
+    loss_scale: float = 1.0,
+    threshold: float = 0.1
+) -> Tuple[bool, float, float, float]:
+    """
+    Detect if correlations between processes are significant.
+
+    Procedure:
+    1. Compute L_min_indep assuming independence (analytical formula)
+    2. Compute L_min_emp using empirical procedure
+    3. If (L_min_emp - L_min_indep) / L_min_indep > threshold, correlations are significant
+
+    Args:
+        Q_samples: Dict mapping process_name to array of Q samples
+        process_params: Dict mapping process_name to {'F_star', 'delta', 'sigma2', 's'}
+        process_weights: Dict mapping process_name to weight
+        F_star: Target reliability (combined F*)
+        loss_scale: Scale factor for the loss
+        threshold: Relative difference threshold (default 0.1 = 10%)
+
+    Returns:
+        Tuple of (is_significant, relative_diff, L_min_empirical, L_min_independent)
+    """
+    # Step 1: Compute L_min assuming independence
+    combined_indep, _ = compute_multi_process_L_min(
+        process_params=process_params,
+        process_weights=process_weights,
+        loss_scale=loss_scale,
+        correlation_matrix=None  # Independence assumption
+    )
+    L_min_indep = combined_indep.L_min
+
+    # Step 2: Compute L_min empirically
+    L_min_emp, _, _, N = compute_empirical_multi_process_L_min(
+        Q_samples=Q_samples,
+        process_weights=process_weights,
+        F_star=F_star,
+        loss_scale=loss_scale
+    )
+
+    # Step 3: Check if difference is significant
+    if L_min_indep > 0:
+        relative_diff = (L_min_emp - L_min_indep) / L_min_indep
+    else:
+        relative_diff = 0.0 if L_min_emp == 0 else float('inf')
+
+    is_significant = abs(relative_diff) > threshold
+
+    return is_significant, relative_diff, L_min_emp, L_min_indep
+
+
+def sample_Q_from_trajectory(
+    process_chain,
+    surrogate,
+    scenario_idx: int,
+    n_samples: int = 100,
+    batch_size: int = 1
+) -> Tuple[Dict[str, np.ndarray], float]:
+    """
+    Generate aligned Q samples for all processes from multiple forward passes.
+
+    This function runs n_samples forward passes through the process chain,
+    collecting Q_i values for each process at each pass. The samples are
+    aligned: Q_samples['laser'][k] and Q_samples['plasma'][k] come from
+    the same forward pass k.
+
+    Args:
+        process_chain: ProcessChain instance
+        surrogate: ProTSurrogate instance (contains PROCESS_CONFIGS)
+        scenario_idx: Which scenario to evaluate
+        n_samples: Number of forward passes
+        batch_size: Batch size per pass
+
+    Returns:
+        Tuple of (Q_samples dict, F_star)
+        Q_samples maps process_name to array of shape (n_samples,)
+    """
+    import torch
+    from controller_optimization.src.models.surrogate import ProTSurrogate
+
+    process_configs = ProTSurrogate.PROCESS_CONFIGS
+    Q_samples = {name: [] for name in process_configs.keys()}
+
+    with torch.no_grad():
+        process_chain.eval()
+
+        for _ in range(n_samples):
+            trajectory = process_chain.forward(batch_size=batch_size, scenario_idx=scenario_idx)
+
+            # Compute Q_i for each process
+            for proc_name, data in trajectory.items():
+                if proc_name not in process_configs:
+                    continue
+
+                cfg = process_configs[proc_name]
+                tau = cfg['target']
+                s = cfg['scale']
+
+                # Get output mean for this sample
+                output_mean = data['outputs_mean'].mean().item()
+
+                # Q_i = exp(-(output - τ)² / s)
+                Q_i = np.exp(-(output_mean - tau) ** 2 / s)
+                Q_samples[proc_name].append(Q_i)
+
+    # Convert lists to arrays
+    Q_samples = {name: np.array(samples) for name, samples in Q_samples.items()
+                 if len(samples) > 0}
+
+    # Get F_star for this scenario
+    F_star = surrogate.F_star[scenario_idx] if hasattr(surrogate, 'F_star') else 1.0
+
+    return Q_samples, F_star
+
+
+def compute_empirical_correlation_matrix(
+    Q_samples: Dict[str, np.ndarray]
+) -> Dict[Tuple[str, str], float]:
+    """
+    Estimate correlation matrix from Q samples.
+
+    Computes Pearson correlation coefficients between all pairs of processes.
+
+    Args:
+        Q_samples: Dict mapping process_name to array of Q samples
+
+    Returns:
+        Dict mapping (process_i, process_j) to correlation coefficient ρᵢⱼ
+    """
+    process_names = list(Q_samples.keys())
+    correlation_matrix = {}
+
+    for i, name_i in enumerate(process_names):
+        for j, name_j in enumerate(process_names):
+            if i == j:
+                # Self-correlation is always 1
+                correlation_matrix[(name_i, name_j)] = 1.0
+            elif i < j:
+                # Compute Pearson correlation
+                samples_i = Q_samples[name_i]
+                samples_j = Q_samples[name_j]
+
+                if len(samples_i) > 1 and len(samples_j) > 1:
+                    # Use numpy corrcoef
+                    corr_matrix = np.corrcoef(samples_i, samples_j)
+                    rho = corr_matrix[0, 1]
+
+                    # Handle NaN (can happen if one variable has zero variance)
+                    if np.isnan(rho):
+                        rho = 0.0
+
+                    correlation_matrix[(name_i, name_j)] = rho
+                    correlation_matrix[(name_j, name_i)] = rho  # Symmetric
+                else:
+                    correlation_matrix[(name_i, name_j)] = 0.0
+                    correlation_matrix[(name_j, name_i)] = 0.0
+
+    return correlation_matrix
+
+
+def compute_multi_controller_L_min(
+    controllers_data: Dict[str, Dict[str, Any]],
+    controller_weights: Dict[str, float],
+    loss_scale: float = 1.0,
+    use_empirical: bool = False,
+    n_samples: int = 100
+) -> Tuple[TheoreticalLossComponents, Dict[str, TheoreticalLossComponents]]:
+    """
+    Compute L_min for a system with multiple controllers.
+
+    Each controller manages its own set of processes. The overall system
+    reliability is a weighted combination of per-controller reliabilities.
+
+    This function supports two modes:
+    1. Analytical (use_empirical=False): Uses theoretical formulas assuming
+       independence between controllers
+    2. Empirical (use_empirical=True): Uses sampling to capture correlations
+
+    Args:
+        controllers_data: Dict mapping controller_name to:
+            {
+                'process_params': Dict[process_name, {'F_star', 'delta', 'sigma2', 's'}],
+                'process_weights': Dict[process_name, weight],
+                'Q_samples': Optional[Dict[process_name, np.ndarray]]  # For empirical mode
+            }
+        controller_weights: Dict mapping controller_name to weight
+        loss_scale: Scale factor for the loss
+        use_empirical: If True, use empirical procedure; else use analytical
+        n_samples: Number of samples for empirical mode (ignored if Q_samples provided)
+
+    Returns:
+        Tuple of (combined L_min components, dict of per-controller components)
+    """
+    per_controller_components = {}
+
+    # Step 1: Compute L_min for each controller
+    for ctrl_name, ctrl_data in controllers_data.items():
+        process_params = ctrl_data['process_params']
+        process_weights = ctrl_data['process_weights']
+
+        if use_empirical and 'Q_samples' in ctrl_data and ctrl_data['Q_samples']:
+            # Empirical mode
+            Q_samples = ctrl_data['Q_samples']
+
+            # Compute F_star for this controller
+            W = sum(process_weights.get(p, 1.0) for p in process_params.keys())
+            F_star_ctrl = sum(
+                process_params[p]['F_star'] * process_weights.get(p, 1.0)
+                for p in process_params.keys()
+            ) / W if W > 0 else 0.0
+
+            L_min, E_F, Var_F, N = compute_empirical_multi_process_L_min(
+                Q_samples=Q_samples,
+                process_weights=process_weights,
+                F_star=F_star_ctrl,
+                loss_scale=loss_scale
+            )
+
+            # Create components object
+            E_F2 = Var_F / loss_scale + E_F ** 2 if loss_scale > 0 else E_F ** 2
+            Bias2 = (E_F - F_star_ctrl) ** 2 * loss_scale
+
+            components = TheoreticalLossComponents(
+                L_min=L_min,
+                E_F=E_F,
+                E_F2=E_F2,
+                Var_F=Var_F,
+                Bias2=Bias2,
+                F_star=F_star_ctrl,
+                sigma2=np.mean([p['sigma2'] for p in process_params.values()]),
+                delta=0.0,
+                s=0.0
+            )
+        else:
+            # Analytical mode (assumes independence within controller)
+            components, _ = compute_multi_process_L_min(
+                process_params=process_params,
+                process_weights=process_weights,
+                loss_scale=loss_scale,
+                correlation_matrix=None
+            )
+
+        per_controller_components[ctrl_name] = components
+
+    # Step 2: Combine controllers using weighted average
+    ctrl_names = list(controllers_data.keys())
+    W_total = sum(controller_weights.get(name, 1.0) for name in ctrl_names)
+
+    if W_total > 0:
+        # Combined F* = Σ(w_ctrl × F*_ctrl) / W_total
+        combined_F_star = sum(
+            per_controller_components[name].F_star * controller_weights.get(name, 1.0)
+            for name in ctrl_names
+        ) / W_total
+
+        # Combined E[F] = Σ(w_ctrl × E[F_ctrl]) / W_total
+        combined_E_F = sum(
+            per_controller_components[name].E_F * controller_weights.get(name, 1.0)
+            for name in ctrl_names
+        ) / W_total
+
+        # Combined Var[F] = Σ(w_ctrl² × Var[F_ctrl]) / W_total²
+        # (assuming independence between controllers)
+        combined_Var_F = sum(
+            per_controller_components[name].Var_F * (controller_weights.get(name, 1.0) ** 2)
+            for name in ctrl_names
+        ) / (W_total ** 2)
+
+        # Bias² = (E[F] - F*)²
+        combined_Bias2 = (combined_E_F - combined_F_star) ** 2 * loss_scale
+
+        # L_min = Var[F] + Bias² (Var_F is already scaled)
+        combined_L_min = combined_Var_F + combined_Bias2
+
+        # E[F²] = Var[F] + E[F]²
+        combined_E_F2 = combined_Var_F / loss_scale + combined_E_F ** 2 if loss_scale > 0 else combined_E_F ** 2
+
+        # Mean sigma2
+        combined_sigma2 = sum(
+            per_controller_components[name].sigma2 * controller_weights.get(name, 1.0)
+            for name in ctrl_names
+        ) / W_total
+    else:
+        combined_L_min = 0.0
+        combined_E_F = 0.0
+        combined_E_F2 = 0.0
+        combined_Var_F = 0.0
+        combined_Bias2 = 0.0
+        combined_F_star = 0.0
+        combined_sigma2 = 0.0
+
+    combined_components = TheoreticalLossComponents(
+        L_min=combined_L_min,
+        E_F=combined_E_F,
+        E_F2=combined_E_F2,
+        Var_F=combined_Var_F,
+        Bias2=combined_Bias2,
+        F_star=combined_F_star,
+        sigma2=combined_sigma2,
+        delta=0.0,
+        s=0.0
+    )
+
+    return combined_components, per_controller_components
+
+
 @dataclass
 class TheoreticalLossTracker:
     """
@@ -766,6 +1140,8 @@ def compute_effective_params_from_trajectory(
     Returns:
         Dict mapping process_name to {'F_star', 'delta', 'sigma2', 's'}
     """
+    import torch
+
     params = {}
 
     for process_name, data in trajectory.items():
@@ -866,6 +1242,8 @@ def run_validation_sampling(
     Returns:
         Tuple of (F_samples array, mean_sigma2, F_star)
     """
+    import torch
+
     F_samples = []
     sigma2_samples = []
 
@@ -966,4 +1344,170 @@ if __name__ == '__main__':
     print(f"  E[F] = {components_det.E_F:.6f} (should equal F* = {F_star})")
     print(f"  L_min = {components_det.L_min:.6f} (should be 0)")
 
-    print("\nTest passed!")
+    # Test multi-process with correlations
+    print("\n" + "="*60)
+    print("Testing Multi-Process L_min with Correlations")
+    print("="*60)
+
+    # Create test parameters for 3 processes
+    process_params = {
+        'laser': {'F_star': 0.9, 'delta': 0.1, 'sigma2': 0.02, 's': 0.1},
+        'plasma': {'F_star': 0.85, 'delta': 0.2, 'sigma2': 0.03, 's': 2.0},
+        'galvanic': {'F_star': 0.88, 'delta': 0.15, 'sigma2': 0.025, 's': 4.0}
+    }
+    process_weights = {'laser': 1.0, 'plasma': 1.0, 'galvanic': 1.5}
+
+    # Test independent case
+    print("\n1. Independent processes (ρ = 0):")
+    combined_indep, per_proc_indep = compute_multi_process_L_min(
+        process_params=process_params,
+        process_weights=process_weights,
+        loss_scale=100.0,
+        correlation_matrix=None
+    )
+    print(f"  Combined L_min: {combined_indep.L_min:.6f}")
+    print(f"  Combined E[F]: {combined_indep.E_F:.6f}")
+    print(f"  Combined Var[F]: {combined_indep.Var_F:.6f}")
+
+    # Test with correlations
+    print("\n2. Correlated processes (ρ_ij = 0.3):")
+    correlation_matrix = {
+        ('laser', 'plasma'): 0.3, ('plasma', 'laser'): 0.3,
+        ('laser', 'galvanic'): 0.3, ('galvanic', 'laser'): 0.3,
+        ('plasma', 'galvanic'): 0.3, ('galvanic', 'plasma'): 0.3
+    }
+    combined_corr, per_proc_corr = compute_multi_process_L_min(
+        process_params=process_params,
+        process_weights=process_weights,
+        loss_scale=100.0,
+        correlation_matrix=correlation_matrix
+    )
+    print(f"  Combined L_min: {combined_corr.L_min:.6f}")
+    print(f"  Combined E[F]: {combined_corr.E_F:.6f}")
+    print(f"  Combined Var[F]: {combined_corr.Var_F:.6f}")
+
+    # Verify: correlated should have higher variance
+    print(f"\n  Var[F] ratio (corr/indep): {combined_corr.Var_F / combined_indep.Var_F:.3f}")
+    print(f"  (should be > 1 for positive correlations)")
+
+    # Test empirical procedure
+    print("\n" + "="*60)
+    print("Testing Empirical Multi-Process L_min")
+    print("="*60)
+
+    # Generate synthetic Q samples (simulating forward passes)
+    np.random.seed(42)
+    N_samples = 1000
+
+    # Generate correlated samples using Cholesky decomposition
+    # First, generate independent standard normals
+    Z = np.random.randn(N_samples, 3)
+
+    # Correlation matrix for generating samples
+    R = np.array([
+        [1.0, 0.3, 0.3],
+        [0.3, 1.0, 0.3],
+        [0.3, 0.3, 1.0]
+    ])
+    L = np.linalg.cholesky(R)
+    Z_corr = Z @ L.T
+
+    # Transform to Q values (using Q = exp(-delta²/s) structure with noise)
+    Q_samples_synth = {}
+    for idx, (proc_name, params) in enumerate(process_params.items()):
+        base_Q = params['F_star']
+        noise_std = np.sqrt(params['sigma2']) / params['s']
+        Q_samples_synth[proc_name] = base_Q * np.exp(-noise_std * Z_corr[:, idx])
+        # Clip to [0, 1]
+        Q_samples_synth[proc_name] = np.clip(Q_samples_synth[proc_name], 0, 1)
+
+    # Compute combined F* for comparison
+    W = sum(process_weights.values())
+    F_star_combined = sum(
+        process_params[p]['F_star'] * process_weights[p] for p in process_params
+    ) / W
+
+    print(f"\nSynthetic samples generated: N = {N_samples}")
+    print(f"Combined F* = {F_star_combined:.6f}")
+
+    # Empirical L_min
+    L_min_emp, E_F_emp, Var_F_emp, N = compute_empirical_multi_process_L_min(
+        Q_samples=Q_samples_synth,
+        process_weights=process_weights,
+        F_star=F_star_combined,
+        loss_scale=100.0
+    )
+    print(f"\nEmpirical results:")
+    print(f"  L_min_emp: {L_min_emp:.6f}")
+    print(f"  E[F]_emp: {E_F_emp:.6f}")
+    print(f"  Var[F]_emp: {Var_F_emp:.6f}")
+
+    # Detect correlations
+    print("\n" + "="*60)
+    print("Testing Correlation Detection")
+    print("="*60)
+
+    is_sig, rel_diff, L_emp, L_indep = detect_significant_correlations(
+        Q_samples=Q_samples_synth,
+        process_params=process_params,
+        process_weights=process_weights,
+        F_star=F_star_combined,
+        loss_scale=100.0,
+        threshold=0.1
+    )
+    print(f"\nCorrelation detection:")
+    print(f"  L_min (empirical): {L_emp:.6f}")
+    print(f"  L_min (independent): {L_indep:.6f}")
+    print(f"  Relative difference: {rel_diff*100:.1f}%")
+    print(f"  Significant correlations: {is_sig}")
+
+    # Estimate correlation matrix
+    print("\n" + "="*60)
+    print("Testing Empirical Correlation Matrix")
+    print("="*60)
+
+    corr_est = compute_empirical_correlation_matrix(Q_samples_synth)
+    print("\nEstimated correlations:")
+    for (p1, p2), rho in corr_est.items():
+        if p1 < p2:  # Print each pair once
+            print(f"  ρ({p1}, {p2}) = {rho:.3f} (true: 0.3)")
+
+    # Test multi-controller
+    print("\n" + "="*60)
+    print("Testing Multi-Controller L_min")
+    print("="*60)
+
+    controllers_data = {
+        'controller_A': {
+            'process_params': {
+                'laser': process_params['laser'],
+                'plasma': process_params['plasma']
+            },
+            'process_weights': {'laser': 1.0, 'plasma': 1.0}
+        },
+        'controller_B': {
+            'process_params': {
+                'galvanic': process_params['galvanic']
+            },
+            'process_weights': {'galvanic': 1.0}
+        }
+    }
+    controller_weights = {'controller_A': 2.0, 'controller_B': 1.0}
+
+    combined_multi, per_ctrl = compute_multi_controller_L_min(
+        controllers_data=controllers_data,
+        controller_weights=controller_weights,
+        loss_scale=100.0,
+        use_empirical=False
+    )
+    print(f"\nMulti-controller results (analytical):")
+    print(f"  Combined L_min: {combined_multi.L_min:.6f}")
+    print(f"  Combined E[F]: {combined_multi.E_F:.6f}")
+    print(f"  Combined Var[F]: {combined_multi.Var_F:.6f}")
+    print(f"\nPer-controller:")
+    for ctrl_name, comp in per_ctrl.items():
+        print(f"  {ctrl_name}: L_min={comp.L_min:.6f}, E[F]={comp.E_F:.6f}")
+
+    print("\n" + "="*60)
+    print("All tests passed!")
+    print("="*60)
