@@ -7,7 +7,7 @@
 #SBATCH --mem-per-cpu=4G
 #SBATCH --output=logs/optuna_%A_%a.out
 #SBATCH --error=logs/optuna_%A_%a.err
-#SBATCH --array=0-49
+#SBATCH --array=0-149
 
 # ============================================================================
 # Optuna Distributed Hyperparameter Optimization - Euler HPC (ETH Zurich)
@@ -20,7 +20,6 @@
 # Hyperparameters optimized:
 #   - hidden_sizes: Architecture of the policy generator
 #   - dropout: Dropout rate for regularization
-#   - use_batchnorm: Whether to use batch normalization
 #   - scenario_embedding_dim: Dimension of scenario embedding
 #   - learning_rate: Learning rate for optimizer
 #
@@ -53,7 +52,7 @@ set -e
 
 # Configuration
 STUDY_NAME="controller_hpo"
-N_TRIALS=50  # Total trials (should match --array size)
+N_TRIALS=150  # Total trials (should match --array size)
 REDUCED_EPOCHS=500  # Fewer epochs for faster trials (set to empty for full training)
 
 # Load required modules (Euler 2024 stack)

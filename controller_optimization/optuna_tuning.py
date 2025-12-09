@@ -9,7 +9,6 @@ Euler HPC cluster.
 Hyperparameters optimized:
 - hidden_sizes: Architecture of the policy generator
 - dropout: Dropout rate for regularization
-- use_batchnorm: Whether to use batch normalization
 - scenario_embedding_dim: Dimension of scenario embedding
 - learning_rate: Learning rate for optimizer
 
@@ -83,7 +82,6 @@ SEARCH_SPACE = {
         [256, 128, 64],
     ],
     'dropout': (0.0, 0.4),  # Uniform range
-    'use_batchnorm': [True, False],
     'scenario_embedding_dim': (8, 64, 8),  # (min, max, step)
     'learning_rate': (1e-5, 1e-2),  # Log-uniform range
 }
@@ -139,12 +137,6 @@ def create_objective(base_config: dict, device: str = 'auto',
             SEARCH_SPACE['dropout'][1]
         )
 
-        # Batch normalization (categorical/boolean)
-        use_batchnorm = trial.suggest_categorical(
-            'use_batchnorm',
-            SEARCH_SPACE['use_batchnorm']
-        )
-
         # Scenario embedding dimension (int with step)
         scenario_embedding_dim = trial.suggest_int(
             'scenario_embedding_dim',
@@ -168,7 +160,6 @@ def create_objective(base_config: dict, device: str = 'auto',
         cfg['policy_generator']['architecture'] = 'custom'
         cfg['policy_generator']['hidden_sizes'] = hidden_sizes
         cfg['policy_generator']['dropout'] = dropout
-        cfg['policy_generator']['use_batchnorm'] = use_batchnorm
         cfg['policy_generator']['use_scenario_encoder'] = True  # Enable for embedding_dim
         cfg['policy_generator']['scenario_embedding_dim'] = scenario_embedding_dim
         cfg['training']['learning_rate'] = learning_rate
@@ -201,7 +192,6 @@ def create_objective(base_config: dict, device: str = 'auto',
             print(f"{'='*60}")
             print(f"  hidden_sizes: {hidden_sizes}")
             print(f"  dropout: {dropout:.4f}")
-            print(f"  use_batchnorm: {use_batchnorm}")
             print(f"  scenario_embedding_dim: {scenario_embedding_dim}")
             print(f"  learning_rate: {learning_rate:.6f}")
             print(f"  epochs: {cfg['training']['epochs']}")
@@ -766,7 +756,6 @@ def generate_pdf_report(study: optuna.Study, output_dir: Path, verbose: bool = T
 
     search_space_text = """• <b>hidden_sizes:</b> [32,16], [64,32], [128,64], [128,64,32], [256,128,64]<br/>
 • <b>dropout:</b> 0.0 - 0.4 (uniform)<br/>
-• <b>use_batchnorm:</b> True, False<br/>
 • <b>scenario_embedding_dim:</b> 8 - 64 (step 8)<br/>
 • <b>learning_rate:</b> 1e-5 - 1e-2 (log-uniform)"""
     content.append(Paragraph(search_space_text, body_style))
@@ -889,7 +878,7 @@ def main():
     )
 
     # Execution mode
-    parser.add_argument('--n-trials', type=int, default=50,
+    parser.add_argument('--n-trials', type=int, default=150,
                         help='Number of trials for local execution')
     parser.add_argument('--create-study', action='store_true',
                         help='Create a new study (for distributed execution)')

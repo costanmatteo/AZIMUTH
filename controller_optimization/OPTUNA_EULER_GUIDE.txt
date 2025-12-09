@@ -44,7 +44,7 @@ python controller_optimization/optuna_tuning.py --create-study --study-name "con
 exit
 
 --------------------------------------------------------------------------------
-LANCIARE OPTUNA SWEEP (50 trial in parallelo)
+LANCIARE OPTUNA SWEEP (150 trial in parallelo)
 --------------------------------------------------------------------------------
 cd ~/AZIMUTH
 sed -i 's/\r$//' controller_optimization/optuna_sweep.sh
@@ -107,7 +107,7 @@ CONFIGURAZIONE OPTUNA_SWEEP.SH
 
 Nel file optuna_sweep.sh puoi modificare:
 
-#SBATCH --array=0-49         # Numero di trial (0-49 = 50 trial)
+#SBATCH --array=0-149        # Numero di trial (0-149 = 150 trial)
 #SBATCH --time=04:00:00      # Tempo massimo per trial (4 ore)
 REDUCED_EPOCHS=500           # Epoche ridotte per trial veloci
                              # (lascia vuoto per training completo)
@@ -118,7 +118,6 @@ IPERPARAMETRI OTTIMIZZATI
 
 - hidden_sizes:           [32,16], [64,32], [128,64], [128,64,32], [256,128,64]
 - dropout:                0.0 - 0.4
-- use_batchnorm:          True / False
 - scenario_embedding_dim: 8 - 64 (step 8)
 - learning_rate:          1e-5 - 1e-2 (log scale)
 
