@@ -20,26 +20,27 @@ class ProTSurrogate:
 
     # Configuration for process-specific targets and quality scales
     # These values are based on typical ranges from the SCM models
+    # RELIABILITY: 50% galvanic + 50% microetch (laser/plasma excluded)
     PROCESS_CONFIGS = {
         'laser': {
             'target': 0.8,      # ActualPower target
             'scale': 0.1,       # Quality scale (smaller = more sensitive)
-            'weight': 1.0       # Relative importance
+            'weight': 0.0       # Excluded from reliability calculation
         },
         'plasma': {
             'target': 3.0,      # RemovalRate target
             'scale': 2.0,
-            'weight': 1.0
+            'weight': 0.0       # Excluded from reliability calculation
         },
         'galvanic': {
             'target': 10.0,     # Thickness target (μm)
             'scale': 4.0,
-            'weight': 1.5       # More important (final product quality)
+            'weight': 1.0       # 50% of reliability
         },
         'microetch': {
             'target': 20.0,     # Depth target
             'scale': 4.0,
-            'weight': 1.0
+            'weight': 1.0       # 50% of reliability
         }
     }
 
