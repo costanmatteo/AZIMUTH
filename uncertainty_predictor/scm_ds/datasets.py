@@ -366,11 +366,11 @@ ds_scm_plasma = SCMDataset(
         "K0":       lambda rng, n: np.full(n, 0.5),
         "LAMBDA_P": lambda rng, n: np.full(n, 0.02),
         "BETA":     lambda rng, n: np.full(n, 0.8),
-        "SIGMA_M0": lambda rng, n: np.full(n, 0.001),
-        "C_P":      lambda rng, n: np.full(n, 0.0005),
-        "SIGMA_A":  lambda rng, n: np.full(n, 0.002),
-        "LAMBDA_J": lambda rng, n: np.full(n, 0.01),
-        "THETA_J":  lambda rng, n: np.full(n, 0.01),
+        "SIGMA_M0": lambda rng, n: np.full(n, 0.06),     # Increased: base multiplicative noise (was 0.001)
+        "C_P":      lambda rng, n: np.full(n, 0.04),     # Increased: power-dependent noise (was 0.0005)
+        "SIGMA_A":  lambda rng, n: np.full(n, 0.03),     # Increased: additive measurement noise (was 0.002)
+        "LAMBDA_J": lambda rng, n: np.full(n, 0.15),     # Increased: Poisson rate for micro-arcing (was 0.01)
+        "THETA_J":  lambda rng, n: np.full(n, 0.08),     # Increased: arc amplitude scale (was 0.01)
         "PMAX":     lambda rng, n: np.full(n, 500.0),
 
         # ==================== INTERMEDIATE NODES ====================
@@ -384,9 +384,9 @@ ds_scm_plasma = SCMDataset(
         # Additive noise: standard normal (scaled in equation)
         "NoiseAdd": lambda rng, n: rng.standard_normal(n),
 
-        # Poisson jumps: custom sampler
+        # Poisson jumps: custom sampler (increased rate and amplitude)
         "Jump": lambda rng, n: np.array([
-            np.sum(rng.exponential(0.05, rng.poisson(0.1))) if rng.poisson(0.1) > 0 else 0.0
+            np.sum(rng.exponential(0.08, rng.poisson(0.15))) if rng.poisson(0.15) > 0 else 0.0
             for _ in range(n)
         ]),
 
@@ -510,10 +510,10 @@ ds_scm_galvanic = SCMDataset(
         "N_ELEC":  lambda rng, n: np.full(n, 2.0),
         "FARADAY": lambda rng, n: np.full(n, 96485.0),
         "RHO_CU":  lambda rng, n: np.full(n, 8.96),
-        "SIGMA_G": lambda rng, n: np.full(n, 0.02),
-        "A_R":     lambda rng, n: np.full(n, 0.01),
+        "SIGMA_G": lambda rng, n: np.full(n, 0.001),   # Minimized: spatial variation (was 0.02)
+        "A_R":     lambda rng, n: np.full(n, 0.0001),  # Minimized: ripple amplitude (was 0.01)
         "F_R":     lambda rng, n: np.full(n, 100.0),
-        "SIGMA_A": lambda rng, n: np.full(n, 0.005),
+        "SIGMA_A": lambda rng, n: np.full(n, 0.0001),  # Minimized: measurement noise (was 0.005)
 
         # ==================== INTERMEDIATE NODES ====================
         "tCu_ideal":  lambda rng, n: np.zeros(n),
@@ -631,15 +631,15 @@ ds_scm_microetch = SCMDataset(
         "R_GAS":   lambda rng, n: np.full(n, 8.314),
         "ALPHA":   lambda rng, n: np.full(n, 0.5),      # Square-root concentration dependence
 
-        # Noise parameters
-        "SIGMA_M": lambda rng, n: np.full(n, 0.06),     # 6% multiplicative noise
-        "NU":      lambda rng, n: np.full(n, 5.0),      # Student-t degrees of freedom
-        "S_T":     lambda rng, n: np.full(n, 0.3),      # 0.3 μm additive noise
+        # Noise parameters - Minimized
+        "SIGMA_M": lambda rng, n: np.full(n, 0.001),    # Minimized: multiplicative noise (was 0.06)
+        "NU":      lambda rng, n: np.full(n, 30.0),     # Higher DF = closer to normal (was 5.0)
+        "S_T":     lambda rng, n: np.full(n, 0.001),    # Minimized: additive noise (was 0.3)
 
         # ==================== INTERMEDIATE & NOISE NODES ====================
         "Rremoved": lambda rng, n: np.zeros(n),
         "Zln": lambda rng, n: rng.standard_normal(n),
-        "NoiseStudentT": lambda rng, n: rng.standard_t(df=5, size=n),
+        "NoiseStudentT": lambda rng, n: rng.standard_t(df=30, size=n),  # Higher DF for minimized noise
         "RemovalDepth": lambda rng, n: np.zeros(n),
     },
     groups=None,
