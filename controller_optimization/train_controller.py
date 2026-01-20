@@ -1086,30 +1086,79 @@ def main(config=None):
             print(f"  Empirical Var[F]: {np.var(F_samples_array):.8f}")
 
             # Compute per-process parameters correctly
+            # NEW: Calculate adaptive tau per scenario, then average delta
             process_params_for_L_min = {}
             print("\n  Per-process theoretical parameters:")
+
+            # First, get outputs per scenario for adaptive target calculation
+            n_scenarios = None
+            scenario_outputs = {}  # {proc_name: array of shape (n_scenarios,)}
+            for proc_name in active_processes:
+                if proc_name in target_trajectory:
+                    outputs = target_trajectory[proc_name]['outputs']
+                    if isinstance(outputs, torch.Tensor):
+                        outputs = outputs.detach().cpu().numpy()
+                    # Squeeze to get (n_scenarios,) or (n_scenarios, 1)
+                    if outputs.ndim > 1:
+                        outputs = outputs.squeeze(-1)
+                    scenario_outputs[proc_name] = outputs
+                    if n_scenarios is None:
+                        n_scenarios = len(outputs)
+
+            if n_scenarios is None:
+                n_scenarios = 1
 
             for proc_name in active_processes:
                 if proc_name not in process_configs_surrogate:
                     continue
 
                 proc_cfg = process_configs_surrogate[proc_name]
-                tau = proc_cfg['target']  # Process optimum
                 s = proc_cfg['scale']     # Quality scale
                 weight = proc_cfg.get('weight', 1.0)
 
-                # Get target output from target_trajectory (μ_target)
-                if proc_name in target_trajectory:
-                    target_outputs = target_trajectory[proc_name]['outputs']
-                    if isinstance(target_outputs, torch.Tensor):
-                        mu_target = target_outputs.mean().item()
-                    else:
-                        mu_target = np.mean(target_outputs)
+                # Get target outputs for all scenarios
+                if proc_name in scenario_outputs:
+                    mu_targets = scenario_outputs[proc_name]
                 else:
-                    mu_target = tau  # Fallback: assume target is at optimum
+                    mu_targets = np.array([proc_cfg['target']])
 
-                # CORRECT delta calculation: δ = μ_target - τ
-                delta = mu_target - tau
+                # Compute adaptive tau PER SCENARIO based on previous process outputs
+                # Formulas from surrogate.py compute_reliability()
+                taus = np.zeros(n_scenarios)
+                for i in range(n_scenarios):
+                    if proc_name == 'laser':
+                        taus[i] = 0.8  # Fixed target
+                    elif proc_name == 'plasma':
+                        tau_i = 3.0
+                        if 'laser' in scenario_outputs:
+                            tau_i = tau_i + 2.0 * (scenario_outputs['laser'][i] - 0.8)
+                        taus[i] = tau_i
+                    elif proc_name == 'galvanic':
+                        tau_i = 10.0
+                        if 'plasma' in scenario_outputs:
+                            tau_i = tau_i + 5.0 * (scenario_outputs['plasma'][i] - 5.0)
+                        if 'laser' in scenario_outputs:
+                            tau_i = tau_i + 4.0 * (scenario_outputs['laser'][i] - 0.5)
+                        taus[i] = tau_i
+                    elif proc_name == 'microetch':
+                        tau_i = 20.0
+                        if 'laser' in scenario_outputs:
+                            tau_i = tau_i + 15.0 * (scenario_outputs['laser'][i] - 0.5)
+                        if 'plasma' in scenario_outputs:
+                            tau_i = tau_i + 3.0 * (scenario_outputs['plasma'][i] - 5.0)
+                        if 'galvanic' in scenario_outputs:
+                            tau_i = tau_i - 1.5 * (scenario_outputs['galvanic'][i] - 10.0)
+                        taus[i] = tau_i
+                    else:
+                        taus[i] = proc_cfg['target']  # Fallback to config
+
+                # Compute delta per scenario: δ_i = μ_target_i - τ_i
+                deltas = mu_targets[:n_scenarios] - taus
+
+                # Average delta and tau across scenarios
+                delta = np.mean(deltas)
+                tau_mean = np.mean(taus)
+                mu_target_mean = np.mean(mu_targets[:n_scenarios])
 
                 # F* for this process: F*_i = exp(-δ²/s)
                 F_star_i = np.exp(-delta**2 / s)
@@ -1128,13 +1177,13 @@ def main(config=None):
                 }
 
                 print(f"    {proc_name}:")
-                print(f"      τ (target) = {tau:.4f}, μ_target = {mu_target:.4f}")
-                print(f"      δ = μ_target - τ = {delta:.4f}")
+                print(f"      τ (adaptive mean) = {tau_mean:.4f}, μ_target = {mu_target_mean:.4f}")
+                print(f"      δ = mean(μ_target_i - τ_i) = {delta:.4f}")
                 print(f"      σ² = {sigma2_i:.6f}, s = {s:.4f}")
                 print(f"      F*_i = exp(-δ²/s) = {F_star_i:.6f}")
 
                 # Update tracker process configs
-                theoretical_tracker.process_configs[proc_name] = {'tau': tau, 's': s}
+                theoretical_tracker.process_configs[proc_name] = {'tau': tau_mean, 's': s}
                 theoretical_tracker.process_weights[proc_name] = weight
 
             # Get correlation matrix from trainer (if enabled in config)
