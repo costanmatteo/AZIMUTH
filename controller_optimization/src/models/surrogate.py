@@ -72,7 +72,7 @@ class ProTSurrogate:
         # Compute F_star for each scenario
         self.F_star = self.compute_all_target_reliabilities()
 
-    def compute_reliability(self, trajectory):
+    def compute_reliability(self, trajectory, return_quality_scores=False):
         """
         Calcola reliability F per una trajectory.
 
@@ -90,9 +90,15 @@ class ProTSurrogate:
                 'plasma': {...},
                 'galvanic': {...}
             }
+            return_quality_scores (bool): If True, also return per-process quality scores.
+                                          Default False for backward compatibility.
 
         Returns:
-            torch.Tensor: Reliability score F (scalar, differentiable)
+            If return_quality_scores=False:
+                torch.Tensor: Reliability score F (scalar, differentiable)
+            If return_quality_scores=True:
+                Tuple[torch.Tensor, Dict[str, torch.Tensor]]: (F, quality_scores)
+                where quality_scores maps process_name to per-process Q_i tensor
         """
         # Use already sampled outputs if available, otherwise sample here
         sampled_outputs = {}
@@ -221,6 +227,8 @@ class ProTSurrogate:
             # Fallback (should never happen)
             F = torch.tensor(0.0, device=self.device)
 
+        if return_quality_scores:
+            return F, quality_scores
         return F
 
     def compute_all_target_reliabilities(self):
