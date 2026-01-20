@@ -251,7 +251,7 @@ class ProTSurrogate:
                         'outputs_var': torch.zeros_like(data['outputs'][scenario_idx:scenario_idx+1])
                     }
 
-                F_star = self.compute_reliability(scenario_traj)
+                F_star = self.compute_reliability(scenario_traj, return_quality_scores=False)
                 F_star_values.append(F_star.item())
 
         return np.array(F_star_values)
