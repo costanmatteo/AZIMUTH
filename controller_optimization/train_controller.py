@@ -1137,18 +1137,37 @@ def main(config=None):
                 theoretical_tracker.process_configs[proc_name] = {'tau': tau, 's': s}
                 theoretical_tracker.process_weights[proc_name] = weight
 
-            # Compute combined L_min using multi-process formula
+            # Get correlation matrix from trainer (if enabled in config)
+            use_correlation = cfg.get('theoretical_analysis', {}).get('use_correlation_for_L_min', True)
+
+            if use_correlation:
+                correlation_matrix = trainer.compute_correlation_matrix()
+                if correlation_matrix:
+                    print("\n  Estimated process correlations (from training data):")
+                    print(trainer.get_correlation_summary())
+                else:
+                    print("\n  No correlation data available (using independence assumption)")
+            else:
+                correlation_matrix = None
+                print("\n  Correlation disabled in config (using independence assumption)")
+
+            # Compute combined L_min using multi-process formula WITH correlations
             from controller_optimization.src.analysis import compute_multi_process_L_min
             combined_components, per_process_components = compute_multi_process_L_min(
                 process_params=process_params_for_L_min,
                 process_weights={p: process_configs_surrogate[p].get('weight', 1.0)
                                 for p in process_params_for_L_min.keys()},
-                loss_scale=CONTROLLER_CONFIG['training']['reliability_loss_scale']
+                loss_scale=CONTROLLER_CONFIG['training']['reliability_loss_scale'],
+                correlation_matrix=correlation_matrix if correlation_matrix else None
             )
 
             print(f"\n  Combined theoretical L_min: {combined_components.L_min:.6f}")
             print(f"    Var[F] component: {combined_components.Var_F:.6f}")
             print(f"    Bias² component:  {combined_components.Bias2:.6f}")
+            if correlation_matrix:
+                print(f"    (Computed with process correlations)")
+            else:
+                print(f"    (Computed assuming process independence)")
 
             # Populate tracker with data from training history
             reliability_loss_history = history.get('reliability_loss', [])
@@ -1182,6 +1201,17 @@ def main(config=None):
                 proc_name: comp.to_dict() for proc_name, comp in per_process_components.items()
             }
             theoretical_data['combined_L_min'] = combined_components.to_dict()
+
+            # Add correlation matrix to theoretical_data
+            if correlation_matrix:
+                # Convert tuple keys to string keys for JSON serialization
+                theoretical_data['correlation_matrix'] = {
+                    f"{k[0]},{k[1]}": v for k, v in correlation_matrix.items()
+                }
+                theoretical_data['correlation_used'] = True
+            else:
+                theoretical_data['correlation_matrix'] = {}
+                theoretical_data['correlation_used'] = False
 
             # Generate theoretical analysis plots
             print("  Generating theoretical analysis plots...")

@@ -82,6 +82,10 @@ class ControllerTrainer:
             'learning_rate': [],  # Track learning rate per epoch
         }
 
+        # Per-process quality score history for correlation estimation
+        # Dict: {process_name: [Q_values per epoch/scenario]}
+        self.Q_history = {}
+
         # Embedding tracking (if scenario encoder is enabled)
         self.embedding_history = {}  # Dict: {epoch: embeddings_array}
 
@@ -400,7 +404,8 @@ class ControllerTrainer:
 
         self.process_chain.train()
 
-    def compute_loss(self, trajectory, scenario_idx, reliability_weight=1.0, lambda_bc=None):
+    def compute_loss(self, trajectory, scenario_idx, reliability_weight=1.0, lambda_bc=None,
+                     return_quality_scores=False):
         """
         Calcola loss totale per uno specifico scenario.
 
@@ -409,9 +414,13 @@ class ControllerTrainer:
             scenario_idx (int): Index of the scenario being evaluated
             reliability_weight (float): Weight for reliability loss (0.0 = ignore, 1.0 = full)
             lambda_bc (float): Behavior cloning weight (if None, uses self.lambda_bc)
+            return_quality_scores (bool): If True, also return per-process quality scores
 
         Returns:
-            total_loss, reliability_loss, bc_loss, F
+            If return_quality_scores=False:
+                total_loss, reliability_loss, bc_loss, F
+            If return_quality_scores=True:
+                total_loss, reliability_loss, bc_loss, F, quality_scores
         """
         # Use provided lambda_bc or fall back to instance value
         if lambda_bc is None:
@@ -419,7 +428,7 @@ class ControllerTrainer:
 
         # Reliability loss: scale * (F - F*)^2
         # Scale prevents vanishing gradients when delta F is small (~0.1)
-        F = self.surrogate.compute_reliability(trajectory)
+        F, quality_scores = self.surrogate.compute_reliability(trajectory, return_quality_scores=True)
 
         # Get F_star for this specific scenario
         F_star_value = self.surrogate.F_star[scenario_idx]
@@ -463,6 +472,8 @@ class ControllerTrainer:
         # reliability_weight controls if reliability loss is active (0.0 during warm-up)
         total_loss = reliability_weight * torch.mean(reliability_loss) + lambda_bc * bc_loss
 
+        if return_quality_scores:
+            return total_loss, torch.mean(reliability_loss).item(), bc_loss.item(), torch.mean(F).item(), quality_scores
         return total_loss, torch.mean(reliability_loss).item(), bc_loss.item(), torch.mean(F).item()
 
     def train_epoch(self, batch_size=32, reliability_weight=1.0, lambda_bc=None):
@@ -510,11 +521,21 @@ class ControllerTrainer:
             )
 
             # Compute loss using scenario-specific F_star and dynamic weights
-            total_loss, rel_loss, bc_loss, F = self.compute_loss(
+            # Also collect quality_scores for correlation estimation
+            total_loss, rel_loss, bc_loss, F, quality_scores = self.compute_loss(
                 trajectory, scenario_idx,
                 reliability_weight=reliability_weight,
-                lambda_bc=lambda_bc
+                lambda_bc=lambda_bc,
+                return_quality_scores=True
             )
+
+            # Collect quality scores for correlation estimation
+            for proc_name, Q in quality_scores.items():
+                if proc_name not in self.Q_history:
+                    self.Q_history[proc_name] = []
+                # Store mean Q value (detached from computation graph)
+                Q_mean = Q.detach().mean().item()
+                self.Q_history[proc_name].append(Q_mean)
 
             # Backward pass
             self.optimizer.zero_grad()
@@ -890,6 +911,104 @@ class ControllerTrainer:
             'F_star_std': np.std(self.surrogate.F_star),
             'trajectories': trajectories
         }
+
+    def compute_correlation_matrix(self):
+        """
+        Compute correlation matrix between process quality scores from Q_history.
+
+        Uses the quality scores (Qᵢ) collected during training to estimate
+        empirical correlations ρᵢⱼ between processes. These correlations
+        are used to compute a more accurate L_min that accounts for
+        correlated process errors.
+
+        Formula:
+            ρᵢⱼ = Cov(Qᵢ, Qⱼ) / (σᵢ × σⱼ)
+
+        Returns:
+            Dict[Tuple[str, str], float]: Correlation matrix as dict mapping
+                (process_i, process_j) to correlation coefficient ρᵢⱼ.
+                Returns empty dict if not enough data.
+        """
+        if not self.Q_history:
+            return {}
+
+        process_names = list(self.Q_history.keys())
+
+        # Need at least 2 processes and some data points
+        if len(process_names) < 2:
+            return {}
+
+        # Check all processes have same length
+        n_samples = len(self.Q_history[process_names[0]])
+        if n_samples < 10:  # Need minimum samples for meaningful correlation
+            return {}
+
+        for name in process_names:
+            if len(self.Q_history[name]) != n_samples:
+                print(f"  Warning: Inconsistent Q_history lengths, skipping correlation")
+                return {}
+
+        # Compute correlation matrix
+        correlation_matrix = {}
+
+        for i, name_i in enumerate(process_names):
+            for j, name_j in enumerate(process_names):
+                if i >= j:  # Only upper triangle, correlation is symmetric
+                    continue
+
+                Q_i = np.array(self.Q_history[name_i])
+                Q_j = np.array(self.Q_history[name_j])
+
+                # Compute Pearson correlation
+                # Handle edge case where one array has no variance
+                std_i = np.std(Q_i)
+                std_j = np.std(Q_j)
+
+                if std_i < 1e-10 or std_j < 1e-10:
+                    rho = 0.0  # No correlation if no variance
+                else:
+                    rho = np.corrcoef(Q_i, Q_j)[0, 1]
+                    # Handle NaN from corrcoef
+                    if np.isnan(rho):
+                        rho = 0.0
+
+                # Store both directions (symmetric)
+                correlation_matrix[(name_i, name_j)] = rho
+                correlation_matrix[(name_j, name_i)] = rho
+
+        return correlation_matrix
+
+    def get_correlation_summary(self):
+        """
+        Get a summary of the correlation matrix for logging.
+
+        Returns:
+            str: Formatted string with correlation summary
+        """
+        corr_matrix = self.compute_correlation_matrix()
+
+        if not corr_matrix:
+            return "  No correlation data available"
+
+        lines = ["  Process Correlation Matrix:"]
+        process_names = list(self.Q_history.keys())
+
+        # Header
+        header = "    " + " ".join(f"{name[:6]:>8}" for name in process_names)
+        lines.append(header)
+
+        # Matrix rows
+        for name_i in process_names:
+            row = f"    {name_i[:6]:>6}"
+            for name_j in process_names:
+                if name_i == name_j:
+                    row += f"{'1.000':>8}"
+                else:
+                    rho = corr_matrix.get((name_i, name_j), 0.0)
+                    row += f"{rho:>8.3f}"
+            lines.append(row)
+
+        return "\n".join(lines)
 
     def save_checkpoint(self, path, epoch):
         """Save model checkpoint."""
