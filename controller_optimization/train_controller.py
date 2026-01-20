@@ -1137,14 +1137,19 @@ def main(config=None):
                 theoretical_tracker.process_configs[proc_name] = {'tau': tau, 's': s}
                 theoretical_tracker.process_weights[proc_name] = weight
 
-            # Get correlation matrix from trainer (estimated from Q_history during training)
-            correlation_matrix = trainer.compute_correlation_matrix()
+            # Get correlation matrix from trainer (if enabled in config)
+            use_correlation = cfg.get('theoretical_analysis', {}).get('use_correlation_for_L_min', True)
 
-            if correlation_matrix:
-                print("\n  Estimated process correlations (from training data):")
-                print(trainer.get_correlation_summary())
+            if use_correlation:
+                correlation_matrix = trainer.compute_correlation_matrix()
+                if correlation_matrix:
+                    print("\n  Estimated process correlations (from training data):")
+                    print(trainer.get_correlation_summary())
+                else:
+                    print("\n  No correlation data available (using independence assumption)")
             else:
-                print("\n  No correlation data available (using independence assumption)")
+                correlation_matrix = None
+                print("\n  Correlation disabled in config (using independence assumption)")
 
             # Compute combined L_min using multi-process formula WITH correlations
             from controller_optimization.src.analysis import compute_multi_process_L_min
