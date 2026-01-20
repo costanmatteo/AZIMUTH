@@ -366,11 +366,11 @@ ds_scm_plasma = SCMDataset(
         "K0":       lambda rng, n: np.full(n, 0.5),
         "LAMBDA_P": lambda rng, n: np.full(n, 0.02),
         "BETA":     lambda rng, n: np.full(n, 0.8),
-        "SIGMA_M0": lambda rng, n: np.full(n, 0.001),
-        "C_P":      lambda rng, n: np.full(n, 0.0005),
-        "SIGMA_A":  lambda rng, n: np.full(n, 0.002),
-        "LAMBDA_J": lambda rng, n: np.full(n, 0.01),
-        "THETA_J":  lambda rng, n: np.full(n, 0.01),
+        "SIGMA_M0": lambda rng, n: np.full(n, 0.003),
+        "C_P":      lambda rng, n: np.full(n, 0.002),
+        "SIGMA_A":  lambda rng, n: np.full(n, 0.005),
+        "LAMBDA_J": lambda rng, n: np.full(n, 0.03),
+        "THETA_J":  lambda rng, n: np.full(n, 0.03),
         "PMAX":     lambda rng, n: np.full(n, 500.0),
 
         # ==================== INTERMEDIATE NODES ====================
@@ -386,7 +386,7 @@ ds_scm_plasma = SCMDataset(
 
         # Poisson jumps: custom sampler
         "Jump": lambda rng, n: np.array([
-            np.sum(rng.exponential(0.05, rng.poisson(0.1))) if rng.poisson(0.1) > 0 else 0.0
+            np.sum(rng.exponential(0.15, rng.poisson(0.3))) if rng.poisson(0.3) > 0 else 0.0
             for _ in range(n)
         ]),
 
@@ -510,10 +510,10 @@ ds_scm_galvanic = SCMDataset(
         "N_ELEC":  lambda rng, n: np.full(n, 2.0),
         "FARADAY": lambda rng, n: np.full(n, 96485.0),
         "RHO_CU":  lambda rng, n: np.full(n, 8.96),
-        "SIGMA_G": lambda rng, n: np.full(n, 0.02),
-        "A_R":     lambda rng, n: np.full(n, 0.01),
+        "SIGMA_G": lambda rng, n: np.full(n, 0.05),
+        "A_R":     lambda rng, n: np.full(n, 0.03),
         "F_R":     lambda rng, n: np.full(n, 100.0),
-        "SIGMA_A": lambda rng, n: np.full(n, 0.005),
+        "SIGMA_A": lambda rng, n: np.full(n, 0.015),
 
         # ==================== INTERMEDIATE NODES ====================
         "tCu_ideal":  lambda rng, n: np.zeros(n),
@@ -632,9 +632,9 @@ ds_scm_microetch = SCMDataset(
         "ALPHA":   lambda rng, n: np.full(n, 0.5),      # Square-root concentration dependence
 
         # Noise parameters
-        "SIGMA_M": lambda rng, n: np.full(n, 0.06),     # 6% multiplicative noise
+        "SIGMA_M": lambda rng, n: np.full(n, 0.12),     # 12% multiplicative noise
         "NU":      lambda rng, n: np.full(n, 5.0),      # Student-t degrees of freedom
-        "S_T":     lambda rng, n: np.full(n, 0.3),      # 0.3 μm additive noise
+        "S_T":     lambda rng, n: np.full(n, 0.6),      # 0.6 μm additive noise
 
         # ==================== INTERMEDIATE & NOISE NODES ====================
         "Rremoved": lambda rng, n: np.zeros(n),
