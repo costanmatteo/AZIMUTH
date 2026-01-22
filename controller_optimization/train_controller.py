@@ -1097,9 +1097,8 @@ def main(config=None):
                     outputs = target_trajectory[proc_name]['outputs']
                     if isinstance(outputs, torch.Tensor):
                         outputs = outputs.numpy()
-                    # outputs shape: (n_scenarios,) or (n_scenarios, 1)
-                    if outputs.ndim > 1:
-                        outputs = outputs.squeeze()
+                    # Ensure outputs is at least 1-dimensional
+                    outputs = np.atleast_1d(outputs.squeeze())
                     process_outputs_per_scenario[proc_name] = outputs
 
             # Get number of scenarios
