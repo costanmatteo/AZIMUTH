@@ -1121,32 +1121,33 @@ def main(config=None):
                     mu_i = process_outputs_per_scenario.get(proc_name, np.array([0.0]))[scenario_idx]
 
                     # Calculate adaptive τ (same logic as surrogate.compute_reliability)
+                    # Coefficients reduced by 10x to avoid negative targets
                     if proc_name == 'laser':
                         tau_adaptive = 0.8  # Fixed for laser
                     elif proc_name == 'plasma':
                         tau_adaptive = 3.0
                         if 'laser' in process_outputs_per_scenario:
                             laser_out = process_outputs_per_scenario['laser'][scenario_idx]
-                            tau_adaptive = tau_adaptive + 2.0 * (laser_out - 0.8)
+                            tau_adaptive = tau_adaptive + 0.2 * (laser_out - 0.8)
                     elif proc_name == 'galvanic':
                         tau_adaptive = 10.0
                         if 'plasma' in process_outputs_per_scenario:
                             plasma_out = process_outputs_per_scenario['plasma'][scenario_idx]
-                            tau_adaptive = tau_adaptive + 5.0 * (plasma_out - 5.0)
+                            tau_adaptive = tau_adaptive + 0.5 * (plasma_out - 5.0)
                         if 'laser' in process_outputs_per_scenario:
                             laser_out = process_outputs_per_scenario['laser'][scenario_idx]
-                            tau_adaptive = tau_adaptive + 4.0 * (laser_out - 0.5)
+                            tau_adaptive = tau_adaptive + 0.4 * (laser_out - 0.5)
                     elif proc_name == 'microetch':
                         tau_adaptive = 20.0
                         if 'laser' in process_outputs_per_scenario:
                             laser_out = process_outputs_per_scenario['laser'][scenario_idx]
-                            tau_adaptive = tau_adaptive + 15.0 * (laser_out - 0.5)
+                            tau_adaptive = tau_adaptive + 1.5 * (laser_out - 0.5)
                         if 'plasma' in process_outputs_per_scenario:
                             plasma_out = process_outputs_per_scenario['plasma'][scenario_idx]
-                            tau_adaptive = tau_adaptive + 3.0 * (plasma_out - 5.0)
+                            tau_adaptive = tau_adaptive + 0.3 * (plasma_out - 5.0)
                         if 'galvanic' in process_outputs_per_scenario:
                             galvanic_out = process_outputs_per_scenario['galvanic'][scenario_idx]
-                            tau_adaptive = tau_adaptive - 1.5 * (galvanic_out - 10.0)
+                            tau_adaptive = tau_adaptive - 0.15 * (galvanic_out - 10.0)
                     else:
                         # Fallback to fixed target
                         tau_adaptive = proc_cfg['target']
