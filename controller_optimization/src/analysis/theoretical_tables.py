@@ -5,7 +5,7 @@ Generates formatted tables comparing observed vs theoretical metrics.
 """
 
 import numpy as np
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any, Tuple, Union
 from pathlib import Path
 import json
 from dataclasses import dataclass
@@ -54,24 +54,35 @@ def generate_main_results_table(
     lines = []
     lines.append("")
     lines.append("TABELLA PRINCIPALE - Risultati vs Limiti Teorici")
-    lines.append("=" * 85)
-    lines.append(f"{'Metrica':<20} {'Osservato':>12} {'Teorico':>12} {'Diff':>10} {'Diff %':>10} {'Status':>10}")
-    lines.append("-" * 85)
+    lines.append("=" * 95)
+    lines.append(f"{'Metrica':<25} {'Osservato':>12} {'Teorico':>12} {'Diff':>10} {'Diff %':>10} {'Status':>10}")
+    lines.append("-" * 95)
 
     # Loss finale
     final_loss = tracker_summary.get('final_loss', 0)
     final_L_min = tracker_summary.get('final_L_min', 0)
+    final_L_min_perfect = tracker_summary.get('final_L_min_perfect', 0)
+
+    # vs L_min_target
     diff = final_loss - final_L_min
     diff_pct = compute_diff_pct(final_loss, final_L_min) if final_L_min > 0 else 0
     status = get_status_symbol(diff_pct)
-    lines.append(f"{'Loss finale':<20} {format_value(final_loss):>12} {format_value(final_L_min):>12} {format_value(diff):>10} {format_pct(diff_pct):>10} {status:>10}")
+    lines.append(f"{'Loss vs L_min(target)':<25} {format_value(final_loss):>12} {format_value(final_L_min):>12} {format_value(diff):>10} {format_pct(diff_pct):>10} {status:>10}")
 
-    # Best loss
+    # vs L_min_perfect
+    diff_perfect = final_loss - final_L_min_perfect
+    diff_pct_perfect = compute_diff_pct(final_loss, final_L_min_perfect) if final_L_min_perfect > 0 else 0
+    status_perfect = get_status_symbol(diff_pct_perfect)
+    lines.append(f"{'Loss vs L_min(perfect)':<25} {format_value(final_loss):>12} {format_value(final_L_min_perfect):>12} {format_value(diff_perfect):>10} {format_pct(diff_pct_perfect):>10} {status_perfect:>10}")
+
+    # Best loss vs L_min_perfect
     best_loss = tracker_summary.get('best_loss', 0)
-    diff = best_loss - final_L_min
-    diff_pct = compute_diff_pct(best_loss, final_L_min) if final_L_min > 0 else 0
+    diff = best_loss - final_L_min_perfect
+    diff_pct = compute_diff_pct(best_loss, final_L_min_perfect) if final_L_min_perfect > 0 else 0
     status = get_status_symbol(diff_pct)
-    lines.append(f"{'Best loss':<20} {format_value(best_loss):>12} {format_value(final_L_min):>12} {format_value(diff):>10} {format_pct(diff_pct):>10} {status:>10}")
+    lines.append(f"{'Best vs L_min(perfect)':<25} {format_value(best_loss):>12} {format_value(final_L_min_perfect):>12} {format_value(diff):>10} {format_pct(diff_pct):>10} {status:>10}")
+
+    lines.append("-" * 95)
 
     # E[F]
     emp_E_F = tracker_summary.get('empirical_E_F_final', 0)
@@ -79,7 +90,7 @@ def generate_main_results_table(
     diff = emp_E_F - theo_E_F
     diff_pct = compute_diff_pct(emp_E_F, theo_E_F) if theo_E_F > 0 else 0
     status = get_status_symbol(diff_pct)
-    lines.append(f"{'E[F]':<20} {format_value(emp_E_F):>12} {format_value(theo_E_F):>12} {format_value(diff):>10} {format_pct(diff_pct):>10} {status:>10}")
+    lines.append(f"{'E[F]':<25} {format_value(emp_E_F):>12} {format_value(theo_E_F):>12} {format_value(diff):>10} {format_pct(diff_pct):>10} {status:>10}")
 
     # Var[F]
     emp_Var_F = tracker_summary.get('empirical_Var_F_final', 0)
@@ -87,10 +98,12 @@ def generate_main_results_table(
     diff = emp_Var_F - theo_Var_F
     diff_pct = compute_diff_pct(emp_Var_F, theo_Var_F) if theo_Var_F > 0 else 0
     status = get_status_symbol(diff_pct)
-    lines.append(f"{'Var[F]':<20} {format_value(emp_Var_F):>12} {format_value(theo_Var_F):>12} {format_value(diff):>10} {format_pct(diff_pct):>10} {status:>10}")
+    lines.append(f"{'Var[F]':<25} {format_value(emp_Var_F):>12} {format_value(theo_Var_F):>12} {format_value(diff):>10} {format_pct(diff_pct):>10} {status:>10}")
 
-    lines.append("=" * 85)
+    lines.append("=" * 95)
     lines.append("")
+    lines.append(f"L_min(target) = Var[F] + Bias² (lower bound dato il target attuale)")
+    lines.append(f"L_min(perfect) = Var[F] solo (lower bound assoluto, δ=0)")
     lines.append(f"Status: OK = match (<5%), WARN = warning (5-20%), MISMATCH = >20%")
     lines.append("")
 
@@ -133,7 +146,8 @@ def generate_decomposition_table(
     Bias2: float,
     gap: float,
     L_min: float,
-    total_loss: float
+    total_loss: float,
+    L_min_perfect: Optional[float] = None
 ) -> str:
     """
     Generate table showing loss decomposition.
@@ -141,18 +155,19 @@ def generate_decomposition_table(
     Args:
         Var_F: Variance component
         Bias2: Bias squared component
-        gap: Reducible gap
-        L_min: Theoretical minimum (Var_F + Bias2)
+        gap: Reducible gap (vs L_min_target)
+        L_min: Theoretical minimum with current δ (Var_F + Bias2)
         total_loss: Total observed loss
+        L_min_perfect: Theoretical minimum with δ=0 (Var_F only)
 
     Returns formatted ASCII table string.
     """
     lines = []
     lines.append("")
     lines.append("TABELLA DECOMPOSIZIONE - Contributi alla Loss")
-    lines.append("=" * 65)
-    lines.append(f"{'Componente':<20} {'Valore':>12} {'% di L_min':>12} {'% di Loss':>12}")
-    lines.append("-" * 65)
+    lines.append("=" * 75)
+    lines.append(f"{'Componente':<25} {'Valore':>12} {'% di L_min':>12} {'% di Loss':>12}")
+    lines.append("-" * 75)
 
     # Calculate percentages
     pct_L_min_var = 100 * Var_F / L_min if L_min > 0 else 0
@@ -161,13 +176,22 @@ def generate_decomposition_table(
     pct_loss_bias = 100 * Bias2 / total_loss if total_loss > 0 else 0
     pct_loss_gap = 100 * gap / total_loss if total_loss > 0 else 0
 
-    lines.append(f"{'Var(F)':<20} {format_value(Var_F):>12} {format_pct(pct_L_min_var):>12} {format_pct(pct_loss_var):>12}")
-    lines.append(f"{'Bias^2':<20} {format_value(Bias2):>12} {format_pct(pct_L_min_bias):>12} {format_pct(pct_loss_bias):>12}")
-    lines.append(f"{'Gap (riducibile)':<20} {format_value(gap):>12} {'-':>12} {format_pct(pct_loss_gap):>12}")
-    lines.append("-" * 65)
-    lines.append(f"{'L_min':<20} {format_value(L_min):>12} {'100.0%':>12} {format_pct(100*L_min/total_loss if total_loss > 0 else 0):>12}")
-    lines.append(f"{'TOTALE':<20} {format_value(total_loss):>12} {'-':>12} {'100.0%':>12}")
-    lines.append("=" * 65)
+    lines.append(f"{'Var(F) [irreducibile]':<25} {format_value(Var_F):>12} {format_pct(pct_L_min_var):>12} {format_pct(pct_loss_var):>12}")
+    lines.append(f"{'Bias² [da target]':<25} {format_value(Bias2):>12} {format_pct(pct_L_min_bias):>12} {format_pct(pct_loss_bias):>12}")
+    lines.append(f"{'Gap [riducibile]':<25} {format_value(gap):>12} {'-':>12} {format_pct(pct_loss_gap):>12}")
+    lines.append("-" * 75)
+
+    # L_min perfect (δ=0)
+    if L_min_perfect is not None:
+        lines.append(f"{'L_min(perfect, δ=0)':<25} {format_value(L_min_perfect):>12} {'-':>12} {format_pct(100*L_min_perfect/total_loss if total_loss > 0 else 0):>12}")
+
+    # L_min target
+    lines.append(f"{'L_min(target, δ attuale)':<25} {format_value(L_min):>12} {'100.0%':>12} {format_pct(100*L_min/total_loss if total_loss > 0 else 0):>12}")
+    lines.append(f"{'TOTALE LOSS':<25} {format_value(total_loss):>12} {'-':>12} {'100.0%':>12}")
+    lines.append("=" * 75)
+    lines.append("")
+    lines.append("Note: L_min(perfect) = Var(F) = lower bound assoluto (policy perfetta)")
+    lines.append("      L_min(target) = Var(F) + Bias² = lower bound dato il target attuale")
     lines.append("")
 
     return "\n".join(lines)
@@ -184,37 +208,55 @@ def generate_efficiency_table(
     lines = []
     lines.append("")
     lines.append("TABELLA EFFICIENZA - Metriche di convergenza")
-    lines.append("=" * 50)
-    lines.append(f"{'Metrica':<35} {'Valore':>12}")
-    lines.append("-" * 50)
+    lines.append("=" * 60)
+    lines.append(f"{'Metrica':<45} {'Valore':>12}")
+    lines.append("-" * 60)
 
-    # Efficiency
+    # Efficiency vs L_min_target
     final_eff = tracker_summary.get('final_efficiency', 0)
-    lines.append(f"{'Efficienza (L_min/Loss)':<35} {format_pct(100*final_eff):>12}")
+    lines.append(f"{'Efficienza vs L_min(target)':<45} {format_pct(100*final_eff):>12}")
 
-    # Gap
+    # Efficiency vs L_min_perfect
+    final_eff_perfect = tracker_summary.get('final_efficiency_perfect', 0)
+    lines.append(f"{'Efficienza vs L_min(perfect)':<45} {format_pct(100*final_eff_perfect):>12}")
+
+    lines.append("-" * 60)
+
+    # Gap vs L_min_target
     final_loss = tracker_summary.get('final_loss', 0)
     final_L_min = tracker_summary.get('final_L_min', 0)
-    gap = final_loss - final_L_min
-    gap_rel = 100 * gap / final_loss if final_loss > 0 else 0
-    lines.append(f"{'Gap assoluto':<35} {format_value(gap):>12}")
-    lines.append(f"{'Gap relativo':<35} {format_pct(gap_rel):>12}")
+    final_L_min_perfect = tracker_summary.get('final_L_min_perfect', 0)
 
-    # Epochs to efficiency thresholds
-    epoch_90 = tracker_summary.get('epoch_90_efficiency', None)
-    epoch_95 = tracker_summary.get('epoch_95_efficiency', None)
-    lines.append(f"{'Epochs al 90% efficienza':<35} {str(epoch_90) if epoch_90 else 'N/A':>12}")
-    lines.append(f"{'Epochs al 95% efficienza':<35} {str(epoch_95) if epoch_95 else 'N/A':>12}")
+    gap_target = final_loss - final_L_min
+    gap_rel_target = 100 * gap_target / final_loss if final_loss > 0 else 0
+    lines.append(f"{'Gap vs L_min(target)':<45} {format_value(gap_target):>12}")
+    lines.append(f"{'Gap relativo vs L_min(target)':<45} {format_pct(gap_rel_target):>12}")
+
+    # Gap vs L_min_perfect
+    gap_perfect = final_loss - final_L_min_perfect
+    gap_rel_perfect = 100 * gap_perfect / final_loss if final_loss > 0 else 0
+    lines.append(f"{'Gap vs L_min(perfect)':<45} {format_value(gap_perfect):>12}")
+    lines.append(f"{'Gap relativo vs L_min(perfect)':<45} {format_pct(gap_rel_perfect):>12}")
+
+    lines.append("-" * 60)
 
     # Best efficiency
     best_eff = tracker_summary.get('best_efficiency', 0)
-    lines.append(f"{'Migliore efficienza raggiunta':<35} {format_pct(100*best_eff):>12}")
+    best_eff_perfect = tracker_summary.get('best_efficiency_perfect', 0)
+    lines.append(f"{'Migliore efficienza vs L_min(target)':<45} {format_pct(100*best_eff):>12}")
+    lines.append(f"{'Migliore efficienza vs L_min(perfect)':<45} {format_pct(100*best_eff_perfect):>12}")
+
+    # Epochs to efficiency thresholds (vs target)
+    epoch_90 = tracker_summary.get('epoch_90_efficiency', None)
+    epoch_95 = tracker_summary.get('epoch_95_efficiency', None)
+    lines.append(f"{'Epochs al 90% efficienza (target)':<45} {str(epoch_90) if epoch_90 else 'N/A':>12}")
+    lines.append(f"{'Epochs al 95% efficienza (target)':<45} {str(epoch_95) if epoch_95 else 'N/A':>12}")
 
     # Total epochs
     total_epochs = tracker_summary.get('total_epochs', 0)
-    lines.append(f"{'Epochs totali':<35} {str(total_epochs):>12}")
+    lines.append(f"{'Epochs totali':<45} {str(total_epochs):>12}")
 
-    lines.append("=" * 50)
+    lines.append("=" * 60)
     lines.append("")
 
     return "\n".join(lines)
@@ -312,7 +354,8 @@ def generate_full_report(
         final_gap = tracker_data['gap'][-1]
         final_L_min = tracker_data['theoretical_L_min'][-1]
         final_loss = tracker_data['observed_loss'][-1]
-        lines.append(generate_decomposition_table(final_Var_F, final_Bias2, final_gap, final_L_min, final_loss))
+        final_L_min_perfect = tracker_data['theoretical_L_min_perfect'][-1] if tracker_data.get('theoretical_L_min_perfect') else None
+        lines.append(generate_decomposition_table(final_Var_F, final_Bias2, final_gap, final_L_min, final_loss, final_L_min_perfect))
 
     # Efficiency table
     lines.append(generate_efficiency_table(summary))
@@ -322,14 +365,24 @@ def generate_full_report(
 
     # Footer
     lines.append("")
-    lines.append("=" * 85)
+    lines.append("=" * 95)
     lines.append("LEGENDA:")
     lines.append("- F* = reliability della traiettoria target (deterministico)")
     lines.append("- F = reliability del controller (sampling stocastico)")
-    lines.append("- L_min = minimo teorico irriducibile quando sigma^2 > 0")
+    lines.append("- δ = μ_target - τ (distanza del target dall'ottimo del processo)")
+    lines.append("")
+    lines.append("DUE TIPI DI L_min:")
+    lines.append("- L_min(perfect) = Var[F] = lower bound assoluto (δ=0, policy perfetta)")
+    lines.append("                   Rappresenta il minimo irriducibile se si potesse scegliere")
+    lines.append("                   τ (target ottimale) come output desiderato.")
+    lines.append("")
+    lines.append("- L_min(target)  = Var[F] + Bias² = lower bound dato il target attuale")
+    lines.append("                   Rappresenta il minimo irriducibile dato che il target")
+    lines.append("                   è fissato a un valore diverso dall'ottimo (δ ≠ 0).")
+    lines.append("")
     lines.append("- Gap = differenza tra loss osservata e L_min (riducibile con training)")
-    lines.append("- Efficienza = quanto della loss e' spiegata dal limite teorico")
-    lines.append("=" * 85)
+    lines.append("- Efficienza = L_min / Loss (quanto della loss è spiegata dal limite teorico)")
+    lines.append("=" * 95)
     lines.append("")
 
     return "\n".join(lines)

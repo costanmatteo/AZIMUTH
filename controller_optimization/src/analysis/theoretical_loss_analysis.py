@@ -364,6 +364,50 @@ def compute_covariance(
     return cov
 
 
+def compute_L_min_perfect_policy(
+    process_params: Dict[str, Dict[str, float]],
+    process_weights: Dict[str, float],
+    loss_scale: float = 1.0,
+    correlation_matrix: Optional[Dict[Tuple[str, str], float]] = None
+) -> TheoreticalLossComponents:
+    """
+    Compute theoretical L_min assuming a perfect policy (δ=0 for all processes).
+
+    A perfect policy would set targets exactly at process optima (τ), yielding F*=1
+    for each process. This gives the absolute lower bound on achievable loss.
+
+    L_min_perfect = Var[F] when δ=0 (no bias term since E[F]=F*=1 when δ=0)
+
+    Args:
+        process_params: Dict mapping process_name to {'F_star', 'delta', 'sigma2', 's'}
+        process_weights: Dict mapping process_name to weight
+        loss_scale: Scale factor for the loss
+        correlation_matrix: Optional correlation matrix (same format as compute_multi_process_L_min)
+
+    Returns:
+        TheoreticalLossComponents for perfect policy (δ=0)
+    """
+    # Create modified params with delta=0 and F_star=1 for each process
+    perfect_params = {}
+    for process_name, params in process_params.items():
+        perfect_params[process_name] = {
+            'F_star': 1.0,  # Perfect quality when δ=0
+            'delta': 0.0,   # Perfect policy hits optimal target
+            'sigma2': params['sigma2'],  # Keep actual variance
+            's': params['s']  # Keep scale parameter
+        }
+
+    # Use the main function with perfect params
+    combined, _ = compute_multi_process_L_min(
+        perfect_params,
+        process_weights,
+        loss_scale,
+        correlation_matrix
+    )
+
+    return combined
+
+
 def compute_multi_process_L_min(
     process_params: Dict[str, Dict[str, float]],
     process_weights: Dict[str, float],
@@ -523,6 +567,40 @@ def compute_multi_process_L_min(
     return combined_components, per_process_components
 
 
+def compute_dual_L_min(
+    process_params: Dict[str, Dict[str, float]],
+    process_weights: Dict[str, float],
+    loss_scale: float = 1.0,
+    correlation_matrix: Optional[Dict[Tuple[str, str], float]] = None
+) -> Tuple[TheoreticalLossComponents, TheoreticalLossComponents, Dict[str, TheoreticalLossComponents]]:
+    """
+    Compute both L_min versions: perfect policy (δ=0) and current target (δ attuale).
+
+    Returns:
+        Tuple of:
+        - L_min_perfect: Components assuming δ=0 (absolute lower bound)
+        - L_min_target: Components with current δ values (lower bound given target)
+        - per_process_components: Per-process breakdown with current δ
+    """
+    # Compute L_min for current target (δ attuale)
+    L_min_target, per_process_components = compute_multi_process_L_min(
+        process_params,
+        process_weights,
+        loss_scale,
+        correlation_matrix
+    )
+
+    # Compute L_min for perfect policy (δ=0)
+    L_min_perfect = compute_L_min_perfect_policy(
+        process_params,
+        process_weights,
+        loss_scale,
+        correlation_matrix
+    )
+
+    return L_min_perfect, L_min_target, per_process_components
+
+
 @dataclass
 class TheoreticalLossTracker:
     """
@@ -544,9 +622,12 @@ class TheoreticalLossTracker:
     # History tracking
     epochs: List[int] = field(default_factory=list)
     observed_loss: List[float] = field(default_factory=list)
-    theoretical_L_min: List[float] = field(default_factory=list)
-    gap: List[float] = field(default_factory=list)
-    efficiency: List[float] = field(default_factory=list)
+    theoretical_L_min: List[float] = field(default_factory=list)  # L_min with current δ (target)
+    theoretical_L_min_perfect: List[float] = field(default_factory=list)  # L_min with δ=0 (perfect policy)
+    gap: List[float] = field(default_factory=list)  # Gap from L_min_target
+    gap_perfect: List[float] = field(default_factory=list)  # Gap from L_min_perfect
+    efficiency: List[float] = field(default_factory=list)  # Efficiency vs L_min_target
+    efficiency_perfect: List[float] = field(default_factory=list)  # Efficiency vs L_min_perfect
 
     # Empirical statistics
     empirical_E_F: List[float] = field(default_factory=list)
@@ -609,12 +690,22 @@ class TheoreticalLossTracker:
         self.observed_loss.append(observed_loss_value)
         self.sigma2_per_epoch.append(sigma2_mean)
 
-        # Compute theoretical values
+        # Compute theoretical values for current target (δ attuale)
         theoretical = compute_theoretical_L_min(F_star, delta, sigma2_mean, s, self.loss_scale)
         self.theoretical_L_min.append(theoretical.L_min)
         self.theoretical_E_F.append(theoretical.E_F)
         self.theoretical_Var_F.append(theoretical.Var_F)
         self.theoretical_Bias2.append(theoretical.Bias2)
+
+        # Compute L_min for perfect policy (δ=0, F*=1)
+        theoretical_perfect = compute_theoretical_L_min(
+            F_star=1.0,  # Perfect quality when δ=0
+            delta=0.0,   # Perfect policy
+            sigma2=sigma2_mean,
+            s=s,
+            loss_scale=self.loss_scale
+        )
+        self.theoretical_L_min_perfect.append(theoretical_perfect.L_min)
 
         # Compute empirical statistics from F_samples
         if len(F_samples) > 0:
@@ -630,7 +721,7 @@ class TheoreticalLossTracker:
         self.empirical_Var_F.append(empirical_var * self.loss_scale)
         self.empirical_Bias2.append(empirical_bias2 * self.loss_scale)
 
-        # Compute gap and efficiency
+        # Compute gap and efficiency vs L_min_target
         gap_value = observed_loss_value - theoretical.L_min
         self.gap.append(gap_value)
 
@@ -640,8 +731,19 @@ class TheoreticalLossTracker:
             efficiency_value = 1.0 if theoretical.L_min == 0 else 0.0
         self.efficiency.append(efficiency_value)
 
-        # Check for violations (loss < L_min indicates theory issue)
-        if observed_loss_value < theoretical.L_min * 0.99:  # 1% tolerance
+        # Compute gap and efficiency vs L_min_perfect
+        gap_perfect_value = observed_loss_value - theoretical_perfect.L_min
+        self.gap_perfect.append(gap_perfect_value)
+
+        if observed_loss_value > 0:
+            efficiency_perfect_value = theoretical_perfect.L_min / observed_loss_value
+        else:
+            efficiency_perfect_value = 1.0 if theoretical_perfect.L_min == 0 else 0.0
+        self.efficiency_perfect.append(efficiency_perfect_value)
+
+        # Check for violations (loss < L_min_perfect indicates theory issue)
+        # Note: We check against L_min_perfect since that's the absolute lower bound
+        if observed_loss_value < theoretical_perfect.L_min * 0.99:  # 1% tolerance
             self.n_violations += 1
 
     def get_final_summary(self) -> Dict[str, Any]:
@@ -660,12 +762,21 @@ class TheoreticalLossTracker:
         return {
             'final_loss': self.observed_loss[final_idx],
             'best_loss': self.observed_loss[best_idx] if best_idx >= 0 else 0.0,
+
+            # L_min target (with current δ)
             'final_L_min': self.theoretical_L_min[final_idx],
             'final_gap': self.gap[final_idx],
             'final_efficiency': self.efficiency[final_idx],
 
+            # L_min perfect (δ=0, absolute lower bound)
+            'final_L_min_perfect': self.theoretical_L_min_perfect[final_idx] if self.theoretical_L_min_perfect else 0.0,
+            'final_gap_perfect': self.gap_perfect[final_idx] if self.gap_perfect else 0.0,
+            'final_efficiency_perfect': self.efficiency_perfect[final_idx] if self.efficiency_perfect else 0.0,
+
             'best_efficiency': max(self.efficiency) if self.efficiency else 0.0,
+            'best_efficiency_perfect': max(self.efficiency_perfect) if self.efficiency_perfect else 0.0,
             'mean_efficiency': np.mean(self.efficiency) if self.efficiency else 0.0,
+            'mean_efficiency_perfect': np.mean(self.efficiency_perfect) if self.efficiency_perfect else 0.0,
 
             'empirical_E_F_final': self.empirical_E_F[final_idx],
             'theoretical_E_F_final': self.theoretical_E_F[final_idx],
@@ -676,7 +787,7 @@ class TheoreticalLossTracker:
             'total_epochs': len(self.epochs),
             'violation_rate': self.n_violations / len(self.epochs) if self.epochs else 0.0,
 
-            # Find epochs where efficiency thresholds were reached
+            # Find epochs where efficiency thresholds were reached (vs L_min_target)
             'epoch_90_efficiency': self._find_efficiency_epoch(0.9),
             'epoch_95_efficiency': self._find_efficiency_epoch(0.95),
         }
@@ -697,8 +808,11 @@ class TheoreticalLossTracker:
             'epochs': self.epochs,
             'observed_loss': self.observed_loss,
             'theoretical_L_min': self.theoretical_L_min,
+            'theoretical_L_min_perfect': self.theoretical_L_min_perfect,
             'gap': self.gap,
+            'gap_perfect': self.gap_perfect,
             'efficiency': self.efficiency,
+            'efficiency_perfect': self.efficiency_perfect,
             'empirical_E_F': self.empirical_E_F,
             'empirical_Var_F': self.empirical_Var_F,
             'empirical_Bias2': self.empirical_Bias2,
@@ -731,8 +845,11 @@ class TheoreticalLossTracker:
         tracker.epochs = data.get('epochs', [])
         tracker.observed_loss = data.get('observed_loss', [])
         tracker.theoretical_L_min = data.get('theoretical_L_min', [])
+        tracker.theoretical_L_min_perfect = data.get('theoretical_L_min_perfect', [])
         tracker.gap = data.get('gap', [])
+        tracker.gap_perfect = data.get('gap_perfect', [])
         tracker.efficiency = data.get('efficiency', [])
+        tracker.efficiency_perfect = data.get('efficiency_perfect', [])
         tracker.empirical_E_F = data.get('empirical_E_F', [])
         tracker.empirical_Var_F = data.get('empirical_Var_F', [])
         tracker.empirical_Bias2 = data.get('empirical_Bias2', [])
