@@ -242,16 +242,19 @@ class ProcessChain(nn.Module):
             self.controllable_info_per_process.append(info)
 
         for i in range(len(processes_config) - 1):
-            # Input to policy: [prev_outputs_mean, prev_outputs_var, scenario_embedding]
+            # Input to policy: [prev_outputs_mean, prev_outputs_var, non_controllable_inputs, scenario_embedding]
             prev_output_dim = processes_config[i]['output_dim']
-            policy_input_size = prev_output_dim + prev_output_dim
+            next_process_info = self.controllable_info_per_process[i + 1]
+            n_non_controllable = next_process_info['n_non_controllable']
+
+            # policy_input_size = prev_mean + prev_var + non_controllable_inputs
+            policy_input_size = prev_output_dim + prev_output_dim + n_non_controllable
 
             # Add scenario embedding dimension if encoder is enabled
             if self.use_scenario_encoder:
                 policy_input_size += self.scenario_embedding_dim
 
             # Output from policy: ONLY controllable inputs for next process
-            next_process_info = self.controllable_info_per_process[i + 1]
             n_controllable = next_process_info['n_controllable']
 
             if n_controllable == 0:
@@ -274,12 +277,12 @@ class ProcessChain(nn.Module):
                     [next_preprocessor.input_max[idx] for idx in controllable_indices],
                     dtype=torch.float32
                 )
-                print(f"  Policy {i} -> Process '{processes_config[i + 1]['name']}' (controllable only):")
+                print(f"  Policy {i} -> Process '{processes_config[i + 1]['name']}':")
+                print(f"    Input dim: {policy_input_size} (prev_mean={prev_output_dim} + prev_var={prev_output_dim} + non_controllable={n_non_controllable})")
+                print(f"    Output dim: {n_controllable} (controllable only)")
                 print(f"    Controllable inputs: {next_process_info['controllable_labels']}")
-                print(f"    Non-controllable inputs: {next_process_info['non_controllable_labels']}")
-                print(f"    Output dim: {n_controllable} (was {processes_config[i + 1]['input_dim']})")
-                print(f"    Min: {output_min.numpy()}")
-                print(f"    Max: {output_max.numpy()}")
+                print(f"    Non-controllable inputs (env conditions): {next_process_info['non_controllable_labels']}")
+                print(f"    Output bounds - Min: {output_min.numpy()}, Max: {output_max.numpy()}")
             else:
                 output_min = None
                 output_max = None
@@ -436,6 +439,49 @@ class ProcessChain(nn.Module):
 
         return full_inputs
 
+    def _get_non_controllable_inputs(self, process_idx, scenario_idx, batch_size):
+        """
+        Get non-controllable inputs for a process from the target trajectory.
+
+        These are environmental conditions (e.g., temperature, ambient conditions)
+        that the policy generator needs to make informed decisions.
+
+        Args:
+            process_idx: Index of the process
+            scenario_idx: Index of the scenario (for retrieving target values)
+            batch_size: Batch size
+
+        Returns:
+            Tensor with non-controllable inputs, shape: (batch_size, n_non_controllable)
+            Returns None if there are no non-controllable inputs
+        """
+        process_name = self.process_names[process_idx]
+        info = self.controllable_info_per_process[process_idx]
+
+        n_non_controllable = info['n_non_controllable']
+
+        # If no non-controllable inputs, return None
+        if n_non_controllable == 0:
+            return None
+
+        non_controllable_indices = info['non_controllable_indices']
+
+        # Get target inputs for this scenario
+        target_inputs_all = self.target_trajectory[process_name]['inputs']
+        target_inputs = target_inputs_all[scenario_idx]  # Shape: (input_dim,)
+
+        # Extract non-controllable values and expand to batch
+        non_controllable_values = torch.tensor(
+            [target_inputs[idx] for idx in non_controllable_indices],
+            dtype=torch.float32,
+            device=self.device
+        )
+
+        # Expand to batch size: (n_non_controllable,) -> (batch_size, n_non_controllable)
+        non_controllable_batch = non_controllable_values.unsqueeze(0).expand(batch_size, -1)
+
+        return non_controllable_batch
+
     def forward(self, batch_size=1, scenario_idx=0):
         """
         Forward pass attraverso tutta la catena per uno scenario specifico.
@@ -488,19 +534,29 @@ class ProcessChain(nn.Module):
 
             # 1. Se i > 0: policy generator produce inputs
             if i > 0:
+                # Get non-controllable inputs for the current process (environmental conditions)
+                non_controllable_inputs = self._get_non_controllable_inputs(i, scenario_idx, batch_size)
+
                 if ProcessChain.debug:
                     print(f"\n[1] POLICY GENERATOR {i-1}: {self.process_names[i-1]} -> {process_name}")
                     print(f"    Policy input components:")
                     print(f"      prev_outputs_mean: shape={prev_outputs_mean.shape}, mean={prev_outputs_mean.mean().item():.6f}, std={prev_outputs_mean.std().item():.6f}")
                     print(f"      prev_outputs_var: shape={prev_outputs_var.shape}, mean={prev_outputs_var.mean().item():.6f}, std={prev_outputs_var.std().item():.6f}")
+                    if non_controllable_inputs is not None:
+                        nc_info = self.controllable_info_per_process[i]
+                        print(f"      non_controllable_inputs: shape={non_controllable_inputs.shape}, labels={nc_info['non_controllable_labels']}")
+                        print(f"        values: {non_controllable_inputs[0].tolist()}")
                     print(f"      Sample values (first batch): prev_mean={prev_outputs_mean[0].tolist()}, prev_var={prev_outputs_var[0].tolist()}")
 
-                # Concatenate: [prev_inputs, prev_outputs_mean, prev_outputs_var, scenario_embedding]
+                # Concatenate: [prev_outputs_mean, prev_outputs_var, non_controllable_inputs, scenario_embedding]
                 policy_input_parts = [
-                   # prev_inputs,
                     prev_outputs_mean,
                     prev_outputs_var
                 ]
+
+                # Add non-controllable inputs (environmental conditions) if present
+                if non_controllable_inputs is not None:
+                    policy_input_parts.append(non_controllable_inputs)
 
                 # Add scenario embedding if encoder is enabled
                 if self.use_scenario_encoder:
