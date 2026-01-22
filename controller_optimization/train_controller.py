@@ -1202,9 +1202,10 @@ def main(config=None):
                 correlation_matrix = None
                 print("\n  Correlation disabled in config (using independence assumption)")
 
-            # Compute combined L_min using multi-process formula WITH correlations
-            from controller_optimization.src.analysis import compute_dual_L_min
-            L_min_perfect, combined_components, per_process_components = compute_dual_L_min(
+            # Compute combined L_min using multi-process formula
+            # L_min = Var[F] + Bias² where Bias² = (E[F] - F*)²
+            from controller_optimization.src.analysis import compute_multi_process_L_min
+            combined_components, per_process_components = compute_multi_process_L_min(
                 process_params=process_params_for_L_min,
                 process_weights={p: process_configs_surrogate[p].get('weight', 1.0)
                                 for p in process_params_for_L_min.keys()},
@@ -1212,12 +1213,12 @@ def main(config=None):
                 correlation_matrix=correlation_matrix if correlation_matrix else None
             )
 
-            print(f"\n  Theoretical L_min (two bounds):")
-            print(f"    L_min_perfect (δ=0):     {L_min_perfect.L_min:.6f}  <- absolute lower bound")
-            print(f"    L_min_target (δ attuale): {combined_components.L_min:.6f}  <- lower bound given target")
-            print(f"\n  L_min_target decomposition:")
+            print(f"\n  Theoretical L_min = Var[F] + Bias²:")
+            print(f"    L_min:            {combined_components.L_min:.6f}")
             print(f"    Var[F] component: {combined_components.Var_F:.6f}")
             print(f"    Bias² component:  {combined_components.Bias2:.6f}")
+            print(f"    E[F]:             {combined_components.E_F:.6f}")
+            print(f"    F*:               {combined_components.F_star:.6f}")
             if correlation_matrix:
                 print(f"    (Computed with process correlations)")
             else:
@@ -1255,8 +1256,6 @@ def main(config=None):
                 proc_name: comp.to_dict() for proc_name, comp in per_process_components.items()
             }
             theoretical_data['combined_L_min'] = combined_components.to_dict()
-            theoretical_data['L_min_perfect'] = L_min_perfect.to_dict()
-            theoretical_data['L_min_target'] = combined_components.to_dict()
 
             # Add correlation matrix to theoretical_data
             if correlation_matrix:
@@ -1295,14 +1294,11 @@ def main(config=None):
             # Print summary
             summary = theoretical_data.get('summary', {})
             print(f"\n  THEORETICAL ANALYSIS SUMMARY:")
-            print(f"    Final Loss:              {summary.get('final_loss', 0):.6f}")
-            print(f"    L_min_perfect (δ=0):     {summary.get('final_L_min_perfect', 0):.6f}")
-            print(f"    L_min_target (δ attuale): {summary.get('final_L_min', 0):.6f}")
-            print(f"    Gap vs L_min_perfect:    {summary.get('final_gap_perfect', 0):.6f}")
-            print(f"    Gap vs L_min_target:     {summary.get('final_gap', 0):.6f}")
-            print(f"    Efficiency (vs perfect): {summary.get('final_efficiency_perfect', 0)*100:.1f}%")
-            print(f"    Efficiency (vs target):  {summary.get('final_efficiency', 0)*100:.1f}%")
-            print(f"    Violations (vs perfect): {summary.get('n_violations', 0)}/{summary.get('total_epochs', 0)}")
+            print(f"    Final Loss:   {summary.get('final_loss', 0):.6f}")
+            print(f"    L_min:        {summary.get('final_L_min', 0):.6f}")
+            print(f"    Gap:          {summary.get('final_gap', 0):.6f}")
+            print(f"    Efficiency:   {summary.get('final_efficiency', 0)*100:.1f}%")
+            print(f"    Violations:   {summary.get('n_violations', 0)}/{summary.get('total_epochs', 0)}")
 
             print("  ✓ Theoretical analysis completed")
 

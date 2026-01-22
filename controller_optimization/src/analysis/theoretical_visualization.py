@@ -15,25 +15,22 @@ def plot_loss_vs_L_min(
     epochs: List[int],
     observed_loss: List[float],
     theoretical_L_min: List[float],
-    theoretical_L_min_perfect: Optional[List[float]] = None,
     save_path: Optional[str] = None,
     title: str = "Loss vs Theoretical Minimum",
     figsize: Tuple[int, int] = (10, 6)
 ) -> plt.Figure:
     """
-    Plot observed loss and theoretical L_min curves over epochs.
+    Plot observed loss and theoretical L_min over epochs.
 
     Shows:
     - Observed loss curve (solid blue)
-    - L_min_target curve (dashed red) - lower bound given current target (δ attuale)
-    - L_min_perfect curve (dashed green) - absolute lower bound (δ=0)
-    - Shaded areas showing reducible gaps
+    - Theoretical L_min curve (dashed red)
+    - Shaded area showing reducible gap
 
     Args:
         epochs: List of epoch numbers
         observed_loss: List of observed loss values
-        theoretical_L_min: List of L_min values with current δ (target)
-        theoretical_L_min_perfect: List of L_min values with δ=0 (perfect policy)
+        theoretical_L_min: List of L_min values (Var[F] + Bias²)
         save_path: Path to save figure (optional)
         title: Plot title
         figsize: Figure size
@@ -45,52 +42,25 @@ def plot_loss_vs_L_min(
 
     epochs = np.array(epochs)
     observed = np.array(observed_loss)
-    L_min_target = np.array(theoretical_L_min)
+    theoretical = np.array(theoretical_L_min)
 
     # Plot observed loss
     ax.plot(epochs, observed, 'b-', linewidth=2, label='Observed Loss', marker='o', markersize=3)
 
-    # Plot L_min_target (current δ)
-    ax.plot(epochs, L_min_target, 'r--', linewidth=2, label='L_min (target, δ attuale)')
+    # Plot theoretical L_min
+    ax.plot(epochs, theoretical, 'r--', linewidth=2, label='Theoretical L_min')
 
-    # Plot L_min_perfect (δ=0) if provided
-    if theoretical_L_min_perfect is not None and len(theoretical_L_min_perfect) > 0:
-        L_min_perfect = np.array(theoretical_L_min_perfect)
-        ax.plot(epochs, L_min_perfect, 'g-.', linewidth=2, label='L_min (perfect, δ=0)')
+    # Fill area between L_min and observed (reducible gap)
+    ax.fill_between(
+        epochs,
+        theoretical,
+        observed,
+        alpha=0.3,
+        color='orange',
+        label='Reducible Gap'
+    )
 
-        # Fill area between L_min_perfect and L_min_target (bias contribution)
-        ax.fill_between(
-            epochs,
-            L_min_perfect,
-            L_min_target,
-            alpha=0.2,
-            color='purple',
-            label='Bias² (target deviation)'
-        )
-
-        # Fill area between L_min_target and observed (reducible gap)
-        ax.fill_between(
-            epochs,
-            L_min_target,
-            observed,
-            alpha=0.2,
-            color='orange',
-            label='Reducible Gap'
-        )
-
-        # Compute y limits considering all curves
-        all_vals = np.concatenate([observed, L_min_target, L_min_perfect])
-    else:
-        # Fill area between L_min_target and observed (reducible gap)
-        ax.fill_between(
-            epochs,
-            L_min_target,
-            observed,
-            alpha=0.3,
-            color='orange',
-            label='Reducible Gap'
-        )
-        all_vals = np.concatenate([observed, L_min_target])
+    all_vals = np.concatenate([observed, theoretical])
 
     # Labels and legend
     ax.set_xlabel('Epoch', fontsize=12)
@@ -468,17 +438,8 @@ def create_summary_figure(
     # 1. Loss vs L_min (top left)
     ax1 = fig.add_subplot(2, 2, 1)
     ax1.plot(epochs, observed_loss, 'b-', linewidth=2, label='Observed Loss', marker='o', markersize=2)
-    ax1.plot(epochs, theoretical_L_min, 'r--', linewidth=2, label='L_min (target)')
-
-    # Add L_min_perfect if available
-    L_min_perfect = tracker_data.get('theoretical_L_min_perfect', [])
-    if len(L_min_perfect) > 0:
-        ax1.plot(epochs, L_min_perfect, 'g-.', linewidth=2, label='L_min (perfect)')
-        ax1.fill_between(epochs, L_min_perfect, theoretical_L_min, alpha=0.2, color='purple')
-        ax1.fill_between(epochs, theoretical_L_min, observed_loss, alpha=0.2, color='orange', label='Gap')
-    else:
-        ax1.fill_between(epochs, theoretical_L_min, observed_loss, alpha=0.3, color='orange', label='Gap')
-
+    ax1.plot(epochs, theoretical_L_min, 'r--', linewidth=2, label='Theoretical L_min')
+    ax1.fill_between(epochs, theoretical_L_min, observed_loss, alpha=0.3, color='orange', label='Gap')
     ax1.set_xlabel('Epoch')
     ax1.set_ylabel('Loss')
     ax1.set_title('Loss vs Theoretical Minimum')
@@ -569,7 +530,6 @@ def generate_all_theoretical_plots(
         epochs=tracker_data['epochs'],
         observed_loss=tracker_data['observed_loss'],
         theoretical_L_min=tracker_data['theoretical_L_min'],
-        theoretical_L_min_perfect=tracker_data.get('theoretical_L_min_perfect', None),
         save_path=str(path)
     )
     plots['loss_vs_L_min'] = path
