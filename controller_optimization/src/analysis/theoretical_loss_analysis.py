@@ -362,8 +362,6 @@ def compute_covariance(
     cov = E_QiQj - E_Qi * E_Qj
 
     return cov
-
-
 def compute_multi_process_L_min(
     process_params: Dict[str, Dict[str, float]],
     process_weights: Dict[str, float],
@@ -544,9 +542,9 @@ class TheoreticalLossTracker:
     # History tracking
     epochs: List[int] = field(default_factory=list)
     observed_loss: List[float] = field(default_factory=list)
-    theoretical_L_min: List[float] = field(default_factory=list)
-    gap: List[float] = field(default_factory=list)
-    efficiency: List[float] = field(default_factory=list)
+    theoretical_L_min: List[float] = field(default_factory=list)  # L_min = Var[F] + Bias²
+    gap: List[float] = field(default_factory=list)  # Gap = Loss - L_min (reducible)
+    efficiency: List[float] = field(default_factory=list)  # Efficiency = L_min / Loss
 
     # Empirical statistics
     empirical_E_F: List[float] = field(default_factory=list)
@@ -609,7 +607,7 @@ class TheoreticalLossTracker:
         self.observed_loss.append(observed_loss_value)
         self.sigma2_per_epoch.append(sigma2_mean)
 
-        # Compute theoretical values
+        # Compute theoretical L_min = Var[F] + Bias²
         theoretical = compute_theoretical_L_min(F_star, delta, sigma2_mean, s, self.loss_scale)
         self.theoretical_L_min.append(theoretical.L_min)
         self.theoretical_E_F.append(theoretical.E_F)
@@ -660,6 +658,8 @@ class TheoreticalLossTracker:
         return {
             'final_loss': self.observed_loss[final_idx],
             'best_loss': self.observed_loss[best_idx] if best_idx >= 0 else 0.0,
+
+            # L_min = Var[F] + Bias²
             'final_L_min': self.theoretical_L_min[final_idx],
             'final_gap': self.gap[final_idx],
             'final_efficiency': self.efficiency[final_idx],

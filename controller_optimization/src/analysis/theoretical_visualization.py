@@ -23,14 +23,14 @@ def plot_loss_vs_L_min(
     Plot observed loss and theoretical L_min over epochs.
 
     Shows:
-    - Observed loss curve (solid)
-    - Theoretical L_min curve (dashed)
-    - Shaded area between them (reducible gap)
+    - Observed loss curve (solid blue)
+    - Theoretical L_min curve (dashed red)
+    - Shaded area showing reducible gap
 
     Args:
         epochs: List of epoch numbers
         observed_loss: List of observed loss values
-        theoretical_L_min: List of theoretical minimum values
+        theoretical_L_min: List of L_min values (Var[F] + Bias²)
         save_path: Path to save figure (optional)
         title: Plot title
         figsize: Figure size
@@ -44,11 +44,13 @@ def plot_loss_vs_L_min(
     observed = np.array(observed_loss)
     theoretical = np.array(theoretical_L_min)
 
-    # Plot curves
+    # Plot observed loss
     ax.plot(epochs, observed, 'b-', linewidth=2, label='Observed Loss', marker='o', markersize=3)
+
+    # Plot theoretical L_min
     ax.plot(epochs, theoretical, 'r--', linewidth=2, label='Theoretical L_min')
 
-    # Fill area between curves (reducible gap)
+    # Fill area between L_min and observed (reducible gap)
     ax.fill_between(
         epochs,
         theoretical,
@@ -58,6 +60,8 @@ def plot_loss_vs_L_min(
         label='Reducible Gap'
     )
 
+    all_vals = np.concatenate([observed, theoretical])
+
     # Labels and legend
     ax.set_xlabel('Epoch', fontsize=12)
     ax.set_ylabel('Loss', fontsize=12)
@@ -66,8 +70,8 @@ def plot_loss_vs_L_min(
     ax.grid(True, alpha=0.3)
 
     # Set reasonable y-axis limits
-    y_max = max(max(observed), max(theoretical)) * 1.1
-    y_min = min(min(theoretical), 0) * 0.9 if min(theoretical) < 0 else 0
+    y_max = max(all_vals) * 1.1
+    y_min = min(min(all_vals), 0) * 0.9 if min(all_vals) < 0 else 0
     ax.set_ylim(y_min, y_max)
 
     plt.tight_layout()

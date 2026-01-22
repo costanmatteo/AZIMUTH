@@ -5,7 +5,7 @@ Generates formatted tables comparing observed vs theoretical metrics.
 """
 
 import numpy as np
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any, Tuple, Union
 from pathlib import Path
 import json
 from dataclasses import dataclass
@@ -58,7 +58,7 @@ def generate_main_results_table(
     lines.append(f"{'Metrica':<20} {'Osservato':>12} {'Teorico':>12} {'Diff':>10} {'Diff %':>10} {'Status':>10}")
     lines.append("-" * 85)
 
-    # Loss finale
+    # Loss finale vs L_min
     final_loss = tracker_summary.get('final_loss', 0)
     final_L_min = tracker_summary.get('final_L_min', 0)
     diff = final_loss - final_L_min
@@ -72,6 +72,8 @@ def generate_main_results_table(
     diff_pct = compute_diff_pct(best_loss, final_L_min) if final_L_min > 0 else 0
     status = get_status_symbol(diff_pct)
     lines.append(f"{'Best loss':<20} {format_value(best_loss):>12} {format_value(final_L_min):>12} {format_value(diff):>10} {format_pct(diff_pct):>10} {status:>10}")
+
+    lines.append("-" * 85)
 
     # E[F]
     emp_E_F = tracker_summary.get('empirical_E_F_final', 0)
@@ -91,6 +93,7 @@ def generate_main_results_table(
 
     lines.append("=" * 85)
     lines.append("")
+    lines.append(f"L_min = Var[F] + Bias² (minimo teorico irriducibile)")
     lines.append(f"Status: OK = match (<5%), WARN = warning (5-20%), MISMATCH = >20%")
     lines.append("")
 
@@ -133,7 +136,7 @@ def generate_decomposition_table(
     Bias2: float,
     gap: float,
     L_min: float,
-    total_loss: float
+    total_loss: float,
 ) -> str:
     """
     Generate table showing loss decomposition.
@@ -162,7 +165,7 @@ def generate_decomposition_table(
     pct_loss_gap = 100 * gap / total_loss if total_loss > 0 else 0
 
     lines.append(f"{'Var(F)':<20} {format_value(Var_F):>12} {format_pct(pct_L_min_var):>12} {format_pct(pct_loss_var):>12}")
-    lines.append(f"{'Bias^2':<20} {format_value(Bias2):>12} {format_pct(pct_L_min_bias):>12} {format_pct(pct_loss_bias):>12}")
+    lines.append(f"{'Bias²':<20} {format_value(Bias2):>12} {format_pct(pct_L_min_bias):>12} {format_pct(pct_loss_bias):>12}")
     lines.append(f"{'Gap (riducibile)':<20} {format_value(gap):>12} {'-':>12} {format_pct(pct_loss_gap):>12}")
     lines.append("-" * 65)
     lines.append(f"{'L_min':<20} {format_value(L_min):>12} {'100.0%':>12} {format_pct(100*L_min/total_loss if total_loss > 0 else 0):>12}")
@@ -188,7 +191,7 @@ def generate_efficiency_table(
     lines.append(f"{'Metrica':<35} {'Valore':>12}")
     lines.append("-" * 50)
 
-    # Efficiency
+    # Efficiency (L_min / Loss)
     final_eff = tracker_summary.get('final_efficiency', 0)
     lines.append(f"{'Efficienza (L_min/Loss)':<35} {format_pct(100*final_eff):>12}")
 
@@ -200,15 +203,17 @@ def generate_efficiency_table(
     lines.append(f"{'Gap assoluto':<35} {format_value(gap):>12}")
     lines.append(f"{'Gap relativo':<35} {format_pct(gap_rel):>12}")
 
+    lines.append("-" * 50)
+
+    # Best efficiency
+    best_eff = tracker_summary.get('best_efficiency', 0)
+    lines.append(f"{'Migliore efficienza raggiunta':<35} {format_pct(100*best_eff):>12}")
+
     # Epochs to efficiency thresholds
     epoch_90 = tracker_summary.get('epoch_90_efficiency', None)
     epoch_95 = tracker_summary.get('epoch_95_efficiency', None)
     lines.append(f"{'Epochs al 90% efficienza':<35} {str(epoch_90) if epoch_90 else 'N/A':>12}")
     lines.append(f"{'Epochs al 95% efficienza':<35} {str(epoch_95) if epoch_95 else 'N/A':>12}")
-
-    # Best efficiency
-    best_eff = tracker_summary.get('best_efficiency', 0)
-    lines.append(f"{'Migliore efficienza raggiunta':<35} {format_pct(100*best_eff):>12}")
 
     # Total epochs
     total_epochs = tracker_summary.get('total_epochs', 0)
@@ -324,11 +329,17 @@ def generate_full_report(
     lines.append("")
     lines.append("=" * 85)
     lines.append("LEGENDA:")
-    lines.append("- F* = reliability della traiettoria target (deterministico)")
+    lines.append("- F* = reliability della traiettoria target (FISSO)")
     lines.append("- F = reliability del controller (sampling stocastico)")
-    lines.append("- L_min = minimo teorico irriducibile quando sigma^2 > 0")
-    lines.append("- Gap = differenza tra loss osservata e L_min (riducibile con training)")
-    lines.append("- Efficienza = quanto della loss e' spiegata dal limite teorico")
+    lines.append("- δ = μ_target - τ (distanza del target dall'ottimo del processo)")
+    lines.append("")
+    lines.append("CALCOLO L_min:")
+    lines.append("- L_min = Var[F] + Bias² = minimo teorico irriducibile")
+    lines.append("- Var[F] = varianza irriducibile (dovuta al sampling stocastico)")
+    lines.append("- Bias² = (E[F] - F*)² = bias sistematico")
+    lines.append("")
+    lines.append("- Gap = Loss - L_min (riducibile con training)")
+    lines.append("- Efficienza = L_min / Loss")
     lines.append("=" * 85)
     lines.append("")
 
