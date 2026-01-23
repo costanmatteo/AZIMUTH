@@ -743,3 +743,123 @@ def plot_training_progression(progression_path, save_path=None):
         plt.show()
 
     plt.close()
+
+
+def plot_loss_chart(history, save_path=None):
+    """
+    Plot training vs validation loss chart to help identify overfitting.
+
+    Similar to uncertainty predictor's plot_training_history, this shows:
+    - Train loss vs Validation loss (if available)
+    - Helps identify when the model starts overfitting
+
+    Layout:
+    - Top: Total Loss (train vs validation)
+    - Bottom: Reliability Loss (train vs validation)
+
+    Args:
+        history (dict): Training history containing:
+            - total_loss: Training total loss per epoch
+            - val_total_loss: Validation total loss per epoch (optional)
+            - reliability_loss: Training reliability loss per epoch
+            - val_reliability_loss: Validation reliability loss per epoch (optional)
+        save_path (str): Path to save figure
+    """
+    # Check if validation data is available
+    has_validation = 'val_total_loss' in history and len(history.get('val_total_loss', [])) > 0
+
+    # Determine number of plots
+    n_plots = 2  # Total loss and Reliability loss
+
+    fig, axes = plt.subplots(n_plots, 1, figsize=(12, 5 * n_plots))
+
+    epochs = range(1, len(history['total_loss']) + 1)
+
+    # ============ Plot 1: Total Loss ============
+    ax1 = axes[0]
+
+    # Training loss
+    ax1.plot(epochs, history['total_loss'], label='Train Loss', color='blue', linewidth=2)
+
+    # Validation loss if available
+    if has_validation:
+        val_epochs = range(1, len(history['val_total_loss']) + 1)
+        ax1.plot(val_epochs, history['val_total_loss'], label='Validation Loss',
+                 color='red', linewidth=2, linestyle='--')
+
+        # Highlight overfitting region (where val loss > train loss)
+        train_arr = np.array(history['total_loss'])
+        val_arr = np.array(history['val_total_loss'])
+        min_len = min(len(train_arr), len(val_arr))
+
+        if min_len > 0:
+            overfit_mask = val_arr[:min_len] > train_arr[:min_len]
+            if np.any(overfit_mask):
+                # Find first overfitting epoch
+                overfit_start = np.argmax(overfit_mask) + 1
+                ax1.axvline(x=overfit_start, color='orange', linestyle=':',
+                           linewidth=2, alpha=0.7, label=f'Overfitting starts (epoch {overfit_start})')
+
+    ax1.set_xlabel('Epoch', fontsize=12)
+    ax1.set_ylabel('Total Loss', fontsize=12)
+    ax1.set_title('Training vs Validation Loss', fontsize=14, fontweight='bold')
+    ax1.legend(loc='upper right', fontsize=10)
+    ax1.grid(True, alpha=0.3)
+
+    # Add annotation for final gap
+    if has_validation and len(history['val_total_loss']) > 0:
+        final_train = history['total_loss'][-1]
+        final_val = history['val_total_loss'][-1]
+        gap = final_val - final_train
+        gap_pct = (gap / final_train) * 100 if final_train != 0 else 0
+
+        status = "⚠ Overfitting" if gap > 0 else "✓ Good generalization"
+        ax1.text(0.02, 0.98, f'Final Train: {final_train:.6f}\nFinal Val: {final_val:.6f}\nGap: {gap:+.6f} ({gap_pct:+.1f}%)\n{status}',
+                transform=ax1.transAxes, fontsize=9,
+                verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.7))
+
+    # ============ Plot 2: Reliability Loss ============
+    ax2 = axes[1]
+
+    # Training reliability loss
+    ax2.plot(epochs, history['reliability_loss'], label='Train Reliability Loss',
+             color='purple', linewidth=2)
+
+    # Validation reliability loss if available
+    if has_validation and 'val_reliability_loss' in history:
+        val_rel_loss = history['val_reliability_loss']
+        if len(val_rel_loss) > 0:
+            val_epochs = range(1, len(val_rel_loss) + 1)
+            ax2.plot(val_epochs, val_rel_loss, label='Validation Reliability Loss',
+                     color='magenta', linewidth=2, linestyle='--')
+
+    ax2.set_xlabel('Epoch', fontsize=12)
+    ax2.set_ylabel('Reliability Loss', fontsize=12)
+    ax2.set_title('Reliability Loss: Train vs Validation', fontsize=14, fontweight='bold')
+    ax2.legend(loc='upper right', fontsize=10)
+    ax2.grid(True, alpha=0.3)
+
+    # Add warm-up marker if curriculum learning data is available
+    if 'reliability_weight' in history and len(history['reliability_weight']) > 0:
+        # Find end of warm-up (first epoch with reliability_weight > 0)
+        warmup_end = 0
+        for i, w in enumerate(history['reliability_weight']):
+            if w > 0:
+                warmup_end = i + 1  # 1-indexed epoch
+                break
+
+        if warmup_end > 0:
+            ax2.axvline(x=warmup_end, color='gray', linestyle=':', alpha=0.7, linewidth=2)
+            ax2.annotate('Warm-up End', xy=(warmup_end, ax2.get_ylim()[1] * 0.9),
+                        fontsize=9, ha='left', va='top', color='gray')
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"  Loss chart saved: {save_path}")
+    else:
+        plt.show()
+
+    plt.close()

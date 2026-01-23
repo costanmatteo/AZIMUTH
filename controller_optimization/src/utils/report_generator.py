@@ -742,6 +742,40 @@ class ControllerReportGenerator:
             self.story.append(caption_table)
             self.story.append(Spacer(1, 0.3*cm))
 
+        # Loss chart (train vs validation) - helps identify overfitting
+        loss_chart = checkpoint_dir / 'loss_chart.png'
+        if loss_chart.exists():
+            self.add_section_title("Overfitting Analysis")
+
+            img = Image(str(loss_chart))
+            img_width, img_height = img.imageWidth, img.imageHeight
+            aspect_ratio = img_height / img_width
+
+            new_width = 16*cm
+            new_height = new_width * aspect_ratio
+
+            if new_height > 12*cm:
+                new_height = 12*cm
+                new_width = new_height / aspect_ratio
+
+            img.drawWidth = new_width
+            img.drawHeight = new_height
+
+            img_table = Table([[img]], colWidths=[18*cm])
+            img_table.setStyle(TableStyle([
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ]))
+            self.story.append(img_table)
+
+            caption = Paragraph("<i>Train vs Validation Loss - Use to identify overfitting</i>", self.styles['Normal'])
+            caption_table = Table([[caption]], colWidths=[18*cm])
+            caption_table.setStyle(TableStyle([
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ]))
+            self.story.append(caption_table)
+            self.story.append(Spacer(1, 0.3*cm))
+
         # Advanced Analysis - 2x2 grid (placed right after Training Visualization)
         self.add_section_title("Advanced Analysis")
 

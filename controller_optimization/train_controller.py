@@ -70,7 +70,8 @@ from controller_optimization.src.utils.visualization import (
     plot_process_improvements,
     plot_target_vs_actual_scatter,
     plot_gap_distribution,
-    plot_training_progression
+    plot_training_progression,
+    plot_loss_chart
 )
 from controller_optimization.src.utils.report_generator import generate_controller_report
 from controller_optimization.src.utils.model_utils import convert_numpy_to_tensor
@@ -458,6 +459,22 @@ def main(config=None):
     trainer._debug_gradients = True
     trainer._debug_bc_loss = True
 
+    # Set up validation data (test scenarios) for overfitting detection
+    print("\n[5.3/9] Setting up validation data for overfitting detection...")
+    validation_surrogate = ProTSurrogate(
+        target_trajectory=target_trajectory_test,
+        device=device,
+        use_deterministic_sampling=use_deterministic_sampling
+    )
+    validation_process_chain = ProcessChain(
+        processes_config=selected_processes,
+        target_trajectory=target_trajectory_test,
+        policy_config=cfg['policy_generator'],
+        device=device
+    )
+    trainer.set_validation_data(validation_surrogate, validation_process_chain)
+    print(f"  ✓ Validation data set with {n_test} test scenarios")
+
     # Initialize theoretical loss tracker
     print("\n[5.5/9] Initializing theoretical loss tracker...")
     theoretical_tracker = TheoreticalLossTracker(loss_scale=cfg['training']['reliability_loss_scale'])
@@ -820,6 +837,14 @@ def main(config=None):
         history=history,
         save_path=str(checkpoint_dir / 'training_history.png')
     )
+
+    # Plot loss chart (train vs validation) for overfitting analysis
+    if 'val_total_loss' in history and len(history['val_total_loss']) > 0:
+        print("  Generating loss chart (train vs validation)...")
+        plot_loss_chart(
+            history=history,
+            save_path=str(checkpoint_dir / 'loss_chart.png')
+        )
 
     # Plot training progression (inputs/outputs evolution through epochs)
     progression_file = checkpoint_dir / 'training_progression.npz'

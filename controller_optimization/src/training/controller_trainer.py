@@ -80,7 +80,16 @@ class ControllerTrainer:
             'lambda_bc': [],  # Track lambda_bc per epoch
             'reliability_weight': [],  # Track reliability_weight per epoch
             'learning_rate': [],  # Track learning rate per epoch
+            # Validation metrics (on test scenarios)
+            'val_total_loss': [],
+            'val_reliability_loss': [],
+            'val_bc_loss': [],
+            'val_F_values': [],
         }
+
+        # Validation data (set externally via set_validation_data)
+        self.validation_surrogate = None
+        self.validation_process_chain = None
 
         # Per-process quality score history for correlation estimation
         # Dict: {process_name: [Q_values per epoch/scenario]}
@@ -594,6 +603,108 @@ class ControllerTrainer:
 
         return avg_total_loss, avg_reliability_loss, avg_bc_loss, avg_F
 
+    def set_validation_data(self, validation_surrogate, validation_process_chain):
+        """
+        Set validation data for computing validation loss during training.
+
+        This allows tracking train vs validation loss to detect overfitting.
+
+        Args:
+            validation_surrogate (ProTSurrogate): Surrogate for test scenarios
+            validation_process_chain (ProcessChain): Process chain for test scenarios
+                (will have trained policy weights copied from main chain)
+        """
+        self.validation_surrogate = validation_surrogate
+        self.validation_process_chain = validation_process_chain
+        print(f"  Validation data set: {len(validation_surrogate.F_star)} test scenarios")
+
+    def compute_validation_loss(self, batch_size=32, reliability_weight=1.0, lambda_bc=None):
+        """
+        Compute validation loss on test scenarios (no gradient computation).
+
+        Uses the same loss function as training but on held-out test scenarios.
+
+        Args:
+            batch_size (int): Number of samples per scenario
+            reliability_weight (float): Weight for reliability loss
+            lambda_bc (float): Behavior cloning weight
+
+        Returns:
+            tuple: (avg_total_loss, avg_reliability_loss, avg_bc_loss, avg_F)
+            Returns (None, None, None, None) if validation data not set
+        """
+        if self.validation_surrogate is None or self.validation_process_chain is None:
+            return None, None, None, None
+
+        # Copy current policy weights to validation process chain
+        for i, policy in enumerate(self.process_chain.policy_generators):
+            self.validation_process_chain.policy_generators[i].load_state_dict(
+                policy.state_dict()
+            )
+
+        self.validation_process_chain.eval()
+
+        if lambda_bc is None:
+            lambda_bc = self.lambda_bc
+
+        n_val_scenarios = len(self.validation_surrogate.F_star)
+
+        val_total_loss = 0.0
+        val_reliability_loss = 0.0
+        val_bc_loss = 0.0
+        val_F_values = []
+
+        with torch.no_grad():
+            for scenario_idx in range(n_val_scenarios):
+                # Forward pass through validation process chain
+                trajectory = self.validation_process_chain.forward(
+                    batch_size=batch_size,
+                    scenario_idx=scenario_idx
+                )
+
+                # Compute reliability
+                F = self.validation_surrogate.compute_reliability(trajectory)
+
+                # Get F_star for this validation scenario
+                F_star_value = self.validation_surrogate.F_star[scenario_idx]
+                F_star_tensor = torch.tensor(F_star_value, dtype=torch.float32, device=self.device)
+
+                # Reliability loss
+                rel_loss = self.reliability_loss_scale * (F - F_star_tensor) ** 2
+
+                # BC loss (compare to validation target inputs)
+                bc_loss = torch.tensor(0.0, device=self.device)
+                n_processes = len(trajectory.keys())
+
+                for process_name in trajectory.keys():
+                    actual_inputs = trajectory[process_name]['inputs']
+                    target_inputs = self.validation_surrogate.target_trajectory_tensors[process_name]['inputs'][scenario_idx:scenario_idx+1]
+
+                    # Use same normalization stats as training
+                    stats = self.input_stats[process_name]
+                    actual_inputs_norm = (actual_inputs - stats['min']) / stats['range']
+                    target_inputs_norm = (target_inputs - stats['min']) / stats['range']
+
+                    bc_loss = bc_loss + torch.mean((actual_inputs_norm - target_inputs_norm) ** 2)
+
+                bc_loss = bc_loss / n_processes
+
+                # Total loss
+                total_loss = reliability_weight * torch.mean(rel_loss) + lambda_bc * bc_loss
+
+                val_total_loss += total_loss.item()
+                val_reliability_loss += torch.mean(rel_loss).item()
+                val_bc_loss += bc_loss.item()
+                val_F_values.append(torch.mean(F).item())
+
+        # Average over validation scenarios
+        avg_val_total_loss = val_total_loss / n_val_scenarios
+        avg_val_reliability_loss = val_reliability_loss / n_val_scenarios
+        avg_val_bc_loss = val_bc_loss / n_val_scenarios
+        avg_val_F = np.mean(val_F_values)
+
+        return avg_val_total_loss, avg_val_reliability_loss, avg_val_bc_loss, avg_val_F
+
     def train(self, epochs=100, batch_size=32,
               patience=20, save_dir='checkpoints/controller', verbose=True):
         """
@@ -678,6 +789,18 @@ class ControllerTrainer:
             self.history['reliability_weight'].append(reliability_weight)
             self.history['learning_rate'].append(current_lr)
 
+            # Compute validation loss (on test scenarios) if validation data is set
+            if self.validation_surrogate is not None:
+                val_total, val_rel, val_bc, val_F = self.compute_validation_loss(
+                    batch_size=batch_size,
+                    reliability_weight=reliability_weight,
+                    lambda_bc=lambda_bc
+                )
+                self.history['val_total_loss'].append(val_total)
+                self.history['val_reliability_loss'].append(val_rel)
+                self.history['val_bc_loss'].append(val_bc)
+                self.history['val_F_values'].append(val_F)
+
             # Step the learning rate scheduler
             if self.scheduler is not None:
                 if isinstance(self.scheduler, torch_lr_scheduler.ReduceLROnPlateau):
@@ -700,11 +823,17 @@ class ControllerTrainer:
                 phase_label = "[WARM-UP]" if phase == 'warmup' else "[CURRICULUM]" if phase == 'curriculum' else ""
                 print(f"\nEpoch {epoch}/{epochs} {phase_label}")
                 print(f"  λ_BC: {lambda_bc:.6f}, Rel Weight: {reliability_weight:.3f}, LR: {current_lr:.2e}")
-                print(f"  Total Loss:       {avg_total_loss:.6f}")
+                print(f"  Train Loss:       {avg_total_loss:.6f}")
                 print(f"  Reliability Loss: {avg_rel_loss:.6f} {'(ignored)' if reliability_weight == 0 else ''}")
                 print(f"  BC Loss:          {avg_bc_loss:.6f}")
                 print(f"  F (actual):       {avg_F:.6f}")
                 print(f"  F* (target, mean):{np.mean(self.surrogate.F_star):.6f}")
+                # Print validation metrics if available
+                if self.validation_surrogate is not None and len(self.history['val_total_loss']) > 0:
+                    val_loss = self.history['val_total_loss'][-1]
+                    val_F = self.history['val_F_values'][-1]
+                    print(f"  Val Loss:         {val_loss:.6f}")
+                    print(f"  Val F:            {val_F:.6f}")
 
             # Print warm-up completion message
             if verbose and self.curriculum_config['enabled'] and epoch == warmup_epochs:
