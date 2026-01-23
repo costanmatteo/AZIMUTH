@@ -1301,6 +1301,60 @@ def main(config=None):
             }
             theoretical_data['combined_L_min'] = combined_components.to_dict()
 
+            # CRITICAL FIX: Override tracker's L_min with correctly computed multi-process values
+            # The tracker uses single-process formula which is incorrect for multi-process systems.
+            # Replace all L_min values in the tracker's lists with the correct combined value.
+            correct_L_min = combined_components.L_min
+            correct_Var_F = combined_components.Var_F
+            correct_Bias2 = combined_components.Bias2
+            correct_E_F = combined_components.E_F
+            correct_F_star = combined_components.F_star
+
+            n_epochs = len(theoretical_data.get('theoretical_L_min', []))
+            if n_epochs > 0:
+                # Replace with correct multi-process L_min (constant across epochs since params don't change)
+                theoretical_data['theoretical_L_min'] = [correct_L_min] * n_epochs
+                theoretical_data['theoretical_Var_F'] = [correct_Var_F] * n_epochs
+                theoretical_data['theoretical_Bias2'] = [correct_Bias2] * n_epochs
+                theoretical_data['theoretical_E_F'] = [correct_E_F] * n_epochs
+
+                # Recompute gap and efficiency with correct L_min
+                observed_losses = theoretical_data.get('observed_loss', [])
+                theoretical_data['gap'] = [obs - correct_L_min for obs in observed_losses]
+                theoretical_data['efficiency'] = [
+                    correct_L_min / obs if obs > 0 else (1.0 if correct_L_min == 0 else 0.0)
+                    for obs in observed_losses
+                ]
+
+                # Recount violations with correct L_min
+                n_violations = sum(1 for obs in observed_losses if obs < correct_L_min * 0.99)
+                theoretical_data['n_violations'] = n_violations
+
+                # Update summary with correct values
+                if observed_losses:
+                    final_loss = observed_losses[-1]
+                    final_gap = final_loss - correct_L_min
+                    final_efficiency = correct_L_min / final_loss if final_loss > 0 else 1.0
+
+                    theoretical_data['summary'] = {
+                        'final_loss': final_loss,
+                        'best_loss': min(observed_losses),
+                        'final_L_min': correct_L_min,
+                        'final_gap': final_gap,
+                        'final_efficiency': final_efficiency,
+                        'best_efficiency': max(theoretical_data['efficiency']) if theoretical_data['efficiency'] else 0.0,
+                        'mean_efficiency': np.mean(theoretical_data['efficiency']) if theoretical_data['efficiency'] else 0.0,
+                        'empirical_E_F_final': theoretical_data.get('empirical_E_F', [0])[-1],
+                        'theoretical_E_F_final': correct_E_F,
+                        'empirical_Var_F_final': theoretical_data.get('empirical_Var_F', [0])[-1],
+                        'theoretical_Var_F_final': correct_Var_F,
+                        'n_violations': n_violations,
+                        'total_epochs': n_epochs,
+                        'violation_rate': n_violations / n_epochs if n_epochs > 0 else 0.0,
+                        'epoch_90_efficiency': next((i+1 for i, e in enumerate(theoretical_data['efficiency']) if e >= 0.9), None),
+                        'epoch_95_efficiency': next((i+1 for i, e in enumerate(theoretical_data['efficiency']) if e >= 0.95), None),
+                    }
+
             # Add correlation matrix to theoretical_data
             if correlation_matrix:
                 # Convert tuple keys to string keys for JSON serialization
