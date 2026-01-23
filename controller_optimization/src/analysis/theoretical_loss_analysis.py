@@ -63,6 +63,49 @@ class TheoreticalLossComponents:
         }
 
 
+def compute_empirical_L_min(
+    F_samples: np.ndarray,
+    F_star: float,
+    loss_scale: float = 1.0
+) -> Tuple[float, float, float, float]:
+    """
+    Compute empirical L_min from collected F samples.
+
+    Instead of using analytical formulas, this measures directly from samples:
+    - E[F] = average of all F values
+    - Var[F] = variance of all F values
+    - L_min = Var[F] + (E[F] - F*)²
+
+    Args:
+        F_samples: Array of F values collected from multiple forward passes
+        F_star: Target reliability
+        loss_scale: Scale factor for the loss (default 1.0, training uses 100.0)
+
+    Returns:
+        Tuple of (L_min, E_F, Var_F, Bias2) where:
+        - L_min: Empirical minimum achievable loss
+        - E_F: Empirical expected value of F
+        - Var_F: Empirical variance of F (scaled)
+        - Bias2: Empirical bias squared (scaled)
+    """
+    if len(F_samples) == 0:
+        return 0.0, F_star, 0.0, 0.0
+
+    # Compute empirical statistics
+    E_F = np.mean(F_samples)
+    Var_F = np.var(F_samples)
+    Bias2 = (E_F - F_star) ** 2
+
+    # L_min = Var[F] + Bias²
+    L_min = (Var_F + Bias2) * loss_scale
+
+    # Scale variance and bias for consistency with loss scale
+    Var_F_scaled = Var_F * loss_scale
+    Bias2_scaled = Bias2 * loss_scale
+
+    return L_min, E_F, Var_F_scaled, Bias2_scaled
+
+
 def compute_theoretical_E_F(F_star: float, delta: float, sigma2: float, s: float) -> float:
     """
     Compute theoretical expected value of F.

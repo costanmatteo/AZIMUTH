@@ -1246,10 +1246,36 @@ def main(config=None):
                 correlation_matrix = None
                 print("\n  Correlation disabled in config (using independence assumption)")
 
-            # Compute combined L_min using multi-process formula
-            # L_min = Var[F] + Bias² where Bias² = (E[F] - F*)²
+            # Compute EMPIRICAL L_min from collected F samples during training
+            # This replaces the analytical formula with direct measurement:
+            # L_min = Var[F] + (E[F] - F*)²
+            print("\n  Computing EMPIRICAL L_min from training F samples...")
+            empirical_L_min_result = trainer.compute_empirical_L_min(F_star_mean)
+
+            print(f"\n  Empirical L_min = Var[F] + Bias² (from {empirical_L_min_result['n_samples']} samples):")
+            print(f"    L_min:            {empirical_L_min_result['L_min']:.6f}")
+            print(f"    Var[F] component: {empirical_L_min_result['Var_F']:.6f}")
+            print(f"    Bias² component:  {empirical_L_min_result['Bias2']:.6f}")
+            print(f"    E[F]:             {empirical_L_min_result['E_F']:.6f}")
+            print(f"    F*:               {empirical_L_min_result['F_star']:.6f}")
+
+            # Create combined_components-like structure for compatibility with rest of code
+            from controller_optimization.src.analysis.theoretical_loss_analysis import TheoreticalLossComponents
+            combined_components = TheoreticalLossComponents(
+                L_min=empirical_L_min_result['L_min'],
+                E_F=empirical_L_min_result['E_F'],
+                E_F2=empirical_L_min_result['E_F']**2 + empirical_L_min_result['Var_F'] / CONTROLLER_CONFIG['training']['reliability_loss_scale'],
+                Var_F=empirical_L_min_result['Var_F'],
+                Bias2=empirical_L_min_result['Bias2'],
+                F_star=empirical_L_min_result['F_star'],
+                sigma2=0.0,  # Not used in empirical approach
+                delta=0.0,   # Not used in empirical approach
+                s=0.0        # Not used in empirical approach
+            )
+
+            # Also compute analytical L_min for comparison (optional)
             from controller_optimization.src.analysis import compute_multi_process_L_min
-            combined_components, per_process_components = compute_multi_process_L_min(
+            analytical_components, per_process_components = compute_multi_process_L_min(
                 process_params=process_params_for_L_min,
                 process_weights={p: process_configs_surrogate[p].get('weight', 1.0)
                                 for p in process_params_for_L_min.keys()},
@@ -1257,12 +1283,10 @@ def main(config=None):
                 correlation_matrix=correlation_matrix if correlation_matrix else None
             )
 
-            print(f"\n  Theoretical L_min = Var[F] + Bias²:")
-            print(f"    L_min:            {combined_components.L_min:.6f}")
-            print(f"    Var[F] component: {combined_components.Var_F:.6f}")
-            print(f"    Bias² component:  {combined_components.Bias2:.6f}")
-            print(f"    E[F]:             {combined_components.E_F:.6f}")
-            print(f"    F*:               {combined_components.F_star:.6f}")
+            print(f"\n  Analytical L_min (for comparison):")
+            print(f"    L_min:            {analytical_components.L_min:.6f}")
+            print(f"    Var[F] component: {analytical_components.Var_F:.6f}")
+            print(f"    Bias² component:  {analytical_components.Bias2:.6f}")
             if correlation_matrix:
                 print(f"    (Computed with process correlations)")
             else:
@@ -1272,9 +1296,9 @@ def main(config=None):
             reliability_loss_history = history.get('reliability_loss', [])
             F_values_history = history.get('F_values', [])
 
-            # Use combined parameters for tracker updates
-            combined_sigma2 = combined_components.sigma2
-            combined_delta = np.sqrt(combined_components.Bias2 / CONTROLLER_CONFIG['training']['reliability_loss_scale']) if combined_components.Bias2 > 0 else 0.0
+            # Use analytical parameters for tracker updates (tracker still uses analytical formulas internally)
+            combined_sigma2 = analytical_components.sigma2
+            combined_delta = np.sqrt(analytical_components.Bias2 / CONTROLLER_CONFIG['training']['reliability_loss_scale']) if analytical_components.Bias2 > 0 else 0.0
             combined_s = np.mean([p['s'] for p in process_params_for_L_min.values()]) if process_params_for_L_min else 1.0
 
             for epoch_idx, (rel_loss, F_val) in enumerate(zip(reliability_loss_history, F_values_history)):
@@ -1299,7 +1323,14 @@ def main(config=None):
             theoretical_data['per_process_L_min'] = {
                 proc_name: comp.to_dict() for proc_name, comp in per_process_components.items()
             }
+            # Use empirical L_min as the primary combined_L_min
             theoretical_data['combined_L_min'] = combined_components.to_dict()
+
+            # Also save empirical L_min results explicitly
+            theoretical_data['empirical_L_min'] = empirical_L_min_result
+
+            # Save analytical L_min for comparison
+            theoretical_data['analytical_L_min'] = analytical_components.to_dict()
 
             # Add correlation matrix to theoretical_data
             if correlation_matrix:
@@ -1337,12 +1368,17 @@ def main(config=None):
 
             # Print summary
             summary = theoretical_data.get('summary', {})
-            print(f"\n  THEORETICAL ANALYSIS SUMMARY:")
-            print(f"    Final Loss:   {summary.get('final_loss', 0):.6f}")
-            print(f"    L_min:        {summary.get('final_L_min', 0):.6f}")
-            print(f"    Gap:          {summary.get('final_gap', 0):.6f}")
-            print(f"    Efficiency:   {summary.get('final_efficiency', 0)*100:.1f}%")
-            print(f"    Violations:   {summary.get('n_violations', 0)}/{summary.get('total_epochs', 0)}")
+            print(f"\n  L_min ANALYSIS SUMMARY:")
+            print(f"    Final Loss:        {summary.get('final_loss', 0):.6f}")
+            print(f"    Empirical L_min:   {empirical_L_min_result['L_min']:.6f}")
+            print(f"    Analytical L_min:  {analytical_components.L_min:.6f}")
+            # Compute gap and efficiency using empirical L_min
+            final_loss = summary.get('final_loss', 0)
+            emp_gap = final_loss - empirical_L_min_result['L_min'] if final_loss > 0 else 0
+            emp_efficiency = empirical_L_min_result['L_min'] / final_loss * 100 if final_loss > 0 else 0
+            print(f"    Gap (empirical):   {emp_gap:.6f}")
+            print(f"    Efficiency:        {emp_efficiency:.1f}%")
+            print(f"    F samples used:    {empirical_L_min_result['n_samples']}")
 
             print("  ✓ Theoretical analysis completed")
 

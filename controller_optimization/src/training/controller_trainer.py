@@ -76,7 +76,7 @@ class ControllerTrainer:
             'total_loss': [],
             'reliability_loss': [],
             'bc_loss': [],
-            'F_values': [],  # Reliability values durante training
+            'F_values': [],  # Reliability values durante training (mean per epoch)
             'lambda_bc': [],  # Track lambda_bc per epoch
             'reliability_weight': [],  # Track reliability_weight per epoch
             'learning_rate': [],  # Track learning rate per epoch
@@ -91,6 +91,10 @@ class ControllerTrainer:
             'val_within_bc_loss': [],
             'val_within_F_values': [],
         }
+
+        # Track ALL individual F values for empirical L_min calculation
+        # This stores F values from every sample across all scenarios and epochs
+        self.F_samples_all = []  # List of all F values collected during training
 
         # Cross-scenario validation data (set externally via set_validation_data)
         self.validation_surrogate = None
@@ -423,7 +427,7 @@ class ControllerTrainer:
         self.process_chain.train()
 
     def compute_loss(self, trajectory, scenario_idx, reliability_weight=1.0, lambda_bc=None,
-                     return_quality_scores=False):
+                     return_quality_scores=False, return_all_F_values=False):
         """
         Calcola loss totale per uno specifico scenario.
 
@@ -433,12 +437,16 @@ class ControllerTrainer:
             reliability_weight (float): Weight for reliability loss (0.0 = ignore, 1.0 = full)
             lambda_bc (float): Behavior cloning weight (if None, uses self.lambda_bc)
             return_quality_scores (bool): If True, also return per-process quality scores
+            return_all_F_values (bool): If True, also return all individual F values (for empirical L_min)
 
         Returns:
-            If return_quality_scores=False:
+            If return_quality_scores=False and return_all_F_values=False:
                 total_loss, reliability_loss, bc_loss, F
             If return_quality_scores=True:
                 total_loss, reliability_loss, bc_loss, F, quality_scores
+            If return_all_F_values=True:
+                total_loss, reliability_loss, bc_loss, F, quality_scores, F_all
+                where F_all is a list of individual F values for each sample in batch
         """
         # Use provided lambda_bc or fall back to instance value
         if lambda_bc is None:
@@ -490,6 +498,11 @@ class ControllerTrainer:
         # reliability_weight controls if reliability loss is active (0.0 during warm-up)
         total_loss = reliability_weight * torch.mean(reliability_loss) + lambda_bc * bc_loss
 
+        # Extract individual F values for empirical L_min calculation
+        F_all = F.detach().cpu().tolist() if return_all_F_values else None
+
+        if return_all_F_values:
+            return total_loss, torch.mean(reliability_loss).item(), bc_loss.item(), torch.mean(F).item(), quality_scores, F_all
         if return_quality_scores:
             return total_loss, torch.mean(reliability_loss).item(), bc_loss.item(), torch.mean(F).item(), quality_scores
         return total_loss, torch.mean(reliability_loss).item(), bc_loss.item(), torch.mean(F).item()
@@ -568,12 +581,18 @@ class ControllerTrainer:
 
             # Compute loss using scenario-specific F_star and dynamic weights
             # Use ONLY train_trajectory for gradient computation
-            total_loss, rel_loss, bc_loss, F, quality_scores = self.compute_loss(
+            # Also collect individual F values for empirical L_min calculation
+            total_loss, rel_loss, bc_loss, F, quality_scores, F_all = self.compute_loss(
                 train_trajectory, scenario_idx,
                 reliability_weight=reliability_weight,
                 lambda_bc=lambda_bc,
-                return_quality_scores=True
+                return_quality_scores=True,
+                return_all_F_values=True
             )
+
+            # Store individual F values for empirical L_min calculation
+            if F_all is not None:
+                self.F_samples_all.extend(F_all)
 
             # Compute within-scenario validation loss (no gradient)
             if val_trajectory is not None:
@@ -1264,6 +1283,90 @@ class ControllerTrainer:
                     rho = corr_matrix.get((name_i, name_j), 0.0)
                     row += f"{rho:>8.3f}"
             lines.append(row)
+
+        return "\n".join(lines)
+
+    def compute_empirical_L_min(self, F_star_mean=None):
+        """
+        Compute empirical L_min from collected F samples during training.
+
+        Empirical L_min is calculated directly from measured F values:
+        - E[F] = average of all F values
+        - Var[F] = variance of all F values
+        - L_min = Var[F] + (E[F] - F*)²
+
+        Args:
+            F_star_mean (float): Target reliability F*. If None, uses mean of surrogate.F_star
+
+        Returns:
+            dict: {
+                'L_min': Empirical minimum achievable loss (scaled by reliability_loss_scale),
+                'E_F': Empirical expected value of F,
+                'Var_F': Empirical variance of F (scaled),
+                'Bias2': Empirical bias squared (scaled),
+                'n_samples': Number of F samples used,
+                'F_star': Target reliability used
+            }
+        """
+        if len(self.F_samples_all) == 0:
+            print("  Warning: No F samples collected for empirical L_min calculation")
+            return {
+                'L_min': 0.0,
+                'E_F': 0.0,
+                'Var_F': 0.0,
+                'Bias2': 0.0,
+                'n_samples': 0,
+                'F_star': 0.0
+            }
+
+        F_samples = np.array(self.F_samples_all)
+
+        # Use provided F_star or mean of all scenarios
+        if F_star_mean is None:
+            F_star_mean = np.mean(self.surrogate.F_star)
+
+        # Compute empirical statistics
+        E_F = np.mean(F_samples)
+        Var_F = np.var(F_samples)
+        Bias2 = (E_F - F_star_mean) ** 2
+
+        # L_min = Var[F] + Bias² (scaled by reliability_loss_scale)
+        L_min = (Var_F + Bias2) * self.reliability_loss_scale
+
+        # Scale variance and bias for consistency with loss
+        Var_F_scaled = Var_F * self.reliability_loss_scale
+        Bias2_scaled = Bias2 * self.reliability_loss_scale
+
+        return {
+            'L_min': L_min,
+            'E_F': E_F,
+            'Var_F': Var_F_scaled,
+            'Bias2': Bias2_scaled,
+            'n_samples': len(F_samples),
+            'F_star': F_star_mean
+        }
+
+    def get_empirical_L_min_summary(self, F_star_mean=None):
+        """
+        Get a formatted summary string for empirical L_min.
+
+        Args:
+            F_star_mean (float): Target reliability F*. If None, uses mean of surrogate.F_star
+
+        Returns:
+            str: Formatted summary string
+        """
+        result = self.compute_empirical_L_min(F_star_mean)
+
+        lines = [
+            "  Empirical L_min (from collected F samples):",
+            f"    L_min:            {result['L_min']:.6f}",
+            f"    Var[F] component: {result['Var_F']:.6f}",
+            f"    Bias² component:  {result['Bias2']:.6f}",
+            f"    E[F]:             {result['E_F']:.6f}",
+            f"    F*:               {result['F_star']:.6f}",
+            f"    n_samples:        {result['n_samples']}"
+        ]
 
         return "\n".join(lines)
 
