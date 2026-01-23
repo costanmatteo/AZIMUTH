@@ -80,16 +80,25 @@ class ControllerTrainer:
             'lambda_bc': [],  # Track lambda_bc per epoch
             'reliability_weight': [],  # Track reliability_weight per epoch
             'learning_rate': [],  # Track learning rate per epoch
-            # Validation metrics (on test scenarios)
+            # Cross-scenario validation metrics (on test scenarios with different conditions)
             'val_total_loss': [],
             'val_reliability_loss': [],
             'val_bc_loss': [],
             'val_F_values': [],
+            # Within-scenario validation metrics (held-out samples from training scenarios)
+            'val_within_total_loss': [],
+            'val_within_reliability_loss': [],
+            'val_within_bc_loss': [],
+            'val_within_F_values': [],
         }
 
-        # Validation data (set externally via set_validation_data)
+        # Cross-scenario validation data (set externally via set_validation_data)
         self.validation_surrogate = None
         self.validation_process_chain = None
+
+        # Within-scenario validation config
+        self.within_scenario_validation_enabled = False
+        self.within_scenario_split = 0.0  # Fraction of samples for validation
 
         # Per-process quality score history for correlation estimation
         # Dict: {process_name: [Q_values per epoch/scenario]}
@@ -508,6 +517,7 @@ class ControllerTrainer:
 
         Returns:
             Tuple of (avg_total_loss, avg_reliability_loss, avg_bc_loss, avg_F)
+            Also stores within-scenario validation metrics in self._within_val_metrics if enabled.
         """
         self.process_chain.train()
 
@@ -516,7 +526,24 @@ class ControllerTrainer:
         epoch_bc_loss = 0.0
         epoch_F_values = []
 
+        # Within-scenario validation tracking
+        epoch_val_total_loss = 0.0
+        epoch_val_reliability_loss = 0.0
+        epoch_val_bc_loss = 0.0
+        epoch_val_F_values = []
+
         n_scenarios = len(self.surrogate.F_star)
+
+        # Calculate train/val batch sizes if within-scenario validation is enabled
+        if self.within_scenario_validation_enabled and self.within_scenario_split > 0:
+            # Generate more samples to split into train and val
+            val_batch_size = max(1, int(batch_size * self.within_scenario_split / (1 - self.within_scenario_split)))
+            total_batch_size = batch_size + val_batch_size
+            train_batch_size = batch_size
+        else:
+            total_batch_size = batch_size
+            train_batch_size = batch_size
+            val_batch_size = 0
 
         # Shuffle scenario order each epoch for diversity
         scenario_order = np.random.permutation(n_scenarios)
@@ -524,19 +551,43 @@ class ControllerTrainer:
         # Cycle through all scenarios exactly once
         for scenario_idx in scenario_order:
             # Forward pass through process chain for this scenario
+            # Generate enough samples for both train and val
             trajectory = self.process_chain.forward(
-                batch_size=batch_size,
+                batch_size=total_batch_size,
                 scenario_idx=scenario_idx
             )
 
+            # Split into train and val trajectories if within-scenario validation is enabled
+            if self.within_scenario_validation_enabled and val_batch_size > 0:
+                train_trajectory, val_trajectory = self._split_trajectory(
+                    trajectory, train_batch_size, val_batch_size
+                )
+            else:
+                train_trajectory = trajectory
+                val_trajectory = None
+
             # Compute loss using scenario-specific F_star and dynamic weights
-            # Also collect quality_scores for correlation estimation
+            # Use ONLY train_trajectory for gradient computation
             total_loss, rel_loss, bc_loss, F, quality_scores = self.compute_loss(
-                trajectory, scenario_idx,
+                train_trajectory, scenario_idx,
                 reliability_weight=reliability_weight,
                 lambda_bc=lambda_bc,
                 return_quality_scores=True
             )
+
+            # Compute within-scenario validation loss (no gradient)
+            if val_trajectory is not None:
+                with torch.no_grad():
+                    val_total, val_rel, val_bc, val_F = self.compute_loss(
+                        val_trajectory, scenario_idx,
+                        reliability_weight=reliability_weight,
+                        lambda_bc=lambda_bc,
+                        return_quality_scores=False
+                    )
+                    epoch_val_total_loss += val_total.item() if torch.is_tensor(val_total) else val_total
+                    epoch_val_reliability_loss += val_rel
+                    epoch_val_bc_loss += val_bc
+                    epoch_val_F_values.append(val_F)
 
             # Collect quality scores for correlation estimation
             for proc_name, Q in quality_scores.items():
@@ -601,13 +652,25 @@ class ControllerTrainer:
         avg_bc_loss = epoch_bc_loss / n_scenarios
         avg_F = np.mean(epoch_F_values)
 
+        # Store within-scenario validation metrics (if enabled)
+        if self.within_scenario_validation_enabled and len(epoch_val_F_values) > 0:
+            self._within_val_metrics = {
+                'total_loss': epoch_val_total_loss / n_scenarios,
+                'reliability_loss': epoch_val_reliability_loss / n_scenarios,
+                'bc_loss': epoch_val_bc_loss / n_scenarios,
+                'F': np.mean(epoch_val_F_values),
+            }
+        else:
+            self._within_val_metrics = None
+
         return avg_total_loss, avg_reliability_loss, avg_bc_loss, avg_F
 
     def set_validation_data(self, validation_surrogate, validation_process_chain):
         """
-        Set validation data for computing validation loss during training.
+        Set cross-scenario validation data for computing validation loss during training.
 
-        This allows tracking train vs validation loss to detect overfitting.
+        This allows tracking train vs validation loss to detect overfitting
+        across different operating conditions.
 
         Args:
             validation_surrogate (ProTSurrogate): Surrogate for test scenarios
@@ -616,7 +679,59 @@ class ControllerTrainer:
         """
         self.validation_surrogate = validation_surrogate
         self.validation_process_chain = validation_process_chain
-        print(f"  Validation data set: {len(validation_surrogate.F_star)} test scenarios")
+        print(f"  Cross-scenario validation data set: {len(validation_surrogate.F_star)} test scenarios")
+
+    def set_within_scenario_validation(self, enabled=True, split_fraction=0.2):
+        """
+        Configure within-scenario validation (train/val split within same scenarios).
+
+        This splits each batch of samples into training and validation portions.
+        The validation samples are NEVER used for gradient updates, preventing data leakage.
+
+        Args:
+            enabled (bool): Enable within-scenario validation
+            split_fraction (float): Fraction of samples to use as validation (0.0 to 0.5)
+                                   E.g., 0.2 = 20% validation, 80% training
+        """
+        self.within_scenario_validation_enabled = enabled
+        self.within_scenario_split = max(0.0, min(0.5, split_fraction))  # Clamp to [0, 0.5]
+
+        if enabled:
+            print(f"  Within-scenario validation: ENABLED")
+            print(f"    Split: {self.within_scenario_split*100:.0f}% validation, {(1-self.within_scenario_split)*100:.0f}% training")
+        else:
+            print(f"  Within-scenario validation: DISABLED")
+
+    def _split_trajectory(self, trajectory, train_size, val_size):
+        """
+        Split a trajectory into training and validation portions.
+
+        Args:
+            trajectory (dict): Trajectory from process_chain.forward()
+            train_size (int): Number of samples for training
+            val_size (int): Number of samples for validation
+
+        Returns:
+            tuple: (train_trajectory, val_trajectory)
+        """
+        train_trajectory = {}
+        val_trajectory = {}
+
+        for process_name, data in trajectory.items():
+            train_trajectory[process_name] = {
+                'inputs': data['inputs'][:train_size],
+                'outputs_mean': data['outputs_mean'][:train_size],
+                'outputs_var': data['outputs_var'][:train_size],
+                'outputs_sampled': data['outputs_sampled'][:train_size],
+            }
+            val_trajectory[process_name] = {
+                'inputs': data['inputs'][train_size:train_size+val_size],
+                'outputs_mean': data['outputs_mean'][train_size:train_size+val_size],
+                'outputs_var': data['outputs_var'][train_size:train_size+val_size],
+                'outputs_sampled': data['outputs_sampled'][train_size:train_size+val_size],
+            }
+
+        return train_trajectory, val_trajectory
 
     def compute_validation_loss(self, batch_size=32, reliability_weight=1.0, lambda_bc=None):
         """
@@ -789,7 +904,7 @@ class ControllerTrainer:
             self.history['reliability_weight'].append(reliability_weight)
             self.history['learning_rate'].append(current_lr)
 
-            # Compute validation loss (on test scenarios) if validation data is set
+            # Compute cross-scenario validation loss (on test scenarios) if validation data is set
             if self.validation_surrogate is not None:
                 val_total, val_rel, val_bc, val_F = self.compute_validation_loss(
                     batch_size=batch_size,
@@ -800,6 +915,13 @@ class ControllerTrainer:
                 self.history['val_reliability_loss'].append(val_rel)
                 self.history['val_bc_loss'].append(val_bc)
                 self.history['val_F_values'].append(val_F)
+
+            # Track within-scenario validation metrics (already computed in train_epoch)
+            if self._within_val_metrics is not None:
+                self.history['val_within_total_loss'].append(self._within_val_metrics['total_loss'])
+                self.history['val_within_reliability_loss'].append(self._within_val_metrics['reliability_loss'])
+                self.history['val_within_bc_loss'].append(self._within_val_metrics['bc_loss'])
+                self.history['val_within_F_values'].append(self._within_val_metrics['F'])
 
             # Step the learning rate scheduler
             if self.scheduler is not None:
@@ -828,12 +950,18 @@ class ControllerTrainer:
                 print(f"  BC Loss:          {avg_bc_loss:.6f}")
                 print(f"  F (actual):       {avg_F:.6f}")
                 print(f"  F* (target, mean):{np.mean(self.surrogate.F_star):.6f}")
-                # Print validation metrics if available
+                # Print cross-scenario validation metrics if available
                 if self.validation_surrogate is not None and len(self.history['val_total_loss']) > 0:
                     val_loss = self.history['val_total_loss'][-1]
                     val_F = self.history['val_F_values'][-1]
-                    print(f"  Val Loss:         {val_loss:.6f}")
-                    print(f"  Val F:            {val_F:.6f}")
+                    print(f"  Val Loss (cross): {val_loss:.6f}")
+                    print(f"  Val F (cross):    {val_F:.6f}")
+                # Print within-scenario validation metrics if available
+                if self.within_scenario_validation_enabled and len(self.history['val_within_total_loss']) > 0:
+                    val_within_loss = self.history['val_within_total_loss'][-1]
+                    val_within_F = self.history['val_within_F_values'][-1]
+                    print(f"  Val Loss (within):{val_within_loss:.6f}")
+                    print(f"  Val F (within):   {val_within_F:.6f}")
 
             # Print warm-up completion message
             if verbose and self.curriculum_config['enabled'] and epoch == warmup_epochs:

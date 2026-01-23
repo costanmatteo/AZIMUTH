@@ -459,21 +459,37 @@ def main(config=None):
     trainer._debug_gradients = True
     trainer._debug_bc_loss = True
 
-    # Set up validation data (test scenarios) for overfitting detection
+    # Set up validation data for overfitting detection
     print("\n[5.3/9] Setting up validation data for overfitting detection...")
-    validation_surrogate = ProTSurrogate(
-        target_trajectory=target_trajectory_test,
-        device=device,
-        use_deterministic_sampling=use_deterministic_sampling
-    )
-    validation_process_chain = ProcessChain(
-        processes_config=selected_processes,
-        target_trajectory=target_trajectory_test,
-        policy_config=cfg['policy_generator'],
-        device=device
-    )
-    trainer.set_validation_data(validation_surrogate, validation_process_chain)
-    print(f"  ✓ Validation data set with {n_test} test scenarios")
+
+    # Get validation config (with defaults for backward compatibility)
+    validation_cfg = cfg.get('validation', {
+        'cross_scenario_enabled': True,
+        'within_scenario_enabled': False,
+        'within_scenario_split': 0.2,
+    })
+
+    # Cross-scenario validation (uses separate test scenarios with different conditions)
+    if validation_cfg.get('cross_scenario_enabled', True):
+        validation_surrogate = ProTSurrogate(
+            target_trajectory=target_trajectory_test,
+            device=device,
+            use_deterministic_sampling=use_deterministic_sampling
+        )
+        validation_process_chain = ProcessChain(
+            processes_config=selected_processes,
+            target_trajectory=target_trajectory_test,
+            policy_config=cfg['policy_generator'],
+            device=device
+        )
+        trainer.set_validation_data(validation_surrogate, validation_process_chain)
+    else:
+        print("  Cross-scenario validation: DISABLED")
+
+    # Within-scenario validation (splits training samples into train/val)
+    within_enabled = validation_cfg.get('within_scenario_enabled', False)
+    within_split = validation_cfg.get('within_scenario_split', 0.2)
+    trainer.set_within_scenario_validation(enabled=within_enabled, split_fraction=within_split)
 
     # Initialize theoretical loss tracker
     print("\n[5.5/9] Initializing theoretical loss tracker...")
@@ -839,7 +855,10 @@ def main(config=None):
     )
 
     # Plot loss chart (train vs validation) for overfitting analysis
-    if 'val_total_loss' in history and len(history['val_total_loss']) > 0:
+    # Generate if either cross-scenario or within-scenario validation is available
+    has_cross_val = 'val_total_loss' in history and len(history.get('val_total_loss', [])) > 0
+    has_within_val = 'val_within_total_loss' in history and len(history.get('val_within_total_loss', [])) > 0
+    if has_cross_val or has_within_val:
         print("  Generating loss chart (train vs validation)...")
         plot_loss_chart(
             history=history,

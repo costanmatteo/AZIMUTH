@@ -768,7 +768,7 @@ class ControllerReportGenerator:
             ]))
             self.story.append(img_table)
 
-            caption = Paragraph("<i>Train vs Validation Loss - Use to identify overfitting</i>", self.styles['Normal'])
+            caption = Paragraph("<i>Train vs Validation Loss - Cross-scenario (different conditions) and Within-scenario (held-out samples)</i>", self.styles['Normal'])
             caption_table = Table([[caption]], colWidths=[18*cm])
             caption_table.setStyle(TableStyle([
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),

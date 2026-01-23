@@ -749,24 +749,27 @@ def plot_loss_chart(history, save_path=None):
     """
     Plot training vs validation loss chart to help identify overfitting.
 
-    Similar to uncertainty predictor's plot_training_history, this shows:
-    - Train loss vs Validation loss (if available)
-    - Helps identify when the model starts overfitting
+    Shows two types of validation:
+    1. Cross-scenario validation: Test scenarios with different conditions
+    2. Within-scenario validation: Held-out samples from training scenarios
 
     Layout:
-    - Top: Total Loss (train vs validation)
-    - Bottom: Reliability Loss (train vs validation)
+    - Top: Total Loss (train vs both validations)
+    - Bottom: Reliability Loss (train vs both validations)
 
     Args:
         history (dict): Training history containing:
             - total_loss: Training total loss per epoch
-            - val_total_loss: Validation total loss per epoch (optional)
+            - val_total_loss: Cross-scenario validation loss (optional)
+            - val_within_total_loss: Within-scenario validation loss (optional)
             - reliability_loss: Training reliability loss per epoch
-            - val_reliability_loss: Validation reliability loss per epoch (optional)
+            - val_reliability_loss: Cross-scenario validation reliability loss (optional)
+            - val_within_reliability_loss: Within-scenario validation reliability loss (optional)
         save_path (str): Path to save figure
     """
-    # Check if validation data is available
-    has_validation = 'val_total_loss' in history and len(history.get('val_total_loss', [])) > 0
+    # Check which validation data is available
+    has_cross_val = 'val_total_loss' in history and len(history.get('val_total_loss', [])) > 0
+    has_within_val = 'val_within_total_loss' in history and len(history.get('val_within_total_loss', [])) > 0
 
     # Determine number of plots
     n_plots = 2  # Total loss and Reliability loss
@@ -781,40 +784,67 @@ def plot_loss_chart(history, save_path=None):
     # Training loss
     ax1.plot(epochs, history['total_loss'], label='Train Loss', color='blue', linewidth=2)
 
-    # Validation loss if available
-    if has_validation:
+    # Cross-scenario validation loss
+    if has_cross_val:
         val_epochs = range(1, len(history['val_total_loss']) + 1)
-        ax1.plot(val_epochs, history['val_total_loss'], label='Validation Loss',
+        ax1.plot(val_epochs, history['val_total_loss'], label='Val Loss (cross-scenario)',
                  color='red', linewidth=2, linestyle='--')
 
-        # Highlight overfitting region (where val loss > train loss)
+    # Within-scenario validation loss
+    if has_within_val:
+        val_within_epochs = range(1, len(history['val_within_total_loss']) + 1)
+        ax1.plot(val_within_epochs, history['val_within_total_loss'], label='Val Loss (within-scenario)',
+                 color='orange', linewidth=2, linestyle=':')
+
+    # Highlight overfitting region (prefer within-scenario for detection, fallback to cross-scenario)
+    val_for_overfit = None
+    val_label = ""
+    if has_within_val:
+        val_for_overfit = history['val_within_total_loss']
+        val_label = "within"
+    elif has_cross_val:
+        val_for_overfit = history['val_total_loss']
+        val_label = "cross"
+
+    if val_for_overfit is not None:
         train_arr = np.array(history['total_loss'])
-        val_arr = np.array(history['val_total_loss'])
+        val_arr = np.array(val_for_overfit)
         min_len = min(len(train_arr), len(val_arr))
 
         if min_len > 0:
             overfit_mask = val_arr[:min_len] > train_arr[:min_len]
             if np.any(overfit_mask):
-                # Find first overfitting epoch
                 overfit_start = np.argmax(overfit_mask) + 1
-                ax1.axvline(x=overfit_start, color='orange', linestyle=':',
-                           linewidth=2, alpha=0.7, label=f'Overfitting starts (epoch {overfit_start})')
+                ax1.axvline(x=overfit_start, color='darkred', linestyle=':',
+                           linewidth=2, alpha=0.7, label=f'Overfitting ({val_label}, epoch {overfit_start})')
 
     ax1.set_xlabel('Epoch', fontsize=12)
     ax1.set_ylabel('Total Loss', fontsize=12)
-    ax1.set_title('Training vs Validation Loss', fontsize=14, fontweight='bold')
-    ax1.legend(loc='upper right', fontsize=10)
+    ax1.set_title('Training vs Validation Loss (Overfitting Detection)', fontsize=14, fontweight='bold')
+    ax1.legend(loc='upper right', fontsize=9)
     ax1.grid(True, alpha=0.3)
 
-    # Add annotation for final gap
-    if has_validation and len(history['val_total_loss']) > 0:
-        final_train = history['total_loss'][-1]
-        final_val = history['val_total_loss'][-1]
-        gap = final_val - final_train
-        gap_pct = (gap / final_train) * 100 if final_train != 0 else 0
+    # Add annotation for final gaps
+    annotation_lines = []
+    final_train = history['total_loss'][-1]
+    annotation_lines.append(f'Final Train: {final_train:.6f}')
 
-        status = "⚠ Overfitting" if gap > 0 else "✓ Good generalization"
-        ax1.text(0.02, 0.98, f'Final Train: {final_train:.6f}\nFinal Val: {final_val:.6f}\nGap: {gap:+.6f} ({gap_pct:+.1f}%)\n{status}',
+    if has_cross_val and len(history['val_total_loss']) > 0:
+        final_cross = history['val_total_loss'][-1]
+        gap_cross = final_cross - final_train
+        gap_cross_pct = (gap_cross / final_train) * 100 if final_train != 0 else 0
+        status_cross = "overfitting" if gap_cross > 0 else "OK"
+        annotation_lines.append(f'Val (cross): {final_cross:.6f} ({gap_cross_pct:+.1f}% {status_cross})')
+
+    if has_within_val and len(history['val_within_total_loss']) > 0:
+        final_within = history['val_within_total_loss'][-1]
+        gap_within = final_within - final_train
+        gap_within_pct = (gap_within / final_train) * 100 if final_train != 0 else 0
+        status_within = "overfitting" if gap_within > 0 else "OK"
+        annotation_lines.append(f'Val (within): {final_within:.6f} ({gap_within_pct:+.1f}% {status_within})')
+
+    if len(annotation_lines) > 1:
+        ax1.text(0.02, 0.98, '\n'.join(annotation_lines),
                 transform=ax1.transAxes, fontsize=9,
                 verticalalignment='top',
                 bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.7))
@@ -826,27 +856,34 @@ def plot_loss_chart(history, save_path=None):
     ax2.plot(epochs, history['reliability_loss'], label='Train Reliability Loss',
              color='purple', linewidth=2)
 
-    # Validation reliability loss if available
-    if has_validation and 'val_reliability_loss' in history:
+    # Cross-scenario validation reliability loss
+    if has_cross_val and 'val_reliability_loss' in history:
         val_rel_loss = history['val_reliability_loss']
         if len(val_rel_loss) > 0:
             val_epochs = range(1, len(val_rel_loss) + 1)
-            ax2.plot(val_epochs, val_rel_loss, label='Validation Reliability Loss',
+            ax2.plot(val_epochs, val_rel_loss, label='Val Reliability (cross-scenario)',
                      color='magenta', linewidth=2, linestyle='--')
+
+    # Within-scenario validation reliability loss
+    if has_within_val and 'val_within_reliability_loss' in history:
+        val_within_rel_loss = history['val_within_reliability_loss']
+        if len(val_within_rel_loss) > 0:
+            val_within_epochs = range(1, len(val_within_rel_loss) + 1)
+            ax2.plot(val_within_epochs, val_within_rel_loss, label='Val Reliability (within-scenario)',
+                     color='darkorange', linewidth=2, linestyle=':')
 
     ax2.set_xlabel('Epoch', fontsize=12)
     ax2.set_ylabel('Reliability Loss', fontsize=12)
     ax2.set_title('Reliability Loss: Train vs Validation', fontsize=14, fontweight='bold')
-    ax2.legend(loc='upper right', fontsize=10)
+    ax2.legend(loc='upper right', fontsize=9)
     ax2.grid(True, alpha=0.3)
 
     # Add warm-up marker if curriculum learning data is available
     if 'reliability_weight' in history and len(history['reliability_weight']) > 0:
-        # Find end of warm-up (first epoch with reliability_weight > 0)
         warmup_end = 0
         for i, w in enumerate(history['reliability_weight']):
             if w > 0:
-                warmup_end = i + 1  # 1-indexed epoch
+                warmup_end = i + 1
                 break
 
         if warmup_end > 0:

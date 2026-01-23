@@ -176,6 +176,17 @@ CONTROLLER_CONFIG = {
         'success_rate_threshold': 0.95,  # Threshold for success rate (F_actual >= threshold * F_star)
     },
 
+    # Validation settings (for overfitting detection)
+    'validation': {
+        # Cross-scenario validation (uses separate test scenarios with different conditions)
+        'cross_scenario_enabled': True,  # Enable validation on test scenarios (different conditions)
+
+        # Within-scenario validation (splits training samples into train/val)
+        'within_scenario_enabled': True,  # Enable train/val split within same scenarios
+        'within_scenario_split': 0.2,  # Fraction of training samples to use as validation (0.2 = 20%)
+                                        # If multiple scenarios: same number of val samples per scenario
+    },
+
     # Surrogate model
     'surrogate': {
         'use_deterministic_sampling': False,  # True = use mean (stable), False = use sampling (stochastic)
