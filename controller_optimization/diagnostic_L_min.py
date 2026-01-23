@@ -118,10 +118,15 @@ def compare_delta_calculation(process_name: str, mu_target: float,
     print(f"    F*_fixed:       {F_star_fixed:.6f}")
     print(f"    F*_adaptive:    {F_star_adaptive:.6f}")
 
-    ratio = abs(delta_fixed / delta_adaptive) if delta_adaptive != 0 else float('inf')
-    if ratio > 2:
-        print(f"    >>> delta_fixed >> delta_adaptive by {ratio:.1f}x <<<")
-        print(f"    >>> THIS IS LIKELY THE CAUSE OF L_min OVERESTIMATION <<<")
+    # Only warn if there's a meaningful difference
+    if abs(delta_adaptive) > 1e-6:
+        ratio = abs(delta_fixed / delta_adaptive)
+        if ratio > 2:
+            print(f"    >>> delta_fixed >> delta_adaptive by {ratio:.1f}x <<<")
+            print(f"    >>> THIS IS LIKELY THE CAUSE OF L_min OVERESTIMATION <<<")
+    elif abs(delta_fixed) > 1e-6:
+        print(f"    >>> delta_adaptive ≈ 0 but delta_fixed = {delta_fixed:.4f} <<<")
+        print(f"    >>> Adaptive target matches output well <<<")
 
     return delta_fixed, delta_adaptive
 
