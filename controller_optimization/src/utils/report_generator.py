@@ -437,7 +437,7 @@ class ControllerReportGenerator:
         self.story.append(Spacer(1, 0.2*cm))
 
     def add_theoretical_tables_section(self, theoretical_data=None):
-        """Add theoretical loss analysis tables to PDF report (for first page).
+        """Add empirical L_min analysis tables to PDF report (for first page).
 
         Args:
             theoretical_data: Dictionary from TheoreticalLossTracker.to_dict() (optional)
@@ -445,30 +445,43 @@ class ControllerReportGenerator:
         if not theoretical_data:
             return
 
-        self.add_section_title("Theoretical Loss Analysis")
+        self.add_section_title("Empirical L_min Analysis")
 
         # Add description
         description = Paragraph(
-            "Analysis comparing observed loss with theoretical minimum (L_min). "
-            "L_min = Var[F] + Bias², where F is the reliability computed with sampling uncertainty.",
+            "Analysis showing empirical L_min computed from F samples collected during training. "
+            "L_min = Var[F] + Bias², where Var[F] and Bias² are measured directly from samples.",
             self.styles['Normal']
         )
         self.story.append(description)
         self.story.append(Spacer(1, 0.2*cm))
 
-        # Add summary table if theoretical data is provided
-        if 'summary' in theoretical_data:
-            summary = theoretical_data['summary']
+        # Get empirical L_min data
+        empirical_data = theoretical_data.get('empirical_L_min', {})
+        summary = theoretical_data.get('summary', {})
+
+        if empirical_data:
+            # Use empirical values
+            L_min = empirical_data.get('L_min', 0)
+            var_f = empirical_data.get('Var_F', 0)
+            bias2 = empirical_data.get('Bias2', 0)
+            E_F = empirical_data.get('E_F', 0)
+            F_star = empirical_data.get('F_star', 0)
+            n_samples = empirical_data.get('n_samples', 0)
+            final_loss = summary.get('final_loss', 0)
+            gap = final_loss - L_min if final_loss > L_min else 0
+            efficiency = L_min / final_loss * 100 if final_loss > 0 else 0
 
             # Create summary metrics table
             summary_data = [
-                ['Metrica', 'Valore'],
-                ['Loss Finale', f"{summary.get('final_loss', 0):.6f}"],
-                ['L_min Teorico', f"{summary.get('final_L_min', 0):.6f}"],
-                ['Gap (Riducibile)', f"{summary.get('final_gap', 0):.6f}"],
-                ['Efficienza', f"{summary.get('final_efficiency', 0)*100:.1f}%"],
-                ['Migliore Efficienza', f"{summary.get('best_efficiency', 0)*100:.1f}%"],
-                ['Violazioni Teoriche', f"{summary.get('n_violations', 0)}/{summary.get('total_epochs', 0)}"]
+                ['Metric', 'Value'],
+                ['Final Loss', f"{final_loss:.6f}"],
+                ['Empirical L_min', f"{L_min:.6f}"],
+                ['Gap (Reducible)', f"{gap:.6f}"],
+                ['Efficiency', f"{efficiency:.1f}%"],
+                ['E[F]', f"{E_F:.6f}"],
+                ['F*', f"{F_star:.6f}"],
+                ['F Samples', f"{n_samples}"]
             ]
 
             table = Table(summary_data, colWidths=[8*cm, 6*cm])
@@ -487,64 +500,59 @@ class ControllerReportGenerator:
             self.story.append(table)
             self.story.append(Spacer(1, 0.2*cm))
 
-            # Add decomposition table
-            if 'theoretical_Var_F' in theoretical_data and len(theoretical_data['theoretical_Var_F']) > 0:
-                var_f = theoretical_data['theoretical_Var_F'][-1]
-                bias2 = theoretical_data['theoretical_Bias2'][-1]
-                gap = theoretical_data['gap'][-1]
-                L_min = var_f + bias2
-                total = var_f + bias2 + gap
+            # Add decomposition table using empirical data
+            total = var_f + bias2 + gap
 
-                decomp_data = [
-                    ['Componente', 'Valore', '% di L_min', '% di Loss'],
-                    ['Var(F) (Irreducibile)', f"{var_f:.6f}",
-                     f"{100*var_f/L_min:.1f}%" if L_min > 0 else "-",
-                     f"{100*var_f/total:.1f}%" if total > 0 else "-"],
-                    ['Bias² (Irreducibile)', f"{bias2:.6f}",
-                     f"{100*bias2/L_min:.1f}%" if L_min > 0 else "-",
-                     f"{100*bias2/total:.1f}%" if total > 0 else "-"],
-                    ['Gap (Riducibile)', f"{gap:.6f}", "-",
-                     f"{100*gap/total:.1f}%" if total > 0 else "-"],
-                ]
+            decomp_data = [
+                ['Component', 'Value', '% of L_min', '% of Loss'],
+                ['Var[F] (Irreducible)', f"{var_f:.6f}",
+                 f"{100*var_f/L_min:.1f}%" if L_min > 0 else "-",
+                 f"{100*var_f/total:.1f}%" if total > 0 else "-"],
+                ['Bias² (Irreducible)', f"{bias2:.6f}",
+                 f"{100*bias2/L_min:.1f}%" if L_min > 0 else "-",
+                 f"{100*bias2/total:.1f}%" if total > 0 else "-"],
+                ['Gap (Reducible)', f"{gap:.6f}", "-",
+                 f"{100*gap/total:.1f}%" if total > 0 else "-"],
+            ]
 
-                table2 = Table(decomp_data, colWidths=[5*cm, 4*cm, 4*cm, 4*cm])
-                table2.setStyle(TableStyle([
-                    ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
-                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                    ('FONTSIZE', (0, 0), (-1, -1), 8),
-                    ('LINEABOVE', (0, 0), (-1, 0), 1.5, colors.black),
-                    ('LINEABOVE', (0, 1), (-1, 1), 0.5, colors.black),
-                    ('LINEBELOW', (0, -1), (-1, -1), 1.5, colors.black),
-                ]))
-                self.story.append(Paragraph("<b>Loss Decomposition</b>", self.styles['SectionTitle']))
-                self.story.append(table2)
-                self.story.append(Spacer(1, 0.2*cm))
+            table2 = Table(decomp_data, colWidths=[5*cm, 4*cm, 4*cm, 4*cm])
+            table2.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, -1), 8),
+                ('LINEABOVE', (0, 0), (-1, 0), 1.5, colors.black),
+                ('LINEABOVE', (0, 1), (-1, 1), 0.5, colors.black),
+                ('LINEBELOW', (0, -1), (-1, -1), 1.5, colors.black),
+            ]))
+            self.story.append(Paragraph("<b>Empirical Loss Decomposition</b>", self.styles['SectionTitle']))
+            self.story.append(table2)
+            self.story.append(Spacer(1, 0.2*cm))
 
     def add_theoretical_analysis_plots(self, checkpoint_dir):
-        """Add theoretical loss analysis plots to PDF report.
+        """Add empirical L_min analysis plots to PDF report.
 
         Args:
             checkpoint_dir: Path to checkpoint directory (contains plots)
         """
         checkpoint_dir = Path(checkpoint_dir)
 
-        # Check if theoretical analysis plots exist
-        theoretical_plots = [
+        # Check if L_min analysis plots exist
+        lmin_plots = [
             'loss_vs_L_min.png',
             'training_efficiency.png',
             'loss_decomposition.png',
             'loss_scatter.png',
-            'theoretical_analysis_summary.png'
+            'L_min_analysis_summary.png'
         ]
 
-        available_plots = [p for p in theoretical_plots if (checkpoint_dir / p).exists()]
+        available_plots = [p for p in lmin_plots if (checkpoint_dir / p).exists()]
 
         if len(available_plots) == 0:
-            return  # No theoretical analysis plots to add
+            return  # No L_min analysis plots to add
 
-        # Add theoretical analysis summary plot (2x2 grid)
-        summary_plot = checkpoint_dir / 'theoretical_analysis_summary.png'
+        # Add L_min analysis summary plot (2x2 grid)
+        summary_plot = checkpoint_dir / 'L_min_analysis_summary.png'
         if summary_plot.exists():
             img = Image(str(summary_plot))
             img_width, img_height = img.imageWidth, img.imageHeight

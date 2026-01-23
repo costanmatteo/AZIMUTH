@@ -1094,8 +1094,8 @@ def main(config=None):
                 import traceback
                 traceback.print_exc()
 
-        # 8.6. Theoretical Loss Analysis
-        print("\n[8.6/9] Running theoretical loss analysis...")
+        # 8.6. Empirical L_min Analysis
+        print("\n[8.6/9] Running empirical L_min analysis...")
 
         try:
             # Compute per-process theoretical parameters from target_trajectory
@@ -1273,32 +1273,13 @@ def main(config=None):
                 s=0.0        # Not used in empirical approach
             )
 
-            # Also compute analytical L_min for comparison (optional)
-            from controller_optimization.src.analysis import compute_multi_process_L_min
-            analytical_components, per_process_components = compute_multi_process_L_min(
-                process_params=process_params_for_L_min,
-                process_weights={p: process_configs_surrogate[p].get('weight', 1.0)
-                                for p in process_params_for_L_min.keys()},
-                loss_scale=CONTROLLER_CONFIG['training']['reliability_loss_scale'],
-                correlation_matrix=correlation_matrix if correlation_matrix else None
-            )
-
-            print(f"\n  Analytical L_min (for comparison):")
-            print(f"    L_min:            {analytical_components.L_min:.6f}")
-            print(f"    Var[F] component: {analytical_components.Var_F:.6f}")
-            print(f"    Bias² component:  {analytical_components.Bias2:.6f}")
-            if correlation_matrix:
-                print(f"    (Computed with process correlations)")
-            else:
-                print(f"    (Computed assuming process independence)")
-
             # Populate tracker with data from training history
             reliability_loss_history = history.get('reliability_loss', [])
             F_values_history = history.get('F_values', [])
 
-            # Use analytical parameters for tracker updates (tracker still uses analytical formulas internally)
-            combined_sigma2 = analytical_components.sigma2
-            combined_delta = np.sqrt(analytical_components.Bias2 / CONTROLLER_CONFIG['training']['reliability_loss_scale']) if analytical_components.Bias2 > 0 else 0.0
+            # Use empirical values for tracker updates
+            combined_sigma2 = 0.0  # Not used in empirical approach
+            combined_delta = 0.0   # Not used in empirical approach
             combined_s = np.mean([p['s'] for p in process_params_for_L_min.values()]) if process_params_for_L_min else 1.0
 
             for epoch_idx, (rel_loss, F_val) in enumerate(zip(reliability_loss_history, F_values_history)):
@@ -1316,35 +1297,17 @@ def main(config=None):
                     s=combined_s
                 )
 
-            # Get theoretical data for report
+            # Get data for report
             theoretical_data = theoretical_tracker.to_dict()
 
-            # Add per-process L_min data to theoretical_data
-            theoretical_data['per_process_L_min'] = {
-                proc_name: comp.to_dict() for proc_name, comp in per_process_components.items()
-            }
             # Use empirical L_min as the primary combined_L_min
             theoretical_data['combined_L_min'] = combined_components.to_dict()
 
-            # Also save empirical L_min results explicitly
+            # Save empirical L_min results
             theoretical_data['empirical_L_min'] = empirical_L_min_result
 
-            # Save analytical L_min for comparison
-            theoretical_data['analytical_L_min'] = analytical_components.to_dict()
-
-            # Add correlation matrix to theoretical_data
-            if correlation_matrix:
-                # Convert tuple keys to string keys for JSON serialization
-                theoretical_data['correlation_matrix'] = {
-                    f"{k[0]},{k[1]}": v for k, v in correlation_matrix.items()
-                }
-                theoretical_data['correlation_used'] = True
-            else:
-                theoretical_data['correlation_matrix'] = {}
-                theoretical_data['correlation_used'] = False
-
-            # Generate theoretical analysis plots
-            print("  Generating theoretical analysis plots...")
+            # Generate L_min analysis plots
+            print("  Generating L_min analysis plots...")
             theoretical_plots = generate_all_theoretical_plots(
                 tracker_data=theoretical_data,
                 checkpoint_dir=checkpoint_dir,
@@ -1352,38 +1315,33 @@ def main(config=None):
             )
 
             # Generate and save text report
-            print("  Generating theoretical analysis text report...")
-            process_params_for_report = process_params_for_L_min
+            print("  Generating L_min analysis report...")
 
-            text_report = generate_full_report(
-                tracker_data=theoretical_data,
-                process_params=process_params_for_report
-            )
+            text_report = generate_full_report(tracker_data=theoretical_data)
 
             # Save text report
-            save_report_txt(text_report, checkpoint_dir / 'theoretical_analysis_report.txt')
+            save_report_txt(text_report, checkpoint_dir / 'L_min_analysis_report.txt')
 
             # Save JSON data
-            save_report_json(theoretical_data, checkpoint_dir / 'theoretical_analysis_data.json')
+            save_report_json(theoretical_data, checkpoint_dir / 'L_min_analysis_data.json')
 
             # Print summary
             summary = theoretical_data.get('summary', {})
-            print(f"\n  L_min ANALYSIS SUMMARY:")
+            print(f"\n  EMPIRICAL L_min ANALYSIS SUMMARY:")
             print(f"    Final Loss:        {summary.get('final_loss', 0):.6f}")
             print(f"    Empirical L_min:   {empirical_L_min_result['L_min']:.6f}")
-            print(f"    Analytical L_min:  {analytical_components.L_min:.6f}")
             # Compute gap and efficiency using empirical L_min
             final_loss = summary.get('final_loss', 0)
             emp_gap = final_loss - empirical_L_min_result['L_min'] if final_loss > 0 else 0
             emp_efficiency = empirical_L_min_result['L_min'] / final_loss * 100 if final_loss > 0 else 0
-            print(f"    Gap (empirical):   {emp_gap:.6f}")
+            print(f"    Gap:               {emp_gap:.6f}")
             print(f"    Efficiency:        {emp_efficiency:.1f}%")
             print(f"    F samples used:    {empirical_L_min_result['n_samples']}")
 
-            print("  ✓ Theoretical analysis completed")
+            print("  ✓ Empirical L_min analysis completed")
 
         except Exception as e:
-            print(f"  ✗ Warning: Failed to run theoretical analysis: {e}")
+            print(f"  ✗ Warning: Failed to run L_min analysis: {e}")
             import traceback
             traceback.print_exc()
 
@@ -1504,9 +1462,9 @@ def main(config=None):
     print("  - training_history.json            : Training history")
     print("  - final_results.json               : All metrics (with per-scenario data)")
     print("  - *.png                            : Visualization plots")
-    print("  - theoretical_analysis_report.txt  : Theoretical analysis text report")
-    print("  - theoretical_analysis_data.json   : Theoretical analysis data")
-    print("  - theoretical_analysis_summary.png : Theoretical analysis plots")
+    print("  - L_min_analysis_report.txt        : Empirical L_min analysis report")
+    print("  - L_min_analysis_data.json         : Empirical L_min analysis data")
+    print("  - L_min_analysis_summary.png       : Empirical L_min analysis plots")
     print(f"\nController trained on {n_scenarios} diverse scenarios")
     print(f"  → Generalizes across varying structural conditions")
     print(f"  → Robustness: {F_actual_std:.6f} (std across scenarios)")
