@@ -269,6 +269,54 @@ def generate_validation_table(
     return "\n".join(lines)
 
 
+def generate_empirical_L_min_table(
+    empirical_data: Dict[str, Any],
+    final_loss: float
+) -> str:
+    """
+    Generate table showing empirical L_min decomposition.
+
+    Args:
+        empirical_data: Dictionary with empirical L_min results
+        final_loss: Total observed loss
+
+    Returns formatted ASCII table string.
+    """
+    lines = []
+    lines.append("")
+    lines.append("EMPIRICAL L_min - Loss Decomposition")
+    lines.append("=" * 65)
+    lines.append(f"{'Component':<20} {'Value':>12} {'% of L_min':>12} {'% of Loss':>12}")
+    lines.append("-" * 65)
+
+    L_min = empirical_data.get('L_min', 0)
+    Var_F = empirical_data.get('Var_F', 0)
+    Bias2 = empirical_data.get('Bias2', 0)
+    gap = final_loss - L_min if final_loss > L_min else 0
+
+    # Calculate percentages
+    pct_L_min_var = 100 * Var_F / L_min if L_min > 0 else 0
+    pct_L_min_bias = 100 * Bias2 / L_min if L_min > 0 else 0
+    pct_loss_var = 100 * Var_F / final_loss if final_loss > 0 else 0
+    pct_loss_bias = 100 * Bias2 / final_loss if final_loss > 0 else 0
+    pct_loss_gap = 100 * gap / final_loss if final_loss > 0 else 0
+
+    lines.append(f"{'Var[F]':<20} {format_value(Var_F):>12} {format_pct(pct_L_min_var):>12} {format_pct(pct_loss_var):>12}")
+    lines.append(f"{'Bias²':<20} {format_value(Bias2):>12} {format_pct(pct_L_min_bias):>12} {format_pct(pct_loss_bias):>12}")
+    lines.append(f"{'Gap (reducible)':<20} {format_value(gap):>12} {'-':>12} {format_pct(pct_loss_gap):>12}")
+    lines.append("-" * 65)
+    lines.append(f"{'L_min':<20} {format_value(L_min):>12} {'100.0%':>12} {format_pct(100*L_min/final_loss if final_loss > 0 else 0):>12}")
+    lines.append(f"{'TOTAL':<20} {format_value(final_loss):>12} {'-':>12} {'100.0%':>12}")
+    lines.append("=" * 65)
+    lines.append("")
+    lines.append(f"E[F] = {empirical_data.get('E_F', 0):.6f}")
+    lines.append(f"F*   = {empirical_data.get('F_star', 0):.6f}")
+    lines.append(f"n_samples = {empirical_data.get('n_samples', 0)}")
+    lines.append("")
+
+    return "\n".join(lines)
+
+
 def generate_full_report(
     tracker_data: Dict[str, Any],
     process_params: Optional[Dict[str, Dict[str, float]]] = None,
@@ -291,55 +339,41 @@ def generate_full_report(
 
     # Header
     lines.append("=" * 85)
-    lines.append("REPORT ANALISI TEORICA - Reliability Loss Function")
+    lines.append("EMPIRICAL L_min ANALYSIS REPORT - Reliability Loss Function")
     lines.append("=" * 85)
     lines.append("")
-    lines.append("Questo report confronta i risultati osservati durante il training")
-    lines.append("con i limiti teorici derivati dall'analisi della loss function.")
+    lines.append("This report shows the empirical L_min computed from F samples collected during training.")
     lines.append("")
     lines.append("Loss function: L = scale * (F - F*)^2")
-    lines.append("Minimo teorico: L_min = Var[F] + Bias^2")
+    lines.append("Empirical L_min: L_min = Var[F] + (E[F] - F*)^2")
     lines.append("")
 
     summary = tracker_data.get('summary', {})
 
-    # Main results table
-    lines.append(generate_main_results_table(summary))
-
-    # Process parameters table (if available)
-    if process_params:
-        lines.append(generate_process_params_table(process_params))
-
-    # Decomposition table
-    if len(tracker_data.get('theoretical_Var_F', [])) > 0:
-        final_Var_F = tracker_data['theoretical_Var_F'][-1]
-        final_Bias2 = tracker_data['theoretical_Bias2'][-1]
-        final_gap = tracker_data['gap'][-1]
-        final_L_min = tracker_data['theoretical_L_min'][-1]
-        final_loss = tracker_data['observed_loss'][-1]
-        lines.append(generate_decomposition_table(final_Var_F, final_Bias2, final_gap, final_L_min, final_loss))
+    # Empirical L_min table (primary)
+    empirical_data = tracker_data.get('empirical_L_min', {})
+    if empirical_data:
+        final_loss = summary.get('final_loss', 0)
+        lines.append(generate_empirical_L_min_table(empirical_data, final_loss))
 
     # Efficiency table
     lines.append(generate_efficiency_table(summary))
 
-    # Validation table
-    lines.append(generate_validation_table(summary, z_score_E_F, z_score_Var_F))
-
     # Footer
     lines.append("")
     lines.append("=" * 85)
-    lines.append("LEGENDA:")
-    lines.append("- F* = reliability della traiettoria target (FISSO)")
-    lines.append("- F = reliability del controller (sampling stocastico)")
-    lines.append("- δ = μ_target - τ (distanza del target dall'ottimo del processo)")
+    lines.append("LEGEND:")
+    lines.append("- F* = target reliability (fixed)")
+    lines.append("- F = controller reliability (stochastic sampling)")
     lines.append("")
-    lines.append("CALCOLO L_min:")
-    lines.append("- L_min = Var[F] + Bias² = minimo teorico irriducibile")
-    lines.append("- Var[F] = varianza irriducibile (dovuta al sampling stocastico)")
-    lines.append("- Bias² = (E[F] - F*)² = bias sistematico")
+    lines.append("EMPIRICAL L_min CALCULATION:")
+    lines.append("- E[F] = mean of all F samples collected during training")
+    lines.append("- Var[F] = variance of all F samples")
+    lines.append("- L_min = Var[F] + Bias² = irreducible minimum loss")
+    lines.append("- Bias² = (E[F] - F*)² = systematic bias")
     lines.append("")
-    lines.append("- Gap = Loss - L_min (riducibile con training)")
-    lines.append("- Efficienza = L_min / Loss")
+    lines.append("- Gap = Loss - L_min (reducible with training)")
+    lines.append("- Efficiency = L_min / Loss")
     lines.append("=" * 85)
     lines.append("")
 

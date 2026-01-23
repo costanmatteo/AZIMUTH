@@ -503,7 +503,7 @@ def generate_all_theoretical_plots(
     verbose: bool = True
 ) -> Dict[str, Path]:
     """
-    Generate all theoretical analysis plots.
+    Generate all L_min analysis plots (using empirical L_min).
 
     Args:
         tracker_data: Dictionary from TheoreticalLossTracker.to_dict()
@@ -517,19 +517,28 @@ def generate_all_theoretical_plots(
     plots = {}
 
     if verbose:
-        print("  Generating theoretical analysis plots...")
+        print("  Generating L_min analysis plots...")
 
     epochs = tracker_data['epochs']
     if len(epochs) == 0:
         print("  Warning: No epochs in tracker data, skipping plots")
         return plots
 
-    # 1. Loss vs L_min
+    # Check if empirical L_min data is available
+    empirical_data = tracker_data.get('empirical_L_min', {})
+
+    # 1. Loss vs L_min (uses empirical L_min if available)
     path = checkpoint_dir / 'loss_vs_L_min.png'
+    # Use empirical L_min for final value comparison
+    L_min_values = tracker_data.get('theoretical_L_min', [])
+    if empirical_data and len(L_min_values) > 0:
+        # Replace final L_min with empirical value
+        L_min_values = list(L_min_values)
+        L_min_values[-1] = empirical_data.get('L_min', L_min_values[-1])
     plot_loss_vs_L_min(
         epochs=tracker_data['epochs'],
         observed_loss=tracker_data['observed_loss'],
-        theoretical_L_min=tracker_data['theoretical_L_min'],
+        theoretical_L_min=L_min_values,
         save_path=str(path)
     )
     plots['loss_vs_L_min'] = path
@@ -545,50 +554,41 @@ def generate_all_theoretical_plots(
     plots['training_efficiency'] = path
     plt.close()
 
-    # 3. Loss decomposition (final values)
-    path = checkpoint_dir / 'loss_decomposition.png'
-    plot_loss_decomposition(
-        Var_F=tracker_data['theoretical_Var_F'][-1],
-        Bias2=tracker_data['theoretical_Bias2'][-1],
-        gap=tracker_data['gap'][-1],
-        save_path=str(path)
-    )
-    plots['loss_decomposition'] = path
-    plt.close()
+    # 3. Loss decomposition using EMPIRICAL data (skip analytical)
+    if empirical_data:
+        path = checkpoint_dir / 'loss_decomposition.png'
+        final_loss = tracker_data['observed_loss'][-1] if tracker_data['observed_loss'] else 0
+        gap = final_loss - empirical_data.get('L_min', 0)
+        plot_loss_decomposition(
+            Var_F=empirical_data.get('Var_F', 0),
+            Bias2=empirical_data.get('Bias2', 0),
+            gap=gap,
+            save_path=str(path)
+        )
+        plots['loss_decomposition'] = path
+        plt.close()
 
     # 4. Scatter plot
     path = checkpoint_dir / 'loss_scatter.png'
     plot_loss_scatter(
         observed_loss=tracker_data['observed_loss'],
-        theoretical_L_min=tracker_data['theoretical_L_min'],
+        theoretical_L_min=L_min_values,
         epochs=tracker_data['epochs'],
         save_path=str(path)
     )
     plots['loss_scatter'] = path
     plt.close()
 
-    # 5. Empirical vs theoretical
-    if 'empirical_E_F' in tracker_data and len(tracker_data['empirical_E_F']) > 0:
-        path = checkpoint_dir / 'empirical_vs_theoretical.png'
-        plot_empirical_vs_theoretical(
-            empirical_E_F=tracker_data['empirical_E_F'],
-            theoretical_E_F=tracker_data['theoretical_E_F'],
-            empirical_Var_F=tracker_data['empirical_Var_F'],
-            theoretical_Var_F=tracker_data['theoretical_Var_F'],
-            epochs=tracker_data['epochs'],
-            save_path=str(path)
-        )
-        plots['empirical_vs_theoretical'] = path
-        plt.close()
+    # Note: Removed empirical_vs_theoretical plot (no longer needed with empirical L_min)
 
-    # 6. Summary figure (2x2)
-    path = checkpoint_dir / 'theoretical_analysis_summary.png'
+    # 5. Summary figure (2x2)
+    path = checkpoint_dir / 'L_min_analysis_summary.png'
     create_summary_figure(tracker_data, save_path=str(path))
-    plots['theoretical_summary'] = path
+    plots['L_min_summary'] = path
     plt.close()
 
     if verbose:
-        print(f"  Generated {len(plots)} theoretical analysis plots")
+        print(f"  Generated {len(plots)} L_min analysis plots")
 
     return plots
 
