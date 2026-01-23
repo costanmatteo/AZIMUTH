@@ -14,6 +14,16 @@ from .theoretical_loss_analysis import (
     format_status
 )
 
+from .empirical_L_min import (
+    EmpiricalLminResult,
+    EmpiricalLminTracker,
+    compute_empirical_L_min,
+    compute_empirical_L_min_multi_scenario,
+    compute_aggregate_empirical_L_min,
+    compare_analytical_vs_empirical,
+    compute_F_star_deterministic
+)
+
 from .theoretical_visualization import (
     plot_loss_vs_L_min,
     plot_efficiency_over_time,
@@ -36,7 +46,7 @@ from .theoretical_tables import (
 )
 
 __all__ = [
-    # Core analysis
+    # Core theoretical analysis
     'TheoreticalLossComponents',
     'TheoreticalLossTracker',
     'compute_theoretical_L_min',
@@ -48,6 +58,14 @@ __all__ = [
     'run_validation_sampling',
     'compute_z_score',
     'format_status',
+    # Empirical L_min analysis (Monte Carlo)
+    'EmpiricalLminResult',
+    'EmpiricalLminTracker',
+    'compute_empirical_L_min',
+    'compute_empirical_L_min_multi_scenario',
+    'compute_aggregate_empirical_L_min',
+    'compare_analytical_vs_empirical',
+    'compute_F_star_deterministic',
     # Visualization
     'plot_loss_vs_L_min',
     'plot_efficiency_over_time',

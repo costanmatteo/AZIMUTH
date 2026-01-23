@@ -436,6 +436,105 @@ class ControllerReportGenerator:
         self.story.append(Paragraph(reliability_text, self.styles['BodyText']))
         self.story.append(Spacer(1, 0.2*cm))
 
+    def add_empirical_analysis_section(self, empirical_data=None):
+        """Add empirical L_min analysis section to PDF report.
+
+        This section shows Monte Carlo-based L_min estimation, which is more
+        accurate for sequential processes with adaptive targets where
+        analytical formulas may not apply.
+
+        Args:
+            empirical_data: Dict from empirical L_min computation (optional)
+        """
+        if not empirical_data:
+            return
+
+        self.add_section_title("Empirical Loss Analysis (Monte Carlo)")
+
+        # Description
+        n_samples = empirical_data.get('n_mc_samples', 'N/A')
+        n_scenarios = empirical_data.get('n_scenarios_evaluated', 'N/A')
+        description = Paragraph(
+            f"Analysis using Monte Carlo sampling to estimate L_min. "
+            f"This approach is required for sequential processes with adaptive targets, "
+            f"where analytical formulas may not fully capture dependencies. "
+            f"Based on {n_samples} samples across {n_scenarios} scenarios.",
+            self.styles['Normal']
+        )
+        self.story.append(description)
+        self.story.append(Spacer(1, 0.2*cm))
+
+        # Get aggregate data
+        agg = empirical_data.get('aggregate', {})
+        loss_scale = empirical_data.get('loss_scale', 1.0)
+        final_loss = empirical_data.get('final_observed_loss', 0)
+        scaled_L_min = empirical_data.get('scaled_L_min', 0)
+        efficiency = empirical_data.get('efficiency', 0)
+
+        # Scale values for display
+        var_f_scaled = agg.get('Var_F', 0) * loss_scale
+        bias2_scaled = agg.get('Bias2', 0) * loss_scale
+
+        # Summary table
+        summary_data = [
+            ['Metrica', 'Valore'],
+            ['E[F] (reliability media)', f"{agg.get('E_F', 0):.6f}"],
+            ['Var[F] (scaled)', f"{var_f_scaled:.6f}"],
+            ['Bias^2 (scaled)', f"{bias2_scaled:.6f}"],
+            ['L_min (empirico)', f"{scaled_L_min:.6f}"],
+            ['Loss Osservata', f"{final_loss:.6f}"],
+            ['Gap (riducibile)', f"{final_loss - scaled_L_min:.6f}"],
+            ['Efficienza', f"{efficiency*100:.1f}%"],
+            ['Campioni MC', f"{agg.get('n_samples', 0)}"],
+            ['Tempo calcolo', f"{agg.get('computation_time', 0):.1f}s"]
+        ]
+
+        table = Table(summary_data, colWidths=[8*cm, 6*cm])
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
+            ('TOPPADDING', (0, 0), (-1, 0), 6),
+            ('LINEABOVE', (0, 0), (-1, 0), 1.5, colors.black),
+            ('LINEABOVE', (0, 1), (-1, 1), 0.5, colors.black),
+            ('LINEBELOW', (0, -1), (-1, -1), 1.5, colors.black),
+        ]))
+        self.story.append(table)
+        self.story.append(Spacer(1, 0.2*cm))
+
+        # Loss decomposition table
+        if scaled_L_min > 0 and final_loss > 0:
+            gap = final_loss - scaled_L_min
+
+            decomp_data = [
+                ['Componente', 'Valore', '% di L_min', '% di Loss'],
+                ['Var(F) (Irreducibile)', f"{var_f_scaled:.6f}",
+                 f"{100*var_f_scaled/scaled_L_min:.1f}%",
+                 f"{100*var_f_scaled/final_loss:.1f}%"],
+                ['Bias^2 (Irreducibile)', f"{bias2_scaled:.6f}",
+                 f"{100*bias2_scaled/scaled_L_min:.1f}%",
+                 f"{100*bias2_scaled/final_loss:.1f}%"],
+                ['Gap (Riducibile)', f"{gap:.6f}", "-",
+                 f"{100*gap/final_loss:.1f}%" if gap > 0 else "0.0%"],
+            ]
+
+            table2 = Table(decomp_data, colWidths=[5*cm, 4*cm, 4*cm, 4*cm])
+            table2.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, -1), 8),
+                ('LINEABOVE', (0, 0), (-1, 0), 1.5, colors.black),
+                ('LINEABOVE', (0, 1), (-1, 1), 0.5, colors.black),
+                ('LINEBELOW', (0, -1), (-1, -1), 1.5, colors.black),
+            ]))
+            self.story.append(Paragraph("<b>Loss Decomposition (Empirical)</b>", self.styles['SectionTitle']))
+            self.story.append(table2)
+            self.story.append(Spacer(1, 0.2*cm))
+
     def add_theoretical_tables_section(self, theoretical_data=None):
         """Add theoretical loss analysis tables to PDF report (for first page).
 
@@ -445,7 +544,7 @@ class ControllerReportGenerator:
         if not theoretical_data:
             return
 
-        self.add_section_title("Theoretical Loss Analysis")
+        self.add_section_title("Theoretical Loss Analysis (Analytical)")
 
         # Add description
         description = Paragraph(
@@ -871,7 +970,7 @@ class ControllerReportGenerator:
 
     def generate(self, config, training_history, final_metrics, process_metrics,
                  F_star, F_baseline, F_actual, timestamp, n_scenarios=None, advanced_metrics=None,
-                 trajectory_values=None, theoretical_data=None):
+                 trajectory_values=None, theoretical_data=None, empirical_data=None):
         """Generate the complete PDF
 
         Args:
@@ -889,6 +988,7 @@ class ControllerReportGenerator:
                     'F_actual': float
                 }
             theoretical_data: Dictionary from TheoreticalLossTracker.to_dict() (optional)
+            empirical_data: Dictionary from empirical L_min computation (optional)
         """
 
         # Add all sections in logical order
@@ -918,6 +1018,10 @@ class ControllerReportGenerator:
         # Theoretical loss analysis tables (on first page)
         if theoretical_data:
             self.add_theoretical_tables_section(theoretical_data)
+
+        # Empirical L_min analysis (Monte Carlo)
+        if empirical_data:
+            self.add_empirical_analysis_section(empirical_data)
 
         # Start new page for visualizations
         self.story.append(PageBreak())
@@ -1020,7 +1124,8 @@ def generate_controller_report(
     n_scenarios=None,
     advanced_metrics=None,
     trajectory_values=None,
-    theoretical_data=None
+    theoretical_data=None,
+    empirical_data=None
 ):
     """
     Generate a LaTeX-style controller optimization training report
@@ -1039,6 +1144,7 @@ def generate_controller_report(
         advanced_metrics: Advanced metrics dictionary (optional)
         trajectory_values: Dictionary with trajectory comparison data (optional)
         theoretical_data: Dictionary from TheoreticalLossTracker.to_dict() (optional)
+        empirical_data: Dictionary from empirical L_min computation (optional)
 
     Returns:
         Path to the generated PDF report
@@ -1058,7 +1164,7 @@ def generate_controller_report(
         generator.generate(config, training_history, final_metrics, process_metrics,
                           F_star, F_baseline, F_actual, timestamp, n_scenarios=n_scenarios,
                           advanced_metrics=advanced_metrics, trajectory_values=trajectory_values,
-                          theoretical_data=theoretical_data)
+                          theoretical_data=theoretical_data, empirical_data=empirical_data)
 
         # Convert to 2-up format
         try:
@@ -1078,7 +1184,7 @@ def generate_controller_report(
         generator.generate(config, training_history, final_metrics, process_metrics,
                           F_star, F_baseline, F_actual, timestamp, n_scenarios=n_scenarios,
                           advanced_metrics=advanced_metrics, trajectory_values=trajectory_values,
-                          theoretical_data=theoretical_data)
+                          theoretical_data=theoretical_data, empirical_data=empirical_data)
 
     return final_report_path
 

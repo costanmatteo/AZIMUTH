@@ -1351,6 +1351,119 @@ def main(config=None):
             import traceback
             traceback.print_exc()
 
+        # 8.7. Empirical L_min Analysis (for sequential processes with adaptive targets)
+        print("\n" + "="*70)
+        print("[8.7/9] Running EMPIRICAL L_min analysis (Monte Carlo)...")
+        print("="*70)
+        print("Note: Using empirical approach because AZIMUTH has sequential")
+        print("      processes with adaptive targets. Analytical formulas from")
+        print("      Jensen document may not fully capture these dependencies.")
+
+        empirical_data = None
+        try:
+            from controller_optimization.src.analysis.empirical_L_min import (
+                compute_empirical_L_min,
+                compute_empirical_L_min_multi_scenario,
+                compute_aggregate_empirical_L_min,
+                compare_analytical_vs_empirical
+            )
+
+            # Number of Monte Carlo samples per scenario
+            N_MC_SAMPLES = cfg.get('empirical_analysis', {}).get('n_mc_samples', 500)
+            N_SCENARIOS_FOR_EMPIRICAL = min(5, n_scenarios)  # Limit scenarios for speed
+
+            print(f"\n  Monte Carlo samples per scenario: {N_MC_SAMPLES}")
+            print(f"  Scenarios to evaluate: {N_SCENARIOS_FOR_EMPIRICAL}")
+
+            # Get F* for each scenario from surrogate
+            F_star_per_scenario = {}
+            for scenario_idx in range(N_SCENARIOS_FOR_EMPIRICAL):
+                F_star_per_scenario[scenario_idx] = float(surrogate.F_star[scenario_idx])
+                print(f"    Scenario {scenario_idx}: F* = {F_star_per_scenario[scenario_idx]:.6f}")
+
+            # Compute empirical L_min for selected scenarios
+            print(f"\n  Running Monte Carlo sampling...")
+            empirical_results = compute_empirical_L_min_multi_scenario(
+                process_chain=process_chain,
+                surrogate=surrogate,
+                F_star_per_scenario=F_star_per_scenario,
+                n_samples_per_scenario=N_MC_SAMPLES,
+                device=device,
+                verbose=True
+            )
+
+            # Aggregate results across scenarios
+            aggregate_result = compute_aggregate_empirical_L_min(empirical_results)
+
+            # Scale to match training loss scale
+            LOSS_SCALE = CONTROLLER_CONFIG['training']['reliability_loss_scale']
+            empirical_L_min_scaled = aggregate_result.L_min * LOSS_SCALE
+
+            # Compare with observed final loss
+            final_reliability_loss = history['reliability_loss'][-1]
+
+            print("\n" + "="*70)
+            print("EMPIRICAL L_min SUMMARY")
+            print("="*70)
+            print(f"  E[F] (empirical):       {aggregate_result.E_F:.6f}")
+            print(f"  Var[F] (unscaled):      {aggregate_result.Var_F:.8f}")
+            print(f"  Bias^2 (unscaled):      {aggregate_result.Bias2:.8f}")
+            print(f"  L_min (unscaled):       {aggregate_result.L_min:.8f}")
+            print(f"  L_min (scaled):         {empirical_L_min_scaled:.6f}")
+            print(f"  Observed Loss:          {final_reliability_loss:.6f}")
+            print(f"  Gap (reducible):        {final_reliability_loss - empirical_L_min_scaled:.6f}")
+            if final_reliability_loss > 0:
+                print(f"  Efficiency:             {100 * empirical_L_min_scaled / final_reliability_loss:.1f}%")
+            ci_scaled = (aggregate_result.confidence_interval[0] * LOSS_SCALE,
+                        aggregate_result.confidence_interval[1] * LOSS_SCALE)
+            print(f"  95% CI (scaled):        [{ci_scaled[0]:.6f}, {ci_scaled[1]:.6f}]")
+
+            # Validate: observed loss should be >= L_min (within statistical error)
+            tolerance = 2 * aggregate_result.std_error_Var_F * LOSS_SCALE
+            if final_reliability_loss < empirical_L_min_scaled - tolerance:
+                print(f"\n  WARNING: Observed loss is below empirical L_min by {empirical_L_min_scaled - final_reliability_loss:.6f}")
+                print("      This might indicate insufficient Monte Carlo samples or training noise.")
+            else:
+                print(f"\n  Observed loss is above L_min (as expected)")
+
+            # Compare with analytical L_min (if available from theoretical analysis)
+            if 'theoretical_data' in dir() and theoretical_data is not None:
+                analytical_L_min = theoretical_data.get('combined_L_min', {}).get('L_min', 0)
+                if analytical_L_min > 0:
+                    print("\n  Comparing analytical vs empirical L_min:")
+                    comparison = compare_analytical_vs_empirical(
+                        analytical_L_min=analytical_L_min,
+                        empirical_result=aggregate_result,
+                        loss_scale=LOSS_SCALE,
+                        verbose=True
+                    )
+
+            # Save empirical results
+            empirical_data = {
+                'aggregate': aggregate_result.to_dict(),
+                'per_scenario': {str(k): v.to_dict() for k, v in empirical_results.items()},
+                'F_star_per_scenario': {str(k): v for k, v in F_star_per_scenario.items()},
+                'loss_scale': LOSS_SCALE,
+                'n_mc_samples': N_MC_SAMPLES,
+                'n_scenarios_evaluated': N_SCENARIOS_FOR_EMPIRICAL,
+                'final_observed_loss': final_reliability_loss,
+                'scaled_L_min': empirical_L_min_scaled,
+                'efficiency': empirical_L_min_scaled / final_reliability_loss if final_reliability_loss > 0 else 0
+            }
+
+            empirical_output_path = checkpoint_dir / 'empirical_L_min_analysis.json'
+            with open(empirical_output_path, 'w') as f:
+                json.dump(empirical_data, f, indent=2)
+            print(f"\n  Empirical analysis saved to: {empirical_output_path}")
+            print("  ✓ Empirical L_min analysis completed")
+
+        except Exception as e:
+            print(f"  ✗ Warning: Failed to run empirical L_min analysis: {e}")
+            import traceback
+            traceback.print_exc()
+
+        print("="*70)
+
         # Generate PDF report
         try:
             report_path = generate_controller_report(
@@ -1366,7 +1479,8 @@ def main(config=None):
                 n_scenarios=n_scenarios,
                 advanced_metrics=advanced_metrics_for_report,
                 trajectory_values=trajectory_values_for_report,
-                theoretical_data=theoretical_data
+                theoretical_data=theoretical_data,
+                empirical_data=empirical_data
             )
             print(f"  ✓ PDF report generated: {report_path}")
         except Exception as e:

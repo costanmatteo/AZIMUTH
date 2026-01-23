@@ -231,6 +231,128 @@ class ProTSurrogate:
             return F, quality_scores
         return F
 
+    def compute_reliability_deterministic(self, trajectory):
+        """
+        Compute reliability WITHOUT stochastic sampling.
+
+        Uses outputs_mean directly instead of sampled outputs.
+        This gives F* (target reliability) for L_min calculation.
+
+        This method is used for computing the deterministic F* value
+        that serves as the target for the L_min = Var[F] + (E[F] - F*)^2 formula.
+
+        Args:
+            trajectory (dict): Dict with process data, must have 'outputs_mean'
+
+        Returns:
+            torch.Tensor: F* - Deterministic reliability
+        """
+        # ADAPTIVE RELIABILITY COMPUTATION WITH EXPLICIT PROCESS DEPENDENCIES
+        # Same logic as compute_reliability but using outputs_mean directly
+
+        # Extract process outputs (using mean, not sampled)
+        outputs = {}
+        for process_name, data in trajectory.items():
+            # Use outputs_mean for deterministic computation
+            if 'outputs_mean' in data:
+                output = data['outputs_mean']
+            elif 'outputs' in data:
+                # Fallback for target trajectory format
+                output = data['outputs']
+            else:
+                continue
+
+            if isinstance(output, np.ndarray):
+                output = torch.tensor(output, dtype=torch.float32, device=self.device)
+
+            outputs[process_name] = output.squeeze()
+
+        # Compute ADAPTIVE TARGETS and quality scores (same logic as compute_reliability)
+        adaptive_targets = {}
+        quality_scores = {}
+
+        # LASER: First process, fixed target
+        if 'laser' in outputs:
+            laser_power = outputs['laser']
+            adaptive_targets['laser'] = 0.8  # Fixed target
+
+            laser_quality = torch.exp(-((laser_power - adaptive_targets['laser']) ** 2) / 0.1)
+            quality_scores['laser'] = laser_quality
+
+        # PLASMA: Target depends on Laser
+        if 'plasma' in outputs:
+            plasma_rate = outputs['plasma']
+
+            # Base target
+            plasma_target = 3.0
+
+            # Adapt based on Laser (if available)
+            if 'laser' in outputs:
+                plasma_target = plasma_target + 0.2 * (outputs['laser'] - 0.8)
+
+            adaptive_targets['plasma'] = plasma_target
+
+            plasma_quality = torch.exp(-((plasma_rate - plasma_target) ** 2) / 2.0)
+            quality_scores['plasma'] = plasma_quality
+
+        # GALVANIC: Target depends on Laser AND Plasma
+        if 'galvanic' in outputs:
+            galvanic_thick = outputs['galvanic']
+
+            # Base target
+            galvanic_target = 10.0
+
+            # Adapt based on previous processes
+            if 'plasma' in outputs:
+                galvanic_target = galvanic_target + 0.5 * (outputs['plasma'] - 5.0)
+
+            if 'laser' in outputs:
+                galvanic_target = galvanic_target + 0.4 * (outputs['laser'] - 0.5)
+
+            adaptive_targets['galvanic'] = galvanic_target
+
+            galvanic_quality = torch.exp(-((galvanic_thick - galvanic_target) ** 2) / 4.0)
+            quality_scores['galvanic'] = galvanic_quality
+
+        # MICROETCH: Target depends on ALL previous processes
+        if 'microetch' in outputs:
+            microetch_depth = outputs['microetch']
+
+            # Base target
+            microetch_target = 20.0
+
+            # Adapt based on all previous processes
+            if 'laser' in outputs:
+                microetch_target = microetch_target + 1.5 * (outputs['laser'] - 0.5)
+
+            if 'plasma' in outputs:
+                microetch_target = microetch_target + 0.3 * (outputs['plasma'] - 5.0)
+
+            if 'galvanic' in outputs:
+                microetch_target = microetch_target - 0.15 * (outputs['galvanic'] - 10.0)
+
+            adaptive_targets['microetch'] = microetch_target
+
+            microetch_quality = torch.exp(-((microetch_depth - microetch_target) ** 2) / 4.0)
+            quality_scores['microetch'] = microetch_quality
+
+        # COMBINE QUALITY SCORES WITH WEIGHTED AVERAGE
+        total_weighted_quality = 0.0
+        total_weight = 0.0
+
+        for process_name, quality in quality_scores.items():
+            weight = self.PROCESS_CONFIGS.get(process_name, {}).get('weight', 1.0)
+            total_weighted_quality += quality * weight
+            total_weight += weight
+
+        # Normalize by total weight
+        if total_weight > 0:
+            F = total_weighted_quality / total_weight
+        else:
+            F = torch.tensor(0.0, device=self.device)
+
+        return F
+
     def compute_all_target_reliabilities(self):
         """
         Calcola F* (reliability target, fisso) per tutti gli n_scenarios.
