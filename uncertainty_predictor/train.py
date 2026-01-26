@@ -34,6 +34,8 @@ from utils import (
     plot_predictions_with_uncertainty,
     plot_scatter_with_uncertainty,
     plot_uncertainty_distribution,
+    plot_predictions_with_stacked_uncertainty,
+    plot_uncertainty_decomposition_bar,
     evaluate_prediction_intervals,
     generate_uncertainty_training_report
 )
@@ -416,6 +418,27 @@ def main():
         output_names=output_columns,
         save_path=checkpoint_dir / 'uncertainty_distribution.png'
     )
+
+    # Ensemble-specific plots
+    if use_ensemble:
+        # Plot predictions with stacked uncertainty bands
+        plot_predictions_with_stacked_uncertainty(
+            y_test_orig,
+            y_pred_mean_orig,
+            y_pred_aleatoric_orig,
+            y_pred_epistemic_orig,
+            output_names=output_columns,
+            save_path=checkpoint_dir / 'predictions_stacked_uncertainty.png',
+            confidence=CONFIG['uncertainty']['confidence_level']
+        )
+
+        # Plot uncertainty decomposition bar chart
+        plot_uncertainty_decomposition_bar(
+            y_pred_aleatoric_orig,
+            y_pred_epistemic_orig,
+            output_names=output_columns,
+            save_path=checkpoint_dir / 'uncertainty_decomposition.png'
+        )
 
     # 9. GENERATE PDF REPORT
     print("\nGenerating PDF report...")

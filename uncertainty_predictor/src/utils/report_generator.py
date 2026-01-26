@@ -501,6 +501,91 @@ class UncertaintyReportGenerator:
             self.story.append(caption_table)
             self.story.append(Spacer(1, 0.15*cm))
 
+        # Ensemble-specific plots (stacked uncertainty and decomposition side by side)
+        stacked_plot = checkpoint_dir / 'predictions_stacked_uncertainty.png'
+        decomp_plot = checkpoint_dir / 'uncertainty_decomposition.png'
+
+        if stacked_plot.exists() and decomp_plot.exists():
+            # Load both images
+            img_stacked = Image(str(stacked_plot))
+            img_decomp = Image(str(decomp_plot))
+
+            # Calculate dimensions for side-by-side layout
+            img_width, img_height = img_stacked.imageWidth, img_stacked.imageHeight
+            aspect_ratio = img_height / img_width
+
+            # Each image gets half the page width
+            new_width = 8.5*cm
+            new_height = new_width * aspect_ratio
+
+            # Max height constraint
+            if new_height > 7*cm:
+                new_height = 7*cm
+                new_width = new_height / aspect_ratio
+
+            img_stacked.drawWidth = new_width
+            img_stacked.drawHeight = new_height
+
+            # Decomposition plot may have different aspect ratio
+            img_width2, img_height2 = img_decomp.imageWidth, img_decomp.imageHeight
+            aspect_ratio2 = img_height2 / img_width2
+            new_width2 = 8.5*cm
+            new_height2 = new_width2 * aspect_ratio2
+            if new_height2 > 7*cm:
+                new_height2 = 7*cm
+                new_width2 = new_height2 / aspect_ratio2
+
+            img_decomp.drawWidth = new_width2
+            img_decomp.drawHeight = new_height2
+
+            # Create two-column table for images
+            img_table = Table([[img_stacked, img_decomp]], colWidths=[9*cm, 9*cm])
+            img_table.setStyle(TableStyle([
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ]))
+            self.story.append(img_table)
+
+            # Captions
+            caption_left = Paragraph("<i>Stacked Uncertainty (Aleatoric + Epistemic)</i>", self.styles['Normal'])
+            caption_right = Paragraph("<i>Uncertainty Decomposition</i>", self.styles['Normal'])
+            caption_table = Table([[caption_left, caption_right]], colWidths=[9*cm, 9*cm])
+            caption_table.setStyle(TableStyle([
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ]))
+            self.story.append(caption_table)
+            self.story.append(Spacer(1, 0.15*cm))
+
+        elif stacked_plot.exists():
+            # Only stacked plot exists
+            img_stacked = Image(str(stacked_plot))
+            img_width, img_height = img_stacked.imageWidth, img_stacked.imageHeight
+            aspect_ratio = img_height / img_width
+
+            new_width = 16*cm
+            new_height = new_width * aspect_ratio
+            if new_height > 10*cm:
+                new_height = 10*cm
+                new_width = new_height / aspect_ratio
+
+            img_stacked.drawWidth = new_width
+            img_stacked.drawHeight = new_height
+
+            img_table = Table([[img_stacked]], colWidths=[18*cm])
+            img_table.setStyle(TableStyle([
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ]))
+            self.story.append(img_table)
+
+            caption = Paragraph("<i>Stacked Uncertainty Bands (Aleatoric + Epistemic)</i>", self.styles['Normal'])
+            caption_table = Table([[caption]], colWidths=[18*cm])
+            caption_table.setStyle(TableStyle([
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ]))
+            self.story.append(caption_table)
+            self.story.append(Spacer(1, 0.15*cm))
+
     def generate(self, config, history, metrics, input_dim, output_dim,
                 total_params, n_train, n_val, n_test, timestamp, coverage_results=None):
         """Generate the complete PDF"""
