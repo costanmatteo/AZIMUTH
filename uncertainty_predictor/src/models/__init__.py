@@ -8,13 +8,18 @@ from .uncertainty_nn import (
     EnergyScoreLoss,
     create_small_uncertainty_model,
     create_medium_uncertainty_model,
-    create_large_uncertainty_model
+    create_large_uncertainty_model,
+    EnsembleUncertaintyPredictor,
+    create_ensemble_model
 )
 
 __all__ = [
     'UncertaintyPredictor',
     'GaussianNLLLoss',
+    'EnergyScoreLoss',
     'create_small_uncertainty_model',
     'create_medium_uncertainty_model',
-    'create_large_uncertainty_model'
+    'create_large_uncertainty_model',
+    'EnsembleUncertaintyPredictor',
+    'create_ensemble_model'
 ]

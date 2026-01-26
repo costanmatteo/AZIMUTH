@@ -106,7 +106,24 @@ class UncertaintyReportGenerator:
         left_col.append(Paragraph("<b>Model Configuration</b>", self.styles['SectionTitle']))
         left_col.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=4))
 
-        model_text = f"""• <b>Type:</b> {config['model']['model_type']}<br/>
+        # Check if ensemble mode
+        use_ensemble = config['model'].get('use_ensemble', False)
+        if use_ensemble:
+            n_ensemble = config['model'].get('n_ensemble_models', 5)
+            params_per_model = total_params // n_ensemble if n_ensemble > 0 else total_params
+            model_text = f"""• <b>Type:</b> Deep Ensemble<br/>
+• <b>Base Architecture:</b> {config['model']['model_type']}<br/>
+• <b>Models in Ensemble:</b> {n_ensemble}<br/>
+• <b>Hidden Layers:</b> {config['model']['hidden_sizes']}<br/>
+• <b>Dropout Rate:</b> {config['model']['dropout_rate']}<br/>
+• <b>Batch Normalization:</b> {config['model']['use_batchnorm']}<br/>
+• <b>Min Variance:</b> {config['model']['min_variance']}<br/>
+• <b>Input Dimension:</b> {input_dim}<br/>
+• <b>Output Dimension:</b> {output_dim}<br/>
+• <b>Params per Model:</b> {params_per_model:,}<br/>
+• <b>Total Parameters:</b> {total_params:,}"""
+        else:
+            model_text = f"""• <b>Type:</b> {config['model']['model_type']}<br/>
 • <b>Hidden Layers:</b> {config['model']['hidden_sizes']}<br/>
 • <b>Dropout Rate:</b> {config['model']['dropout_rate']}<br/>
 • <b>Batch Normalization:</b> {config['model']['use_batchnorm']}<br/>
@@ -191,6 +208,13 @@ class UncertaintyReportGenerator:
 • <b>Actual Coverage:</b> {coverage_results['actual_coverage']:.1f}%<br/>
 • <b>Coverage Error:</b> {coverage_results['coverage_error']:.1f}%<br/>
 • <b>Well Calibrated:</b> {'Yes' if coverage_results['well_calibrated'] else 'No'}"""
+
+            # Add ensemble-specific uncertainty decomposition
+            if 'mean_aleatoric' in coverage_results:
+                results_text += f"""<br/><br/><b>Uncertainty Decomposition:</b><br/>
+• <b>Mean Aleatoric:</b> {coverage_results['mean_aleatoric']:.6f}<br/>
+• <b>Mean Epistemic:</b> {coverage_results['mean_epistemic']:.6f}<br/>
+• <b>Epistemic Ratio:</b> {coverage_results['epistemic_ratio']:.1f}%"""
 
         right_col.append(Paragraph(results_text, self.styles['BodyText']))
         right_col.append(Spacer(1, 0.15*cm))
