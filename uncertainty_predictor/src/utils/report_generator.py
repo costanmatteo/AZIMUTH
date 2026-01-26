@@ -97,7 +97,7 @@ class UncertaintyReportGenerator:
 
     def create_two_column_section(self, config, history, metrics, input_dim, output_dim,
                                   total_params, n_train, n_val, n_test, coverage_results=None):
-        """Create two-column layout for compact info"""
+        """Create two-column layout for compact info including test metrics"""
 
         # Left column data
         left_col = []
@@ -149,6 +149,27 @@ class UncertaintyReportGenerator:
 • <b>Scaling Method:</b> {config['data']['scaling_method']}<br/>
 • <b>Random State:</b> {config['data']['random_state']}"""
         left_col.append(Paragraph(dataset_text, self.styles['BodyText']))
+        left_col.append(Spacer(1, 0.15*cm))
+
+        # Test Metrics (in left column after Dataset)
+        left_col.append(Paragraph("<b>Test Metrics</b>", self.styles['SectionTitle']))
+        left_col.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=4))
+
+        for output_name, output_metrics in metrics.items():
+            if output_name == 'Overall':
+                continue
+
+            metrics_text = f"<b>{output_name}</b><br/>"
+            metrics_text += f"• MSE: {output_metrics['MSE']:.6f}  "
+            metrics_text += f"• RMSE: {output_metrics['RMSE']:.6f}<br/>"
+            metrics_text += f"• MAE: {output_metrics['MAE']:.6f}  "
+            metrics_text += f"• R²: {output_metrics['R2']:.6f}"
+
+            if 'Mean_Variance' in output_metrics:
+                metrics_text += f"<br/>• Mean Var: {output_metrics['Mean_Variance']:.6f}  "
+                metrics_text += f"• Cal. Ratio: {output_metrics['Calibration_Ratio']:.4f}"
+
+            left_col.append(Paragraph(metrics_text, self.styles['BodyText']))
 
         # Right column data
         right_col = []
@@ -247,33 +268,6 @@ class UncertaintyReportGenerator:
 
         self.story.append(col_table)
         self.story.append(Spacer(1, 0.2*cm))
-
-    def add_metrics_section(self, metrics):
-        """Add metrics as bullet points for each output"""
-        self.add_section_title("Test Metrics")
-
-        for output_name, output_metrics in metrics.items():
-            if output_name == 'Overall':
-                continue
-
-            # Build bullet points for this output
-            metrics_text = f"<b>{output_name}</b><br/>"
-            metrics_text += f"• <b>MSE:</b> {output_metrics['MSE']:.6f}<br/>"
-            metrics_text += f"• <b>RMSE:</b> {output_metrics['RMSE']:.6f}<br/>"
-            metrics_text += f"• <b>MAE:</b> {output_metrics['MAE']:.6f}<br/>"
-            metrics_text += f"• <b>R²:</b> {output_metrics['R2']:.6f}"
-
-            # Add uncertainty metrics if available
-            if 'Mean_Variance' in output_metrics:
-                metrics_text += f"<br/>• <b>Mean Variance:</b> {output_metrics['Mean_Variance']:.6f}"
-                metrics_text += f"<br/>• <b>Calibration Ratio:</b> {output_metrics['Calibration_Ratio']:.6f}"
-                metrics_text += f"<br/>• <b>NLL:</b> {output_metrics['NLL']:.6f}"
-
-            self.story.append(Paragraph(metrics_text, self.styles['BodyText']))
-            self.story.append(Spacer(1, 0.1*cm))
-
-
-
 
     def add_scm_graph(self, checkpoint_dir):
         """Add SCM graph visualization if available"""
@@ -474,7 +468,6 @@ class UncertaintyReportGenerator:
         self.add_title(timestamp)
         self.create_two_column_section(config, history, metrics, input_dim, output_dim,
                                        total_params, n_train, n_val, n_test, coverage_results)
-        self.add_metrics_section(metrics)
         self.add_plots_stacked(Path(config['training']['checkpoint_dir']))
 
         # Build PDF
