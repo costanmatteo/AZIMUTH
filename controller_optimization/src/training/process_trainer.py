@@ -36,6 +36,7 @@ sys.modules['uncertainty_nn'] = uncertainty_nn  # Register for pickle
 spec_nn.loader.exec_module(uncertainty_nn)
 UncertaintyPredictor = uncertainty_nn.UncertaintyPredictor
 GaussianNLLLoss = uncertainty_nn.GaussianNLLLoss
+EnsembleUncertaintyPredictor = uncertainty_nn.EnsembleUncertaintyPredictor
 
 spec_trainer = importlib.util.spec_from_file_location(
     "uncertainty_trainer",
@@ -45,6 +46,7 @@ uncertainty_trainer = importlib.util.module_from_spec(spec_trainer)
 sys.modules['uncertainty_trainer'] = uncertainty_trainer  # Register for pickle
 spec_trainer.loader.exec_module(uncertainty_trainer)
 UncertaintyTrainer = uncertainty_trainer.UncertaintyTrainer
+EnsembleTrainer = uncertainty_trainer.EnsembleTrainer
 
 spec_preprocessing = importlib.util.spec_from_file_location(
     "preprocessing",
@@ -192,22 +194,46 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
         print(f"  Val:   {len(X_val)} samples")
         print(f"  Test:  {len(X_test)} samples")
 
-    # 3. Create UncertaintyPredictor
-    if verbose:
-        print(f"\n[3/9] Creating UncertaintyPredictor model...")
+    # 3. Create UncertaintyPredictor (or Ensemble)
+    use_ensemble = model_config.get('use_ensemble', False)
 
-    model = UncertaintyPredictor(
-        input_size=input_dim,
-        output_size=output_dim,
-        hidden_sizes=model_config['hidden_sizes'],
-        dropout_rate=model_config['dropout_rate'],
-        use_batchnorm=model_config['use_batchnorm'],
-        min_variance=model_config['min_variance']
-    )
+    if use_ensemble:
+        n_ensemble_models = model_config.get('n_ensemble_models', 5)
+        if verbose:
+            print(f"\n[3/9] Creating EnsembleUncertaintyPredictor with {n_ensemble_models} models...")
 
-    total_params = sum(p.numel() for p in model.parameters())
-    if verbose:
-        print(f"  Total parameters: {total_params:,}")
+        model = EnsembleUncertaintyPredictor(
+            input_size=input_dim,
+            output_size=output_dim,
+            hidden_sizes=model_config['hidden_sizes'],
+            n_models=n_ensemble_models,
+            dropout_rate=model_config['dropout_rate'],
+            use_batchnorm=model_config['use_batchnorm'],
+            min_variance=model_config['min_variance']
+        )
+
+        total_params = sum(p.numel() for p in model.parameters())
+        params_per_model = total_params // n_ensemble_models
+        if verbose:
+            print(f"  Models in ensemble: {n_ensemble_models}")
+            print(f"  Parameters per model: {params_per_model:,}")
+            print(f"  Total parameters: {total_params:,}")
+    else:
+        if verbose:
+            print(f"\n[3/9] Creating UncertaintyPredictor model...")
+
+        model = UncertaintyPredictor(
+            input_size=input_dim,
+            output_size=output_dim,
+            hidden_sizes=model_config['hidden_sizes'],
+            dropout_rate=model_config['dropout_rate'],
+            use_batchnorm=model_config['use_batchnorm'],
+            min_variance=model_config['min_variance']
+        )
+
+        total_params = sum(p.numel() for p in model.parameters())
+        if verbose:
+            print(f"  Total parameters: {total_params:,}")
 
     # 4. Create loss function
     criterion = GaussianNLLLoss(alpha=training_config['variance_penalty_alpha'])
@@ -216,13 +242,24 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
     if verbose:
         print(f"\n[4/9] Creating trainer...")
 
-    trainer = UncertaintyTrainer(
-        model=model,
-        criterion=criterion,
-        device=device,
-        learning_rate=training_config['learning_rate'],
-        weight_decay=training_config['weight_decay']
-    )
+    if use_ensemble:
+        ensemble_base_seed = model_config.get('ensemble_base_seed', 42)
+        trainer = EnsembleTrainer(
+            ensemble_model=model,
+            criterion=criterion,
+            device=device,
+            learning_rate=training_config['learning_rate'],
+            weight_decay=training_config['weight_decay'],
+            base_seed=ensemble_base_seed
+        )
+    else:
+        trainer = UncertaintyTrainer(
+            model=model,
+            criterion=criterion,
+            device=device,
+            learning_rate=training_config['learning_rate'],
+            weight_decay=training_config['weight_decay']
+        )
 
     # 6. Train
     if verbose:
@@ -244,13 +281,21 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
     all_means = []
     all_vars = []
     all_targets = []
+    all_aleatorics = []
+    all_epistemics = []
 
     with torch.no_grad():
         for batch_X, batch_y in test_loader:
             batch_X = batch_X.to(device)
             batch_y = batch_y.to(device)
 
-            mean, variance = model(batch_X)
+            if use_ensemble:
+                mean, variance, aleatoric, epistemic = model.predict_with_decomposition(batch_X)
+                all_aleatorics.append(aleatoric.cpu().numpy())
+                all_epistemics.append(epistemic.cpu().numpy())
+            else:
+                mean, variance = model(batch_X)
+
             all_means.append(mean.cpu().numpy())
             all_vars.append(variance.cpu().numpy())
             all_targets.append(batch_y.cpu().numpy())
@@ -259,6 +304,10 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
     vars_scaled = np.vstack(all_vars)
     targets_scaled = np.vstack(all_targets)
 
+    if use_ensemble:
+        aleatorics_scaled = np.vstack(all_aleatorics)
+        epistemics_scaled = np.vstack(all_epistemics)
+
     # Unscale predictions
     means = preprocessor.output_scaler.inverse_transform(means_scaled)
     targets = preprocessor.output_scaler.inverse_transform(targets_scaled)
@@ -266,6 +315,11 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
     # Unscale variances (variance scales with scale^2)
     output_scale = preprocessor.output_scaler.scale_
     variances = vars_scaled * (output_scale ** 2)
+
+    # Unscale ensemble uncertainty decomposition if available
+    if use_ensemble:
+        aleatorics = aleatorics_scaled * (output_scale ** 2)
+        epistemics = epistemics_scaled * (output_scale ** 2)
 
     # Compute metrics (note: calculate_metrics expects y_true, y_pred_mean, y_pred_variance)
     metrics_full = uq_metrics.calculate_metrics(targets, means, variances)
@@ -290,8 +344,29 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
         print(f"    Actual:   {coverage_results['actual_coverage']:.1f}%")
         print(f"    Well calibrated: {coverage_results['well_calibrated']}")
 
+        # Print ensemble-specific uncertainty decomposition
+        if use_ensemble:
+            mean_aleatoric = np.mean(aleatorics)
+            mean_epistemic = np.mean(epistemics)
+            mean_total = np.mean(variances)
+            epistemic_ratio = mean_epistemic / mean_total * 100 if mean_total > 0 else 0
+
+            print(f"\n  Uncertainty Decomposition (Ensemble):")
+            print(f"    Mean Aleatoric:  {mean_aleatoric:.6f}")
+            print(f"    Mean Epistemic:  {mean_epistemic:.6f}")
+            print(f"    Epistemic Ratio: {epistemic_ratio:.1f}%")
+
+            # Add to coverage_results for report
+            coverage_results['mean_aleatoric'] = float(mean_aleatoric)
+            coverage_results['mean_epistemic'] = float(mean_epistemic)
+            coverage_results['epistemic_ratio'] = float(epistemic_ratio)
+
     # Also get predictions on training set for visualization
-    y_train_pred_mean, y_train_pred_variance = trainer.predict(X_train_scaled, return_uncertainty=True)
+    if use_ensemble:
+        y_train_pred_mean, y_train_pred_variance, _, _ = trainer.predict(X_train_scaled, return_uncertainty=True)
+    else:
+        y_train_pred_mean, y_train_pred_variance = trainer.predict(X_train_scaled, return_uncertainty=True)
+
     y_train_pred_mean_orig = preprocessor.inverse_transform_output(y_train_pred_mean)
     y_train_orig = y_train
 
@@ -358,11 +433,13 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
     # Build config dict for report
     config_dict = {
         'model': {
-            'model_type': 'UncertaintyPredictor',
+            'model_type': 'EnsembleUncertaintyPredictor' if use_ensemble else 'UncertaintyPredictor',
             'hidden_sizes': model_config['hidden_sizes'],
             'dropout_rate': model_config['dropout_rate'],
             'use_batchnorm': model_config['use_batchnorm'],
             'min_variance': model_config['min_variance'],
+            'use_ensemble': use_ensemble,
+            'n_ensemble_models': model_config.get('n_ensemble_models', 5) if use_ensemble else None,
         },
         'data': {
             'csv_path': f'SCM:{scm_dataset_type}',
