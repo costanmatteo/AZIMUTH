@@ -34,8 +34,6 @@ from utils import (
     plot_predictions_with_uncertainty,
     plot_scatter_with_uncertainty,
     plot_uncertainty_distribution,
-    plot_predictions_with_stacked_uncertainty,
-    plot_uncertainty_decomposition_bar,
     evaluate_prediction_intervals,
     generate_uncertainty_training_report
 )
@@ -384,13 +382,16 @@ def main():
     )
 
     # Plot predictions with uncertainty bounds (test set)
+    # Pass aleatoric/epistemic for ensemble mode to show decomposition
     plot_predictions_with_uncertainty(
         y_test_orig,
         y_pred_mean_orig,
         y_pred_variance_orig,
         output_names=output_columns,
         save_path=checkpoint_dir / 'predictions_with_uncertainty.png',
-        confidence=CONFIG['uncertainty']['confidence_level']
+        confidence=CONFIG['uncertainty']['confidence_level'],
+        y_pred_aleatoric=y_pred_aleatoric_orig if use_ensemble else None,
+        y_pred_epistemic=y_pred_epistemic_orig if use_ensemble else None
     )
 
     # Plot predictions with uncertainty bounds (training set)
@@ -418,27 +419,6 @@ def main():
         output_names=output_columns,
         save_path=checkpoint_dir / 'uncertainty_distribution.png'
     )
-
-    # Ensemble-specific plots
-    if use_ensemble:
-        # Plot predictions with stacked uncertainty bands
-        plot_predictions_with_stacked_uncertainty(
-            y_test_orig,
-            y_pred_mean_orig,
-            y_pred_aleatoric_orig,
-            y_pred_epistemic_orig,
-            output_names=output_columns,
-            save_path=checkpoint_dir / 'predictions_stacked_uncertainty.png',
-            confidence=CONFIG['uncertainty']['confidence_level']
-        )
-
-        # Plot uncertainty decomposition bar chart
-        plot_uncertainty_decomposition_bar(
-            y_pred_aleatoric_orig,
-            y_pred_epistemic_orig,
-            output_names=output_columns,
-            save_path=checkpoint_dir / 'uncertainty_decomposition.png'
-        )
 
     # 9. GENERATE PDF REPORT
     print("\nGenerating PDF report...")

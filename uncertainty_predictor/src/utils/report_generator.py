@@ -248,64 +248,29 @@ class UncertaintyReportGenerator:
         self.story.append(col_table)
         self.story.append(Spacer(1, 0.2*cm))
 
-    def add_metrics_table(self, metrics):
-        """Add metrics table with uncertainty-specific metrics"""
+    def add_metrics_section(self, metrics):
+        """Add metrics as bullet points for each output"""
         self.add_section_title("Test Metrics")
-
-        # Build table data with uncertainty metrics
-        headers = ['Output', 'MSE', 'RMSE', 'MAE', 'R²', 'Mean Var', 'Cal. Ratio', 'NLL']
-        data = [headers]
 
         for output_name, output_metrics in metrics.items():
             if output_name == 'Overall':
                 continue
 
-            # Standard metrics
-            row = [
-                output_name,
-                f"{output_metrics['MSE']:.4f}",
-                f"{output_metrics['RMSE']:.4f}",
-                f"{output_metrics['MAE']:.4f}",
-                f"{output_metrics['R2']:.4f}",
-            ]
+            # Build bullet points for this output
+            metrics_text = f"<b>{output_name}</b><br/>"
+            metrics_text += f"• <b>MSE:</b> {output_metrics['MSE']:.6f}<br/>"
+            metrics_text += f"• <b>RMSE:</b> {output_metrics['RMSE']:.6f}<br/>"
+            metrics_text += f"• <b>MAE:</b> {output_metrics['MAE']:.6f}<br/>"
+            metrics_text += f"• <b>R²:</b> {output_metrics['R2']:.6f}"
 
-            # Uncertainty metrics
+            # Add uncertainty metrics if available
             if 'Mean_Variance' in output_metrics:
-                row.append(f"{output_metrics['Mean_Variance']:.4f}")
-                row.append(f"{output_metrics['Calibration_Ratio']:.4f}")
-                row.append(f"{output_metrics['NLL']:.4f}")
-            else:
-                row.extend(['N/A', 'N/A', 'N/A'])
+                metrics_text += f"<br/>• <b>Mean Variance:</b> {output_metrics['Mean_Variance']:.6f}"
+                metrics_text += f"<br/>• <b>Calibration Ratio:</b> {output_metrics['Calibration_Ratio']:.6f}"
+                metrics_text += f"<br/>• <b>NLL:</b> {output_metrics['NLL']:.6f}"
 
-            data.append(row)
-
-        # Create table with adjusted column widths
-        col_widths = [2.2*cm, 1.9*cm, 1.9*cm, 1.9*cm, 1.9*cm, 1.9*cm, 1.9*cm, 1.9*cm]
-        table = Table(data, colWidths=col_widths)
-        table.setStyle(TableStyle([
-            # Header row
-            ('BACKGROUND', (0, 0), (-1, 0), colors.white),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, 0), 8),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
-            ('TOPPADDING', (0, 0), (-1, 0), 8),
-
-            # Data rows
-            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-            ('FONTSIZE', (0, 1), (-1, -1), 8),
-            ('TOPPADDING', (0, 1), (-1, -1), 6),
-            ('BOTTOMPADDING', (0, 1), (-1, -1), 6),
-
-            # Top and bottom lines
-            ('LINEABOVE', (0, 0), (-1, 0), 1.5, colors.black),
-            ('LINEABOVE', (0, 1), (-1, 1), 0.5, colors.black),
-            ('LINEBELOW', (0, -1), (-1, -1), 1.5, colors.black),
-        ]))
-
-        self.story.append(table)
-        self.story.append(Spacer(1, 0.1*cm))
+            self.story.append(Paragraph(metrics_text, self.styles['BodyText']))
+            self.story.append(Spacer(1, 0.1*cm))
 
 
 
@@ -501,91 +466,6 @@ class UncertaintyReportGenerator:
             self.story.append(caption_table)
             self.story.append(Spacer(1, 0.15*cm))
 
-        # Ensemble-specific plots (stacked uncertainty and decomposition side by side)
-        stacked_plot = checkpoint_dir / 'predictions_stacked_uncertainty.png'
-        decomp_plot = checkpoint_dir / 'uncertainty_decomposition.png'
-
-        if stacked_plot.exists() and decomp_plot.exists():
-            # Load both images
-            img_stacked = Image(str(stacked_plot))
-            img_decomp = Image(str(decomp_plot))
-
-            # Calculate dimensions for side-by-side layout
-            img_width, img_height = img_stacked.imageWidth, img_stacked.imageHeight
-            aspect_ratio = img_height / img_width
-
-            # Each image gets half the page width
-            new_width = 8.5*cm
-            new_height = new_width * aspect_ratio
-
-            # Max height constraint
-            if new_height > 7*cm:
-                new_height = 7*cm
-                new_width = new_height / aspect_ratio
-
-            img_stacked.drawWidth = new_width
-            img_stacked.drawHeight = new_height
-
-            # Decomposition plot may have different aspect ratio
-            img_width2, img_height2 = img_decomp.imageWidth, img_decomp.imageHeight
-            aspect_ratio2 = img_height2 / img_width2
-            new_width2 = 8.5*cm
-            new_height2 = new_width2 * aspect_ratio2
-            if new_height2 > 7*cm:
-                new_height2 = 7*cm
-                new_width2 = new_height2 / aspect_ratio2
-
-            img_decomp.drawWidth = new_width2
-            img_decomp.drawHeight = new_height2
-
-            # Create two-column table for images
-            img_table = Table([[img_stacked, img_decomp]], colWidths=[9*cm, 9*cm])
-            img_table.setStyle(TableStyle([
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ]))
-            self.story.append(img_table)
-
-            # Captions
-            caption_left = Paragraph("<i>Stacked Uncertainty (Aleatoric + Epistemic)</i>", self.styles['Normal'])
-            caption_right = Paragraph("<i>Uncertainty Decomposition</i>", self.styles['Normal'])
-            caption_table = Table([[caption_left, caption_right]], colWidths=[9*cm, 9*cm])
-            caption_table.setStyle(TableStyle([
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ]))
-            self.story.append(caption_table)
-            self.story.append(Spacer(1, 0.15*cm))
-
-        elif stacked_plot.exists():
-            # Only stacked plot exists
-            img_stacked = Image(str(stacked_plot))
-            img_width, img_height = img_stacked.imageWidth, img_stacked.imageHeight
-            aspect_ratio = img_height / img_width
-
-            new_width = 16*cm
-            new_height = new_width * aspect_ratio
-            if new_height > 10*cm:
-                new_height = 10*cm
-                new_width = new_height / aspect_ratio
-
-            img_stacked.drawWidth = new_width
-            img_stacked.drawHeight = new_height
-
-            img_table = Table([[img_stacked]], colWidths=[18*cm])
-            img_table.setStyle(TableStyle([
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ]))
-            self.story.append(img_table)
-
-            caption = Paragraph("<i>Stacked Uncertainty Bands (Aleatoric + Epistemic)</i>", self.styles['Normal'])
-            caption_table = Table([[caption]], colWidths=[18*cm])
-            caption_table.setStyle(TableStyle([
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ]))
-            self.story.append(caption_table)
-            self.story.append(Spacer(1, 0.15*cm))
-
     def generate(self, config, history, metrics, input_dim, output_dim,
                 total_params, n_train, n_val, n_test, timestamp, coverage_results=None):
         """Generate the complete PDF"""
@@ -594,7 +474,7 @@ class UncertaintyReportGenerator:
         self.add_title(timestamp)
         self.create_two_column_section(config, history, metrics, input_dim, output_dim,
                                        total_params, n_train, n_val, n_test, coverage_results)
-        self.add_metrics_table(metrics)
+        self.add_metrics_section(metrics)
         self.add_plots_stacked(Path(config['training']['checkpoint_dir']))
 
         # Build PDF

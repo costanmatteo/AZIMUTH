@@ -12,9 +12,7 @@ from .visualization import (
     plot_training_history,
     plot_predictions_with_uncertainty,
     plot_scatter_with_uncertainty,
-    plot_uncertainty_distribution,
-    plot_predictions_with_stacked_uncertainty,
-    plot_uncertainty_decomposition_bar
+    plot_uncertainty_distribution
 )
 from .report_generator import (
     generate_uncertainty_training_report,
@@ -30,8 +28,6 @@ __all__ = [
     'plot_predictions_with_uncertainty',
     'plot_scatter_with_uncertainty',
     'plot_uncertainty_distribution',
-    'plot_predictions_with_stacked_uncertainty',
-    'plot_uncertainty_decomposition_bar',
     'generate_uncertainty_training_report',
     'UncertaintyReportGenerator'
 ]

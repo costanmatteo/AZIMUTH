@@ -57,24 +57,34 @@ def plot_training_history(train_losses, val_losses, train_mse=None, val_mse=None
 
 def plot_predictions_with_uncertainty(y_true, y_pred_mean, y_pred_variance,
                                      output_names=None, save_path=None,
-                                     confidence=0.95):
+                                     confidence=0.95, y_pred_aleatoric=None,
+                                     y_pred_epistemic=None):
     """
     Plot predictions vs true values with uncertainty bounds.
+
+    If y_pred_aleatoric and y_pred_epistemic are provided (ensemble mode),
+    shows stacked bands: inner band for aleatoric, outer for total uncertainty.
 
     Args:
         y_true (np.ndarray): True values
         y_pred_mean (np.ndarray): Predicted means
-        y_pred_variance (np.ndarray): Predicted variances
+        y_pred_variance (np.ndarray): Predicted variances (total)
         output_names (list): Names of outputs
         save_path (str or Path): Path to save the plot
         confidence (float): Confidence level for prediction intervals
+        y_pred_aleatoric (np.ndarray): Aleatoric variance (optional, for ensemble)
+        y_pred_epistemic (np.ndarray): Epistemic variance (optional, for ensemble)
     """
     if len(y_true.shape) == 1:
         y_true = y_true.reshape(-1, 1)
         y_pred_mean = y_pred_mean.reshape(-1, 1)
         y_pred_variance = y_pred_variance.reshape(-1, 1)
+        if y_pred_aleatoric is not None:
+            y_pred_aleatoric = y_pred_aleatoric.reshape(-1, 1)
+            y_pred_epistemic = y_pred_epistemic.reshape(-1, 1)
 
     n_outputs = y_true.shape[1]
+    use_decomposition = y_pred_aleatoric is not None and y_pred_epistemic is not None
 
     if output_names is None:
         output_names = [f"Output {i+1}" for i in range(n_outputs)]
@@ -105,12 +115,35 @@ def plot_predictions_with_uncertainty(y_true, y_pred_mean, y_pred_variance,
         y_p_sorted = y_p[sort_idx]
         y_std_sorted = y_std[sort_idx]
 
-        # Plot uncertainty bounds
-        ax.fill_between(range(len(y_p_sorted)),
-                        y_p_sorted - z_score * y_std_sorted,
-                        y_p_sorted + z_score * y_std_sorted,
-                        alpha=0.3, color='blue',
-                        label=f'{int(confidence*100)}% Prediction Interval')
+        x_range = range(len(y_p_sorted))
+
+        if use_decomposition:
+            # Ensemble mode: show aleatoric (inner) and epistemic (outer) bands
+            y_a = y_pred_aleatoric[:, i]
+            y_e = y_pred_epistemic[:, i]
+            std_aleatoric = np.sqrt(y_a)
+            std_aleatoric_sorted = std_aleatoric[sort_idx]
+
+            # Outer band (total = aleatoric + epistemic) - lighter
+            ax.fill_between(x_range,
+                            y_p_sorted - z_score * y_std_sorted,
+                            y_p_sorted + z_score * y_std_sorted,
+                            alpha=0.2, color='orange',
+                            label=f'Epistemic ({int(confidence*100)}% CI)')
+
+            # Inner band (aleatoric only) - darker
+            ax.fill_between(x_range,
+                            y_p_sorted - z_score * std_aleatoric_sorted,
+                            y_p_sorted + z_score * std_aleatoric_sorted,
+                            alpha=0.4, color='blue',
+                            label=f'Aleatoric ({int(confidence*100)}% CI)')
+        else:
+            # Single model mode: show total uncertainty
+            ax.fill_between(x_range,
+                            y_p_sorted - z_score * y_std_sorted,
+                            y_p_sorted + z_score * y_std_sorted,
+                            alpha=0.3, color='blue',
+                            label=f'{int(confidence*100)}% Prediction Interval')
 
         # Plot predictions and true values
         ax.plot(y_p_sorted, 'b-', linewidth=2, label='Predicted Mean', alpha=0.7)
@@ -162,8 +195,8 @@ def plot_scatter_with_uncertainty(y_true, y_pred_mean, y_pred_variance,
     n_cols = min(3, n_outputs)
     n_rows = (n_outputs + n_cols - 1) // n_cols
 
-    # Reduced figure size
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(4.5*n_cols, 4*n_rows))
+    # Compact figure size
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(3.5*n_cols, 3.2*n_rows))
     if n_outputs == 1:
         axes = np.array([axes])
     axes = axes.flatten()
@@ -280,207 +313,5 @@ def plot_uncertainty_distribution(y_pred_variance, output_names=None, save_path=
     if save_path:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         print(f"Uncertainty distribution plot saved: {save_path}")
-
-    plt.close()
-
-
-def plot_predictions_with_stacked_uncertainty(y_true, y_pred_mean, y_pred_aleatoric,
-                                              y_pred_epistemic, output_names=None,
-                                              save_path=None, confidence=0.95):
-    """
-    Plot predictions with stacked uncertainty bands for ensemble models.
-
-    Shows two overlapping bands:
-    - Inner band (darker): Aleatoric uncertainty only (data noise)
-    - Outer band (lighter): Total uncertainty (aleatoric + epistemic)
-
-    This visualization helps distinguish between:
-    - Aleatoric: irreducible noise in the data
-    - Epistemic: model uncertainty (reducible with more data)
-
-    Args:
-        y_true (np.ndarray): True values
-        y_pred_mean (np.ndarray): Predicted means
-        y_pred_aleatoric (np.ndarray): Aleatoric variance (data noise)
-        y_pred_epistemic (np.ndarray): Epistemic variance (model uncertainty)
-        output_names (list): Names of outputs
-        save_path (str or Path): Path to save the plot
-        confidence (float): Confidence level for prediction intervals
-    """
-    if len(y_true.shape) == 1:
-        y_true = y_true.reshape(-1, 1)
-        y_pred_mean = y_pred_mean.reshape(-1, 1)
-        y_pred_aleatoric = y_pred_aleatoric.reshape(-1, 1)
-        y_pred_epistemic = y_pred_epistemic.reshape(-1, 1)
-
-    n_outputs = y_true.shape[1]
-
-    if output_names is None:
-        output_names = [f"Output {i+1}" for i in range(n_outputs)]
-
-    # Calculate number of rows needed
-    n_cols = min(3, n_outputs)
-    n_rows = (n_outputs + n_cols - 1) // n_cols
-
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(6*n_cols, 5*n_rows))
-    if n_outputs == 1:
-        axes = np.array([axes])
-    axes = axes.flatten()
-
-    from scipy import stats
-    z_score = stats.norm.ppf((1 + confidence) / 2)
-
-    for i, name in enumerate(output_names):
-        ax = axes[i]
-
-        y_t = y_true[:, i]
-        y_p = y_pred_mean[:, i]
-        y_a = y_pred_aleatoric[:, i]
-        y_e = y_pred_epistemic[:, i]
-
-        # Total variance
-        y_total = y_a + y_e
-
-        # Standard deviations
-        std_aleatoric = np.sqrt(y_a)
-        std_total = np.sqrt(y_total)
-
-        # Sort by predicted mean for better visualization
-        sort_idx = np.argsort(y_p)
-        y_t_sorted = y_t[sort_idx]
-        y_p_sorted = y_p[sort_idx]
-        std_aleatoric_sorted = std_aleatoric[sort_idx]
-        std_total_sorted = std_total[sort_idx]
-
-        x_range = range(len(y_p_sorted))
-
-        # Plot OUTER band first (total uncertainty) - lighter color
-        ax.fill_between(x_range,
-                        y_p_sorted - z_score * std_total_sorted,
-                        y_p_sorted + z_score * std_total_sorted,
-                        alpha=0.25, color='orange',
-                        label=f'Epistemic ({int(confidence*100)}% CI)')
-
-        # Plot INNER band (aleatoric only) - darker color
-        ax.fill_between(x_range,
-                        y_p_sorted - z_score * std_aleatoric_sorted,
-                        y_p_sorted + z_score * std_aleatoric_sorted,
-                        alpha=0.4, color='blue',
-                        label=f'Aleatoric ({int(confidence*100)}% CI)')
-
-        # Plot predictions and true values
-        ax.plot(y_p_sorted, 'b-', linewidth=2, label='Predicted Mean', alpha=0.8)
-        ax.plot(y_t_sorted, 'ro', markersize=3, label='True Values', alpha=0.5)
-
-        ax.set_xlabel('Sample (sorted by prediction)', fontsize=10)
-        ax.set_ylabel('Value', fontsize=10)
-        ax.set_title(f'{name}', fontsize=12, fontweight='bold')
-        ax.legend(fontsize=8, loc='upper left')
-        ax.grid(True, alpha=0.3)
-
-        # Add uncertainty ratio annotation
-        mean_aleatoric = np.mean(y_a)
-        mean_epistemic = np.mean(y_e)
-        epistemic_ratio = mean_epistemic / (mean_aleatoric + mean_epistemic) * 100
-
-        ax.text(0.98, 0.02,
-                f'Aleatoric: {mean_aleatoric:.4f}\n'
-                f'Epistemic: {mean_epistemic:.4f}\n'
-                f'Epistemic ratio: {epistemic_ratio:.1f}%',
-                transform=ax.transAxes,
-                bbox=dict(boxstyle='round', facecolor='white', alpha=0.8),
-                verticalalignment='bottom', horizontalalignment='right',
-                fontsize=8, family='monospace')
-
-    # Hide extra subplots
-    for i in range(n_outputs, len(axes)):
-        axes[i].axis('off')
-
-    plt.tight_layout()
-
-    if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"Stacked uncertainty plot saved: {save_path}")
-
-    plt.close()
-
-
-def plot_uncertainty_decomposition_bar(y_pred_aleatoric, y_pred_epistemic,
-                                       output_names=None, save_path=None):
-    """
-    Plot bar chart showing uncertainty decomposition per output.
-
-    Shows the proportion of aleatoric vs epistemic uncertainty
-    for each output variable.
-
-    Args:
-        y_pred_aleatoric (np.ndarray): Aleatoric variance
-        y_pred_epistemic (np.ndarray): Epistemic variance
-        output_names (list): Names of outputs
-        save_path (str or Path): Path to save the plot
-    """
-    if len(y_pred_aleatoric.shape) == 1:
-        y_pred_aleatoric = y_pred_aleatoric.reshape(-1, 1)
-        y_pred_epistemic = y_pred_epistemic.reshape(-1, 1)
-
-    n_outputs = y_pred_aleatoric.shape[1]
-
-    if output_names is None:
-        output_names = [f"Output {i+1}" for i in range(n_outputs)]
-
-    # Calculate mean uncertainties per output
-    mean_aleatoric = np.mean(y_pred_aleatoric, axis=0)
-    mean_epistemic = np.mean(y_pred_epistemic, axis=0)
-    mean_total = mean_aleatoric + mean_epistemic
-
-    # Calculate percentages
-    pct_aleatoric = mean_aleatoric / mean_total * 100
-    pct_epistemic = mean_epistemic / mean_total * 100
-
-    # Create figure
-    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
-
-    # Left plot: Absolute values (stacked bar)
-    x = np.arange(n_outputs)
-    width = 0.6
-
-    axes[0].bar(x, mean_aleatoric, width, label='Aleatoric', color='steelblue', alpha=0.8)
-    axes[0].bar(x, mean_epistemic, width, bottom=mean_aleatoric,
-                label='Epistemic', color='darkorange', alpha=0.8)
-
-    axes[0].set_xlabel('Output', fontsize=10)
-    axes[0].set_ylabel('Mean Variance', fontsize=10)
-    axes[0].set_title('Uncertainty Decomposition (Absolute)', fontsize=12, fontweight='bold')
-    axes[0].set_xticks(x)
-    axes[0].set_xticklabels(output_names, rotation=45, ha='right')
-    axes[0].legend(fontsize=9)
-    axes[0].grid(True, alpha=0.3, axis='y')
-
-    # Right plot: Percentage (stacked bar, normalized to 100%)
-    axes[1].bar(x, pct_aleatoric, width, label='Aleatoric', color='steelblue', alpha=0.8)
-    axes[1].bar(x, pct_epistemic, width, bottom=pct_aleatoric,
-                label='Epistemic', color='darkorange', alpha=0.8)
-
-    axes[1].set_xlabel('Output', fontsize=10)
-    axes[1].set_ylabel('Percentage (%)', fontsize=10)
-    axes[1].set_title('Uncertainty Decomposition (Relative)', fontsize=12, fontweight='bold')
-    axes[1].set_xticks(x)
-    axes[1].set_xticklabels(output_names, rotation=45, ha='right')
-    axes[1].set_ylim(0, 100)
-    axes[1].legend(fontsize=9)
-    axes[1].grid(True, alpha=0.3, axis='y')
-
-    # Add percentage labels on bars
-    for i in range(n_outputs):
-        axes[1].text(i, pct_aleatoric[i]/2, f'{pct_aleatoric[i]:.1f}%',
-                    ha='center', va='center', fontsize=9, fontweight='bold', color='white')
-        axes[1].text(i, pct_aleatoric[i] + pct_epistemic[i]/2, f'{pct_epistemic[i]:.1f}%',
-                    ha='center', va='center', fontsize=9, fontweight='bold', color='white')
-
-    plt.tight_layout()
-
-    if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"Uncertainty decomposition bar chart saved: {save_path}")
 
     plt.close()

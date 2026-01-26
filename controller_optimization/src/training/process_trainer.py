@@ -392,13 +392,15 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
         save_path=str(checkpoint_dir / 'training_history.png')
     )
 
-    # Predictions plot - test set
+    # Predictions plot - test set (with aleatoric/epistemic decomposition for ensemble)
     uq_viz.plot_predictions_with_uncertainty(
         y_true=targets,
         y_pred_mean=means,
         y_pred_variance=variances,
         output_names=output_labels,
-        save_path=str(checkpoint_dir / 'predictions_with_uncertainty.png')
+        save_path=str(checkpoint_dir / 'predictions_with_uncertainty.png'),
+        y_pred_aleatoric=aleatorics if use_ensemble else None,
+        y_pred_epistemic=epistemics if use_ensemble else None
     )
 
     # Predictions plot - training set
@@ -425,26 +427,6 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
         output_names=output_labels,
         save_path=str(checkpoint_dir / 'uncertainty_distribution.png')
     )
-
-    # Ensemble-specific plots
-    if use_ensemble:
-        # Plot predictions with stacked uncertainty bands
-        uq_viz.plot_predictions_with_stacked_uncertainty(
-            y_true=targets,
-            y_pred_mean=means,
-            y_pred_aleatoric=aleatorics,
-            y_pred_epistemic=epistemics,
-            output_names=output_labels,
-            save_path=str(checkpoint_dir / 'predictions_stacked_uncertainty.png')
-        )
-
-        # Plot uncertainty decomposition bar chart
-        uq_viz.plot_uncertainty_decomposition_bar(
-            y_pred_aleatoric=aleatorics,
-            y_pred_epistemic=epistemics,
-            output_names=output_labels,
-            save_path=str(checkpoint_dir / 'uncertainty_decomposition.png')
-        )
 
     # 9. Generate PDF report
     if verbose:
