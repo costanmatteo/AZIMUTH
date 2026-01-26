@@ -66,7 +66,28 @@ def load_uncertainty_predictor(checkpoint_path, input_dim, output_dim, model_con
     )
 
     # Load weights
-    state_dict = torch.load(checkpoint_path, map_location=device)
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+
+    # Handle different checkpoint formats
+    if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+        # Format from UncertaintyTrainer.save_checkpoint()
+        state_dict = checkpoint['model_state_dict']
+    else:
+        state_dict = checkpoint
+
+    # Check if this is an ensemble checkpoint (keys start with "models.X.")
+    first_key = next(iter(state_dict.keys()), '')
+    if first_key.startswith('models.'):
+        # Extract weights from the first ensemble member (models.0.*)
+        single_model_state_dict = {}
+        prefix = 'models.0.'
+        for key, value in state_dict.items():
+            if key.startswith(prefix):
+                # Remove the "models.0." prefix to get single model keys
+                new_key = key[len(prefix):]
+                single_model_state_dict[new_key] = value
+        state_dict = single_model_state_dict
+
     model.load_state_dict(state_dict)
 
     # Move to device
