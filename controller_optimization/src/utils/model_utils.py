@@ -28,6 +28,7 @@ uncertainty_nn = importlib.util.module_from_spec(spec_nn)
 sys.modules['uncertainty_nn'] = uncertainty_nn  # Register for pickle
 spec_nn.loader.exec_module(uncertainty_nn)
 UncertaintyPredictor = uncertainty_nn.UncertaintyPredictor
+EnsembleUncertaintyPredictor = uncertainty_nn.EnsembleUncertaintyPredictor
 
 # Load preprocessing module for pickle compatibility
 spec_preprocessing = importlib.util.spec_from_file_location(
@@ -43,6 +44,9 @@ def load_uncertainty_predictor(checkpoint_path, input_dim, output_dim, model_con
     """
     Carica uncertainty predictor pre-addestrato.
 
+    Automatically detects if the checkpoint is an ensemble model and loads
+    the appropriate model type.
+
     Args:
         checkpoint_path (Path or str): Path to .pth file
         input_dim (int): Input dimension
@@ -51,22 +55,48 @@ def load_uncertainty_predictor(checkpoint_path, input_dim, output_dim, model_con
         device (str): Device to load model on
 
     Returns:
-        model (UncertaintyPredictor): Modello con pesi caricati, frozen
+        model (UncertaintyPredictor or EnsembleUncertaintyPredictor): Model with loaded weights, frozen
     """
     checkpoint_path = Path(checkpoint_path)
 
-    # Create model
-    model = UncertaintyPredictor(
-        input_size=input_dim,
-        output_size=output_dim,
-        hidden_sizes=model_config['hidden_sizes'],
-        dropout_rate=model_config.get('dropout_rate', 0.2),
-        use_batchnorm=model_config.get('use_batchnorm', False),
-        min_variance=model_config.get('min_variance', 1e-6)
-    )
+    # Load weights first to detect model type
+    state_dict = torch.load(checkpoint_path, map_location=device)
+
+    # Detect if this is an ensemble model by checking for "models.X." prefix in keys
+    is_ensemble = any(key.startswith('models.') for key in state_dict.keys())
+
+    if is_ensemble:
+        # Count number of models in ensemble
+        model_indices = set()
+        for key in state_dict.keys():
+            if key.startswith('models.'):
+                # Extract model index from "models.X.layer_name"
+                idx = int(key.split('.')[1])
+                model_indices.add(idx)
+        n_models = len(model_indices)
+
+        # Create ensemble model
+        model = EnsembleUncertaintyPredictor(
+            input_size=input_dim,
+            output_size=output_dim,
+            hidden_sizes=model_config['hidden_sizes'],
+            dropout_rate=model_config.get('dropout_rate', 0.2),
+            use_batchnorm=model_config.get('use_batchnorm', False),
+            min_variance=model_config.get('min_variance', 1e-6),
+            n_models=n_models
+        )
+    else:
+        # Create single model
+        model = UncertaintyPredictor(
+            input_size=input_dim,
+            output_size=output_dim,
+            hidden_sizes=model_config['hidden_sizes'],
+            dropout_rate=model_config.get('dropout_rate', 0.2),
+            use_batchnorm=model_config.get('use_batchnorm', False),
+            min_variance=model_config.get('min_variance', 1e-6)
+        )
 
     # Load weights
-    state_dict = torch.load(checkpoint_path, map_location=device)
     model.load_state_dict(state_dict)
 
     # Move to device
