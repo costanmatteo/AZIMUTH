@@ -97,7 +97,7 @@ class UncertaintyReportGenerator:
 
     def create_two_column_section(self, config, history, metrics, input_dim, output_dim,
                                   total_params, n_train, n_val, n_test, coverage_results=None):
-        """Create two-column layout for compact info"""
+        """Create two-column layout for compact info including test metrics"""
 
         # Left column data
         left_col = []
@@ -106,7 +106,24 @@ class UncertaintyReportGenerator:
         left_col.append(Paragraph("<b>Model Configuration</b>", self.styles['SectionTitle']))
         left_col.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=4))
 
-        model_text = f"""• <b>Type:</b> {config['model']['model_type']}<br/>
+        # Check if ensemble mode
+        use_ensemble = config['model'].get('use_ensemble', False)
+        if use_ensemble:
+            n_ensemble = config['model'].get('n_ensemble_models', 5)
+            params_per_model = total_params // n_ensemble if n_ensemble > 0 else total_params
+            model_text = f"""• <b>Type:</b> Deep Ensemble<br/>
+• <b>Base Architecture:</b> {config['model']['model_type']}<br/>
+• <b>Models in Ensemble:</b> {n_ensemble}<br/>
+• <b>Hidden Layers:</b> {config['model']['hidden_sizes']}<br/>
+• <b>Dropout Rate:</b> {config['model']['dropout_rate']}<br/>
+• <b>Batch Normalization:</b> {config['model']['use_batchnorm']}<br/>
+• <b>Min Variance:</b> {config['model']['min_variance']}<br/>
+• <b>Input Dimension:</b> {input_dim}<br/>
+• <b>Output Dimension:</b> {output_dim}<br/>
+• <b>Params per Model:</b> {params_per_model:,}<br/>
+• <b>Total Parameters:</b> {total_params:,}"""
+        else:
+            model_text = f"""• <b>Type:</b> {config['model']['model_type']}<br/>
 • <b>Hidden Layers:</b> {config['model']['hidden_sizes']}<br/>
 • <b>Dropout Rate:</b> {config['model']['dropout_rate']}<br/>
 • <b>Batch Normalization:</b> {config['model']['use_batchnorm']}<br/>
@@ -132,6 +149,27 @@ class UncertaintyReportGenerator:
 • <b>Scaling Method:</b> {config['data']['scaling_method']}<br/>
 • <b>Random State:</b> {config['data']['random_state']}"""
         left_col.append(Paragraph(dataset_text, self.styles['BodyText']))
+        left_col.append(Spacer(1, 0.15*cm))
+
+        # Test Metrics (in left column after Dataset)
+        left_col.append(Paragraph("<b>Test Metrics</b>", self.styles['SectionTitle']))
+        left_col.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=4))
+
+        for output_name, output_metrics in metrics.items():
+            if output_name == 'Overall':
+                continue
+
+            metrics_text = f"<b>{output_name}</b><br/>"
+            metrics_text += f"• MSE: {output_metrics['MSE']:.6f}  "
+            metrics_text += f"• RMSE: {output_metrics['RMSE']:.6f}<br/>"
+            metrics_text += f"• MAE: {output_metrics['MAE']:.6f}  "
+            metrics_text += f"• R²: {output_metrics['R2']:.6f}"
+
+            if 'Mean_Variance' in output_metrics:
+                metrics_text += f"<br/>• Mean Var: {output_metrics['Mean_Variance']:.6f}  "
+                metrics_text += f"• Cal. Ratio: {output_metrics['Calibration_Ratio']:.4f}"
+
+            left_col.append(Paragraph(metrics_text, self.styles['BodyText']))
 
         # Right column data
         right_col = []
@@ -192,6 +230,13 @@ class UncertaintyReportGenerator:
 • <b>Coverage Error:</b> {coverage_results['coverage_error']:.1f}%<br/>
 • <b>Well Calibrated:</b> {'Yes' if coverage_results['well_calibrated'] else 'No'}"""
 
+            # Add ensemble-specific uncertainty decomposition
+            if 'mean_aleatoric' in coverage_results:
+                results_text += f"""<br/><br/><b>Uncertainty Decomposition:</b><br/>
+• <b>Mean Aleatoric:</b> {coverage_results['mean_aleatoric']:.6f}<br/>
+• <b>Mean Epistemic:</b> {coverage_results['mean_epistemic']:.6f}<br/>
+• <b>Epistemic Ratio:</b> {coverage_results['epistemic_ratio']:.1f}%"""
+
         right_col.append(Paragraph(results_text, self.styles['BodyText']))
         right_col.append(Spacer(1, 0.15*cm))
 
@@ -223,68 +268,6 @@ class UncertaintyReportGenerator:
 
         self.story.append(col_table)
         self.story.append(Spacer(1, 0.2*cm))
-
-    def add_metrics_table(self, metrics):
-        """Add metrics table with uncertainty-specific metrics"""
-        self.add_section_title("Test Metrics")
-
-        # Build table data with uncertainty metrics
-        headers = ['Output', 'MSE', 'RMSE', 'MAE', 'R²', 'Mean Var', 'Cal. Ratio', 'NLL']
-        data = [headers]
-
-        for output_name, output_metrics in metrics.items():
-            if output_name == 'Overall':
-                continue
-
-            # Standard metrics
-            row = [
-                output_name,
-                f"{output_metrics['MSE']:.4f}",
-                f"{output_metrics['RMSE']:.4f}",
-                f"{output_metrics['MAE']:.4f}",
-                f"{output_metrics['R2']:.4f}",
-            ]
-
-            # Uncertainty metrics
-            if 'Mean_Variance' in output_metrics:
-                row.append(f"{output_metrics['Mean_Variance']:.4f}")
-                row.append(f"{output_metrics['Calibration_Ratio']:.4f}")
-                row.append(f"{output_metrics['NLL']:.4f}")
-            else:
-                row.extend(['N/A', 'N/A', 'N/A'])
-
-            data.append(row)
-
-        # Create table with adjusted column widths
-        col_widths = [2.2*cm, 1.9*cm, 1.9*cm, 1.9*cm, 1.9*cm, 1.9*cm, 1.9*cm, 1.9*cm]
-        table = Table(data, colWidths=col_widths)
-        table.setStyle(TableStyle([
-            # Header row
-            ('BACKGROUND', (0, 0), (-1, 0), colors.white),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, 0), 8),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
-            ('TOPPADDING', (0, 0), (-1, 0), 8),
-
-            # Data rows
-            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-            ('FONTSIZE', (0, 1), (-1, -1), 8),
-            ('TOPPADDING', (0, 1), (-1, -1), 6),
-            ('BOTTOMPADDING', (0, 1), (-1, -1), 6),
-
-            # Top and bottom lines
-            ('LINEABOVE', (0, 0), (-1, 0), 1.5, colors.black),
-            ('LINEABOVE', (0, 1), (-1, 1), 0.5, colors.black),
-            ('LINEBELOW', (0, -1), (-1, -1), 1.5, colors.black),
-        ]))
-
-        self.story.append(table)
-        self.story.append(Spacer(1, 0.1*cm))
-
-
-
 
     def add_scm_graph(self, checkpoint_dir):
         """Add SCM graph visualization if available"""
@@ -485,7 +468,6 @@ class UncertaintyReportGenerator:
         self.add_title(timestamp)
         self.create_two_column_section(config, history, metrics, input_dim, output_dim,
                                        total_params, n_train, n_val, n_test, coverage_results)
-        self.add_metrics_table(metrics)
         self.add_plots_stacked(Path(config['training']['checkpoint_dir']))
 
         # Build PDF

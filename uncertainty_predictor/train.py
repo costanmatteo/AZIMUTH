@@ -7,6 +7,7 @@ and trains it to predict both mean values and uncertainties.
 
 import sys
 import torch
+import numpy as np
 from torch.utils.data import DataLoader
 from pathlib import Path
 from datetime import datetime
@@ -21,9 +22,11 @@ from models import (
     EnergyScoreLoss,
     create_small_uncertainty_model,
     create_medium_uncertainty_model,
-    create_large_uncertainty_model
+    create_large_uncertainty_model,
+    EnsembleUncertaintyPredictor,
+    create_ensemble_model
 )
-from training import UncertaintyTrainer
+from training import UncertaintyTrainer, EnsembleTrainer
 from utils import (
     calculate_metrics,
     print_metrics,
@@ -153,26 +156,48 @@ def main():
     # 4. CREATE MODEL
     print("\n[4/7] Creating uncertainty model...")
     model_type = CONFIG['model']['model_type']
+    use_ensemble = CONFIG['model'].get('use_ensemble', False)
 
-    if model_type == 'small':
-        model = create_small_uncertainty_model(input_dim, output_dim)
-    elif model_type == 'medium':
-        model = create_medium_uncertainty_model(input_dim, output_dim)
-    elif model_type == 'large':
-        model = create_large_uncertainty_model(input_dim, output_dim)
-    else:  # custom
-        model = UncertaintyPredictor(
+    if use_ensemble:
+        # Create Deep Ensemble model
+        n_ensemble_models = CONFIG['model'].get('n_ensemble_models', 5)
+        print(f"  Using Deep Ensemble with {n_ensemble_models} models")
+
+        model = EnsembleUncertaintyPredictor(
             input_size=input_dim,
             hidden_sizes=CONFIG['model']['hidden_sizes'],
             output_size=output_dim,
+            n_models=n_ensemble_models,
             dropout_rate=CONFIG['model']['dropout_rate'],
             use_batchnorm=CONFIG['model']['use_batchnorm'],
             min_variance=CONFIG['model']['min_variance']
         )
+        print(f"  Model type: ensemble ({model_type} base architecture)")
+        print(f"  Models in ensemble: {n_ensemble_models}")
+        print(f"  Parameters per model: {sum(p.numel() for p in model.models[0].parameters())}")
+        print(f"  Total parameters: {sum(p.numel() for p in model.parameters())}")
+        print(f"  Output: Mean (μ), Aleatoric (σ²_a), Epistemic (σ²_e) uncertainty")
+    else:
+        # Create single model
+        if model_type == 'small':
+            model = create_small_uncertainty_model(input_dim, output_dim)
+        elif model_type == 'medium':
+            model = create_medium_uncertainty_model(input_dim, output_dim)
+        elif model_type == 'large':
+            model = create_large_uncertainty_model(input_dim, output_dim)
+        else:  # custom
+            model = UncertaintyPredictor(
+                input_size=input_dim,
+                hidden_sizes=CONFIG['model']['hidden_sizes'],
+                output_size=output_dim,
+                dropout_rate=CONFIG['model']['dropout_rate'],
+                use_batchnorm=CONFIG['model']['use_batchnorm'],
+                min_variance=CONFIG['model']['min_variance']
+            )
 
-    print(f"  Model type: {model_type}")
-    print(f"  Total parameters: {sum(p.numel() for p in model.parameters())}")
-    print(f"  Output: Mean (μ) and Variance (σ²) for each target")
+        print(f"  Model type: {model_type}")
+        print(f"  Total parameters: {sum(p.numel() for p in model.parameters())}")
+        print(f"  Output: Mean (μ) and Variance (σ²) for each target")
 
     # 5. CREATE LOSS FUNCTION
     print("\n[5/7] Setting up loss function...")
@@ -209,13 +234,26 @@ def main():
     if device == 'auto':
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-    trainer = UncertaintyTrainer(
-        model,
-        criterion,
-        device=device,
-        learning_rate=CONFIG['training']['learning_rate'],
-        weight_decay=CONFIG['training']['weight_decay']
-    )
+    if use_ensemble:
+        # Use EnsembleTrainer for Deep Ensemble
+        ensemble_base_seed = CONFIG['model'].get('ensemble_base_seed', 42)
+        trainer = EnsembleTrainer(
+            model,
+            criterion,
+            device=device,
+            learning_rate=CONFIG['training']['learning_rate'],
+            weight_decay=CONFIG['training']['weight_decay'],
+            base_seed=ensemble_base_seed
+        )
+    else:
+        # Use standard UncertaintyTrainer
+        trainer = UncertaintyTrainer(
+            model,
+            criterion,
+            device=device,
+            learning_rate=CONFIG['training']['learning_rate'],
+            weight_decay=CONFIG['training']['weight_decay']
+        )
 
     history = trainer.train(
         train_loader,
@@ -228,7 +266,14 @@ def main():
     # 7. EVALUATION
     print("\n[7/7] Evaluation on test set...")
 
-    y_pred_mean, y_pred_variance = trainer.predict(X_test_scaled, return_uncertainty=True)
+    # Get predictions (different return format for ensemble vs single model)
+    if use_ensemble:
+        y_pred_mean, y_pred_variance, y_pred_aleatoric, y_pred_epistemic = \
+            trainer.predict(X_test_scaled, return_uncertainty=True)
+    else:
+        y_pred_mean, y_pred_variance = trainer.predict(X_test_scaled, return_uncertainty=True)
+        y_pred_aleatoric = None
+        y_pred_epistemic = None
 
     # Inverse transform to original scale
     y_pred_mean_orig = preprocessor.inverse_transform_output(y_pred_mean)
@@ -240,13 +285,27 @@ def main():
         if hasattr(preprocessor.y_scaler, 'scale_'):
             scale_factors = preprocessor.y_scaler.scale_
             y_pred_variance_orig = y_pred_variance * (scale_factors ** 2)
+            if use_ensemble:
+                y_pred_aleatoric_orig = y_pred_aleatoric * (scale_factors ** 2)
+                y_pred_epistemic_orig = y_pred_epistemic * (scale_factors ** 2)
         else:
             y_pred_variance_orig = y_pred_variance
+            if use_ensemble:
+                y_pred_aleatoric_orig = y_pred_aleatoric
+                y_pred_epistemic_orig = y_pred_epistemic
     else:
         y_pred_variance_orig = y_pred_variance
+        if use_ensemble:
+            y_pred_aleatoric_orig = y_pred_aleatoric
+            y_pred_epistemic_orig = y_pred_epistemic
 
     # Also get predictions on training set for visualization
-    y_train_pred_mean, y_train_pred_variance = trainer.predict(X_train_scaled, return_uncertainty=True)
+    if use_ensemble:
+        y_train_pred_mean, y_train_pred_variance, y_train_aleatoric, y_train_epistemic = \
+            trainer.predict(X_train_scaled, return_uncertainty=True)
+    else:
+        y_train_pred_mean, y_train_pred_variance = trainer.predict(X_train_scaled, return_uncertainty=True)
+
     y_train_pred_mean_orig = preprocessor.inverse_transform_output(y_train_pred_mean)
     y_train_orig = y_train
 
@@ -282,6 +341,27 @@ def main():
     print(f"Actual coverage:   {coverage_results['actual_coverage']:.1f}%")
     print(f"Coverage error:    {coverage_results['coverage_error']:.1f}%")
     print(f"Well calibrated:   {'Yes ✓' if coverage_results['well_calibrated'] else 'No ✗'}")
+
+    # Print ensemble-specific uncertainty decomposition
+    if use_ensemble:
+        print("\n" + "-"*50)
+        print("UNCERTAINTY DECOMPOSITION (Ensemble)")
+        print("-"*50)
+        mean_aleatoric = np.mean(y_pred_aleatoric_orig)
+        mean_epistemic = np.mean(y_pred_epistemic_orig)
+        mean_total = np.mean(y_pred_variance_orig)
+        epistemic_ratio = mean_epistemic / mean_total * 100 if mean_total > 0 else 0
+
+        print(f"Mean Aleatoric (data noise):     {mean_aleatoric:.6f}")
+        print(f"Mean Epistemic (model uncertainty): {mean_epistemic:.6f}")
+        print(f"Mean Total Variance:             {mean_total:.6f}")
+        print(f"Epistemic Ratio:                 {epistemic_ratio:.1f}%")
+
+        # Add to coverage_results for report
+        coverage_results['mean_aleatoric'] = float(mean_aleatoric)
+        coverage_results['mean_epistemic'] = float(mean_epistemic)
+        coverage_results['epistemic_ratio'] = float(epistemic_ratio)
+
     print("="*70)
 
     # Save scaler for future use
@@ -302,13 +382,16 @@ def main():
     )
 
     # Plot predictions with uncertainty bounds (test set)
+    # Pass aleatoric/epistemic for ensemble mode to show decomposition
     plot_predictions_with_uncertainty(
         y_test_orig,
         y_pred_mean_orig,
         y_pred_variance_orig,
         output_names=output_columns,
         save_path=checkpoint_dir / 'predictions_with_uncertainty.png',
-        confidence=CONFIG['uncertainty']['confidence_level']
+        confidence=CONFIG['uncertainty']['confidence_level'],
+        y_pred_aleatoric=y_pred_aleatoric_orig if use_ensemble else None,
+        y_pred_epistemic=y_pred_epistemic_orig if use_ensemble else None
     )
 
     # Plot predictions with uncertainty bounds (training set)

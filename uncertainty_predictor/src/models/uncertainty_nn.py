@@ -398,3 +398,258 @@ def create_large_uncertainty_model(input_size, output_size):
         output_size=output_size,
         dropout_rate=0.3
     )
+
+
+class EnsembleUncertaintyPredictor(nn.Module):
+    """
+    Deep Ensemble for Uncertainty Quantification.
+
+    This class implements a Deep Ensemble approach where N independent neural networks
+    are trained with different random initializations. The ensemble provides:
+    - Better calibrated uncertainty estimates
+    - Separation of aleatoric and epistemic uncertainty
+    - Improved out-of-distribution detection
+
+    The ensemble combines predictions using:
+    - Mean: average of individual model means
+    - Aleatoric uncertainty: average of individual model variances (data noise)
+    - Epistemic uncertainty: variance of individual model means (model uncertainty)
+    - Total uncertainty: aleatoric + epistemic
+
+    Args:
+        input_size (int): Number of input features
+        hidden_sizes (list): List with dimensions of shared hidden layers
+        output_size (int): Number of output values to predict
+        n_models (int): Number of models in the ensemble (default: 5)
+        dropout_rate (float): Dropout rate for regularization (default: 0.2)
+        use_batchnorm (bool): Whether to use batch normalization (default: False)
+        min_variance (float): Minimum allowed variance for numerical stability (default: 1e-6)
+
+    Example:
+        >>> ensemble = EnsembleUncertaintyPredictor(
+        ...     input_size=10,
+        ...     hidden_sizes=[64, 32],
+        ...     output_size=5,
+        ...     n_models=5
+        ... )
+        >>> x = torch.randn(32, 10)
+        >>> mean, total_var, aleatoric, epistemic = ensemble.predict_with_decomposition(x)
+    """
+
+    def __init__(self, input_size, hidden_sizes, output_size, n_models=5,
+                 dropout_rate=0.2, use_batchnorm=False, min_variance=1e-6):
+        super(EnsembleUncertaintyPredictor, self).__init__()
+
+        self.n_models = n_models
+        self.input_size = input_size
+        self.hidden_sizes = hidden_sizes
+        self.output_size = output_size
+        self.dropout_rate = dropout_rate
+        self.use_batchnorm = use_batchnorm
+        self.min_variance = min_variance
+
+        # Create N independent models
+        self.models = nn.ModuleList([
+            UncertaintyPredictor(
+                input_size=input_size,
+                hidden_sizes=hidden_sizes,
+                output_size=output_size,
+                dropout_rate=dropout_rate,
+                use_batchnorm=use_batchnorm,
+                min_variance=min_variance
+            )
+            for _ in range(n_models)
+        ])
+
+    def forward(self, x, model_idx=None):
+        """
+        Forward pass through the ensemble.
+
+        Args:
+            x (torch.Tensor): Input tensor of shape (batch_size, input_size)
+            model_idx (int, optional): If specified, only use this model index.
+                                       Used during training to train individual models.
+
+        Returns:
+            If model_idx is specified:
+                tuple: (mean, variance) from the specified model
+            Otherwise:
+                tuple: (ensemble_mean, total_variance)
+                    - ensemble_mean: Average of all model means
+                    - total_variance: Aleatoric + Epistemic uncertainty
+        """
+        if model_idx is not None:
+            # Training mode: forward through single model
+            return self.models[model_idx](x)
+
+        # Inference mode: aggregate all models
+        return self.predict_ensemble(x)
+
+    def predict_ensemble(self, x):
+        """
+        Make ensemble prediction by aggregating all models.
+
+        Args:
+            x (torch.Tensor): Input tensor
+
+        Returns:
+            tuple: (ensemble_mean, total_variance)
+        """
+        means = []
+        variances = []
+
+        for model in self.models:
+            mean, variance = model(x)
+            means.append(mean)
+            variances.append(variance)
+
+        # Stack predictions: shape (n_models, batch_size, output_size)
+        means = torch.stack(means)
+        variances = torch.stack(variances)
+
+        # Ensemble mean: average of individual means
+        ensemble_mean = means.mean(dim=0)
+
+        # Aleatoric uncertainty: average of individual variances
+        aleatoric = variances.mean(dim=0)
+
+        # Epistemic uncertainty: variance of individual means
+        epistemic = means.var(dim=0)
+
+        # Total uncertainty
+        total_variance = aleatoric + epistemic
+
+        return ensemble_mean, total_variance
+
+    def predict_with_decomposition(self, x):
+        """
+        Make predictions with full uncertainty decomposition.
+
+        This method provides separate aleatoric and epistemic uncertainties,
+        which is useful for understanding the source of uncertainty.
+
+        Args:
+            x (torch.Tensor): Input tensor
+
+        Returns:
+            tuple: (ensemble_mean, total_variance, aleatoric, epistemic)
+                - ensemble_mean: Average prediction across ensemble
+                - total_variance: Total uncertainty (aleatoric + epistemic)
+                - aleatoric: Data/noise uncertainty (average of predicted variances)
+                - epistemic: Model uncertainty (variance of predicted means)
+        """
+        self.eval()
+        with torch.no_grad():
+            means = []
+            variances = []
+
+            for model in self.models:
+                mean, variance = model(x)
+                means.append(mean)
+                variances.append(variance)
+
+            means = torch.stack(means)
+            variances = torch.stack(variances)
+
+            ensemble_mean = means.mean(dim=0)
+            aleatoric = variances.mean(dim=0)
+            epistemic = means.var(dim=0)
+            total_variance = aleatoric + epistemic
+
+            return ensemble_mean, total_variance, aleatoric, epistemic
+
+    def predict_with_uncertainty(self, x, n_samples=100):
+        """
+        Make predictions with uncertainty estimation (compatible with single model API).
+
+        This method maintains API compatibility with UncertaintyPredictor.
+
+        Args:
+            x (torch.Tensor): Input tensor
+            n_samples (int): Not used, kept for API compatibility
+
+        Returns:
+            dict: Dictionary containing:
+                - 'mean': Ensemble mean predictions
+                - 'variance': Total variance (aleatoric + epistemic)
+                - 'std': Standard deviation
+                - 'aleatoric': Aleatoric uncertainty
+                - 'epistemic': Epistemic uncertainty
+                - 'individual_means': Means from each model
+                - 'individual_variances': Variances from each model
+        """
+        self.eval()
+        with torch.no_grad():
+            means = []
+            variances = []
+
+            for model in self.models:
+                mean, variance = model(x)
+                means.append(mean)
+                variances.append(variance)
+
+            means_stacked = torch.stack(means)
+            variances_stacked = torch.stack(variances)
+
+            ensemble_mean = means_stacked.mean(dim=0)
+            aleatoric = variances_stacked.mean(dim=0)
+            epistemic = means_stacked.var(dim=0)
+            total_variance = aleatoric + epistemic
+
+            return {
+                'mean': ensemble_mean,
+                'variance': total_variance,
+                'std': torch.sqrt(total_variance),
+                'aleatoric': aleatoric,
+                'epistemic': epistemic,
+                'individual_means': means_stacked,
+                'individual_variances': variances_stacked
+            }
+
+    def get_individual_predictions(self, x):
+        """
+        Get predictions from each individual model.
+
+        Useful for visualization and debugging.
+
+        Args:
+            x (torch.Tensor): Input tensor
+
+        Returns:
+            list: List of (mean, variance) tuples from each model
+        """
+        self.eval()
+        predictions = []
+        with torch.no_grad():
+            for model in self.models:
+                mean, variance = model(x)
+                predictions.append((mean, variance))
+        return predictions
+
+
+def create_ensemble_model(input_size, output_size, hidden_sizes, n_models=5,
+                          dropout_rate=0.2, use_batchnorm=False, min_variance=1e-6):
+    """
+    Factory function to create an ensemble uncertainty model.
+
+    Args:
+        input_size (int): Number of input features
+        output_size (int): Number of output features
+        hidden_sizes (list): Hidden layer sizes
+        n_models (int): Number of models in ensemble (default: 5)
+        dropout_rate (float): Dropout rate (default: 0.2)
+        use_batchnorm (bool): Use batch normalization (default: False)
+        min_variance (float): Minimum variance (default: 1e-6)
+
+    Returns:
+        EnsembleUncertaintyPredictor: Configured ensemble model
+    """
+    return EnsembleUncertaintyPredictor(
+        input_size=input_size,
+        hidden_sizes=hidden_sizes,
+        output_size=output_size,
+        n_models=n_models,
+        dropout_rate=dropout_rate,
+        use_batchnorm=use_batchnorm,
+        min_variance=min_variance
+    )

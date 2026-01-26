@@ -33,7 +33,20 @@ CONFIG = {
         'hidden_sizes': [64, 32, 16],  # Used only if model_type='custom'
         'dropout_rate': 0.1,
         'use_batchnorm': True,
-        'min_variance': 1e-6  # Minimum variance for numerical stability
+        'min_variance': 1e-6,  # Minimum variance for numerical stability
+
+        # Deep Ensemble configuration
+        # Enable ensemble mode for better uncertainty quantification
+        # Ensemble trains N independent models and combines their predictions
+        'use_ensemble': False,  # Set to True to use Deep Ensemble
+
+        # Number of models in the ensemble (recommended: 5)
+        # More models = better uncertainty estimates but longer training
+        # Diminishing returns beyond 5-10 models
+        'n_ensemble_models': 5,
+
+        # Base seed for ensemble (each model uses base_seed + model_idx * 1000)
+        'ensemble_base_seed': 42
     },
 
     # Training configuration

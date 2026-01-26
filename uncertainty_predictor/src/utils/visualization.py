@@ -57,24 +57,34 @@ def plot_training_history(train_losses, val_losses, train_mse=None, val_mse=None
 
 def plot_predictions_with_uncertainty(y_true, y_pred_mean, y_pred_variance,
                                      output_names=None, save_path=None,
-                                     confidence=0.95):
+                                     confidence=0.95, y_pred_aleatoric=None,
+                                     y_pred_epistemic=None):
     """
     Plot predictions vs true values with uncertainty bounds.
+
+    If y_pred_aleatoric and y_pred_epistemic are provided (ensemble mode),
+    shows stacked bands: inner band for aleatoric, outer for total uncertainty.
 
     Args:
         y_true (np.ndarray): True values
         y_pred_mean (np.ndarray): Predicted means
-        y_pred_variance (np.ndarray): Predicted variances
+        y_pred_variance (np.ndarray): Predicted variances (total)
         output_names (list): Names of outputs
         save_path (str or Path): Path to save the plot
         confidence (float): Confidence level for prediction intervals
+        y_pred_aleatoric (np.ndarray): Aleatoric variance (optional, for ensemble)
+        y_pred_epistemic (np.ndarray): Epistemic variance (optional, for ensemble)
     """
     if len(y_true.shape) == 1:
         y_true = y_true.reshape(-1, 1)
         y_pred_mean = y_pred_mean.reshape(-1, 1)
         y_pred_variance = y_pred_variance.reshape(-1, 1)
+        if y_pred_aleatoric is not None:
+            y_pred_aleatoric = y_pred_aleatoric.reshape(-1, 1)
+            y_pred_epistemic = y_pred_epistemic.reshape(-1, 1)
 
     n_outputs = y_true.shape[1]
+    use_decomposition = y_pred_aleatoric is not None and y_pred_epistemic is not None
 
     if output_names is None:
         output_names = [f"Output {i+1}" for i in range(n_outputs)]
@@ -105,12 +115,35 @@ def plot_predictions_with_uncertainty(y_true, y_pred_mean, y_pred_variance,
         y_p_sorted = y_p[sort_idx]
         y_std_sorted = y_std[sort_idx]
 
-        # Plot uncertainty bounds
-        ax.fill_between(range(len(y_p_sorted)),
-                        y_p_sorted - z_score * y_std_sorted,
-                        y_p_sorted + z_score * y_std_sorted,
-                        alpha=0.3, color='blue',
-                        label=f'{int(confidence*100)}% Prediction Interval')
+        x_range = range(len(y_p_sorted))
+
+        if use_decomposition:
+            # Ensemble mode: show aleatoric (inner) and epistemic (outer) bands
+            y_a = y_pred_aleatoric[:, i]
+            y_e = y_pred_epistemic[:, i]
+            std_aleatoric = np.sqrt(y_a)
+            std_aleatoric_sorted = std_aleatoric[sort_idx]
+
+            # Outer band (total = aleatoric + epistemic) - lighter
+            ax.fill_between(x_range,
+                            y_p_sorted - z_score * y_std_sorted,
+                            y_p_sorted + z_score * y_std_sorted,
+                            alpha=0.2, color='orange',
+                            label=f'Epistemic ({int(confidence*100)}% CI)')
+
+            # Inner band (aleatoric only) - darker
+            ax.fill_between(x_range,
+                            y_p_sorted - z_score * std_aleatoric_sorted,
+                            y_p_sorted + z_score * std_aleatoric_sorted,
+                            alpha=0.4, color='blue',
+                            label=f'Aleatoric ({int(confidence*100)}% CI)')
+        else:
+            # Single model mode: show total uncertainty
+            ax.fill_between(x_range,
+                            y_p_sorted - z_score * y_std_sorted,
+                            y_p_sorted + z_score * y_std_sorted,
+                            alpha=0.3, color='blue',
+                            label=f'{int(confidence*100)}% Prediction Interval')
 
         # Plot predictions and true values
         ax.plot(y_p_sorted, 'b-', linewidth=2, label='Predicted Mean', alpha=0.7)
@@ -162,7 +195,8 @@ def plot_scatter_with_uncertainty(y_true, y_pred_mean, y_pred_variance,
     n_cols = min(3, n_outputs)
     n_rows = (n_outputs + n_cols - 1) // n_cols
 
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(6*n_cols, 5*n_rows))
+    # Compact figure size
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(3.5*n_cols, 3.2*n_rows))
     if n_outputs == 1:
         axes = np.array([axes])
     axes = axes.flatten()
@@ -176,23 +210,23 @@ def plot_scatter_with_uncertainty(y_true, y_pred_mean, y_pred_variance,
 
         # Create scatter plot with color representing uncertainty
         scatter = ax.scatter(y_t, y_p, c=y_v, cmap='viridis',
-                           alpha=0.6, s=30, edgecolors='black', linewidth=0.5)
+                           alpha=0.6, s=20, edgecolors='black', linewidth=0.3)
 
         # Add perfect prediction line
         min_val = min(y_t.min(), y_p.min())
         max_val = max(y_t.max(), y_p.max())
         ax.plot([min_val, max_val], [min_val, max_val],
-               'r--', linewidth=2, label='Perfect Prediction', alpha=0.7)
+               'r--', linewidth=1.5, label='Perfect Prediction', alpha=0.7)
 
-        ax.set_xlabel('True Values', fontsize=10)
-        ax.set_ylabel('Predicted Mean', fontsize=10)
-        ax.set_title(f'{name}', fontsize=12, fontweight='bold')
-        ax.legend(fontsize=8)
+        ax.set_xlabel('True Values', fontsize=9)
+        ax.set_ylabel('Predicted Mean', fontsize=9)
+        ax.set_title(f'{name}', fontsize=10, fontweight='bold')
+        ax.legend(fontsize=7, loc='lower right')
         ax.grid(True, alpha=0.3)
 
         # Add colorbar
         cbar = plt.colorbar(scatter, ax=ax)
-        cbar.set_label('Predicted Variance', fontsize=9)
+        cbar.set_label('Predicted Variance', fontsize=8)
 
         # Calculate and display R²
         from sklearn.metrics import r2_score
@@ -200,7 +234,7 @@ def plot_scatter_with_uncertainty(y_true, y_pred_mean, y_pred_variance,
         ax.text(0.05, 0.95, f'R² = {r2:.4f}',
                transform=ax.transAxes,
                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5),
-               verticalalignment='top', fontsize=9)
+               verticalalignment='top', fontsize=8)
 
     # Hide extra subplots
     for i in range(n_outputs, len(axes)):

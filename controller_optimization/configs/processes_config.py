@@ -25,6 +25,10 @@ PROCESSES = [
                 'dropout_rate': 0.1,
                 'use_batchnorm': False,
                 'min_variance': 1e-6,
+                # Deep Ensemble configuration
+                'use_ensemble': False,  # Set to True to use Deep Ensemble
+                'n_ensemble_models': 5,  # Number of models in ensemble
+                'ensemble_base_seed': 42,  # Base seed for ensemble diversity
             },
             'training': {
                 'n_samples': 2000,
@@ -56,6 +60,10 @@ PROCESSES = [
                 'dropout_rate': 0.1,
                 'use_batchnorm': False,
                 'min_variance': 1e-6,
+                # Deep Ensemble configuration
+                'use_ensemble': False,  # Set to True to use Deep Ensemble
+                'n_ensemble_models': 5,  # Number of models in ensemble
+                'ensemble_base_seed': 42,  # Base seed for ensemble diversity
             },
             'training': {
                 'n_samples': 2000,
@@ -87,6 +95,10 @@ PROCESSES = [
                 'dropout_rate': 0.1,
                 'use_batchnorm': False,
                 'min_variance': 1e-6,
+                # Deep Ensemble configuration
+                'use_ensemble': False,  # Set to True to use Deep Ensemble
+                'n_ensemble_models': 5,  # Number of models in ensemble
+                'ensemble_base_seed': 42,  # Base seed for ensemble diversity
             },
             'training': {
                 'n_samples': 2000,
@@ -118,6 +130,10 @@ PROCESSES = [
                 'dropout_rate': 0.1,
                 'use_batchnorm': False,
                 'min_variance': 1e-6,
+                # Deep Ensemble configuration
+                'use_ensemble': False,  # Set to True to use Deep Ensemble
+                'n_ensemble_models': 5,  # Number of models in ensemble
+                'ensemble_base_seed': 42,  # Base seed for ensemble diversity
             },
             'training': {
                 'n_samples': 2000,
