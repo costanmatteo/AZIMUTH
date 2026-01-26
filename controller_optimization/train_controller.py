@@ -1278,17 +1278,17 @@ def main(config=None):
                 # Populate tracker with data from training history
                 reliability_loss_history = history.get('reliability_loss', [])
                 F_values_history = history.get('F_values', [])
-    
+
                 # Use combined parameters for tracker updates
                 combined_sigma2 = combined_components.sigma2
                 combined_delta = np.sqrt(combined_components.Bias2 / CONTROLLER_CONFIG['training']['reliability_loss_scale']) if combined_components.Bias2 > 0 else 0.0
                 combined_s = np.mean([p['s'] for p in process_params_for_L_min.values()]) if process_params_for_L_min else 1.0
-    
+
                 for epoch_idx, (rel_loss, F_val) in enumerate(zip(reliability_loss_history, F_values_history)):
                     epoch = epoch_idx + 1
                     observed_loss = rel_loss
                     F_samples_epoch = np.array([F_val])
-    
+
                     theoretical_tracker.update(
                         epoch=epoch,
                         observed_loss_value=observed_loss,
@@ -1298,16 +1298,70 @@ def main(config=None):
                         delta=combined_delta,
                         s=combined_s
                     )
-    
+
                 # Get theoretical data for report
                 theoretical_data = theoretical_tracker.to_dict()
-    
+
                 # Add per-process L_min data to theoretical_data
                 theoretical_data['per_process_L_min'] = {
                     proc_name: comp.to_dict() for proc_name, comp in per_process_components.items()
                 }
                 theoretical_data['combined_L_min'] = combined_components.to_dict()
-    
+
+                # CRITICAL FIX: Override tracker's L_min with correctly computed multi-process values
+                # The tracker uses single-process formula which is incorrect for multi-process systems.
+                # Replace all L_min values in the tracker's lists with the correct combined value.
+                correct_L_min = combined_components.L_min
+                correct_Var_F = combined_components.Var_F
+                correct_Bias2 = combined_components.Bias2
+                correct_E_F = combined_components.E_F
+                correct_F_star = combined_components.F_star
+
+                n_epochs = len(theoretical_data.get('theoretical_L_min', []))
+                if n_epochs > 0:
+                    # Replace with correct multi-process L_min (constant across epochs since params don't change)
+                    theoretical_data['theoretical_L_min'] = [correct_L_min] * n_epochs
+                    theoretical_data['theoretical_Var_F'] = [correct_Var_F] * n_epochs
+                    theoretical_data['theoretical_Bias2'] = [correct_Bias2] * n_epochs
+                    theoretical_data['theoretical_E_F'] = [correct_E_F] * n_epochs
+
+                    # Recompute gap and efficiency with correct L_min
+                    observed_losses = theoretical_data.get('observed_loss', [])
+                    theoretical_data['gap'] = [obs - correct_L_min for obs in observed_losses]
+                    theoretical_data['efficiency'] = [
+                        correct_L_min / obs if obs > 0 else (1.0 if correct_L_min == 0 else 0.0)
+                        for obs in observed_losses
+                    ]
+
+                    # Recount violations with correct L_min
+                    n_violations = sum(1 for obs in observed_losses if obs < correct_L_min * 0.99)
+                    theoretical_data['n_violations'] = n_violations
+
+                    # Update summary with correct values
+                    if observed_losses:
+                        final_loss = observed_losses[-1]
+                        final_gap = final_loss - correct_L_min
+                        final_efficiency = correct_L_min / final_loss if final_loss > 0 else 1.0
+
+                        theoretical_data['summary'] = {
+                            'final_loss': final_loss,
+                            'best_loss': min(observed_losses),
+                            'final_L_min': correct_L_min,
+                            'final_gap': final_gap,
+                            'final_efficiency': final_efficiency,
+                            'best_efficiency': max(theoretical_data['efficiency']) if theoretical_data['efficiency'] else 0.0,
+                            'mean_efficiency': np.mean(theoretical_data['efficiency']) if theoretical_data['efficiency'] else 0.0,
+                            'empirical_E_F_final': theoretical_data.get('empirical_E_F', [0])[-1],
+                            'theoretical_E_F_final': correct_E_F,
+                            'empirical_Var_F_final': theoretical_data.get('empirical_Var_F', [0])[-1],
+                            'theoretical_Var_F_final': correct_Var_F,
+                            'n_violations': n_violations,
+                            'total_epochs': n_epochs,
+                            'violation_rate': n_violations / n_epochs if n_epochs > 0 else 0.0,
+                            'epoch_90_efficiency': next((i+1 for i, e in enumerate(theoretical_data['efficiency']) if e >= 0.9), None),
+                            'epoch_95_efficiency': next((i+1 for i, e in enumerate(theoretical_data['efficiency']) if e >= 0.95), None),
+                        }
+
                 # Add correlation matrix to theoretical_data
                 if correlation_matrix:
                     # Convert tuple keys to string keys for JSON serialization
@@ -1318,7 +1372,7 @@ def main(config=None):
                 else:
                     theoretical_data['correlation_matrix'] = {}
                     theoretical_data['correlation_used'] = False
-    
+
                 # Generate theoretical analysis plots
                 print("  Generating theoretical analysis plots...")
                 theoretical_plots = generate_all_theoretical_plots(
@@ -1327,118 +1381,36 @@ def main(config=None):
                     verbose=True
                 )
 
-            # Get theoretical data for report
-            theoretical_data = theoretical_tracker.to_dict()
+                # Generate and save text report
+                print("  Generating theoretical analysis text report...")
+                process_params_for_report = process_params_for_L_min
 
-            # Add per-process L_min data to theoretical_data
-            theoretical_data['per_process_L_min'] = {
-                proc_name: comp.to_dict() for proc_name, comp in per_process_components.items()
-            }
-            theoretical_data['combined_L_min'] = combined_components.to_dict()
+                text_report = generate_full_report(
+                    tracker_data=theoretical_data,
+                    process_params=process_params_for_report
+                )
 
-            # CRITICAL FIX: Override tracker's L_min with correctly computed multi-process values
-            # The tracker uses single-process formula which is incorrect for multi-process systems.
-            # Replace all L_min values in the tracker's lists with the correct combined value.
-            correct_L_min = combined_components.L_min
-            correct_Var_F = combined_components.Var_F
-            correct_Bias2 = combined_components.Bias2
-            correct_E_F = combined_components.E_F
-            correct_F_star = combined_components.F_star
+                # Save text report
+                save_report_txt(text_report, checkpoint_dir / 'theoretical_analysis_report.txt')
 
-            n_epochs = len(theoretical_data.get('theoretical_L_min', []))
-            if n_epochs > 0:
-                # Replace with correct multi-process L_min (constant across epochs since params don't change)
-                theoretical_data['theoretical_L_min'] = [correct_L_min] * n_epochs
-                theoretical_data['theoretical_Var_F'] = [correct_Var_F] * n_epochs
-                theoretical_data['theoretical_Bias2'] = [correct_Bias2] * n_epochs
-                theoretical_data['theoretical_E_F'] = [correct_E_F] * n_epochs
+                # Save JSON data
+                save_report_json(theoretical_data, checkpoint_dir / 'theoretical_analysis_data.json')
 
-                # Recompute gap and efficiency with correct L_min
-                observed_losses = theoretical_data.get('observed_loss', [])
-                theoretical_data['gap'] = [obs - correct_L_min for obs in observed_losses]
-                theoretical_data['efficiency'] = [
-                    correct_L_min / obs if obs > 0 else (1.0 if correct_L_min == 0 else 0.0)
-                    for obs in observed_losses
-                ]
+                # Print summary
+                summary = theoretical_data.get('summary', {})
+                print(f"\n  THEORETICAL ANALYSIS SUMMARY:")
+                print(f"    Final Loss:   {summary.get('final_loss', 0):.6f}")
+                print(f"    L_min:        {summary.get('final_L_min', 0):.6f}")
+                print(f"    Gap:          {summary.get('final_gap', 0):.6f}")
+                print(f"    Efficiency:   {summary.get('final_efficiency', 0)*100:.1f}%")
+                print(f"    Violations:   {summary.get('n_violations', 0)}/{summary.get('total_epochs', 0)}")
 
-                # Recount violations with correct L_min
-                n_violations = sum(1 for obs in observed_losses if obs < correct_L_min * 0.99)
-                theoretical_data['n_violations'] = n_violations
+                print("  ✓ Theoretical analysis completed")
 
-                # Update summary with correct values
-                if observed_losses:
-                    final_loss = observed_losses[-1]
-                    final_gap = final_loss - correct_L_min
-                    final_efficiency = correct_L_min / final_loss if final_loss > 0 else 1.0
-
-                    theoretical_data['summary'] = {
-                        'final_loss': final_loss,
-                        'best_loss': min(observed_losses),
-                        'final_L_min': correct_L_min,
-                        'final_gap': final_gap,
-                        'final_efficiency': final_efficiency,
-                        'best_efficiency': max(theoretical_data['efficiency']) if theoretical_data['efficiency'] else 0.0,
-                        'mean_efficiency': np.mean(theoretical_data['efficiency']) if theoretical_data['efficiency'] else 0.0,
-                        'empirical_E_F_final': theoretical_data.get('empirical_E_F', [0])[-1],
-                        'theoretical_E_F_final': correct_E_F,
-                        'empirical_Var_F_final': theoretical_data.get('empirical_Var_F', [0])[-1],
-                        'theoretical_Var_F_final': correct_Var_F,
-                        'n_violations': n_violations,
-                        'total_epochs': n_epochs,
-                        'violation_rate': n_violations / n_epochs if n_epochs > 0 else 0.0,
-                        'epoch_90_efficiency': next((i+1 for i, e in enumerate(theoretical_data['efficiency']) if e >= 0.9), None),
-                        'epoch_95_efficiency': next((i+1 for i, e in enumerate(theoretical_data['efficiency']) if e >= 0.95), None),
-                    }
-
-            # Add correlation matrix to theoretical_data
-            if correlation_matrix:
-                # Convert tuple keys to string keys for JSON serialization
-                theoretical_data['correlation_matrix'] = {
-                    f"{k[0]},{k[1]}": v for k, v in correlation_matrix.items()
-                }
-                theoretical_data['correlation_used'] = True
-            else:
-                theoretical_data['correlation_matrix'] = {}
-                theoretical_data['correlation_used'] = False
-
-            # Generate theoretical analysis plots
-            print("  Generating theoretical analysis plots...")
-            theoretical_plots = generate_all_theoretical_plots(
-                tracker_data=theoretical_data,
-                checkpoint_dir=checkpoint_dir,
-                verbose=True
-            )
-
-            # Generate and save text report
-            print("  Generating theoretical analysis text report...")
-            process_params_for_report = process_params_for_L_min
-
-            text_report = generate_full_report(
-                tracker_data=theoretical_data,
-                process_params=process_params_for_report
-            )
-
-            # Save text report
-            save_report_txt(text_report, checkpoint_dir / 'theoretical_analysis_report.txt')
-
-            # Save JSON data
-            save_report_json(theoretical_data, checkpoint_dir / 'theoretical_analysis_data.json')
-
-            # Print summary
-            summary = theoretical_data.get('summary', {})
-            print(f"\n  THEORETICAL ANALYSIS SUMMARY:")
-            print(f"    Final Loss:   {summary.get('final_loss', 0):.6f}")
-            print(f"    L_min:        {summary.get('final_L_min', 0):.6f}")
-            print(f"    Gap:          {summary.get('final_gap', 0):.6f}")
-            print(f"    Efficiency:   {summary.get('final_efficiency', 0)*100:.1f}%")
-            print(f"    Violations:   {summary.get('n_violations', 0)}/{summary.get('total_epochs', 0)}")
-
-            print("  ✓ Theoretical analysis completed")
-
-        except Exception as e:
-            print(f"  ✗ Warning: Failed to run theoretical analysis: {e}")
-            import traceback
-            traceback.print_exc()
+            except Exception as e:
+                print(f"  ✗ Warning: Failed to run theoretical analysis: {e}")
+                import traceback
+                traceback.print_exc()
 
         # Generate PDF report
         try:
