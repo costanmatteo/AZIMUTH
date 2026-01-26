@@ -100,8 +100,8 @@ CONTROLLER_CONFIG = {
     # Policy generator architecture
     'policy_generator': {
         'architecture': 'custom',  # 'small', 'medium', 'large', 'custom'
-        'hidden_sizes': [128, 64, 32],  # Usato solo se 'custom'
-        'dropout': 0.1,
+        'hidden_sizes': [32, 16],  # Usato solo se 'custom'
+        'dropout': 0.015735540546988648,
         'use_batchnorm': False,
         'use_scenario_encoder': False,  # Enable scenario context encoding
         'scenario_embedding_dim': 16,  # Dimension of scenario embedding vector
@@ -110,8 +110,8 @@ CONTROLLER_CONFIG = {
     # Training parameters
     'training': {
         'epochs': 1500,  # Each epoch cycles through all training scenarios once
-        'batch_size': 2000,  # Replicas per scenario (same inputs, different dropout/stochasticity)
-        'learning_rate': 0.0005,
+        'batch_size': 2500,  # Replicas per scenario (same inputs, different dropout/stochasticity)
+        'learning_rate': 0.0019017383571692538,
         'weight_decay': 0.001,
         'lambda_bc': 0.001,  # Behavior cloning weight
         'reliability_loss_scale': 100.0,  # Scale factor for reliability loss (F - F*)^2
@@ -179,7 +179,7 @@ CONTROLLER_CONFIG = {
     # Validation settings (for overfitting detection)
     'validation': {
         # Cross-scenario validation (uses separate test scenarios with different conditions)
-        'cross_scenario_enabled': True,  # Enable validation on test scenarios (different conditions)
+        'cross_scenario_enabled': False,  # Enable validation on test scenarios (different conditions)
 
         # Within-scenario validation (splits training samples into train/val)
         'within_scenario_enabled': True,  # Enable train/val split within same scenarios
