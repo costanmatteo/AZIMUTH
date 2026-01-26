@@ -436,13 +436,13 @@ class ControllerReportGenerator:
         self.story.append(Paragraph(reliability_text, self.styles['BodyText']))
         self.story.append(Spacer(1, 0.2*cm))
 
-    def add_theoretical_tables_section(self, theoretical_data=None):
+    def add_empirical_L_min_section(self, empirical_data_dict=None):
         """Add empirical L_min analysis tables to PDF report (for first page).
 
         Args:
-            theoretical_data: Dictionary from TheoreticalLossTracker.to_dict() (optional)
+            empirical_data_dict: Dictionary containing empirical_L_min data (optional)
         """
-        if not theoretical_data:
+        if not empirical_data_dict:
             return
 
         self.add_section_title("Empirical L_min Analysis")
@@ -457,8 +457,8 @@ class ControllerReportGenerator:
         self.story.append(Spacer(1, 0.2*cm))
 
         # Get empirical L_min data
-        empirical_data = theoretical_data.get('empirical_L_min', {})
-        summary = theoretical_data.get('summary', {})
+        empirical_data = empirical_data_dict.get('empirical_L_min', {})
+        summary = empirical_data_dict.get('summary', {})
 
         if empirical_data:
             # Use empirical values
@@ -529,7 +529,7 @@ class ControllerReportGenerator:
             self.story.append(table2)
             self.story.append(Spacer(1, 0.2*cm))
 
-    def add_theoretical_analysis_plots(self, checkpoint_dir):
+    def add_L_min_analysis_plots(self, checkpoint_dir):
         """Add empirical L_min analysis plots to PDF report.
 
         Args:
@@ -574,7 +574,7 @@ class ControllerReportGenerator:
             ]))
             self.story.append(img_table)
 
-            caption = Paragraph("<i>Theoretical Analysis: Loss vs L_min, Efficiency, Decomposition, Scatter</i>",
+            caption = Paragraph("<i>Empirical L_min Analysis: Loss vs L_min, Efficiency, Decomposition, Scatter</i>",
                                self.styles['Normal'])
             caption_table = Table([[caption]], colWidths=[18*cm])
             caption_table.setStyle(TableStyle([
@@ -606,7 +606,7 @@ class ControllerReportGenerator:
             ]))
             self.story.append(img_table)
 
-            caption = Paragraph("<i>Loss vs Theoretical Minimum (L_min)</i>", self.styles['Normal'])
+            caption = Paragraph("<i>Loss vs Empirical L_min</i>", self.styles['Normal'])
             caption_table = Table([[caption]], colWidths=[18*cm])
             caption_table.setStyle(TableStyle([('ALIGN', (0, 0), (-1, -1), 'CENTER')]))
             self.story.append(caption_table)
@@ -896,7 +896,7 @@ class ControllerReportGenerator:
                     'F_baseline': float,
                     'F_actual': float
                 }
-            theoretical_data: Dictionary from TheoreticalLossTracker.to_dict() (optional)
+            theoretical_data: Dictionary containing empirical_L_min data (optional)
         """
 
         # Add all sections in logical order
@@ -923,9 +923,9 @@ class ControllerReportGenerator:
         if advanced_metrics:
             self.add_advanced_metrics_section(advanced_metrics)
 
-        # Theoretical loss analysis tables (on first page)
+        # Empirical L_min analysis tables (on first page)
         if theoretical_data:
-            self.add_theoretical_tables_section(theoretical_data)
+            self.add_empirical_L_min_section(theoretical_data)
 
         # Start new page for visualizations
         self.story.append(PageBreak())
@@ -933,8 +933,8 @@ class ControllerReportGenerator:
         # Visualizations
         self.add_plots_stacked(Path(config['training']['checkpoint_dir']))
 
-        # Theoretical analysis plots (if available)
-        self.add_theoretical_analysis_plots(Path(config['training']['checkpoint_dir']))
+        # Empirical L_min analysis plots (if available)
+        self.add_L_min_analysis_plots(Path(config['training']['checkpoint_dir']))
 
         # Embedding visualizations (if scenario encoder is enabled)
         self.add_embedding_plots(Path(config['training']['checkpoint_dir']))
@@ -1046,7 +1046,7 @@ def generate_controller_report(
         n_scenarios: Number of scenarios (for multi-scenario training)
         advanced_metrics: Advanced metrics dictionary (optional)
         trajectory_values: Dictionary with trajectory comparison data (optional)
-        theoretical_data: Dictionary from TheoreticalLossTracker.to_dict() (optional)
+        theoretical_data: Dictionary containing empirical_L_min data (optional)
 
     Returns:
         Path to the generated PDF report
