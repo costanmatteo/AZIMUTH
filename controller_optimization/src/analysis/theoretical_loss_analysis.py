@@ -362,6 +362,8 @@ def compute_covariance(
     cov = E_QiQj - E_Qi * E_Qj
 
     return cov
+
+
 def compute_multi_process_L_min(
     process_params: Dict[str, Dict[str, float]],
     process_weights: Dict[str, float],
@@ -370,6 +372,10 @@ def compute_multi_process_L_min(
 ) -> Tuple[TheoreticalLossComponents, Dict[str, TheoreticalLossComponents]]:
     """
     Compute theoretical L_min for a multi-process system.
+
+    IMPORTANT: Use this function (not compute_theoretical_L_min) for systems with
+    multiple processes! The single-process formula gives incorrect results when
+    the reliability F is computed as a weighted average of multiple quality scores.
 
     The reliability F is a weighted average of per-process quality scores:
         F = Σ(w_i × Q_i) / W    where W = Σw_i
@@ -384,6 +390,10 @@ def compute_multi_process_L_min(
 
     The minimum achievable loss is:
         L_min = Var[F] + (E[F] - F*)²
+
+    Note on delta parameter: For systems with ADAPTIVE targets (where τ depends on
+    previous process outputs), delta should be computed using the adaptive τ, not
+    the fixed τ from PROCESS_CONFIGS. See compute_adaptive_targets() for details.
 
     Args:
         process_params: Dict mapping process_name to {'F_star', 'delta', 'sigma2', 's'}
