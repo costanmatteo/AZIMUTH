@@ -37,6 +37,7 @@ PROCESSES = [
                 'swag_max_rank': 20,  # Low-rank covariance dimension
                 'swag_collection_freq': 1,  # Collect weights every N epochs
                 'swag_n_samples': 30,  # Weight samples for prediction
+                'swag_min_samples': 20,  # Minimum samples before training can stop
             },
             'training': {
                 'n_samples': 2000,

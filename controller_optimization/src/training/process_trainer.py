@@ -296,7 +296,8 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
             swa_learning_rate=model_config.get('swag_learning_rate', 0.01),
             weight_decay=training_config['weight_decay'],
             swa_start_epoch=model_config.get('swag_start_epoch', 0.5),
-            swa_freq=model_config.get('swag_collection_freq', 1)
+            swa_freq=model_config.get('swag_collection_freq', 1),
+            min_samples=model_config.get('swag_min_samples', 20)
         )
     else:
         trainer = UncertaintyTrainer(

@@ -785,7 +785,8 @@ class SWAGTrainer:
     """
 
     def __init__(self, swag_model, criterion, device=None, learning_rate=0.001,
-                 swa_learning_rate=0.01, weight_decay=0.0, swa_start_epoch=0.5, swa_freq=1):
+                 swa_learning_rate=0.01, weight_decay=0.0, swa_start_epoch=0.5, swa_freq=1,
+                 min_samples=20):
         # Setup device
         if device is None:
             self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -799,6 +800,7 @@ class SWAGTrainer:
         self.weight_decay = weight_decay
         self.swa_start_epoch = swa_start_epoch  # Fraction (0.5 = start SWA at 50% of training)
         self.swa_freq = swa_freq
+        self.min_samples = min_samples  # Minimum weight samples before training can stop
 
         # Setup optimizer for base model
         self.optimizer = optim.Adam(
@@ -819,6 +821,7 @@ class SWAGTrainer:
         print(f"Pre-training LR: {learning_rate}, SWA LR: {swa_learning_rate}")
         print(f"SWA start: {swa_start_epoch*100:.0f}% of training")
         print(f"Weight collection frequency: every {swa_freq} epoch(s)")
+        print(f"Minimum samples before stopping: {min_samples}")
         print(f"Max rank for covariance: {swag_model.max_rank}")
         print(f"Loss function: {criterion.__class__.__name__}")
 
@@ -913,15 +916,18 @@ class SWAGTrainer:
         print(f"Total epochs: {epochs}")
         print(f"Pre-training phase: epochs 1-{swa_start}")
         print(f"SWA collection phase: epochs {swa_start+1}-{epochs}")
+        print(f"Minimum SWA samples required: {self.min_samples}")
         print(f"Early stopping patience: {patience} (pre-training only)")
         print(f"Checkpoint directory: {save_path}")
         print(f"{'='*70}\n")
 
         epochs_without_improvement = 0
         in_swa_phase = False
+        epoch = 0
 
-        for epoch in range(epochs):
-            # Check if we should switch to SWA phase
+        # Continue training until we have collected enough samples
+        while True:
+            # Check if we should switch to SWA phase (scheduled start)
             if epoch >= swa_start and not in_swa_phase:
                 in_swa_phase = True
                 self._set_learning_rate(self.swa_learning_rate)
@@ -941,8 +947,11 @@ class SWAGTrainer:
             self.val_mse.append(val_mse)
 
             # Collect weights during SWA phase
-            if in_swa_phase and (epoch - swa_start) % self.swa_freq == 0:
-                self.swag_model.collect_model()
+            if in_swa_phase:
+                # Use swa_start_actual to track collection frequency from when SWA actually started
+                swa_epoch = epoch - self.swa_start_actual if self.swa_start_actual is not None else epoch - swa_start
+                if swa_epoch % self.swa_freq == 0:
+                    self.swag_model.collect_model()
 
             # Early stopping (only during pre-training phase)
             if not in_swa_phase:
@@ -961,8 +970,28 @@ class SWAGTrainer:
                     self.swa_start_actual = epoch + 1
                     epochs_without_improvement = 0
 
+            epoch += 1
+
+            # Check if we can stop training
+            n_samples_collected = self.swag_model.n_models
+            if epoch >= epochs:
+                if n_samples_collected >= self.min_samples:
+                    break
+                else:
+                    # Need more samples, continue training
+                    if epoch == epochs:  # Print message only once
+                        print(f"\n{'─'*50}")
+                        print(f"Extending training: only {n_samples_collected}/{self.min_samples} samples collected")
+                        print(f"Continuing until minimum samples reached...")
+                        print(f"{'─'*50}\n")
+
+            # Safety check: don't run forever (max 2x original epochs)
+            if epoch >= epochs * 2:
+                print(f"\nWarning: Reached maximum epochs ({epoch}), stopping with {n_samples_collected} samples")
+                break
+
         # Save final SWAG model
-        self.save_checkpoint(save_path / 'best_model.pth', epochs, self.val_losses[-1])
+        self.save_checkpoint(save_path / 'best_model.pth', epoch, self.val_losses[-1])
 
         # Save training history
         self.save_training_history(save_path / 'training_history.json')

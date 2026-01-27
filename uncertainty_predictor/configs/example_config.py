@@ -92,7 +92,12 @@ CONFIG = {
         'swag_collection_freq': 1,
 
         # Number of weight samples for prediction (more = slower but smoother)
-        'swag_n_samples': 30
+        'swag_n_samples': 30,
+
+        # Minimum number of weight samples to collect before allowing training to stop
+        # If early stopping triggers before collecting this many samples, training
+        # continues until this minimum is reached. Set to 0 to disable this check.
+        'swag_min_samples': 20
     },
 
     # Training configuration

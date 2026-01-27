@@ -298,7 +298,8 @@ def main():
             swa_learning_rate=CONFIG['model'].get('swag_learning_rate', 0.01),
             weight_decay=CONFIG['training']['weight_decay'],
             swa_start_epoch=CONFIG['model'].get('swag_start_epoch', 0.5),
-            swa_freq=CONFIG['model'].get('swag_collection_freq', 1)
+            swa_freq=CONFIG['model'].get('swag_collection_freq', 1),
+            min_samples=CONFIG['model'].get('swag_min_samples', 20)
         )
     else:
         # Use standard UncertaintyTrainer
