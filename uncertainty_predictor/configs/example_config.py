@@ -35,10 +35,29 @@ CONFIG = {
         'use_batchnorm': True,
         'min_variance': 1e-6,  # Minimum variance for numerical stability
 
-        # Deep Ensemble configuration
+        # ═══════════════════════════════════════════════════════════════════
+        # UNCERTAINTY QUANTIFICATION METHOD
+        # ═══════════════════════════════════════════════════════════════════
+        # Choose ONE method for uncertainty quantification:
+        #   - 'single': Single model, only aleatoric uncertainty
+        #   - 'ensemble': Deep Ensemble, aleatoric + epistemic (trains N models)
+        #   - 'swag': SWAG (SWA-Gaussian), aleatoric + epistemic (single training)
+        #
+        # Comparison:
+        #   | Method   | Training Cost | Epistemic | Accuracy |
+        #   |----------|---------------|-----------|----------|
+        #   | single   | 1x            | No        | Good     |
+        #   | ensemble | Nx            | Yes       | Best     |
+        #   | swag     | ~1.25x        | Yes       | Good     |
+        # ═══════════════════════════════════════════════════════════════════
+        'uncertainty_method': 'single',  # 'single', 'ensemble', or 'swag'
+
+        # ─────────────────────────────────────────────────────────────────────
+        # Deep Ensemble configuration (used if uncertainty_method='ensemble')
+        # ─────────────────────────────────────────────────────────────────────
         # Enable ensemble mode for better uncertainty quantification
         # Ensemble trains N independent models and combines their predictions
-        'use_ensemble': False,  # Set to True to use Deep Ensemble
+        'use_ensemble': False,  # DEPRECATED: use uncertainty_method='ensemble' instead
 
         # Number of models in the ensemble (recommended: 5)
         # More models = better uncertainty estimates but longer training
@@ -46,7 +65,34 @@ CONFIG = {
         'n_ensemble_models': 5,
 
         # Base seed for ensemble (each model uses base_seed + model_idx * 1000)
-        'ensemble_base_seed': 42
+        'ensemble_base_seed': 42,
+
+        # ─────────────────────────────────────────────────────────────────────
+        # SWAG configuration (used if uncertainty_method='swag')
+        # ─────────────────────────────────────────────────────────────────────
+        # SWAG approximates the posterior over weights using a Gaussian with
+        # low-rank + diagonal covariance. Much cheaper than ensemble.
+        #
+        # Reference: Maddox et al. (2019) "A Simple Baseline for Bayesian
+        # Uncertainty in Deep Learning" https://arxiv.org/abs/1902.02476
+
+        # Fraction of training to complete before starting SWA collection
+        # 0.5 = start collecting weights at 50% of training
+        'swag_start_epoch': 0.5,
+
+        # Learning rate during SWA phase (typically higher than final LR)
+        # Higher LR helps explore the posterior better
+        'swag_learning_rate': 0.01,
+
+        # Maximum rank for low-rank covariance approximation
+        # Higher = more accurate but more memory. 20-30 is usually sufficient
+        'swag_max_rank': 20,
+
+        # Collect weights every N epochs during SWA phase
+        'swag_collection_freq': 1,
+
+        # Number of weight samples for prediction (more = slower but smoother)
+        'swag_n_samples': 30
     },
 
     # Training configuration

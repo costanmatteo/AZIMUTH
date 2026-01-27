@@ -24,9 +24,11 @@ from models import (
     create_medium_uncertainty_model,
     create_large_uncertainty_model,
     EnsembleUncertaintyPredictor,
-    create_ensemble_model
+    create_ensemble_model,
+    SWAGUncertaintyPredictor,
+    create_swag_model
 )
-from training import UncertaintyTrainer, EnsembleTrainer
+from training import UncertaintyTrainer, EnsembleTrainer, SWAGTrainer
 from utils import (
     calculate_metrics,
     print_metrics,
@@ -156,7 +158,16 @@ def main():
     # 4. CREATE MODEL
     print("\n[4/7] Creating uncertainty model...")
     model_type = CONFIG['model']['model_type']
-    use_ensemble = CONFIG['model'].get('use_ensemble', False)
+
+    # Determine uncertainty method (new config style)
+    uncertainty_method = CONFIG['model'].get('uncertainty_method', 'single')
+
+    # Backward compatibility: check old use_ensemble flag
+    if CONFIG['model'].get('use_ensemble', False) and uncertainty_method == 'single':
+        uncertainty_method = 'ensemble'
+
+    use_ensemble = (uncertainty_method == 'ensemble')
+    use_swag = (uncertainty_method == 'swag')
 
     if use_ensemble:
         # Create Deep Ensemble model
@@ -177,6 +188,38 @@ def main():
         print(f"  Parameters per model: {sum(p.numel() for p in model.models[0].parameters())}")
         print(f"  Total parameters: {sum(p.numel() for p in model.parameters())}")
         print(f"  Output: Mean (μ), Aleatoric (σ²_a), Epistemic (σ²_e) uncertainty")
+
+    elif use_swag:
+        # Create SWAG model (wraps a base UncertaintyPredictor)
+        swag_max_rank = CONFIG['model'].get('swag_max_rank', 20)
+        print(f"  Using SWAG (Stochastic Weight Averaging - Gaussian)")
+
+        # Create base model
+        if model_type == 'small':
+            base_model = create_small_uncertainty_model(input_dim, output_dim)
+        elif model_type == 'medium':
+            base_model = create_medium_uncertainty_model(input_dim, output_dim)
+        elif model_type == 'large':
+            base_model = create_large_uncertainty_model(input_dim, output_dim)
+        else:  # custom
+            base_model = UncertaintyPredictor(
+                input_size=input_dim,
+                hidden_sizes=CONFIG['model']['hidden_sizes'],
+                output_size=output_dim,
+                dropout_rate=CONFIG['model']['dropout_rate'],
+                use_batchnorm=CONFIG['model']['use_batchnorm'],
+                min_variance=CONFIG['model']['min_variance']
+            )
+
+        # Wrap with SWAG
+        model = SWAGUncertaintyPredictor(base_model, max_rank=swag_max_rank)
+
+        print(f"  Model type: swag ({model_type} base architecture)")
+        print(f"  Base model parameters: {sum(p.numel() for p in base_model.parameters())}")
+        print(f"  Low-rank covariance dimension: {swag_max_rank}")
+        print(f"  SWA start: {CONFIG['model'].get('swag_start_epoch', 0.5)*100:.0f}% of training")
+        print(f"  Output: Mean (μ), Aleatoric (σ²_a), Epistemic (σ²_e) uncertainty")
+
     else:
         # Create single model
         if model_type == 'small':
@@ -245,6 +288,18 @@ def main():
             weight_decay=CONFIG['training']['weight_decay'],
             base_seed=ensemble_base_seed
         )
+    elif use_swag:
+        # Use SWAGTrainer for SWAG
+        trainer = SWAGTrainer(
+            model,
+            criterion,
+            device=device,
+            learning_rate=CONFIG['training']['learning_rate'],
+            swa_learning_rate=CONFIG['model'].get('swag_learning_rate', 0.01),
+            weight_decay=CONFIG['training']['weight_decay'],
+            swa_start_epoch=CONFIG['model'].get('swag_start_epoch', 0.5),
+            swa_freq=CONFIG['model'].get('swag_collection_freq', 1)
+        )
     else:
         # Use standard UncertaintyTrainer
         trainer = UncertaintyTrainer(
@@ -266,10 +321,15 @@ def main():
     # 7. EVALUATION
     print("\n[7/7] Evaluation on test set...")
 
-    # Get predictions (different return format for ensemble vs single model)
-    if use_ensemble:
-        y_pred_mean, y_pred_variance, y_pred_aleatoric, y_pred_epistemic = \
-            trainer.predict(X_test_scaled, return_uncertainty=True)
+    # Get predictions (different return format for ensemble/swag vs single model)
+    if use_ensemble or use_swag:
+        n_samples = CONFIG['model'].get('swag_n_samples', 30) if use_swag else None
+        if use_swag:
+            y_pred_mean, y_pred_variance, y_pred_aleatoric, y_pred_epistemic = \
+                trainer.predict(X_test_scaled, return_uncertainty=True, n_samples=n_samples)
+        else:
+            y_pred_mean, y_pred_variance, y_pred_aleatoric, y_pred_epistemic = \
+                trainer.predict(X_test_scaled, return_uncertainty=True)
     else:
         y_pred_mean, y_pred_variance = trainer.predict(X_test_scaled, return_uncertainty=True)
         y_pred_aleatoric = None
@@ -285,24 +345,28 @@ def main():
         if hasattr(preprocessor.y_scaler, 'scale_'):
             scale_factors = preprocessor.y_scaler.scale_
             y_pred_variance_orig = y_pred_variance * (scale_factors ** 2)
-            if use_ensemble:
+            if use_ensemble or use_swag:
                 y_pred_aleatoric_orig = y_pred_aleatoric * (scale_factors ** 2)
                 y_pred_epistemic_orig = y_pred_epistemic * (scale_factors ** 2)
         else:
             y_pred_variance_orig = y_pred_variance
-            if use_ensemble:
+            if use_ensemble or use_swag:
                 y_pred_aleatoric_orig = y_pred_aleatoric
                 y_pred_epistemic_orig = y_pred_epistemic
     else:
         y_pred_variance_orig = y_pred_variance
-        if use_ensemble:
+        if use_ensemble or use_swag:
             y_pred_aleatoric_orig = y_pred_aleatoric
             y_pred_epistemic_orig = y_pred_epistemic
 
     # Also get predictions on training set for visualization
-    if use_ensemble:
-        y_train_pred_mean, y_train_pred_variance, y_train_aleatoric, y_train_epistemic = \
-            trainer.predict(X_train_scaled, return_uncertainty=True)
+    if use_ensemble or use_swag:
+        if use_swag:
+            y_train_pred_mean, y_train_pred_variance, y_train_aleatoric, y_train_epistemic = \
+                trainer.predict(X_train_scaled, return_uncertainty=True, n_samples=n_samples)
+        else:
+            y_train_pred_mean, y_train_pred_variance, y_train_aleatoric, y_train_epistemic = \
+                trainer.predict(X_train_scaled, return_uncertainty=True)
     else:
         y_train_pred_mean, y_train_pred_variance = trainer.predict(X_train_scaled, return_uncertainty=True)
 
@@ -342,10 +406,11 @@ def main():
     print(f"Coverage error:    {coverage_results['coverage_error']:.1f}%")
     print(f"Well calibrated:   {'Yes ✓' if coverage_results['well_calibrated'] else 'No ✗'}")
 
-    # Print ensemble-specific uncertainty decomposition
-    if use_ensemble:
+    # Print ensemble/SWAG-specific uncertainty decomposition
+    if use_ensemble or use_swag:
+        method_name = "Ensemble" if use_ensemble else "SWAG"
         print("\n" + "-"*50)
-        print("UNCERTAINTY DECOMPOSITION (Ensemble)")
+        print(f"UNCERTAINTY DECOMPOSITION ({method_name})")
         print("-"*50)
         mean_aleatoric = np.mean(y_pred_aleatoric_orig)
         mean_epistemic = np.mean(y_pred_epistemic_orig)
@@ -390,8 +455,8 @@ def main():
         output_names=output_columns,
         save_path=checkpoint_dir / 'predictions_with_uncertainty.png',
         confidence=CONFIG['uncertainty']['confidence_level'],
-        y_pred_aleatoric=y_pred_aleatoric_orig if use_ensemble else None,
-        y_pred_epistemic=y_pred_epistemic_orig if use_ensemble else None
+        y_pred_aleatoric=y_pred_aleatoric_orig if (use_ensemble or use_swag) else None,
+        y_pred_epistemic=y_pred_epistemic_orig if (use_ensemble or use_swag) else None
     )
 
     # Plot predictions with uncertainty bounds (training set)
