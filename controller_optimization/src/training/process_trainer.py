@@ -502,15 +502,6 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
         save_path=str(checkpoint_dir / 'uncertainty_distribution.png')
     )
 
-    # Uncertainty decomposition plot (only for ensemble/SWAG)
-    if use_ensemble or use_swag:
-        uq_viz.plot_uncertainty_decomposition(
-            y_pred_aleatoric=aleatorics,
-            y_pred_epistemic=epistemics,
-            output_names=output_labels,
-            save_path=str(checkpoint_dir / 'uncertainty_decomposition.png')
-        )
-
     # 9. Generate PDF report
     if verbose:
         print(f"\n[8/9] Generating PDF report...")

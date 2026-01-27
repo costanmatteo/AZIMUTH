@@ -36,7 +36,6 @@ from utils import (
     plot_predictions_with_uncertainty,
     plot_scatter_with_uncertainty,
     plot_uncertainty_distribution,
-    plot_uncertainty_decomposition,
     evaluate_prediction_intervals,
     generate_uncertainty_training_report
 )
@@ -500,15 +499,6 @@ def main():
         output_names=output_columns,
         save_path=checkpoint_dir / 'uncertainty_distribution.png'
     )
-
-    # Plot uncertainty decomposition (only for ensemble/SWAG)
-    if use_ensemble or use_swag:
-        plot_uncertainty_decomposition(
-            y_pred_aleatoric_orig,
-            y_pred_epistemic_orig,
-            output_names=output_columns,
-            save_path=checkpoint_dir / 'uncertainty_decomposition.png'
-        )
 
     # 9. GENERATE PDF REPORT
     print("\nGenerating PDF report...")
