@@ -229,10 +229,10 @@ def generate_scm_data(n_samples=5000, seed=42, dataset_type='one_to_one_ct', sav
     import sys
     from pathlib import Path
 
-    # Add scm_ds to path
-    scm_path = Path(__file__).parent.parent.parent / 'scm_ds'
-    if str(scm_path) not in sys.path:
-        sys.path.insert(0, str(scm_path))
+    # Add project root to path for scm_ds import
+    project_root = Path(__file__).parent.parent.parent.parent
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
 
     from scm_ds.datasets import (
         ds_scm_1_to_1_ct,

@@ -38,7 +38,7 @@ Analyzed all 4 SCM datasets and classified noise into two categories:
 
 #### ✅ PHASE 2: Noise Classification in Code
 
-**File**: `uncertainty_predictor/scm_ds/datasets.py`
+**File**: `scm_ds/datasets.py`
 
 Added attributes to each SCM dataset:
 ```python

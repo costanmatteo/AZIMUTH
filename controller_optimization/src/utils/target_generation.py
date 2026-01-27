@@ -19,28 +19,19 @@ Baseline Trajectory (a'):
 import sys
 from pathlib import Path
 import numpy as np
-import importlib.util
 
-# Add uncertainty_predictor to path
+# Add project root to path for scm_ds import
 REPO_ROOT = Path(__file__).parent.parent.parent.parent
-UNCERTAINTY_PREDICTOR_PATH = REPO_ROOT / 'uncertainty_predictor'
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-# CRITICAL: Add uncertainty_predictor to sys.path FIRST
-if str(UNCERTAINTY_PREDICTOR_PATH) not in sys.path:
-    sys.path.insert(0, str(UNCERTAINTY_PREDICTOR_PATH))
-
-# Load SCM datasets explicitly
-spec_datasets = importlib.util.spec_from_file_location(
-    "scm_datasets",
-    UNCERTAINTY_PREDICTOR_PATH / "scm_ds" / "datasets.py"
+# Import SCM datasets from the shared scm_ds package
+from scm_ds.datasets import (
+    ds_scm_laser,
+    ds_scm_plasma,
+    ds_scm_galvanic,
+    ds_scm_microetch
 )
-scm_datasets = importlib.util.module_from_spec(spec_datasets)
-sys.modules['scm_datasets'] = scm_datasets
-spec_datasets.loader.exec_module(scm_datasets)
-ds_scm_laser = scm_datasets.ds_scm_laser
-ds_scm_plasma = scm_datasets.ds_scm_plasma
-ds_scm_galvanic = scm_datasets.ds_scm_galvanic
-ds_scm_microetch = scm_datasets.ds_scm_microetch
 
 
 def get_scm_dataset(process_config):
