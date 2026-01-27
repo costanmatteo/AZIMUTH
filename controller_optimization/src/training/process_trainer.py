@@ -384,6 +384,17 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
         targets, means, variances, confidence=0.95
     )
 
+    # Add ensemble/SWAG uncertainty decomposition to coverage_results for report
+    if use_ensemble or use_swag:
+        mean_aleatoric = np.mean(aleatorics)
+        mean_epistemic = np.mean(epistemics)
+        mean_total = np.mean(variances)
+        epistemic_ratio = mean_epistemic / mean_total * 100 if mean_total > 0 else 0
+
+        coverage_results['mean_aleatoric'] = float(mean_aleatoric)
+        coverage_results['mean_epistemic'] = float(mean_epistemic)
+        coverage_results['epistemic_ratio'] = float(epistemic_ratio)
+
     if verbose:
         print("\n  Test Metrics:")
         print(f"    MSE:               {test_metrics['MSE']:.6f}")
@@ -401,20 +412,10 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
         # Print ensemble/SWAG-specific uncertainty decomposition
         if use_ensemble or use_swag:
             method_name = "Ensemble" if use_ensemble else "SWAG"
-            mean_aleatoric = np.mean(aleatorics)
-            mean_epistemic = np.mean(epistemics)
-            mean_total = np.mean(variances)
-            epistemic_ratio = mean_epistemic / mean_total * 100 if mean_total > 0 else 0
-
             print(f"\n  Uncertainty Decomposition ({method_name}):")
             print(f"    Mean Aleatoric:  {mean_aleatoric:.6f}")
             print(f"    Mean Epistemic:  {mean_epistemic:.6f}")
             print(f"    Epistemic Ratio: {epistemic_ratio:.1f}%")
-
-            # Add to coverage_results for report
-            coverage_results['mean_aleatoric'] = float(mean_aleatoric)
-            coverage_results['mean_epistemic'] = float(mean_epistemic)
-            coverage_results['epistemic_ratio'] = float(epistemic_ratio)
 
     # Also get predictions on training set for visualization
     if use_ensemble or use_swag:
