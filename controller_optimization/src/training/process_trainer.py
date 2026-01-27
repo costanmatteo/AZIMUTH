@@ -110,6 +110,9 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
     torch.manual_seed(seed)
     np.random.seed(seed)
 
+    # Import global uncertainty config
+    from configs.processes_config import GLOBAL_UNCERTAINTY_CONFIG
+
     # Extract config
     process_name = process_config['name']
     scm_dataset_type = process_config['scm_dataset_type']
@@ -117,7 +120,10 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
     output_dim = process_config['output_dim']
     input_labels = process_config['input_labels']
     output_labels = process_config['output_labels']
-    model_config = process_config['uncertainty_predictor']['model']
+
+    # Merge global uncertainty config with process-specific config
+    # Process-specific values override global defaults
+    model_config = {**GLOBAL_UNCERTAINTY_CONFIG, **process_config['uncertainty_predictor']['model']}
     training_config = process_config['uncertainty_predictor']['training']
     checkpoint_dir = Path(process_config['checkpoint_dir'])
 
