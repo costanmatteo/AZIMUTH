@@ -25,10 +25,18 @@ PROCESSES = [
                 'dropout_rate': 0.1,
                 'use_batchnorm': False,
                 'min_variance': 1e-6,
-                # Deep Ensemble configuration
-                'use_ensemble': False,  # Set to True to use Deep Ensemble
+                # Uncertainty quantification method: 'single', 'ensemble', or 'swag'
+                'uncertainty_method': 'single',
+                # Deep Ensemble configuration (used if uncertainty_method='ensemble')
+                'use_ensemble': False,  # DEPRECATED: use uncertainty_method='ensemble'
                 'n_ensemble_models': 5,  # Number of models in ensemble
                 'ensemble_base_seed': 42,  # Base seed for ensemble diversity
+                # SWAG configuration (used if uncertainty_method='swag')
+                'swag_start_epoch': 0.5,  # Start SWA at 50% of training
+                'swag_learning_rate': 0.01,  # LR during SWA phase
+                'swag_max_rank': 20,  # Low-rank covariance dimension
+                'swag_collection_freq': 1,  # Collect weights every N epochs
+                'swag_n_samples': 30,  # Weight samples for prediction
             },
             'training': {
                 'n_samples': 2000,

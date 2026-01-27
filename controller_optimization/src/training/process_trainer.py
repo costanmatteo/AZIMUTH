@@ -37,6 +37,7 @@ spec_nn.loader.exec_module(uncertainty_nn)
 UncertaintyPredictor = uncertainty_nn.UncertaintyPredictor
 GaussianNLLLoss = uncertainty_nn.GaussianNLLLoss
 EnsembleUncertaintyPredictor = uncertainty_nn.EnsembleUncertaintyPredictor
+SWAGUncertaintyPredictor = uncertainty_nn.SWAGUncertaintyPredictor
 
 spec_trainer = importlib.util.spec_from_file_location(
     "uncertainty_trainer",
@@ -47,6 +48,7 @@ sys.modules['uncertainty_trainer'] = uncertainty_trainer  # Register for pickle
 spec_trainer.loader.exec_module(uncertainty_trainer)
 UncertaintyTrainer = uncertainty_trainer.UncertaintyTrainer
 EnsembleTrainer = uncertainty_trainer.EnsembleTrainer
+SWAGTrainer = uncertainty_trainer.SWAGTrainer
 
 spec_preprocessing = importlib.util.spec_from_file_location(
     "preprocessing",
@@ -194,8 +196,16 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
         print(f"  Val:   {len(X_val)} samples")
         print(f"  Test:  {len(X_test)} samples")
 
-    # 3. Create UncertaintyPredictor (or Ensemble)
-    use_ensemble = model_config.get('use_ensemble', False)
+    # 3. Create UncertaintyPredictor (Ensemble, SWAG, or Single)
+    # Determine uncertainty method
+    uncertainty_method = model_config.get('uncertainty_method', 'single')
+
+    # Backward compatibility: check old use_ensemble flag
+    if model_config.get('use_ensemble', False) and uncertainty_method == 'single':
+        uncertainty_method = 'ensemble'
+
+    use_ensemble = (uncertainty_method == 'ensemble')
+    use_swag = (uncertainty_method == 'swag')
 
     if use_ensemble:
         n_ensemble_models = model_config.get('n_ensemble_models', 5)
@@ -218,6 +228,31 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
             print(f"  Models in ensemble: {n_ensemble_models}")
             print(f"  Parameters per model: {params_per_model:,}")
             print(f"  Total parameters: {total_params:,}")
+
+    elif use_swag:
+        swag_max_rank = model_config.get('swag_max_rank', 20)
+        if verbose:
+            print(f"\n[3/9] Creating SWAGUncertaintyPredictor...")
+
+        # Create base model
+        base_model = UncertaintyPredictor(
+            input_size=input_dim,
+            output_size=output_dim,
+            hidden_sizes=model_config['hidden_sizes'],
+            dropout_rate=model_config['dropout_rate'],
+            use_batchnorm=model_config['use_batchnorm'],
+            min_variance=model_config['min_variance']
+        )
+
+        # Wrap with SWAG
+        model = SWAGUncertaintyPredictor(base_model, max_rank=swag_max_rank)
+
+        total_params = sum(p.numel() for p in base_model.parameters())
+        if verbose:
+            print(f"  Base model parameters: {total_params:,}")
+            print(f"  Low-rank covariance dimension: {swag_max_rank}")
+            print(f"  SWA start: {model_config.get('swag_start_epoch', 0.5)*100:.0f}% of training")
+
     else:
         if verbose:
             print(f"\n[3/9] Creating UncertaintyPredictor model...")
@@ -252,6 +287,17 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
             weight_decay=training_config['weight_decay'],
             base_seed=ensemble_base_seed
         )
+    elif use_swag:
+        trainer = SWAGTrainer(
+            swag_model=model,
+            criterion=criterion,
+            device=device,
+            learning_rate=training_config['learning_rate'],
+            swa_learning_rate=model_config.get('swag_learning_rate', 0.01),
+            weight_decay=training_config['weight_decay'],
+            swa_start_epoch=model_config.get('swag_start_epoch', 0.5),
+            swa_freq=model_config.get('swag_collection_freq', 1)
+        )
     else:
         trainer = UncertaintyTrainer(
             model=model,
@@ -284,6 +330,8 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
     all_aleatorics = []
     all_epistemics = []
 
+    swag_n_samples = model_config.get('swag_n_samples', 30)
+
     with torch.no_grad():
         for batch_X, batch_y in test_loader:
             batch_X = batch_X.to(device)
@@ -291,6 +339,12 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
 
             if use_ensemble:
                 mean, variance, aleatoric, epistemic = model.predict_with_decomposition(batch_X)
+                all_aleatorics.append(aleatoric.cpu().numpy())
+                all_epistemics.append(epistemic.cpu().numpy())
+            elif use_swag:
+                mean, variance, aleatoric, epistemic = model.predict_with_decomposition(
+                    batch_X, n_samples=swag_n_samples
+                )
                 all_aleatorics.append(aleatoric.cpu().numpy())
                 all_epistemics.append(epistemic.cpu().numpy())
             else:
@@ -304,7 +358,7 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
     vars_scaled = np.vstack(all_vars)
     targets_scaled = np.vstack(all_targets)
 
-    if use_ensemble:
+    if use_ensemble or use_swag:
         aleatorics_scaled = np.vstack(all_aleatorics)
         epistemics_scaled = np.vstack(all_epistemics)
 
@@ -317,7 +371,7 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
     variances = vars_scaled * (output_scale ** 2)
 
     # Unscale ensemble uncertainty decomposition if available
-    if use_ensemble:
+    if use_ensemble or use_swag:
         aleatorics = aleatorics_scaled * (output_scale ** 2)
         epistemics = epistemics_scaled * (output_scale ** 2)
 
@@ -344,14 +398,15 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
         print(f"    Actual:   {coverage_results['actual_coverage']:.1f}%")
         print(f"    Well calibrated: {coverage_results['well_calibrated']}")
 
-        # Print ensemble-specific uncertainty decomposition
-        if use_ensemble:
+        # Print ensemble/SWAG-specific uncertainty decomposition
+        if use_ensemble or use_swag:
+            method_name = "Ensemble" if use_ensemble else "SWAG"
             mean_aleatoric = np.mean(aleatorics)
             mean_epistemic = np.mean(epistemics)
             mean_total = np.mean(variances)
             epistemic_ratio = mean_epistemic / mean_total * 100 if mean_total > 0 else 0
 
-            print(f"\n  Uncertainty Decomposition (Ensemble):")
+            print(f"\n  Uncertainty Decomposition ({method_name}):")
             print(f"    Mean Aleatoric:  {mean_aleatoric:.6f}")
             print(f"    Mean Epistemic:  {mean_epistemic:.6f}")
             print(f"    Epistemic Ratio: {epistemic_ratio:.1f}%")
@@ -362,8 +417,13 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
             coverage_results['epistemic_ratio'] = float(epistemic_ratio)
 
     # Also get predictions on training set for visualization
-    if use_ensemble:
-        y_train_pred_mean, y_train_pred_variance, _, _ = trainer.predict(X_train_scaled, return_uncertainty=True)
+    if use_ensemble or use_swag:
+        if use_swag:
+            y_train_pred_mean, y_train_pred_variance, _, _ = trainer.predict(
+                X_train_scaled, return_uncertainty=True, n_samples=swag_n_samples
+            )
+        else:
+            y_train_pred_mean, y_train_pred_variance, _, _ = trainer.predict(X_train_scaled, return_uncertainty=True)
     else:
         y_train_pred_mean, y_train_pred_variance = trainer.predict(X_train_scaled, return_uncertainty=True)
 
@@ -399,8 +459,8 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
         y_pred_variance=variances,
         output_names=output_labels,
         save_path=str(checkpoint_dir / 'predictions_with_uncertainty.png'),
-        y_pred_aleatoric=aleatorics if use_ensemble else None,
-        y_pred_epistemic=epistemics if use_ensemble else None
+        y_pred_aleatoric=aleatorics if (use_ensemble or use_swag) else None,
+        y_pred_epistemic=epistemics if (use_ensemble or use_swag) else None
     )
 
     # Predictions plot - training set
@@ -435,13 +495,16 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
     # Build config dict for report
     config_dict = {
         'model': {
-            'model_type': 'EnsembleUncertaintyPredictor' if use_ensemble else 'UncertaintyPredictor',
+            'model_type': 'EnsembleUncertaintyPredictor' if use_ensemble else ('SWAGUncertaintyPredictor' if use_swag else 'UncertaintyPredictor'),
             'hidden_sizes': model_config['hidden_sizes'],
             'dropout_rate': model_config['dropout_rate'],
             'use_batchnorm': model_config['use_batchnorm'],
             'min_variance': model_config['min_variance'],
+            'uncertainty_method': uncertainty_method,
             'use_ensemble': use_ensemble,
             'n_ensemble_models': model_config.get('n_ensemble_models', 5) if use_ensemble else None,
+            'use_swag': use_swag,
+            'swag_max_rank': model_config.get('swag_max_rank', 20) if use_swag else None,
         },
         'data': {
             'csv_path': f'SCM:{scm_dataset_type}',
