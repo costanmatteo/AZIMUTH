@@ -461,13 +461,14 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
     if verbose:
         print(f"\n[7/9] Generating visualizations...")
 
-    # Training history plot
+    # Training history plot (with SWA start marker if using SWAG)
     uq_viz.plot_training_history(
         train_losses=history['train_losses'],
         val_losses=history['val_losses'],
         train_mse=history.get('train_mse'),
         val_mse=history.get('val_mse'),
-        save_path=str(checkpoint_dir / 'training_history.png')
+        save_path=str(checkpoint_dir / 'training_history.png'),
+        swa_start_epoch=history.get('swa_start_epoch') if use_swag else None
     )
 
     # Predictions plot - test set (with aleatoric/epistemic decomposition for ensemble)

@@ -10,7 +10,8 @@ import seaborn as sns
 from pathlib import Path
 
 
-def plot_training_history(train_losses, val_losses, train_mse=None, val_mse=None, save_path=None):
+def plot_training_history(train_losses, val_losses, train_mse=None, val_mse=None,
+                          save_path=None, swa_start_epoch=None):
     """
     Plot training history for uncertainty model.
 
@@ -20,6 +21,7 @@ def plot_training_history(train_losses, val_losses, train_mse=None, val_mse=None
         train_mse (list): Training MSE (optional)
         val_mse (list): Validation MSE (optional)
         save_path (str or Path): Path to save the plot
+        swa_start_epoch (int): Epoch when SWA collection started (optional)
     """
     n_plots = 2 if train_mse is not None else 1
     fig, axes = plt.subplots(1, n_plots, figsize=(6*n_plots, 5))
@@ -30,6 +32,12 @@ def plot_training_history(train_losses, val_losses, train_mse=None, val_mse=None
     # Plot NLL loss
     axes[0].plot(train_losses, label='Train NLL Loss', linewidth=2)
     axes[0].plot(val_losses, label='Validation NLL Loss', linewidth=2)
+
+    # Add SWA start marker
+    if swa_start_epoch is not None and swa_start_epoch < len(train_losses):
+        axes[0].axvline(x=swa_start_epoch, color='green', linestyle='--', linewidth=2,
+                        label=f'SWA Start (epoch {swa_start_epoch})')
+
     axes[0].set_xlabel('Epoch', fontsize=12)
     axes[0].set_ylabel('Negative Log-Likelihood', fontsize=12)
     axes[0].set_title('Training History - NLL Loss', fontsize=14, fontweight='bold')
@@ -40,6 +48,12 @@ def plot_training_history(train_losses, val_losses, train_mse=None, val_mse=None
     if train_mse is not None and val_mse is not None:
         axes[1].plot(train_mse, label='Train MSE', linewidth=2)
         axes[1].plot(val_mse, label='Validation MSE', linewidth=2)
+
+        # Add SWA start marker to MSE plot too
+        if swa_start_epoch is not None and swa_start_epoch < len(train_mse):
+            axes[1].axvline(x=swa_start_epoch, color='green', linestyle='--', linewidth=2,
+                            label=f'SWA Start (epoch {swa_start_epoch})')
+
         axes[1].set_xlabel('Epoch', fontsize=12)
         axes[1].set_ylabel('Mean Squared Error', fontsize=12)
         axes[1].set_title('Training History - MSE', fontsize=14, fontweight='bold')

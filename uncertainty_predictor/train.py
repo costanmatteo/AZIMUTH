@@ -450,13 +450,14 @@ def main():
     print("\nGenerating visualizations...")
     checkpoint_dir = Path(CONFIG['training']['checkpoint_dir'])
 
-    # Plot training history
+    # Plot training history (with SWA start marker if using SWAG)
     plot_training_history(
         history['train_losses'],
         history['val_losses'],
         history['train_mse'],
         history['val_mse'],
-        save_path=checkpoint_dir / 'training_history.png'
+        save_path=checkpoint_dir / 'training_history.png',
+        swa_start_epoch=history.get('swa_start_epoch') if use_swag else None
     )
 
     # Plot predictions with uncertainty bounds (test set)
