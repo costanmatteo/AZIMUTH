@@ -9,6 +9,29 @@ Ogni processo specifica:
 - Configurazione training
 """
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# GLOBAL UNCERTAINTY CONFIGURATION
+# ═══════════════════════════════════════════════════════════════════════════════
+# These settings apply to ALL processes unless overridden in process-specific config
+GLOBAL_UNCERTAINTY_CONFIG = {
+    # Uncertainty quantification method: 'single', 'ensemble', or 'swag'
+    'uncertainty_method': 'single',
+
+    # Deep Ensemble configuration (used if uncertainty_method='ensemble')
+    'use_ensemble': False,  # DEPRECATED: use uncertainty_method='ensemble'
+    'n_ensemble_models': 5,
+    'ensemble_base_seed': 42,
+
+    # SWAG configuration (used if uncertainty_method='swag')
+    'swag_start_epoch': 0.5,      # Start SWA at 50% of training
+    'swag_learning_rate': 0.01,   # LR during SWA phase
+    'swag_max_rank': 20,          # Low-rank covariance dimension
+    'swag_collection_freq': 1,    # Collect weights every N epochs
+    'swag_n_samples': 30,         # Weight samples for prediction
+    'swag_min_samples': 20,       # Minimum samples before training can stop
+}
+# ═══════════════════════════════════════════════════════════════════════════════
+
 PROCESSES = [
     {
         'name': 'laser',
@@ -19,16 +42,15 @@ PROCESSES = [
         'output_labels': ['ActualPower'],
         'controllable_inputs': ['PowerTarget'],  # AmbientTemp is environmental (non-controllable)
 
+        # Process-specific model settings (override global if needed)
         'uncertainty_predictor': {
             'model': {
                 'hidden_sizes': [64, 32],
                 'dropout_rate': 0.1,
                 'use_batchnorm': False,
                 'min_variance': 1e-6,
-                # Deep Ensemble configuration
-                'use_ensemble': False,  # Set to True to use Deep Ensemble
-                'n_ensemble_models': 5,  # Number of models in ensemble
-                'ensemble_base_seed': 42,  # Base seed for ensemble diversity
+                # Override global uncertainty_method here if needed for this process only
+                # 'uncertainty_method': 'swag',
             },
             'training': {
                 'n_samples': 2000,
@@ -52,7 +74,7 @@ PROCESSES = [
         'output_dim': 1,
         'input_labels': ['RF_Power', 'Duration'],
         'output_labels': ['RemovalRate'],
-        'controllable_inputs': ['RF_Power'],  # Duration is environmental (non-controllable)
+        'controllable_inputs': ['RF_Power'],
 
         'uncertainty_predictor': {
             'model': {
@@ -60,10 +82,6 @@ PROCESSES = [
                 'dropout_rate': 0.1,
                 'use_batchnorm': False,
                 'min_variance': 1e-6,
-                # Deep Ensemble configuration
-                'use_ensemble': False,  # Set to True to use Deep Ensemble
-                'n_ensemble_models': 5,  # Number of models in ensemble
-                'ensemble_base_seed': 42,  # Base seed for ensemble diversity
             },
             'training': {
                 'n_samples': 2000,
@@ -87,7 +105,7 @@ PROCESSES = [
         'output_dim': 1,
         'input_labels': ['CurrentDensity', 'Duration'],
         'output_labels': ['Thickness'],
-        'controllable_inputs': ['CurrentDensity', 'Duration'],  # All inputs controllable
+        'controllable_inputs': ['CurrentDensity', 'Duration'],
 
         'uncertainty_predictor': {
             'model': {
@@ -95,10 +113,6 @@ PROCESSES = [
                 'dropout_rate': 0.1,
                 'use_batchnorm': False,
                 'min_variance': 1e-6,
-                # Deep Ensemble configuration
-                'use_ensemble': False,  # Set to True to use Deep Ensemble
-                'n_ensemble_models': 5,  # Number of models in ensemble
-                'ensemble_base_seed': 42,  # Base seed for ensemble diversity
             },
             'training': {
                 'n_samples': 2000,
@@ -122,7 +136,7 @@ PROCESSES = [
         'output_dim': 1,
         'input_labels': ['Temperature', 'Concentration', 'Duration'],
         'output_labels': ['RemovalDepth'],
-        'controllable_inputs': ['Concentration', 'Duration'],  # Temperature is environmental (non-controllable)
+        'controllable_inputs': ['Concentration', 'Duration'],
 
         'uncertainty_predictor': {
             'model': {
@@ -130,10 +144,6 @@ PROCESSES = [
                 'dropout_rate': 0.1,
                 'use_batchnorm': False,
                 'min_variance': 1e-6,
-                # Deep Ensemble configuration
-                'use_ensemble': False,  # Set to True to use Deep Ensemble
-                'n_ensemble_models': 5,  # Number of models in ensemble
-                'ensemble_base_seed': 42,  # Base seed for ensemble diversity
             },
             'training': {
                 'n_samples': 2000,
@@ -148,7 +158,6 @@ PROCESSES = [
         },
 
         'checkpoint_dir': 'controller_optimization/checkpoints/microetch',
-
     },
 ]
 

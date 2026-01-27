@@ -653,3 +653,299 @@ def create_ensemble_model(input_size, output_size, hidden_sizes, n_models=5,
         use_batchnorm=use_batchnorm,
         min_variance=min_variance
     )
+
+
+class SWAGUncertaintyPredictor(nn.Module):
+    """
+    SWAG (Stochastic Weight Averaging - Gaussian) for Uncertainty Quantification.
+
+    This class implements SWAG, which approximates the posterior distribution over
+    neural network weights using a Gaussian with a low-rank plus diagonal covariance.
+
+    Key idea: During the last phase of training, SGD iterates approximate samples
+    from the posterior. SWAG captures the first two moments of these iterates.
+
+    The covariance is approximated as:
+        Σ ≈ (1/2) * (Σ_diag + Σ_low_rank)
+    where:
+        - Σ_diag: diagonal covariance (variance of each weight)
+        - Σ_low_rank: low-rank approximation using K deviation vectors
+
+    During inference:
+        1. Sample weights from N(θ_SWA, Σ)
+        2. Make prediction with sampled weights
+        3. Repeat n_samples times
+        4. Aggregate: mean → prediction, variance of means → epistemic,
+                      mean of variances → aleatoric
+
+    Reference:
+        Maddox et al. (2019) "A Simple Baseline for Bayesian Uncertainty in Deep Learning"
+        https://arxiv.org/abs/1902.02476
+
+    Args:
+        base_model (UncertaintyPredictor): The base model to wrap
+        max_rank (int): Maximum rank for low-rank covariance approximation (default: 20)
+
+    Example:
+        >>> base_model = UncertaintyPredictor(input_size=10, hidden_sizes=[64, 32], output_size=5)
+        >>> swag_model = SWAGUncertaintyPredictor(base_model, max_rank=20)
+        >>> # After SWAG training...
+        >>> mean, total_var, aleatoric, epistemic = swag_model.predict_with_decomposition(x)
+    """
+
+    def __init__(self, base_model, max_rank=20):
+        super(SWAGUncertaintyPredictor, self).__init__()
+
+        self.base_model = base_model
+        self.max_rank = max_rank
+
+        # Get total number of parameters
+        self.n_params = sum(p.numel() for p in base_model.parameters())
+
+        # SWA mean (running average of weights)
+        self.register_buffer('swa_mean', torch.zeros(self.n_params))
+
+        # Diagonal variance (running average of squared weights)
+        self.register_buffer('swa_sq_mean', torch.zeros(self.n_params))
+
+        # Low-rank deviation vectors (columns of D matrix)
+        # Shape: (n_params, max_rank)
+        self.register_buffer('deviation_matrix', torch.zeros(self.n_params, max_rank))
+
+        # Number of models collected for SWA
+        self.register_buffer('n_models_collected', torch.tensor(0))
+
+        # Current column index for deviation matrix (circular buffer)
+        self.register_buffer('deviation_idx', torch.tensor(0))
+
+        # Flag to indicate if SWAG statistics have been collected
+        self.swag_collected = False
+
+    def _flatten_params(self):
+        """Flatten all model parameters into a single vector."""
+        return torch.cat([p.data.view(-1) for p in self.base_model.parameters()])
+
+    def _unflatten_params(self, flat_params):
+        """Restore flattened parameters back to model."""
+        idx = 0
+        for p in self.base_model.parameters():
+            n = p.numel()
+            p.data.copy_(flat_params[idx:idx + n].view(p.shape))
+            idx += n
+
+    def collect_model(self):
+        """
+        Collect current model weights for SWAG statistics.
+
+        Call this at the end of each epoch during the SWA phase.
+        Updates running mean, squared mean, and deviation matrix.
+        """
+        # Get current parameters as flat vector
+        current_params = self._flatten_params()
+
+        n = self.n_models_collected.item()
+
+        if n == 0:
+            # First collection: initialize
+            self.swa_mean.copy_(current_params)
+            self.swa_sq_mean.copy_(current_params ** 2)
+        else:
+            # Update running averages (online mean update)
+            # new_mean = old_mean + (new_value - old_mean) / (n + 1)
+            self.swa_mean.add_((current_params - self.swa_mean) / (n + 1))
+            self.swa_sq_mean.add_((current_params ** 2 - self.swa_sq_mean) / (n + 1))
+
+        # Store deviation from mean in low-rank matrix (circular buffer)
+        deviation = current_params - self.swa_mean
+        col_idx = self.deviation_idx.item() % self.max_rank
+        self.deviation_matrix[:, col_idx] = deviation
+
+        self.n_models_collected.add_(1)
+        self.deviation_idx.add_(1)
+        self.swag_collected = True
+
+    def _compute_variance(self):
+        """
+        Compute the diagonal variance from collected statistics.
+
+        Returns:
+            torch.Tensor: Diagonal variance vector
+        """
+        # Variance = E[X^2] - E[X]^2
+        variance = self.swa_sq_mean - self.swa_mean ** 2
+        # Clamp to avoid negative variance due to numerical issues
+        return torch.clamp(variance, min=1e-10)
+
+    def sample_weights(self, scale=1.0):
+        """
+        Sample weights from the SWAG posterior distribution.
+
+        The posterior is: N(θ_SWA, (1/2) * (Σ_diag + Σ_low_rank))
+
+        Sampling procedure:
+        1. Sample z1 ~ N(0, I_d) for diagonal part
+        2. Sample z2 ~ N(0, I_K) for low-rank part
+        3. θ = θ_SWA + (1/√2) * (√Σ_diag * z1 + D * z2 / √(K-1))
+
+        Args:
+            scale (float): Scale factor for perturbation (default: 1.0)
+
+        Returns:
+            torch.Tensor: Sampled parameter vector
+        """
+        if not self.swag_collected:
+            raise RuntimeError("No SWAG statistics collected. Train with SWAG first.")
+
+        device = self.swa_mean.device
+
+        # Diagonal part: sample from N(0, Σ_diag)
+        diag_var = self._compute_variance()
+        z1 = torch.randn(self.n_params, device=device)
+        diag_sample = torch.sqrt(diag_var) * z1
+
+        # Low-rank part: sample from N(0, D @ D.T / (K-1))
+        n_collected = min(self.n_models_collected.item(), self.max_rank)
+        if n_collected > 1:
+            z2 = torch.randn(n_collected, device=device)
+            D = self.deviation_matrix[:, :n_collected]
+            low_rank_sample = (D @ z2) / np.sqrt(n_collected - 1)
+        else:
+            low_rank_sample = torch.zeros(self.n_params, device=device)
+
+        # Combine: θ = θ_SWA + scale * (1/√2) * (diag + low_rank)
+        sampled_params = self.swa_mean + scale * (1.0 / np.sqrt(2.0)) * (diag_sample + low_rank_sample)
+
+        return sampled_params
+
+    def forward(self, x):
+        """
+        Forward pass using SWA mean weights.
+
+        For uncertainty estimation, use predict_with_decomposition instead.
+
+        Args:
+            x (torch.Tensor): Input tensor
+
+        Returns:
+            tuple: (mean, variance) predictions using SWA mean weights
+        """
+        if self.swag_collected:
+            # Use SWA mean weights
+            self._unflatten_params(self.swa_mean)
+        return self.base_model(x)
+
+    def predict_with_decomposition(self, x, n_samples=30, scale=1.0):
+        """
+        Make predictions with full uncertainty decomposition using SWAG sampling.
+
+        Samples n_samples weight configurations from the posterior, makes predictions
+        with each, and aggregates to compute aleatoric and epistemic uncertainty.
+
+        Args:
+            x (torch.Tensor): Input tensor
+            n_samples (int): Number of weight samples (default: 30)
+            scale (float): Scale factor for weight perturbation (default: 1.0)
+
+        Returns:
+            tuple: (ensemble_mean, total_variance, aleatoric, epistemic)
+                - ensemble_mean: Average prediction across weight samples
+                - total_variance: Total uncertainty (aleatoric + epistemic)
+                - aleatoric: Data/noise uncertainty (average of predicted variances)
+                - epistemic: Model uncertainty (variance of predicted means)
+        """
+        if not self.swag_collected:
+            raise RuntimeError("No SWAG statistics collected. Train with SWAG first.")
+
+        self.base_model.eval()
+
+        all_means = []
+        all_variances = []
+
+        # Save original weights to restore later
+        original_params = self._flatten_params().clone()
+
+        with torch.no_grad():
+            for _ in range(n_samples):
+                # Sample weights from posterior
+                sampled_params = self.sample_weights(scale=scale)
+                self._unflatten_params(sampled_params)
+
+                # Forward pass with sampled weights
+                mean, variance = self.base_model(x)
+                all_means.append(mean)
+                all_variances.append(variance)
+
+        # Restore original weights
+        self._unflatten_params(original_params)
+
+        # Stack predictions: shape (n_samples, batch_size, output_size)
+        means = torch.stack(all_means)
+        variances = torch.stack(all_variances)
+
+        # Aggregate predictions
+        ensemble_mean = means.mean(dim=0)
+
+        # Aleatoric: average of predicted variances (data noise)
+        aleatoric = variances.mean(dim=0)
+
+        # Epistemic: variance of predicted means (model uncertainty)
+        epistemic = means.var(dim=0)
+
+        # Total uncertainty
+        total_variance = aleatoric + epistemic
+
+        return ensemble_mean, total_variance, aleatoric, epistemic
+
+    def predict_with_uncertainty(self, x, n_samples=30):
+        """
+        Make predictions with uncertainty estimation (compatible with other models API).
+
+        Args:
+            x (torch.Tensor): Input tensor
+            n_samples (int): Number of weight samples (default: 30)
+
+        Returns:
+            dict: Dictionary containing:
+                - 'mean': SWAG mean predictions
+                - 'variance': Total variance (aleatoric + epistemic)
+                - 'std': Standard deviation
+                - 'aleatoric': Aleatoric uncertainty
+                - 'epistemic': Epistemic uncertainty
+        """
+        ensemble_mean, total_var, aleatoric, epistemic = self.predict_with_decomposition(x, n_samples)
+
+        return {
+            'mean': ensemble_mean,
+            'variance': total_var,
+            'std': torch.sqrt(total_var),
+            'aleatoric': aleatoric,
+            'epistemic': epistemic
+        }
+
+    def get_swag_stats(self):
+        """
+        Get SWAG statistics for inspection/debugging.
+
+        Returns:
+            dict: Dictionary with SWAG statistics
+        """
+        return {
+            'n_models_collected': self.n_models_collected.item(),
+            'mean_weight_norm': torch.norm(self.swa_mean).item(),
+            'mean_variance': self._compute_variance().mean().item(),
+            'max_rank_used': min(self.n_models_collected.item(), self.max_rank)
+        }
+
+
+def create_swag_model(base_model, max_rank=20):
+    """
+    Factory function to create a SWAG uncertainty model.
+
+    Args:
+        base_model (UncertaintyPredictor): Base model to wrap
+        max_rank (int): Maximum rank for covariance approximation (default: 20)
+
+    Returns:
+        SWAGUncertaintyPredictor: SWAG-wrapped model
+    """
+    return SWAGUncertaintyPredictor(base_model, max_rank=max_rank)

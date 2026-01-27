@@ -10,7 +10,9 @@ from .uncertainty_nn import (
     create_medium_uncertainty_model,
     create_large_uncertainty_model,
     EnsembleUncertaintyPredictor,
-    create_ensemble_model
+    create_ensemble_model,
+    SWAGUncertaintyPredictor,
+    create_swag_model
 )
 
 __all__ = [
@@ -21,5 +23,7 @@ __all__ = [
     'create_medium_uncertainty_model',
     'create_large_uncertainty_model',
     'EnsembleUncertaintyPredictor',
-    'create_ensemble_model'
+    'create_ensemble_model',
+    'SWAGUncertaintyPredictor',
+    'create_swag_model'
 ]

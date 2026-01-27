@@ -751,3 +751,422 @@ class EnsembleTrainer:
                             'Under-confident (predicts too much uncertainty)' if calibration_ratio < 0.8 else
                             'Over-confident (predicts too little uncertainty)'
         }
+
+
+class SWAGTrainer:
+    """
+    Trainer for SWAG (Stochastic Weight Averaging - Gaussian) Uncertainty Quantification.
+
+    SWAG training consists of two phases:
+    1. Pre-training phase: Standard training with SGD/Adam
+    2. SWA collection phase: Continue training with constant/cyclic LR while
+       collecting weight statistics at the end of each epoch
+
+    The collected statistics form a Gaussian approximation to the posterior
+    distribution over weights, which enables Bayesian inference at test time.
+
+    Reference:
+        Maddox et al. (2019) "A Simple Baseline for Bayesian Uncertainty in Deep Learning"
+
+    Args:
+        swag_model (SWAGUncertaintyPredictor): SWAG model to train
+        criterion (nn.Module): Loss function (typically GaussianNLLLoss)
+        device (str): 'cuda' or 'cpu' (default: auto-detect)
+        learning_rate (float): Learning rate for pre-training (default: 0.001)
+        swa_learning_rate (float): Learning rate for SWA phase (default: 0.01)
+        weight_decay (float): L2 regularization strength (default: 0.0)
+        swa_start_epoch (float): Fraction of training to do before SWA (default: 0.5)
+        swa_freq (int): Collect weights every swa_freq epochs (default: 1)
+
+    Example:
+        >>> trainer = SWAGTrainer(swag_model, criterion, swa_start_epoch=0.5)
+        >>> history = trainer.train(train_loader, val_loader, epochs=100)
+        >>> mean, var, aleatoric, epistemic = trainer.predict(X, return_uncertainty=True)
+    """
+
+    def __init__(self, swag_model, criterion, device=None, learning_rate=0.001,
+                 swa_learning_rate=0.01, weight_decay=0.0, swa_start_epoch=0.5, swa_freq=1,
+                 min_samples=20):
+        # Setup device
+        if device is None:
+            self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        else:
+            self.device = torch.device(device)
+
+        self.swag_model = swag_model.to(self.device)
+        self.criterion = criterion
+        self.learning_rate = learning_rate
+        self.swa_learning_rate = swa_learning_rate
+        self.weight_decay = weight_decay
+        self.swa_start_epoch = swa_start_epoch  # Fraction (0.5 = start SWA at 50% of training)
+        self.swa_freq = swa_freq
+        self.min_samples = min_samples  # Minimum weight samples before training can stop
+
+        # Setup optimizer for base model
+        self.optimizer = optim.Adam(
+            self.swag_model.base_model.parameters(),
+            lr=learning_rate,
+            weight_decay=weight_decay
+        )
+
+        # Tracking
+        self.train_losses = []
+        self.val_losses = []
+        self.train_mse = []
+        self.val_mse = []
+        self.best_val_loss = float('inf')
+        self.swa_start_actual = None  # Actual epoch when SWA started
+
+        print(f"SWAGTrainer initialized on device: {self.device}")
+        print(f"Pre-training LR: {learning_rate}, SWA LR: {swa_learning_rate}")
+        print(f"SWA start: {swa_start_epoch*100:.0f}% of training")
+        print(f"Weight collection frequency: every {swa_freq} epoch(s)")
+        print(f"Minimum samples before stopping: {min_samples}")
+        print(f"Max rank for covariance: {swag_model.max_rank}")
+        print(f"Loss function: {criterion.__class__.__name__}")
+
+    def _set_learning_rate(self, lr):
+        """Set learning rate for all parameter groups."""
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] = lr
+
+    def train_epoch(self, train_loader):
+        """Training for a single epoch."""
+        self.swag_model.base_model.train()
+        epoch_loss = 0.0
+        epoch_mse = 0.0
+
+        for batch_X, batch_y in train_loader:
+            batch_X = batch_X.to(self.device)
+            batch_y = batch_y.to(self.device)
+
+            # Forward pass through base model
+            mean, variance = self.swag_model.base_model(batch_X)
+
+            # Compute loss
+            loss = self.criterion(mean, variance, batch_y)
+
+            # Compute MSE for monitoring
+            with torch.no_grad():
+                mse = torch.mean((mean - batch_y) ** 2)
+                epoch_mse += mse.item()
+
+            # Backward pass
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step()
+
+            epoch_loss += loss.item()
+
+        avg_loss = epoch_loss / len(train_loader)
+        avg_mse = epoch_mse / len(train_loader)
+        return avg_loss, avg_mse
+
+    def validate(self, val_loader):
+        """Model validation."""
+        self.swag_model.base_model.eval()
+        val_loss = 0.0
+        val_mse = 0.0
+        val_variance = 0.0
+
+        with torch.no_grad():
+            for batch_X, batch_y in val_loader:
+                batch_X = batch_X.to(self.device)
+                batch_y = batch_y.to(self.device)
+
+                mean, variance = self.swag_model.base_model(batch_X)
+
+                loss = self.criterion(mean, variance, batch_y)
+                mse = torch.mean((mean - batch_y) ** 2)
+
+                val_loss += loss.item()
+                val_mse += mse.item()
+                val_variance += torch.mean(variance).item()
+
+        n_batches = len(val_loader)
+        return val_loss / n_batches, val_mse / n_batches, val_variance / n_batches
+
+    def train(self, train_loader, val_loader, epochs=100, patience=10, save_dir='checkpoints'):
+        """
+        Complete SWAG training with two phases.
+
+        Phase 1: Pre-training with standard learning rate
+        Phase 2: SWA collection with constant learning rate
+
+        Args:
+            train_loader (DataLoader): DataLoader for training
+            val_loader (DataLoader): DataLoader for validation
+            epochs (int): Total number of epochs
+            patience (int): Early stopping patience (only for pre-training phase)
+            save_dir (str): Directory to save checkpoints
+
+        Returns:
+            dict: Dictionary with training history
+        """
+        save_path = Path(save_dir)
+        save_path.mkdir(parents=True, exist_ok=True)
+
+        # Calculate when to start SWA
+        swa_start = int(epochs * self.swa_start_epoch)
+        self.swa_start_actual = swa_start
+
+        print(f"\n{'='*70}")
+        print(f"START SWAG TRAINING")
+        print(f"{'='*70}")
+        print(f"Total epochs: {epochs}")
+        print(f"Pre-training phase: epochs 1-{swa_start}")
+        print(f"SWA collection phase: epochs {swa_start+1}-{epochs}")
+        print(f"Minimum SWA samples required: {self.min_samples}")
+        print(f"Early stopping patience: {patience} (pre-training only)")
+        print(f"Checkpoint directory: {save_path}")
+        print(f"{'='*70}\n")
+
+        epochs_without_improvement = 0
+        in_swa_phase = False
+        epoch = 0
+
+        # Continue training until we have collected enough samples
+        while True:
+            # Check if we should switch to SWA phase (scheduled start)
+            if epoch >= swa_start and not in_swa_phase:
+                in_swa_phase = True
+                self._set_learning_rate(self.swa_learning_rate)
+                print(f"\n{'─'*50}")
+                print(f"Entering SWA collection phase (epoch {epoch+1})")
+                print(f"Learning rate set to: {self.swa_learning_rate}")
+                print(f"{'─'*50}\n")
+
+            # Training
+            train_loss, train_mse = self.train_epoch(train_loader)
+            self.train_losses.append(train_loss)
+            self.train_mse.append(train_mse)
+
+            # Validation
+            val_loss, val_mse, val_variance = self.validate(val_loader)
+            self.val_losses.append(val_loss)
+            self.val_mse.append(val_mse)
+
+            # Collect weights during SWA phase
+            if in_swa_phase:
+                # Use swa_start_actual to track collection frequency from when SWA actually started
+                swa_epoch = epoch - self.swa_start_actual if self.swa_start_actual is not None else epoch - swa_start
+                if swa_epoch % self.swa_freq == 0:
+                    self.swag_model.collect_model()
+                    n_collected = self.swag_model.n_models_collected.item()
+                    print(f"  [SWA] Epoch {epoch+1}: collected sample {n_collected}/{self.min_samples} (val_loss: {val_loss:.6f})")
+
+            # Early stopping (only during pre-training phase)
+            if not in_swa_phase:
+                if val_loss < self.best_val_loss:
+                    self.best_val_loss = val_loss
+                    self.save_checkpoint(save_path / 'best_pretrain_model.pth', epoch, val_loss)
+                    epochs_without_improvement = 0
+                else:
+                    epochs_without_improvement += 1
+
+                if epochs_without_improvement >= patience:
+                    # Instead of stopping, switch to SWA phase
+                    in_swa_phase = True
+                    self._set_learning_rate(self.swa_learning_rate)
+                    self.swa_start_actual = epoch + 1
+                    epochs_without_improvement = 0
+                    print(f"\n{'─'*50}")
+                    print(f"EARLY STOPPING triggered at epoch {epoch+1}")
+                    print(f"Switching to SWA collection phase")
+                    print(f"Learning rate set to: {self.swa_learning_rate}")
+                    print(f"Will collect minimum {self.min_samples} weight samples")
+                    print(f"{'─'*50}\n")
+
+            epoch += 1
+
+            # Check if we can stop training
+            n_samples_collected = self.swag_model.n_models_collected.item()
+            if epoch >= epochs:
+                if n_samples_collected >= self.min_samples:
+                    break
+                else:
+                    # Need more samples, continue training
+                    if epoch == epochs:  # Print message only once
+                        print(f"\n{'─'*50}")
+                        print(f"Extending training: only {n_samples_collected}/{self.min_samples} samples collected")
+                        print(f"Continuing until minimum samples reached...")
+                        print(f"{'─'*50}\n")
+
+            # Safety check: don't run forever (max 2x original epochs)
+            if epoch >= epochs * 2:
+                print(f"\nWarning: Reached maximum epochs ({epoch}), stopping with {n_samples_collected} samples")
+                break
+
+        # Save final SWAG model
+        self.save_checkpoint(save_path / 'best_model.pth', epoch, self.val_losses[-1])
+
+        # Save training history
+        self.save_training_history(save_path / 'training_history.json')
+
+        # Print SWAG statistics
+        swag_stats = self.swag_model.get_swag_stats()
+        print(f"\n{'='*70}")
+        print(f"SWAG TRAINING COMPLETED")
+        print(f"{'='*70}")
+        print(f"Models collected: {swag_stats['n_models_collected']}")
+        print(f"Low-rank dimension: {swag_stats['max_rank_used']}")
+        print(f"Mean weight norm: {swag_stats['mean_weight_norm']:.4f}")
+        print(f"Mean variance: {swag_stats['mean_variance']:.6f}")
+        print(f"Best pre-training val loss: {self.best_val_loss:.6f}")
+        print(f"{'='*70}\n")
+
+        return {
+            'train_losses': self.train_losses,
+            'val_losses': self.val_losses,
+            'train_mse': self.train_mse,
+            'val_mse': self.val_mse,
+            'best_val_loss': self.best_val_loss,
+            'total_epochs': len(self.train_losses),
+            'swa_start_epoch': self.swa_start_actual,
+            'models_collected': swag_stats['n_models_collected']
+        }
+
+    def save_checkpoint(self, filepath, epoch, val_loss):
+        """Save a model checkpoint including SWAG statistics."""
+        torch.save({
+            'epoch': epoch,
+            'base_model_state_dict': self.swag_model.base_model.state_dict(),
+            'swa_mean': self.swag_model.swa_mean,
+            'swa_sq_mean': self.swag_model.swa_sq_mean,
+            'deviation_matrix': self.swag_model.deviation_matrix,
+            'n_models_collected': self.swag_model.n_models_collected,
+            'deviation_idx': self.swag_model.deviation_idx,
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'val_loss': val_loss,
+            'train_losses': self.train_losses,
+            'val_losses': self.val_losses,
+            'train_mse': self.train_mse,
+            'val_mse': self.val_mse,
+            'swag_collected': self.swag_model.swag_collected
+        }, filepath)
+
+    def load_checkpoint(self, filepath):
+        """Load a model checkpoint."""
+        checkpoint = torch.load(filepath, map_location=self.device)
+
+        self.swag_model.base_model.load_state_dict(checkpoint['base_model_state_dict'])
+        self.swag_model.swa_mean.copy_(checkpoint['swa_mean'])
+        self.swag_model.swa_sq_mean.copy_(checkpoint['swa_sq_mean'])
+        self.swag_model.deviation_matrix.copy_(checkpoint['deviation_matrix'])
+        self.swag_model.n_models_collected.copy_(checkpoint['n_models_collected'])
+        self.swag_model.deviation_idx.copy_(checkpoint['deviation_idx'])
+        self.swag_model.swag_collected = checkpoint.get('swag_collected', True)
+
+        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        self.train_losses = checkpoint.get('train_losses', [])
+        self.val_losses = checkpoint.get('val_losses', [])
+        self.train_mse = checkpoint.get('train_mse', [])
+        self.val_mse = checkpoint.get('val_mse', [])
+
+        print(f"SWAG checkpoint loaded from: {filepath}")
+        return checkpoint
+
+    def save_training_history(self, filepath):
+        """Save training history to JSON."""
+        history = {
+            'train_losses': self.train_losses,
+            'val_losses': self.val_losses,
+            'train_mse': self.train_mse,
+            'val_mse': self.val_mse,
+            'best_val_loss': float(self.best_val_loss),
+            'swa_start_epoch': self.swa_start_actual,
+            'models_collected': self.swag_model.n_models_collected.item(),
+            'timestamp': datetime.now().isoformat()
+        }
+        with open(filepath, 'w') as f:
+            json.dump(history, f, indent=2)
+
+    def predict(self, X, return_uncertainty=True, n_samples=30):
+        """
+        Make predictions using SWAG sampling.
+
+        Args:
+            X (np.ndarray or torch.Tensor): Input data
+            return_uncertainty (bool): If True, return full uncertainty decomposition
+            n_samples (int): Number of weight samples for prediction
+
+        Returns:
+            If return_uncertainty=True:
+                tuple: (mean, total_variance, aleatoric, epistemic)
+            If return_uncertainty=False:
+                np.ndarray: Mean predictions only
+        """
+        self.swag_model.eval()
+
+        if isinstance(X, np.ndarray):
+            X = torch.FloatTensor(X)
+
+        X = X.to(self.device)
+
+        with torch.no_grad():
+            mean, total_var, aleatoric, epistemic = \
+                self.swag_model.predict_with_decomposition(X, n_samples=n_samples)
+
+        if return_uncertainty:
+            return (
+                mean.cpu().numpy(),
+                total_var.cpu().numpy(),
+                aleatoric.cpu().numpy(),
+                epistemic.cpu().numpy()
+            )
+        else:
+            return mean.cpu().numpy()
+
+    def compute_calibration_metrics(self, val_loader, n_samples=30):
+        """
+        Compute calibration metrics for the SWAG model.
+
+        Args:
+            val_loader (DataLoader): Validation data loader
+            n_samples (int): Number of weight samples
+
+        Returns:
+            dict: Dictionary with calibration metrics
+        """
+        self.swag_model.eval()
+        squared_errors = []
+        total_variances = []
+        aleatorics = []
+        epistemics = []
+
+        with torch.no_grad():
+            for batch_X, batch_y in val_loader:
+                batch_X = batch_X.to(self.device)
+                batch_y = batch_y.to(self.device)
+
+                mean, total_var, aleatoric, epistemic = \
+                    self.swag_model.predict_with_decomposition(batch_X, n_samples=n_samples)
+
+                sq_error = (mean - batch_y) ** 2
+                squared_errors.append(sq_error.cpu().numpy())
+                total_variances.append(total_var.cpu().numpy())
+                aleatorics.append(aleatoric.cpu().numpy())
+                epistemics.append(epistemic.cpu().numpy())
+
+        squared_errors = np.concatenate(squared_errors, axis=0)
+        total_variances = np.concatenate(total_variances, axis=0)
+        aleatorics = np.concatenate(aleatorics, axis=0)
+        epistemics = np.concatenate(epistemics, axis=0)
+
+        mse = np.mean(squared_errors)
+        mean_total_var = np.mean(total_variances)
+        mean_aleatoric = np.mean(aleatorics)
+        mean_epistemic = np.mean(epistemics)
+        calibration_ratio = mse / mean_total_var if mean_total_var > 0 else float('inf')
+
+        return {
+            'mse': mse,
+            'mean_predicted_variance': mean_total_var,
+            'mean_aleatoric': mean_aleatoric,
+            'mean_epistemic': mean_epistemic,
+            'epistemic_ratio': mean_epistemic / mean_total_var if mean_total_var > 0 else 0,
+            'calibration_ratio': calibration_ratio,
+            'interpretation': 'Well calibrated!' if 0.8 <= calibration_ratio <= 1.2 else
+                            'Under-confident (predicts too much uncertainty)' if calibration_ratio < 0.8 else
+                            'Over-confident (predicts too little uncertainty)'
+        }
