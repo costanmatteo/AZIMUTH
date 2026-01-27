@@ -287,7 +287,7 @@ python train_controller.py  # Auto-include nuovo processo
 
 - **PDF Tecnico**: `Azimuth.pdf` (architecture specification)
 - **Uncertainty Predictor Module**: `../uncertainty_predictor/`
-- **SCM Datasets**: `../uncertainty_predictor/scm_ds/datasets.py`
+- **SCM Datasets**: `../scm_ds/datasets.py`
 
 ## Citation
 

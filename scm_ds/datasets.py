@@ -1,14 +1,14 @@
+"""
+SCM Datasets - Pre-defined Structural Causal Model datasets for physical processes.
 
+This module provides ready-to-use SCM datasets for various PCB manufacturing processes:
+- Laser drilling
+- Plasma cleaning
+- Galvanic copper deposition
+- Micro-etching
+"""
 
-
-from os.path import abspath, dirname
-import sys
-
-ROOT_DIR = dirname(dirname(abspath(__file__)))
-print("Root directory: ", ROOT_DIR)
-sys.path.append(ROOT_DIR)
-
-from scm_ds.scm import *
+from .scm import *
 
 
 
@@ -28,7 +28,7 @@ ds_scm_1_to_1_ct = SCMDataset(
         NodeSpec("C4", ["P4"], "P4 + eps_C4"),                  # child 4
         NodeSpec("C5", ["P5"], "P5 + eps_C5"),                  # child 5
         # output
-        NodeSpec("Y", ["C1", "C2", "C3", "C4", "C5"],    "C1 + C2 + C3 + C4 + C5 + eps_Y"),     
+        NodeSpec("Y", ["C1", "C2", "C3", "C4", "C5"],    "C1 + C2 + C3 + C4 + C5 + eps_Y"),
         ],
     params = {
         "w1": 0.01,
@@ -56,7 +56,7 @@ ds_scm_1_to_1_ct = SCMDataset(
         "C1", "C2", "C3", "C4", "C5"],
     target_labels = ["Y"]
     )
-    
+
 
 # TODO
 # - one-to-one-CT
@@ -65,7 +65,8 @@ ds_scm_1_to_1_ct = SCMDataset(
 
 
 # Example usage (commented out to avoid running on import)
-# ds_scm_1_to_1_ct.generate_ds(mode="flat", n=5_000, save_dir=join(ROOT_DIR, "data/example"))
+# ds_scm_1_to_1_ct.generate_ds(mode="flat", n=5_000, save_dir="data/example")
+
 
 
 
@@ -658,8 +659,8 @@ ds_scm_microetch.process_noise_vars = ['Zln', 'NoiseStudentT']
 # =============================================================================
 # Uncomment and modify as needed to generate datasets
 
-# ds_scm_1_to_1_ct.generate_ds(mode="flat", n=5_000, save_dir=join(ROOT_DIR, "data/one_to_one"))
-# ds_scm_laser.generate_ds(mode="flat", n=5_000, save_dir=join(ROOT_DIR, "data/laser"))
-# ds_scm_plasma.generate_ds(mode="flat", n=5_000, save_dir=join(ROOT_DIR, "data/plasma"))
-# ds_scm_galvanic.generate_ds(mode="flat", n=5_000, save_dir=join(ROOT_DIR, "data/galvanic"))
-# ds_scm_microetch.generate_ds(mode="flat", n=5_000, save_dir=join(ROOT_DIR, "data/microetch"))
+# ds_scm_1_to_1_ct.generate_ds(mode="flat", n=5_000, save_dir="data/one_to_one")
+# ds_scm_laser.generate_ds(mode="flat", n=5_000, save_dir="data/laser")
+# ds_scm_plasma.generate_ds(mode="flat", n=5_000, save_dir="data/plasma")
+# ds_scm_galvanic.generate_ds(mode="flat", n=5_000, save_dir="data/galvanic")
+# ds_scm_microetch.generate_ds(mode="flat", n=5_000, save_dir="data/microetch")
