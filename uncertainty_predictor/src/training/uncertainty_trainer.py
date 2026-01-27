@@ -952,7 +952,7 @@ class SWAGTrainer:
                 swa_epoch = epoch - self.swa_start_actual if self.swa_start_actual is not None else epoch - swa_start
                 if swa_epoch % self.swa_freq == 0:
                     self.swag_model.collect_model()
-                    n_collected = self.swag_model.n_models
+                    n_collected = self.swag_model.n_models_collected.item()
                     print(f"  [SWA] Epoch {epoch+1}: collected sample {n_collected}/{self.min_samples} (val_loss: {val_loss:.6f})")
 
             # Early stopping (only during pre-training phase)
@@ -980,7 +980,7 @@ class SWAGTrainer:
             epoch += 1
 
             # Check if we can stop training
-            n_samples_collected = self.swag_model.n_models
+            n_samples_collected = self.swag_model.n_models_collected.item()
             if epoch >= epochs:
                 if n_samples_collected >= self.min_samples:
                     break
