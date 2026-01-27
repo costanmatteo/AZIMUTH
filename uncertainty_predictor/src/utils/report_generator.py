@@ -460,6 +460,43 @@ class UncertaintyReportGenerator:
             self.story.append(caption_table)
             self.story.append(Spacer(1, 0.15*cm))
 
+        # Uncertainty decomposition plot (for ensemble/SWAG)
+        decomposition_plot = checkpoint_dir / 'uncertainty_decomposition.png'
+        if decomposition_plot.exists():
+            self.add_section_title("Uncertainty Decomposition")
+
+            img4 = Image(str(decomposition_plot))
+            img_width, img_height = img4.imageWidth, img4.imageHeight
+            aspect_ratio = img_height / img_width
+
+            # Larger width for this plot
+            new_width = 18*cm
+            new_height = new_width * aspect_ratio
+
+            # Max height constraint
+            if new_height > 16*cm:
+                new_height = 16*cm
+                new_width = new_height / aspect_ratio
+
+            img4.drawWidth = new_width
+            img4.drawHeight = new_height
+
+            # Center the image
+            img_table = Table([[img4]], colWidths=[18*cm])
+            img_table.setStyle(TableStyle([
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ]))
+            self.story.append(img_table)
+
+            caption4 = Paragraph("<i>Aleatoric vs Epistemic Uncertainty Decomposition</i>", self.styles['Normal'])
+            caption_table = Table([[caption4]], colWidths=[18*cm])
+            caption_table.setStyle(TableStyle([
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ]))
+            self.story.append(caption_table)
+            self.story.append(Spacer(1, 0.15*cm))
+
     def generate(self, config, history, metrics, input_dim, output_dim,
                 total_params, n_train, n_val, n_test, timestamp, coverage_results=None):
         """Generate the complete PDF"""

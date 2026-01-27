@@ -315,3 +315,94 @@ def plot_uncertainty_distribution(y_pred_variance, output_names=None, save_path=
         print(f"Uncertainty distribution plot saved: {save_path}")
 
     plt.close()
+
+
+def plot_uncertainty_decomposition(y_pred_aleatoric, y_pred_epistemic, output_names=None, save_path=None):
+    """
+    Plot the decomposition of uncertainty into aleatoric and epistemic components.
+
+    Creates a visualization showing:
+    1. Stacked bar chart of mean aleatoric vs epistemic
+    2. Distribution of aleatoric and epistemic across samples
+
+    Args:
+        y_pred_aleatoric (np.ndarray): Aleatoric variance per sample
+        y_pred_epistemic (np.ndarray): Epistemic variance per sample
+        output_names (list): Names of outputs
+        save_path (str or Path): Path to save the plot
+    """
+    if y_pred_aleatoric is None or y_pred_epistemic is None:
+        print("Warning: Aleatoric/epistemic data not available for decomposition plot")
+        return
+
+    if len(y_pred_aleatoric.shape) == 1:
+        y_pred_aleatoric = y_pred_aleatoric.reshape(-1, 1)
+        y_pred_epistemic = y_pred_epistemic.reshape(-1, 1)
+
+    n_outputs = y_pred_aleatoric.shape[1]
+
+    if output_names is None:
+        output_names = [f"Output {i+1}" for i in range(n_outputs)]
+
+    # Create figure with 2 rows: top for bar chart, bottom for distributions
+    fig, axes = plt.subplots(2, n_outputs, figsize=(5*n_outputs, 8))
+    if n_outputs == 1:
+        axes = axes.reshape(2, 1)
+
+    for i, name in enumerate(output_names):
+        aleatoric = y_pred_aleatoric[:, i]
+        epistemic = y_pred_epistemic[:, i]
+        total = aleatoric + epistemic
+
+        mean_aleatoric = np.mean(aleatoric)
+        mean_epistemic = np.mean(epistemic)
+        mean_total = mean_aleatoric + mean_epistemic
+
+        # Top: Stacked bar chart showing mean decomposition
+        ax1 = axes[0, i]
+        bars = ax1.bar(['Uncertainty'], [mean_aleatoric], label='Aleatoric', color='#3498db', alpha=0.8)
+        ax1.bar(['Uncertainty'], [mean_epistemic], bottom=[mean_aleatoric], label='Epistemic', color='#e74c3c', alpha=0.8)
+
+        # Add percentage labels
+        aleatoric_pct = mean_aleatoric / mean_total * 100 if mean_total > 0 else 0
+        epistemic_pct = mean_epistemic / mean_total * 100 if mean_total > 0 else 0
+
+        ax1.text(0, mean_aleatoric/2, f'{aleatoric_pct:.1f}%', ha='center', va='center', fontsize=12, fontweight='bold', color='white')
+        ax1.text(0, mean_aleatoric + mean_epistemic/2, f'{epistemic_pct:.1f}%', ha='center', va='center', fontsize=12, fontweight='bold', color='white')
+
+        ax1.set_ylabel('Variance', fontsize=10)
+        ax1.set_title(f'{name}\nUncertainty Decomposition', fontsize=12, fontweight='bold')
+        ax1.legend(loc='upper right', fontsize=9)
+        ax1.grid(True, alpha=0.3, axis='y')
+
+        # Add text with values
+        ax1.text(0.02, 0.98, f'Aleatoric: {mean_aleatoric:.6f}\nEpistemic: {mean_epistemic:.6f}\nTotal: {mean_total:.6f}',
+                transform=ax1.transAxes, fontsize=9, verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+        # Bottom: Distribution comparison
+        ax2 = axes[1, i]
+
+        # Histogram for both
+        bins = 50
+        alpha = 0.6
+        ax2.hist(aleatoric, bins=bins, alpha=alpha, label='Aleatoric', color='#3498db', density=True)
+        ax2.hist(epistemic, bins=bins, alpha=alpha, label='Epistemic', color='#e74c3c', density=True)
+
+        ax2.set_xlabel('Variance', fontsize=10)
+        ax2.set_ylabel('Density', fontsize=10)
+        ax2.set_title(f'{name}\nDistribution Comparison', fontsize=11)
+        ax2.legend(fontsize=9)
+        ax2.grid(True, alpha=0.3)
+
+        # Add vertical lines for means
+        ax2.axvline(mean_aleatoric, color='#2980b9', linestyle='--', linewidth=2, label=f'Mean Aleatoric')
+        ax2.axvline(mean_epistemic, color='#c0392b', linestyle='--', linewidth=2, label=f'Mean Epistemic')
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Uncertainty decomposition plot saved: {save_path}")
+
+    plt.close()

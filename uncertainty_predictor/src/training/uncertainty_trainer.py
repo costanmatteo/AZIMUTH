@@ -952,6 +952,8 @@ class SWAGTrainer:
                 swa_epoch = epoch - self.swa_start_actual if self.swa_start_actual is not None else epoch - swa_start
                 if swa_epoch % self.swa_freq == 0:
                     self.swag_model.collect_model()
+                    n_collected = self.swag_model.n_models
+                    print(f"  [SWA] Epoch {epoch+1}: collected sample {n_collected}/{self.min_samples} (val_loss: {val_loss:.6f})")
 
             # Early stopping (only during pre-training phase)
             if not in_swa_phase:
@@ -963,12 +965,17 @@ class SWAGTrainer:
                     epochs_without_improvement += 1
 
                 if epochs_without_improvement >= patience:
-                    print(f"\nEarly stopping at epoch {epoch+1}, switching to SWA phase")
                     # Instead of stopping, switch to SWA phase
                     in_swa_phase = True
                     self._set_learning_rate(self.swa_learning_rate)
                     self.swa_start_actual = epoch + 1
                     epochs_without_improvement = 0
+                    print(f"\n{'─'*50}")
+                    print(f"EARLY STOPPING triggered at epoch {epoch+1}")
+                    print(f"Switching to SWA collection phase")
+                    print(f"Learning rate set to: {self.swa_learning_rate}")
+                    print(f"Will collect minimum {self.min_samples} weight samples")
+                    print(f"{'─'*50}\n")
 
             epoch += 1
 

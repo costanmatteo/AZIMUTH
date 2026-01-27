@@ -36,6 +36,7 @@ from utils import (
     plot_predictions_with_uncertainty,
     plot_scatter_with_uncertainty,
     plot_uncertainty_distribution,
+    plot_uncertainty_decomposition,
     evaluate_prediction_intervals,
     generate_uncertainty_training_report
 )
@@ -373,15 +374,27 @@ def main():
 
     y_train_pred_mean_orig = preprocessor.inverse_transform_output(y_train_pred_mean)
     y_train_orig = y_train
+    y_train_aleatoric_orig = None
+    y_train_epistemic_orig = None
 
     if hasattr(preprocessor, 'y_scaler') and preprocessor.y_scaler is not None:
         if hasattr(preprocessor.y_scaler, 'scale_'):
             scale_factors = preprocessor.y_scaler.scale_
             y_train_pred_variance_orig = y_train_pred_variance * (scale_factors ** 2)
+            # Also scale aleatoric and epistemic variances
+            if use_ensemble or use_swag:
+                y_train_aleatoric_orig = y_train_aleatoric * (scale_factors ** 2)
+                y_train_epistemic_orig = y_train_epistemic * (scale_factors ** 2)
         else:
             y_train_pred_variance_orig = y_train_pred_variance
+            if use_ensemble or use_swag:
+                y_train_aleatoric_orig = y_train_aleatoric
+                y_train_epistemic_orig = y_train_epistemic
     else:
         y_train_pred_variance_orig = y_train_pred_variance
+        if use_ensemble or use_swag:
+            y_train_aleatoric_orig = y_train_aleatoric
+            y_train_epistemic_orig = y_train_epistemic
 
     # Calculate metrics
     metrics = calculate_metrics(
@@ -467,7 +480,9 @@ def main():
         y_train_pred_variance_orig,
         output_names=output_columns,
         save_path=checkpoint_dir / 'training_predictions_with_uncertainty.png',
-        confidence=CONFIG['uncertainty']['confidence_level']
+        confidence=CONFIG['uncertainty']['confidence_level'],
+        y_pred_aleatoric=y_train_aleatoric_orig if (use_ensemble or use_swag) else None,
+        y_pred_epistemic=y_train_epistemic_orig if (use_ensemble or use_swag) else None
     )
 
     # Plot scatter with uncertainty coloring
@@ -485,6 +500,15 @@ def main():
         output_names=output_columns,
         save_path=checkpoint_dir / 'uncertainty_distribution.png'
     )
+
+    # Plot uncertainty decomposition (only for ensemble/SWAG)
+    if use_ensemble or use_swag:
+        plot_uncertainty_decomposition(
+            y_pred_aleatoric_orig,
+            y_pred_epistemic_orig,
+            output_names=output_columns,
+            save_path=checkpoint_dir / 'uncertainty_decomposition.png'
+        )
 
     # 9. GENERATE PDF REPORT
     print("\nGenerating PDF report...")

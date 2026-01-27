@@ -419,13 +419,15 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
             print(f"    Epistemic Ratio: {epistemic_ratio:.1f}%")
 
     # Also get predictions on training set for visualization
+    y_train_pred_aleatoric = None
+    y_train_pred_epistemic = None
     if use_ensemble or use_swag:
         if use_swag:
-            y_train_pred_mean, y_train_pred_variance, _, _ = trainer.predict(
+            y_train_pred_mean, y_train_pred_variance, y_train_pred_aleatoric, y_train_pred_epistemic = trainer.predict(
                 X_train_scaled, return_uncertainty=True, n_samples=swag_n_samples
             )
         else:
-            y_train_pred_mean, y_train_pred_variance, _, _ = trainer.predict(X_train_scaled, return_uncertainty=True)
+            y_train_pred_mean, y_train_pred_variance, y_train_pred_aleatoric, y_train_pred_epistemic = trainer.predict(X_train_scaled, return_uncertainty=True)
     else:
         y_train_pred_mean, y_train_pred_variance = trainer.predict(X_train_scaled, return_uncertainty=True)
 
@@ -436,10 +438,18 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
         if hasattr(preprocessor.output_scaler, 'scale_'):
             scale_factors = preprocessor.output_scaler.scale_
             y_train_pred_variance_orig = y_train_pred_variance * (scale_factors ** 2)
+            # Also scale aleatoric and epistemic variances
+            if y_train_pred_aleatoric is not None:
+                y_train_pred_aleatoric_orig = y_train_pred_aleatoric * (scale_factors ** 2)
+                y_train_pred_epistemic_orig = y_train_pred_epistemic * (scale_factors ** 2)
         else:
             y_train_pred_variance_orig = y_train_pred_variance
+            y_train_pred_aleatoric_orig = y_train_pred_aleatoric
+            y_train_pred_epistemic_orig = y_train_pred_epistemic
     else:
         y_train_pred_variance_orig = y_train_pred_variance
+        y_train_pred_aleatoric_orig = y_train_pred_aleatoric
+        y_train_pred_epistemic_orig = y_train_pred_epistemic
 
     # 8. Generate visualizations
     if verbose:
@@ -465,13 +475,15 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
         y_pred_epistemic=epistemics if (use_ensemble or use_swag) else None
     )
 
-    # Predictions plot - training set
+    # Predictions plot - training set (with aleatoric/epistemic decomposition for ensemble/SWAG)
     uq_viz.plot_predictions_with_uncertainty(
         y_true=y_train_orig,
         y_pred_mean=y_train_pred_mean_orig,
         y_pred_variance=y_train_pred_variance_orig,
         output_names=output_labels,
-        save_path=str(checkpoint_dir / 'training_predictions_with_uncertainty.png')
+        save_path=str(checkpoint_dir / 'training_predictions_with_uncertainty.png'),
+        y_pred_aleatoric=y_train_pred_aleatoric_orig if (use_ensemble or use_swag) else None,
+        y_pred_epistemic=y_train_pred_epistemic_orig if (use_ensemble or use_swag) else None
     )
 
     # Scatter plot with uncertainty
@@ -489,6 +501,15 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
         output_names=output_labels,
         save_path=str(checkpoint_dir / 'uncertainty_distribution.png')
     )
+
+    # Uncertainty decomposition plot (only for ensemble/SWAG)
+    if use_ensemble or use_swag:
+        uq_viz.plot_uncertainty_decomposition(
+            y_pred_aleatoric=aleatorics,
+            y_pred_epistemic=epistemics,
+            output_names=output_labels,
+            save_path=str(checkpoint_dir / 'uncertainty_decomposition.png')
+        )
 
     # 9. Generate PDF report
     if verbose:
