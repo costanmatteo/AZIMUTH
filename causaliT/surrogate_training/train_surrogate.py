@@ -13,6 +13,7 @@ Options:
     --batch_size INT       Batch size (default: from config)
     --learning_rate FLOAT  Learning rate (default: from config)
     --generate_data        Generate new training data before training
+    --data_only            Generate data only (no training)
     --skip_training        Skip training, only generate report from existing results
     --output_dir PATH      Output directory
     --device STR           Device (cpu/cuda/auto)
@@ -605,6 +606,7 @@ def main():
     parser.add_argument('--batch_size', type=int, default=None, help='Batch size')
     parser.add_argument('--learning_rate', type=float, default=None, help='Learning rate')
     parser.add_argument('--generate_data', action='store_true', help='Generate new training data')
+    parser.add_argument('--data_only', action='store_true', help='Generate data only (no training)')
     parser.add_argument('--skip_training', action='store_true', help='Skip training')
     parser.add_argument('--output_dir', type=str, default='causaliT/checkpoints/surrogate',
                        help='Output directory')
@@ -632,9 +634,18 @@ def main():
 
     # Generate data if requested or if data doesn't exist
     data_path = Path(args.data_dir)
-    if args.generate_data or not (data_path / 'train_X.npy').exists():
+    if args.data_only or args.generate_data or not (data_path / 'train_X.npy').exists():
         print("\n[1/4] Generating training data...")
         stats = generate_all_datasets(config, args.data_dir, device=args.device)
+
+        if args.data_only:
+            print("\n" + "="*70)
+            print("Data Generation Complete!")
+            print("="*70)
+            print(f"Data saved to: {args.data_dir}")
+            for split, s in stats.items():
+                print(f"  {split}: {s['n_samples']} samples, F = {s['F_mean']:.4f} +/- {s['F_std']:.4f}")
+            return
     else:
         print("\n[1/4] Using existing training data")
 
