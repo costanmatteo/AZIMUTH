@@ -40,10 +40,15 @@ class TrajectoryDataGenerator:
         """
         Args:
             config: Data generation configuration
-            device: Torch device
+            device: Torch device ('cpu', 'cuda', or 'auto')
         """
         self.config = config
-        self.device = device
+
+        # Resolve device string
+        if device == 'auto':
+            self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        else:
+            self.device = device
 
         # Get process configuration
         process_names = config.get('process_names', None)
@@ -52,7 +57,7 @@ class TrajectoryDataGenerator:
 
         print(f"TrajectoryDataGenerator initialized:")
         print(f"  Processes: {self.process_names}")
-        print(f"  Device: {device}")
+        print(f"  Device: {self.device}")
 
     def generate_dataset(self,
                         n_trajectories: int,
