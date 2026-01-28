@@ -3,13 +3,13 @@ Surrogate Models for Controller Optimization.
 
 This module provides surrogate models for computing reliability F:
 
-1. ProTSurrogate: Uses mathematical formula (reliability_function)
+1. ProTSurrogate: Uses mathematical formula
    - Computes F using adaptive targets and weighted quality scores
    - Deterministic, fast, interpretable
 
-2. CasualiTSurrogate: Uses learned transformer (casualit_surrogate)
-   - Predicts F using trained CasualiT model
-   - Learned from trajectory data
+2. CasualiTSurrogate: Uses causaliT (ProT transformer)
+   - Loads trained TransformerForecaster from causaliT
+   - Predicts F from trajectory using learned model
 
 Use create_surrogate() factory function to instantiate the appropriate surrogate
 based on configuration.
@@ -373,7 +373,7 @@ def create_surrogate(config: Dict,
         config: Surrogate configuration dict from controller_config['surrogate']
             - type: 'reliability_function' or 'casualit'
             - use_deterministic_sampling: bool
-            - casualit: dict with checkpoint_path, auto_train_if_missing
+            - casualit: dict with checkpoint_path
         target_trajectory: Target trajectory dict for F* computation
         device: Torch device
 
@@ -400,34 +400,19 @@ def create_surrogate(config: Dict,
         )
 
     elif surrogate_type == 'casualit':
-        # Use learned transformer (CasualiTSurrogate)
+        # Use learned transformer from causaliT
         casualit_config = config.get('casualit', {})
-        checkpoint_path = casualit_config.get(
-            'checkpoint_path',
-            'casualit_surrogate/checkpoints/best_model.ckpt'
-        )
-        auto_train = casualit_config.get('auto_train_if_missing', True)
+        checkpoint_path = casualit_config.get('checkpoint_path')
 
-        # Check if checkpoint exists
-        if not os.path.exists(checkpoint_path):
-            if auto_train:
-                print(f"CasualiT checkpoint not found at {checkpoint_path}")
-                print("Training CasualiT surrogate automatically...")
-                _train_casualit_surrogate(checkpoint_path)
-            else:
-                raise FileNotFoundError(
-                    f"CasualiT checkpoint not found at {checkpoint_path}. "
-                    f"Either train the model first or set auto_train_if_missing=True"
-                )
+        if not checkpoint_path or not os.path.exists(checkpoint_path):
+            raise FileNotFoundError(
+                f"CasualiT checkpoint not found at {checkpoint_path}. "
+                f"Train the model first using causaliT training pipeline."
+            )
 
-        # Load CasualiT surrogate
-        from casualit_surrogate.src.models.casualit_surrogate import CasualiTSurrogate
-
-        surrogate = CasualiTSurrogate.load(checkpoint_path, device=device)
-
-        # Wrap to add F_star computation (for compatibility)
-        return CasualiTSurrogateWrapper(
-            model=surrogate,
+        # Load and wrap CasualiT model
+        return CasualiTSurrogate(
+            checkpoint_path=checkpoint_path,
             target_trajectory=target_trajectory,
             device=device,
         )
@@ -439,46 +424,30 @@ def create_surrogate(config: Dict,
         )
 
 
-def _train_casualit_surrogate(checkpoint_path: str):
-    """Train CasualiT surrogate if checkpoint doesn't exist."""
-    try:
-        from casualit_surrogate.src.training.surrogate_trainer import train_casualit_surrogate
-        from casualit_surrogate.configs.surrogate_config import SURROGATE_CONFIG
-
-        # Update checkpoint path in config
-        config = dict(SURROGATE_CONFIG)
-        config['training'] = dict(config['training'])
-        config['training']['checkpoint_dir'] = os.path.dirname(checkpoint_path)
-
-        train_casualit_surrogate(config=config, verbose=True)
-
-    except ImportError as e:
-        raise ImportError(
-            f"Cannot auto-train CasualiT surrogate: {e}. "
-            f"Please train manually using: python -m casualit_surrogate.train_surrogate"
-        )
-
-
-class CasualiTSurrogateWrapper:
+class CasualiTSurrogate:
     """
-    Wrapper for CasualiTSurrogate to provide ProTSurrogate-compatible interface.
+    Surrogate using causaliT (ProT transformer) to predict reliability F.
 
-    Adds F_star computation for target trajectory.
+    Loads a trained TransformerForecaster model and uses it to predict F
+    from process chain trajectories.
     """
 
     def __init__(self,
-                 model,
+                 checkpoint_path: str,
                  target_trajectory: Dict,
                  device: str = 'cpu'):
         """
         Args:
-            model: Loaded CasualiTSurrogate model
+            checkpoint_path: Path to trained TransformerForecaster checkpoint
             target_trajectory: Target trajectory for F* computation
             device: Torch device
         """
-        self.model = model
         self.device = device
+        self.checkpoint_path = checkpoint_path
         self.n_scenarios = None
+
+        # Load the trained model from causaliT
+        self.model = self._load_model(checkpoint_path, device)
 
         # Store target trajectory
         self.target_trajectory_tensors = {}
@@ -493,13 +462,117 @@ class CasualiTSurrogateWrapper:
         # Compute F_star using the model
         self.F_star = self._compute_all_target_reliabilities()
 
+    def _load_model(self, checkpoint_path: str, device: str):
+        """
+        Load trained TransformerForecaster from causaliT checkpoint.
+
+        Args:
+            checkpoint_path: Path to .ckpt file
+            device: Torch device
+
+        Returns:
+            Loaded model in eval mode
+        """
+        from causaliT.proT.training.forecasters.transformer_forecaster import TransformerForecaster
+
+        # Load model from checkpoint
+        model = TransformerForecaster.load_from_checkpoint(
+            checkpoint_path,
+            map_location=device
+        )
+        model.eval()
+        model.to(device)
+
+        return model
+
     def compute_reliability(self, trajectory: Dict, return_quality_scores: bool = False):
-        """Compute reliability F using CasualiT model."""
-        F = self.model.predict_reliability(trajectory)
+        """
+        Compute reliability F using CasualiT model.
+
+        Args:
+            trajectory: Dict with process outputs
+            return_quality_scores: If True, return empty dict (not supported)
+
+        Returns:
+            F: Predicted reliability tensor
+        """
+        # Convert trajectory to ProT input format
+        X, Y = self._trajectory_to_prot_format(trajectory)
+
+        # Run inference
+        with torch.no_grad():
+            forecast_output, _, _, _ = self.model.forward(data_input=X, data_trg=Y)
+
+        # Extract F from forecast output (assumes F is the target)
+        F = forecast_output.squeeze()
 
         if return_quality_scores:
-            return F, {}  # CasualiT doesn't provide quality scores
+            return F, {}  # CasualiT doesn't provide per-process quality scores
         return F
+
+    def _trajectory_to_prot_format(self, trajectory: Dict):
+        """
+        Convert trajectory dict to ProT input format.
+
+        ProT expects:
+            X: (batch, seq_len, features) - encoder input
+            Y: (batch, seq_len, features) - decoder input/target
+
+        Args:
+            trajectory: Dict mapping process_name to data
+
+        Returns:
+            X, Y tensors for ProT forward pass
+        """
+        process_order = ['laser', 'plasma', 'galvanic', 'microetch']
+        features_list = []
+
+        for process_name in process_order:
+            if process_name not in trajectory:
+                continue
+
+            data = trajectory[process_name]
+
+            # Get inputs
+            inputs = data.get('inputs', torch.zeros(1, 2))
+            if isinstance(inputs, np.ndarray):
+                inputs = torch.tensor(inputs, dtype=torch.float32)
+
+            # Get outputs (mean and var)
+            outputs_mean = data.get('outputs_mean', data.get('outputs_sampled', torch.zeros(1, 1)))
+            if isinstance(outputs_mean, np.ndarray):
+                outputs_mean = torch.tensor(outputs_mean, dtype=torch.float32)
+
+            outputs_var = data.get('outputs_var', torch.zeros_like(outputs_mean))
+            if isinstance(outputs_var, np.ndarray):
+                outputs_var = torch.tensor(outputs_var, dtype=torch.float32)
+
+            # Concatenate features for this process step
+            step_features = torch.cat([
+                inputs.view(inputs.shape[0], -1),
+                outputs_mean.view(outputs_mean.shape[0], -1),
+                outputs_var.view(outputs_var.shape[0], -1),
+            ], dim=-1)
+
+            features_list.append(step_features)
+
+        # Stack to create sequence: (batch, n_processes, features)
+        # Pad to same feature dimension if needed
+        max_features = max(f.shape[-1] for f in features_list)
+        padded = []
+        for f in features_list:
+            if f.shape[-1] < max_features:
+                padding = torch.zeros(f.shape[0], max_features - f.shape[-1], device=f.device)
+                f = torch.cat([f, padding], dim=-1)
+            padded.append(f)
+
+        X = torch.stack(padded, dim=1).to(self.device)
+
+        # For decoder input, use same format (target will be F)
+        # Create placeholder target tensor
+        Y = torch.zeros(X.shape[0], 1, 1, device=self.device)
+
+        return X, Y
 
     def _compute_all_target_reliabilities(self) -> np.ndarray:
         """Compute F* for all scenarios using CasualiT model."""
@@ -515,8 +588,10 @@ class CasualiTSurrogateWrapper:
                         'outputs_var': torch.zeros_like(data['outputs'][scenario_idx:scenario_idx+1])
                     }
 
-                F_star = self.model.predict_reliability(scenario_traj)
-                F_star_values.append(F_star.item())
+                F_star = self.compute_reliability(scenario_traj)
+                if isinstance(F_star, torch.Tensor):
+                    F_star = F_star.item()
+                F_star_values.append(F_star)
 
         return np.array(F_star_values)
 
