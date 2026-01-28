@@ -12,7 +12,10 @@ The generator:
 """
 
 import sys
+import os
+import io
 from pathlib import Path
+from contextlib import redirect_stdout
 import numpy as np
 import torch
 from tqdm import tqdm
@@ -25,6 +28,11 @@ from controller_optimization.configs.processes_config import get_filtered_proces
 from controller_optimization.src.utils.target_generation import generate_target_trajectory
 from controller_optimization.src.utils.process_chain import ProcessChain
 from controller_optimization.src.models.surrogate import ProTSurrogate
+
+
+def suppress_stdout():
+    """Context manager to suppress stdout."""
+    return redirect_stdout(io.StringIO())
 
 
 class TrajectoryDataGenerator:
@@ -54,10 +62,6 @@ class TrajectoryDataGenerator:
         process_names = config.get('process_names', None)
         self.processes_config = get_filtered_processes(process_names)
         self.process_names = [p['name'] for p in self.processes_config]
-
-        print(f"TrajectoryDataGenerator initialized:")
-        print(f"  Processes: {self.process_names}")
-        print(f"  Device: {self.device}")
 
     def generate_dataset(self,
                         n_trajectories: int,
@@ -95,34 +99,34 @@ class TrajectoryDataGenerator:
         all_F_star = []
 
         if verbose:
-            print(f"\nGenerating {n_trajectories} trajectories across {n_scenarios} scenarios...")
-            scenario_iter = tqdm(range(n_scenarios), desc="Scenarios")
+            scenario_iter = tqdm(range(n_scenarios), desc="Scenarios", leave=False)
         else:
             scenario_iter = range(n_scenarios)
 
         for scenario_idx in scenario_iter:
-            # Generate target trajectory for this scenario
+            # Generate target trajectory for this scenario (suppress verbose output)
             scenario_seed = seed + scenario_idx * self.config.get('scenario_seed_offset', 1000)
-            target_trajectory = generate_target_trajectory(
-                self.processes_config,
-                n_samples=1,
-                seed=scenario_seed
-            )
+            with suppress_stdout():
+                target_trajectory = generate_target_trajectory(
+                    self.processes_config,
+                    n_samples=1,
+                    seed=scenario_seed
+                )
 
-            # Create ProcessChain for this scenario
-            process_chain = ProcessChain(
-                processes_config=self.processes_config,
-                target_trajectory=target_trajectory,
-                policy_config={'architecture': 'medium', 'use_scenario_encoder': False},
-                device=self.device
-            )
+                # Create ProcessChain for this scenario
+                process_chain = ProcessChain(
+                    processes_config=self.processes_config,
+                    target_trajectory=target_trajectory,
+                    policy_config={'architecture': 'medium', 'use_scenario_encoder': False},
+                    device=self.device
+                )
 
-            # Create ProTSurrogate for computing F
-            surrogate = ProTSurrogate(
-                target_trajectory=target_trajectory,
-                device=self.device,
-                use_deterministic_sampling=False  # Use stochastic sampling for diversity
-            )
+                # Create ProTSurrogate for computing F
+                surrogate = ProTSurrogate(
+                    target_trajectory=target_trajectory,
+                    device=self.device,
+                    use_deterministic_sampling=False  # Use stochastic sampling for diversity
+                )
 
             # Determine number of trajectories for this scenario
             n_traj_scenario = trajectories_per_scenario + (1 if scenario_idx < remaining else 0)
@@ -171,11 +175,7 @@ class TrajectoryDataGenerator:
         Y = np.concatenate(all_Y, axis=0)
 
         if verbose:
-            print(f"\nDataset generated:")
-            print(f"  X shape: {X.shape}")
-            print(f"  Y shape: {Y.shape}")
-            print(f"  F range: [{Y.min():.4f}, {Y.max():.4f}]")
-            print(f"  F mean: {Y.mean():.4f} +/- {Y.std():.4f}")
+            print(f"  -> {X.shape[0]} samples, F = {Y.mean():.4f} +/- {Y.std():.4f}")
 
         return {
             'X': X,
@@ -210,8 +210,6 @@ class TrajectoryDataGenerator:
         # Save metadata
         np.savez(output_path / f'{prefix}_metadata.npz', **data['metadata'])
 
-        print(f"Saved {prefix} dataset to {output_path}")
-
 
 def generate_all_datasets(config: dict, output_dir: str, device: str = 'cpu'):
     """
@@ -230,45 +228,42 @@ def generate_all_datasets(config: dict, output_dir: str, device: str = 'cpu'):
     data_config = config['data']
 
     # Generate training data
-    print("\n" + "="*60)
-    print("Generating TRAINING data")
-    print("="*60)
+    print("Generating training data...")
     train_data = generator.generate_dataset(
         n_trajectories=data_config['n_trajectories'],
         n_scenarios=data_config['n_scenarios'],
         seed=data_config['random_seed'],
         batch_size=data_config['batch_size_generation'],
+        verbose=True,
     )
     generator.save_dataset(train_data, output_dir, 'train')
 
     # Generate validation data
-    print("\n" + "="*60)
-    print("Generating VALIDATION data")
-    print("="*60)
+    print("Generating validation data...")
     val_data = generator.generate_dataset(
         n_trajectories=data_config['n_val_trajectories'],
         n_scenarios=data_config['n_scenarios'] // 2,
         seed=data_config['random_seed'] + 10000,
         batch_size=data_config['batch_size_generation'],
+        verbose=False,
     )
     generator.save_dataset(val_data, output_dir, 'val')
 
     # Generate test data
-    print("\n" + "="*60)
-    print("Generating TEST data")
-    print("="*60)
+    print("Generating test data...")
     test_data = generator.generate_dataset(
         n_trajectories=data_config['n_test_trajectories'],
         n_scenarios=data_config['n_scenarios'] // 2,
         seed=data_config['random_seed'] + 20000,
         batch_size=data_config['batch_size_generation'],
+        verbose=False,
     )
     generator.save_dataset(test_data, output_dir, 'test')
 
     stats = {
-        'train': {'n_samples': len(train_data['X']), 'F_mean': train_data['Y'].mean(), 'F_std': train_data['Y'].std()},
-        'val': {'n_samples': len(val_data['X']), 'F_mean': val_data['Y'].mean(), 'F_std': val_data['Y'].std()},
-        'test': {'n_samples': len(test_data['X']), 'F_mean': test_data['Y'].mean(), 'F_std': test_data['Y'].std()},
+        'train': {'n_samples': len(train_data['X']), 'F_mean': float(train_data['Y'].mean()), 'F_std': float(train_data['Y'].std())},
+        'val': {'n_samples': len(val_data['X']), 'F_mean': float(val_data['Y'].mean()), 'F_std': float(val_data['Y'].std())},
+        'test': {'n_samples': len(test_data['X']), 'F_mean': float(test_data['Y'].mean()), 'F_std': float(test_data['Y'].std())},
     }
 
     return stats
