@@ -240,7 +240,6 @@ class SurrogateTrainer:
             mode='min',
             factor=training_cfg['scheduler_factor'],
             patience=training_cfg['scheduler_patience'],
-            verbose=True
         ) if training_cfg['use_scheduler'] else None
 
         # Loss function
