@@ -1,13 +1,28 @@
 """
-Surrogate Model (ProT) - Placeholder.
+Surrogate Models for Controller Optimization.
 
-Questo è un PLACEHOLDER che sarà sostituito dal vero transformer.
-Per ora: metrica semplice basata su distanza da target.
+This module provides surrogate models for computing reliability F:
+
+1. ProTSurrogate: Uses mathematical formula
+   - Computes F using adaptive targets and weighted quality scores
+   - Deterministic, fast, interpretable
+
+2. CasualiTSurrogate: Uses causaliT (ProT transformer)
+   - Loads trained TransformerForecaster from causaliT
+   - Predicts F from trajectory using learned model
+
+Use create_surrogate() factory function to instantiate the appropriate surrogate
+based on configuration.
 """
 
+import os
+import sys
 import torch
 import torch.nn as nn
 import numpy as np
+from typing import Dict, Optional, Union
+
+sys.path.insert(0, '/home/user/AZIMUTH')
 
 
 class ProTSurrogate:
@@ -342,3 +357,224 @@ if __name__ == '__main__':
     print(f"  Outputs grad exists: {test_traj_grad['laser']['outputs_mean'].grad is not None}")
 
     print("\n✓ ProTSurrogate test passed!")
+
+
+# =============================================================================
+# FACTORY FUNCTION
+# =============================================================================
+
+def create_surrogate(config: Dict,
+                     target_trajectory: Dict,
+                     device: str = 'cpu') -> Union['ProTSurrogate', 'CasualiTSurrogate']:
+    """
+    Factory function to create the appropriate surrogate based on configuration.
+
+    Args:
+        config: Surrogate configuration dict from controller_config['surrogate']
+            - type: 'reliability_function' or 'casualit'
+            - use_deterministic_sampling: bool
+            - casualit: dict with checkpoint_path
+        target_trajectory: Target trajectory dict for F* computation
+        device: Torch device
+
+    Returns:
+        Surrogate instance (ProTSurrogate or CasualiTSurrogate)
+
+    Example:
+        >>> surrogate_config = {
+        ...     'type': 'reliability_function',
+        ...     'use_deterministic_sampling': False,
+        ... }
+        >>> surrogate = create_surrogate(surrogate_config, target_trajectory, 'cuda')
+        >>> F = surrogate.compute_reliability(trajectory)
+    """
+    surrogate_type = config.get('type', 'reliability_function')
+    use_deterministic = config.get('use_deterministic_sampling', True)
+
+    if surrogate_type == 'reliability_function':
+        # Use mathematical formula (ProTSurrogate)
+        return ProTSurrogate(
+            target_trajectory=target_trajectory,
+            device=device,
+            use_deterministic_sampling=use_deterministic,
+        )
+
+    elif surrogate_type == 'casualit':
+        # Use learned transformer from causaliT
+        casualit_config = config.get('casualit', {})
+        checkpoint_path = casualit_config.get('checkpoint_path')
+
+        if not checkpoint_path or not os.path.exists(checkpoint_path):
+            raise FileNotFoundError(
+                f"CasualiT checkpoint not found at {checkpoint_path}. "
+                f"Train the model first using causaliT training pipeline."
+            )
+
+        # Load and wrap CasualiT model
+        return CasualiTSurrogate(
+            checkpoint_path=checkpoint_path,
+            target_trajectory=target_trajectory,
+            device=device,
+        )
+
+    else:
+        raise ValueError(
+            f"Unknown surrogate type: {surrogate_type}. "
+            f"Expected 'reliability_function' or 'casualit'"
+        )
+
+
+class CasualiTSurrogate:
+    """
+    Minimal adapter for using causaliT (ProT transformer) to predict reliability F.
+
+    This is a thin wrapper that:
+    1. Loads a trained TransformerForecaster model
+    2. Delegates format conversion to ProcessChain.trajectory_to_prot_format()
+    3. Provides the same interface as ProTSurrogate
+
+    The actual data format conversion is done by ProcessChain, making it the
+    single source of truth for ProT format.
+    """
+
+    def __init__(self,
+                 checkpoint_path: str,
+                 target_trajectory: Dict,
+                 device: str = 'cpu'):
+        """
+        Args:
+            checkpoint_path: Path to trained TransformerForecaster checkpoint
+            target_trajectory: Target trajectory for F* computation
+            device: Torch device
+        """
+        self.device = device
+        self.checkpoint_path = checkpoint_path
+        self.n_scenarios = None
+        self.process_chain = None  # Set via set_process_chain() after creation
+
+        # Load the trained model from causaliT
+        self.model = self._load_model(checkpoint_path, device)
+
+        # Store target trajectory (same interface as ProTSurrogate)
+        self.target_trajectory_tensors = {}
+        for process_name, data in target_trajectory.items():
+            self.target_trajectory_tensors[process_name] = {
+                'inputs': torch.tensor(data['inputs'], dtype=torch.float32, device=device),
+                'outputs': torch.tensor(data['outputs'], dtype=torch.float32, device=device)
+            }
+            if self.n_scenarios is None:
+                self.n_scenarios = data['inputs'].shape[0]
+
+        # F_star will be computed after process_chain is set
+        self.F_star = None
+
+    def set_process_chain(self, process_chain):
+        """
+        Set the ProcessChain reference for format conversion.
+
+        Must be called before compute_reliability() can be used.
+        After setting, computes F_star for all scenarios.
+
+        Args:
+            process_chain: ProcessChain instance
+        """
+        self.process_chain = process_chain
+        # Now compute F_star using the model
+        self.F_star = self._compute_all_target_reliabilities()
+
+    def _load_model(self, checkpoint_path: str, device: str):
+        """
+        Load trained TransformerForecaster from causaliT checkpoint.
+
+        Args:
+            checkpoint_path: Path to .ckpt file
+            device: Torch device
+
+        Returns:
+            Loaded model in eval mode
+        """
+        from causaliT.proT.training.forecasters.transformer_forecaster import TransformerForecaster
+
+        # Load model from checkpoint
+        model = TransformerForecaster.load_from_checkpoint(
+            checkpoint_path,
+            map_location=device
+        )
+        model.eval()
+        model.to(device)
+
+        return model
+
+    def compute_reliability(self, trajectory: Dict, return_quality_scores: bool = False):
+        """
+        Compute reliability F using CasualiT model.
+
+        Uses ProcessChain.trajectory_to_prot_format() for data conversion,
+        then runs inference through the TransformerForecaster.
+
+        Args:
+            trajectory: Dict with process outputs from ProcessChain.forward()
+            return_quality_scores: If True, return empty dict (not supported by CasualiT)
+
+        Returns:
+            F: Predicted reliability tensor
+
+        Raises:
+            RuntimeError: If process_chain not set via set_process_chain()
+        """
+        if self.process_chain is None:
+            raise RuntimeError(
+                "ProcessChain not set. Call set_process_chain() before compute_reliability(). "
+                "CasualiTSurrogate uses ProcessChain.trajectory_to_prot_format() for data conversion."
+            )
+
+        # Use ProcessChain for format conversion (single source of truth)
+        X, Y = self.process_chain.trajectory_to_prot_format(trajectory)
+
+        # Run inference through causaliT model
+        with torch.no_grad():
+            forecast_output, _, _, _ = self.model.forward(data_input=X, data_trg=Y)
+
+        # Extract F from forecast output (assumes F is the target)
+        F = forecast_output.squeeze()
+
+        if return_quality_scores:
+            return F, {}  # CasualiT doesn't provide per-process quality scores
+        return F
+
+    def _compute_all_target_reliabilities(self) -> np.ndarray:
+        """
+        Compute F* for all scenarios using CasualiT model.
+
+        Returns:
+            np.array: F_star values, shape (n_scenarios,)
+        """
+        if self.process_chain is None:
+            # Return placeholder - will be recomputed when process_chain is set
+            return np.ones(self.n_scenarios)
+
+        F_star_values = []
+
+        with torch.no_grad():
+            for scenario_idx in range(self.n_scenarios):
+                # Create trajectory dict for this scenario
+                scenario_traj = {}
+                for process_name, data in self.target_trajectory_tensors.items():
+                    scenario_traj[process_name] = {
+                        'inputs': data['inputs'][scenario_idx:scenario_idx+1],
+                        'outputs_mean': data['outputs'][scenario_idx:scenario_idx+1],
+                        'outputs_var': torch.zeros_like(data['outputs'][scenario_idx:scenario_idx+1])
+                    }
+
+                F_star = self.compute_reliability(scenario_traj)
+                if isinstance(F_star, torch.Tensor):
+                    F_star = F_star.item()
+                F_star_values.append(F_star)
+
+        return np.array(F_star_values)
+
+    def compute_target_reliability(self) -> float:
+        """Return mean F* across all scenarios."""
+        if self.F_star is None:
+            return 1.0  # Placeholder before process_chain is set
+        return float(np.mean(self.F_star))

@@ -70,9 +70,13 @@ METRICS:
                           Success means F_actual >= threshold * F_star
 
 SURROGATE:
+- type: Which surrogate to use for reliability computation
+        * 'reliability_function': Mathematical formula (default)
+        * 'casualit': Learned transformer model (uses causaliT/proT)
 - use_deterministic_sampling: If True, uses mean values directly (deterministic)
                               If False, uses reparameterization trick (stochastic)
                               Recommended: True for stable training, False for uncertainty estimation
+- casualit.checkpoint_path: Path to trained causaliT TransformerForecaster checkpoint
 
 MISC:
 - random_seed: Global random seed
@@ -189,7 +193,17 @@ CONTROLLER_CONFIG = {
 
     # Surrogate model
     'surrogate': {
+        # Surrogate type: 'reliability_function' (mathematical formula) or 'casualit' (learned transformer)
+        'type': 'reliability_function',
+
+        # Common settings
         'use_deterministic_sampling': False,  # True = use mean (stable), False = use sampling (stochastic)
+
+        # CasualiT surrogate settings (used if type='casualit')
+        # Requires a trained causaliT model checkpoint
+        'casualit': {
+            'checkpoint_path': 'causaliT/checkpoints/surrogate/best_model.ckpt',
+        },
     },
 
     # Theoretical analysis
