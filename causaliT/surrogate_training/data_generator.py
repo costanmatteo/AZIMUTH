@@ -21,7 +21,7 @@ from tqdm import tqdm
 REPO_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from controller_optimization.configs.processes_config import PROCESSES, get_filtered_processes
+from controller_optimization.configs.processes_config import get_filtered_processes
 from controller_optimization.src.utils.target_generation import generate_target_trajectory
 from controller_optimization.src.utils.process_chain import ProcessChain
 from controller_optimization.src.models.surrogate import ProTSurrogate
@@ -47,7 +47,7 @@ class TrajectoryDataGenerator:
 
         # Get process configuration
         process_names = config.get('process_names', None)
-        self.processes_config = get_filtered_processes(PROCESSES, process_names)
+        self.processes_config = get_filtered_processes(process_names)
         self.process_names = [p['name'] for p in self.processes_config]
 
         print(f"TrajectoryDataGenerator initialized:")
