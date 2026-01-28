@@ -1,13 +1,28 @@
 """
-Surrogate Model (ProT) - Placeholder.
+Surrogate Models for Controller Optimization.
 
-Questo è un PLACEHOLDER che sarà sostituito dal vero transformer.
-Per ora: metrica semplice basata su distanza da target.
+This module provides surrogate models for computing reliability F:
+
+1. ProTSurrogate: Uses mathematical formula (reliability_function)
+   - Computes F using adaptive targets and weighted quality scores
+   - Deterministic, fast, interpretable
+
+2. CasualiTSurrogate: Uses learned transformer (casualit_surrogate)
+   - Predicts F using trained CasualiT model
+   - Learned from trajectory data
+
+Use create_surrogate() factory function to instantiate the appropriate surrogate
+based on configuration.
 """
 
+import os
+import sys
 import torch
 import torch.nn as nn
 import numpy as np
+from typing import Dict, Optional, Union
+
+sys.path.insert(0, '/home/user/AZIMUTH')
 
 
 class ProTSurrogate:
@@ -342,3 +357,169 @@ if __name__ == '__main__':
     print(f"  Outputs grad exists: {test_traj_grad['laser']['outputs_mean'].grad is not None}")
 
     print("\n✓ ProTSurrogate test passed!")
+
+
+# =============================================================================
+# FACTORY FUNCTION
+# =============================================================================
+
+def create_surrogate(config: Dict,
+                     target_trajectory: Dict,
+                     device: str = 'cpu') -> Union['ProTSurrogate', 'CasualiTSurrogate']:
+    """
+    Factory function to create the appropriate surrogate based on configuration.
+
+    Args:
+        config: Surrogate configuration dict from controller_config['surrogate']
+            - type: 'reliability_function' or 'casualit'
+            - use_deterministic_sampling: bool
+            - casualit: dict with checkpoint_path, auto_train_if_missing
+        target_trajectory: Target trajectory dict for F* computation
+        device: Torch device
+
+    Returns:
+        Surrogate instance (ProTSurrogate or CasualiTSurrogate)
+
+    Example:
+        >>> surrogate_config = {
+        ...     'type': 'reliability_function',
+        ...     'use_deterministic_sampling': False,
+        ... }
+        >>> surrogate = create_surrogate(surrogate_config, target_trajectory, 'cuda')
+        >>> F = surrogate.compute_reliability(trajectory)
+    """
+    surrogate_type = config.get('type', 'reliability_function')
+    use_deterministic = config.get('use_deterministic_sampling', True)
+
+    if surrogate_type == 'reliability_function':
+        # Use mathematical formula (ProTSurrogate)
+        return ProTSurrogate(
+            target_trajectory=target_trajectory,
+            device=device,
+            use_deterministic_sampling=use_deterministic,
+        )
+
+    elif surrogate_type == 'casualit':
+        # Use learned transformer (CasualiTSurrogate)
+        casualit_config = config.get('casualit', {})
+        checkpoint_path = casualit_config.get(
+            'checkpoint_path',
+            'casualit_surrogate/checkpoints/best_model.ckpt'
+        )
+        auto_train = casualit_config.get('auto_train_if_missing', True)
+
+        # Check if checkpoint exists
+        if not os.path.exists(checkpoint_path):
+            if auto_train:
+                print(f"CasualiT checkpoint not found at {checkpoint_path}")
+                print("Training CasualiT surrogate automatically...")
+                _train_casualit_surrogate(checkpoint_path)
+            else:
+                raise FileNotFoundError(
+                    f"CasualiT checkpoint not found at {checkpoint_path}. "
+                    f"Either train the model first or set auto_train_if_missing=True"
+                )
+
+        # Load CasualiT surrogate
+        from casualit_surrogate.src.models.casualit_surrogate import CasualiTSurrogate
+
+        surrogate = CasualiTSurrogate.load(checkpoint_path, device=device)
+
+        # Wrap to add F_star computation (for compatibility)
+        return CasualiTSurrogateWrapper(
+            model=surrogate,
+            target_trajectory=target_trajectory,
+            device=device,
+        )
+
+    else:
+        raise ValueError(
+            f"Unknown surrogate type: {surrogate_type}. "
+            f"Expected 'reliability_function' or 'casualit'"
+        )
+
+
+def _train_casualit_surrogate(checkpoint_path: str):
+    """Train CasualiT surrogate if checkpoint doesn't exist."""
+    try:
+        from casualit_surrogate.src.training.surrogate_trainer import train_casualit_surrogate
+        from casualit_surrogate.configs.surrogate_config import SURROGATE_CONFIG
+
+        # Update checkpoint path in config
+        config = dict(SURROGATE_CONFIG)
+        config['training'] = dict(config['training'])
+        config['training']['checkpoint_dir'] = os.path.dirname(checkpoint_path)
+
+        train_casualit_surrogate(config=config, verbose=True)
+
+    except ImportError as e:
+        raise ImportError(
+            f"Cannot auto-train CasualiT surrogate: {e}. "
+            f"Please train manually using: python -m casualit_surrogate.train_surrogate"
+        )
+
+
+class CasualiTSurrogateWrapper:
+    """
+    Wrapper for CasualiTSurrogate to provide ProTSurrogate-compatible interface.
+
+    Adds F_star computation for target trajectory.
+    """
+
+    def __init__(self,
+                 model,
+                 target_trajectory: Dict,
+                 device: str = 'cpu'):
+        """
+        Args:
+            model: Loaded CasualiTSurrogate model
+            target_trajectory: Target trajectory for F* computation
+            device: Torch device
+        """
+        self.model = model
+        self.device = device
+        self.n_scenarios = None
+
+        # Store target trajectory
+        self.target_trajectory_tensors = {}
+        for process_name, data in target_trajectory.items():
+            self.target_trajectory_tensors[process_name] = {
+                'inputs': torch.tensor(data['inputs'], dtype=torch.float32, device=device),
+                'outputs': torch.tensor(data['outputs'], dtype=torch.float32, device=device)
+            }
+            if self.n_scenarios is None:
+                self.n_scenarios = data['inputs'].shape[0]
+
+        # Compute F_star using the model
+        self.F_star = self._compute_all_target_reliabilities()
+
+    def compute_reliability(self, trajectory: Dict, return_quality_scores: bool = False):
+        """Compute reliability F using CasualiT model."""
+        F = self.model.predict_reliability(trajectory)
+
+        if return_quality_scores:
+            return F, {}  # CasualiT doesn't provide quality scores
+        return F
+
+    def _compute_all_target_reliabilities(self) -> np.ndarray:
+        """Compute F* for all scenarios using CasualiT model."""
+        F_star_values = []
+
+        with torch.no_grad():
+            for scenario_idx in range(self.n_scenarios):
+                scenario_traj = {}
+                for process_name, data in self.target_trajectory_tensors.items():
+                    scenario_traj[process_name] = {
+                        'inputs': data['inputs'][scenario_idx:scenario_idx+1],
+                        'outputs_mean': data['outputs'][scenario_idx:scenario_idx+1],
+                        'outputs_var': torch.zeros_like(data['outputs'][scenario_idx:scenario_idx+1])
+                    }
+
+                F_star = self.model.predict_reliability(scenario_traj)
+                F_star_values.append(F_star.item())
+
+        return np.array(F_star_values)
+
+    def compute_target_reliability(self) -> float:
+        """Return mean F* across all scenarios."""
+        return float(np.mean(self.F_star))
