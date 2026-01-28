@@ -66,7 +66,7 @@ from controller_optimization.src.utils.target_generation import (
     generate_baseline_trajectory
 )
 from controller_optimization.src.utils.process_chain import ProcessChain
-from controller_optimization.src.models.surrogate import ProTSurrogate
+from controller_optimization.src.models.surrogate import ProTSurrogate, CasualiTSurrogate, create_surrogate
 from controller_optimization.src.training.controller_trainer import ControllerTrainer
 
 
@@ -239,12 +239,16 @@ def create_objective(base_config: dict, device: str = 'auto',
                 device=actual_device
             )
 
-            # Create Surrogate
-            surrogate = ProTSurrogate(
+            # Create Surrogate (supports both reliability_function and casualit)
+            surrogate_config = cfg.get('surrogate', {'type': 'reliability_function'})
+            surrogate = create_surrogate(
+                config=surrogate_config,
                 target_trajectory=target_trajectory,
-                device=actual_device,
-                use_deterministic_sampling=cfg.get('surrogate', {}).get('use_deterministic_sampling', True)
+                device=actual_device
             )
+            # For CasualiTSurrogate, connect to ProcessChain for format conversion
+            if isinstance(surrogate, CasualiTSurrogate):
+                surrogate.set_process_chain(process_chain)
 
             # Get curriculum config
             curriculum_config = cfg['training'].get('curriculum_learning', {

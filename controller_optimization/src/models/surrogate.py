@@ -426,10 +426,15 @@ def create_surrogate(config: Dict,
 
 class CasualiTSurrogate:
     """
-    Surrogate using causaliT (ProT transformer) to predict reliability F.
+    Minimal adapter for using causaliT (ProT transformer) to predict reliability F.
 
-    Loads a trained TransformerForecaster model and uses it to predict F
-    from process chain trajectories.
+    This is a thin wrapper that:
+    1. Loads a trained TransformerForecaster model
+    2. Delegates format conversion to ProcessChain.trajectory_to_prot_format()
+    3. Provides the same interface as ProTSurrogate
+
+    The actual data format conversion is done by ProcessChain, making it the
+    single source of truth for ProT format.
     """
 
     def __init__(self,
@@ -445,11 +450,12 @@ class CasualiTSurrogate:
         self.device = device
         self.checkpoint_path = checkpoint_path
         self.n_scenarios = None
+        self.process_chain = None  # Set via set_process_chain() after creation
 
         # Load the trained model from causaliT
         self.model = self._load_model(checkpoint_path, device)
 
-        # Store target trajectory
+        # Store target trajectory (same interface as ProTSurrogate)
         self.target_trajectory_tensors = {}
         for process_name, data in target_trajectory.items():
             self.target_trajectory_tensors[process_name] = {
@@ -459,7 +465,21 @@ class CasualiTSurrogate:
             if self.n_scenarios is None:
                 self.n_scenarios = data['inputs'].shape[0]
 
-        # Compute F_star using the model
+        # F_star will be computed after process_chain is set
+        self.F_star = None
+
+    def set_process_chain(self, process_chain):
+        """
+        Set the ProcessChain reference for format conversion.
+
+        Must be called before compute_reliability() can be used.
+        After setting, computes F_star for all scenarios.
+
+        Args:
+            process_chain: ProcessChain instance
+        """
+        self.process_chain = process_chain
+        # Now compute F_star using the model
         self.F_star = self._compute_all_target_reliabilities()
 
     def _load_model(self, checkpoint_path: str, device: str):
@@ -489,17 +509,29 @@ class CasualiTSurrogate:
         """
         Compute reliability F using CasualiT model.
 
+        Uses ProcessChain.trajectory_to_prot_format() for data conversion,
+        then runs inference through the TransformerForecaster.
+
         Args:
-            trajectory: Dict with process outputs
-            return_quality_scores: If True, return empty dict (not supported)
+            trajectory: Dict with process outputs from ProcessChain.forward()
+            return_quality_scores: If True, return empty dict (not supported by CasualiT)
 
         Returns:
             F: Predicted reliability tensor
-        """
-        # Convert trajectory to ProT input format
-        X, Y = self._trajectory_to_prot_format(trajectory)
 
-        # Run inference
+        Raises:
+            RuntimeError: If process_chain not set via set_process_chain()
+        """
+        if self.process_chain is None:
+            raise RuntimeError(
+                "ProcessChain not set. Call set_process_chain() before compute_reliability(). "
+                "CasualiTSurrogate uses ProcessChain.trajectory_to_prot_format() for data conversion."
+            )
+
+        # Use ProcessChain for format conversion (single source of truth)
+        X, Y = self.process_chain.trajectory_to_prot_format(trajectory)
+
+        # Run inference through causaliT model
         with torch.no_grad():
             forecast_output, _, _, _ = self.model.forward(data_input=X, data_trg=Y)
 
@@ -510,76 +542,22 @@ class CasualiTSurrogate:
             return F, {}  # CasualiT doesn't provide per-process quality scores
         return F
 
-    def _trajectory_to_prot_format(self, trajectory: Dict):
+    def _compute_all_target_reliabilities(self) -> np.ndarray:
         """
-        Convert trajectory dict to ProT input format.
-
-        ProT expects:
-            X: (batch, seq_len, features) - encoder input
-            Y: (batch, seq_len, features) - decoder input/target
-
-        Args:
-            trajectory: Dict mapping process_name to data
+        Compute F* for all scenarios using CasualiT model.
 
         Returns:
-            X, Y tensors for ProT forward pass
+            np.array: F_star values, shape (n_scenarios,)
         """
-        process_order = ['laser', 'plasma', 'galvanic', 'microetch']
-        features_list = []
+        if self.process_chain is None:
+            # Return placeholder - will be recomputed when process_chain is set
+            return np.ones(self.n_scenarios)
 
-        for process_name in process_order:
-            if process_name not in trajectory:
-                continue
-
-            data = trajectory[process_name]
-
-            # Get inputs
-            inputs = data.get('inputs', torch.zeros(1, 2))
-            if isinstance(inputs, np.ndarray):
-                inputs = torch.tensor(inputs, dtype=torch.float32)
-
-            # Get outputs (mean and var)
-            outputs_mean = data.get('outputs_mean', data.get('outputs_sampled', torch.zeros(1, 1)))
-            if isinstance(outputs_mean, np.ndarray):
-                outputs_mean = torch.tensor(outputs_mean, dtype=torch.float32)
-
-            outputs_var = data.get('outputs_var', torch.zeros_like(outputs_mean))
-            if isinstance(outputs_var, np.ndarray):
-                outputs_var = torch.tensor(outputs_var, dtype=torch.float32)
-
-            # Concatenate features for this process step
-            step_features = torch.cat([
-                inputs.view(inputs.shape[0], -1),
-                outputs_mean.view(outputs_mean.shape[0], -1),
-                outputs_var.view(outputs_var.shape[0], -1),
-            ], dim=-1)
-
-            features_list.append(step_features)
-
-        # Stack to create sequence: (batch, n_processes, features)
-        # Pad to same feature dimension if needed
-        max_features = max(f.shape[-1] for f in features_list)
-        padded = []
-        for f in features_list:
-            if f.shape[-1] < max_features:
-                padding = torch.zeros(f.shape[0], max_features - f.shape[-1], device=f.device)
-                f = torch.cat([f, padding], dim=-1)
-            padded.append(f)
-
-        X = torch.stack(padded, dim=1).to(self.device)
-
-        # For decoder input, use same format (target will be F)
-        # Create placeholder target tensor
-        Y = torch.zeros(X.shape[0], 1, 1, device=self.device)
-
-        return X, Y
-
-    def _compute_all_target_reliabilities(self) -> np.ndarray:
-        """Compute F* for all scenarios using CasualiT model."""
         F_star_values = []
 
         with torch.no_grad():
             for scenario_idx in range(self.n_scenarios):
+                # Create trajectory dict for this scenario
                 scenario_traj = {}
                 for process_name, data in self.target_trajectory_tensors.items():
                     scenario_traj[process_name] = {
@@ -597,4 +575,6 @@ class CasualiTSurrogate:
 
     def compute_target_reliability(self) -> float:
         """Return mean F* across all scenarios."""
+        if self.F_star is None:
+            return 1.0  # Placeholder before process_chain is set
         return float(np.mean(self.F_star))

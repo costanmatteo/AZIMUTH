@@ -52,7 +52,7 @@ from controller_optimization.src.utils.target_generation import (
     generate_baseline_trajectory
 )
 from controller_optimization.src.utils.process_chain import ProcessChain
-from controller_optimization.src.models.surrogate import ProTSurrogate
+from controller_optimization.src.models.surrogate import ProTSurrogate, CasualiTSurrogate, create_surrogate
 from controller_optimization.src.training.controller_trainer import ControllerTrainer
 from controller_optimization.src.utils.metrics import (
     compute_final_metrics,
@@ -413,12 +413,25 @@ def main(config=None):
 
     # 4. Create Surrogate (computes F* for all scenarios)
     print("\n[4/9] Initializing surrogate model...")
-    use_deterministic_sampling = cfg.get('surrogate', {}).get('use_deterministic_sampling', True)
-    surrogate = ProTSurrogate(
+    surrogate_config = cfg.get('surrogate', {'type': 'reliability_function'})
+    surrogate_type = surrogate_config.get('type', 'reliability_function')
+    use_deterministic_sampling = surrogate_config.get('use_deterministic_sampling', True)
+
+    # Use factory function to create appropriate surrogate
+    surrogate = create_surrogate(
+        config=surrogate_config,
         target_trajectory=target_trajectory,
-        device=device,
-        use_deterministic_sampling=use_deterministic_sampling
+        device=device
     )
+
+    # For CasualiTSurrogate, connect to ProcessChain for format conversion
+    if isinstance(surrogate, CasualiTSurrogate):
+        surrogate.set_process_chain(process_chain)
+        print(f"  Surrogate type: CasualiT (TransformerForecaster)")
+        print(f"  Checkpoint: {surrogate_config.get('casualit', {}).get('checkpoint_path')}")
+    else:
+        print(f"  Surrogate type: reliability_function (mathematical formula)")
+
     print(f"  Sampling mode: {'DETERMINISTIC (mean)' if use_deterministic_sampling else 'STOCHASTIC (reparameterization trick)'}")
     F_star_array = surrogate.F_star  # Now an array of (n_scenarios,)
     F_star_mean = np.mean(F_star_array)
@@ -471,17 +484,20 @@ def main(config=None):
 
     # Cross-scenario validation (uses separate test scenarios with different conditions)
     if validation_cfg.get('cross_scenario_enabled', True):
-        validation_surrogate = ProTSurrogate(
-            target_trajectory=target_trajectory_test,
-            device=device,
-            use_deterministic_sampling=use_deterministic_sampling
-        )
         validation_process_chain = ProcessChain(
             processes_config=selected_processes,
             target_trajectory=target_trajectory_test,
             policy_config=cfg['policy_generator'],
             device=device
         )
+        validation_surrogate = create_surrogate(
+            config=surrogate_config,
+            target_trajectory=target_trajectory_test,
+            device=device
+        )
+        # For CasualiTSurrogate, connect to validation ProcessChain
+        if isinstance(validation_surrogate, CasualiTSurrogate):
+            validation_surrogate.set_process_chain(validation_process_chain)
         trainer.set_validation_data(validation_surrogate, validation_process_chain)
     else:
         print("  Cross-scenario validation: DISABLED")
