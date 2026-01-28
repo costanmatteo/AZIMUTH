@@ -94,10 +94,15 @@ class SimpleSurrogateModel(nn.Module):
             nn.Sigmoid()  # F is in [0, 1]
         )
 
-    def set_input_dim(self, n_features: int):
+    def set_input_dim(self, n_features: int, device: torch.device = None):
         """Set input dimension after data is loaded."""
         self.n_features = n_features
         self.input_proj = nn.Linear(n_features, self.d_model)
+        # Move to same device as the rest of the model
+        if device is not None:
+            self.input_proj = self.input_proj.to(device)
+        elif next(self.parameters(), None) is not None:
+            self.input_proj = self.input_proj.to(next(self.parameters()).device)
 
     def forward(self, x):
         """
