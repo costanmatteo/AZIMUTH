@@ -14,6 +14,7 @@ from __future__ import annotations
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Mapping, MutableMapping, Optional, Sequence, Tuple, Any, Union
+from pathlib import Path
 import datetime
 from os import makedirs
 from os.path import join
@@ -22,6 +23,7 @@ import pandas as pd
 import sympy as sp
 import json
 from graphviz import Digraph
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
 
 
 # ----------------------------- Type aliases --------------------------------- #
@@ -487,6 +489,7 @@ class SCMDataset:
         # Dataset info
         input_labels: List[str],
         target_labels: List[str],
+        source_labels: Optional[List[str]] = None,
     ) -> None:
         
         self.noise_model = NoiseModel(singles=singles, groups=groups)
@@ -499,6 +502,7 @@ class SCMDataset:
         self.scm = specs_scm.to_scm()
         self.input_labels = input_labels
         self.target_labels = target_labels
+        self.source_labels = source_labels
         
         # meta
         created = datetime.date.today().isoformat()
@@ -512,7 +516,29 @@ class SCMDataset:
     def sample(self, n, seed=42):
         return self.scm.sample(n, seed)
     
-    def get_numpy(self, mode, n, seed=42):
+    def _normalize(self, data: np.ndarray, method: str = "standardize"):
+        """Normalize only the value features (feature index 0) using sklearn scalers."""
+        normalized_data = data.copy()
+        values = data[:, :, 0].reshape(-1, 1)  # Flatten to (batch*seq, 1)
+        
+        if method == "standardize":
+            scaler = StandardScaler()
+        elif method == "minmax":
+            scaler = MinMaxScaler()
+        else:
+            raise ValueError(f"Unknown method: {method}")
+        
+        normalized_values = scaler.fit_transform(values).reshape(data.shape[0], data.shape[1])
+        normalized_data[:, :, 0] = normalized_values
+        
+        stats = {"method": method, "mean": float(scaler.mean_[0]) if hasattr(scaler, 'mean_') else None, 
+                 "std": float(np.sqrt(scaler.var_[0])) if hasattr(scaler, 'var_') else None,
+                 "min": float(scaler.data_min_[0]) if hasattr(scaler, 'data_min_') else None,
+                 "max": float(scaler.data_max_[0]) if hasattr(scaler, 'data_max_') else None}
+        
+        return normalized_data, {k: v for k, v in stats.items() if v is not None}
+    
+    def get_numpy(self, mode, n, seed=42, shared_embedding=False):
         # reshape the dataset into B x L x D, where
                 # - B: batch/sample size
                 # - L: is the sequence length
@@ -522,13 +548,28 @@ class SCMDataset:
         
         if mode == "flat":
             
-            def to_numpy_(label):
+            # Build shared mapping if requested (order: source -> input -> target)
+            if shared_embedding:
+                all_labels = []
+                if self.source_labels is not None:
+                    all_labels.extend(self.source_labels)
+                all_labels.extend(self.input_labels)
+                all_labels.extend(self.target_labels)
+                shared_vars_map = {var: i+1 for i, var in enumerate(all_labels)}
+            else:
+                shared_vars_map = None
+            
+            def to_numpy_(label, vars_map_override=None):
                 
                 df_ = pd.melt(df[label], id_vars=None, ignore_index=False)
                 unique_vars = df_["variable"].unique()
                 
                 # convert vars --> int and save map
-                vars_map = {var : i+1 for i,var in enumerate(unique_vars)}
+                if vars_map_override is not None:
+                    # Use the shared mapping (filter to only include vars in this category)
+                    vars_map = {var: vars_map_override[var] for var in unique_vars}
+                else:
+                    vars_map = {var : i+1 for i,var in enumerate(unique_vars)}
                 df_["variable"] = df_["variable"].map(vars_map)
                 
                 feats = ['value', 'variable']
@@ -552,41 +593,111 @@ class SCMDataset:
                 
                 return np.stack(arrays, axis=0), vars_map, feat_map, seq_vars
             
-            input_np, iv_map, if_map, iv_order = to_numpy_(self.input_labels)
-            target_np, tv_map, tf_map, tv_order = to_numpy_(self.target_labels)
+            input_np, iv_map, if_map, iv_order = to_numpy_(self.input_labels, shared_vars_map)
+            target_np, tv_map, tf_map, tv_order = to_numpy_(self.target_labels, shared_vars_map)
             
-            return input_np, (iv_map, if_map, iv_order), target_np , (tv_map, tf_map, tv_order)
+            # Handle source_labels if present
+            if self.source_labels is not None:
+                source_np, sv_map, sf_map, sv_order = to_numpy_(self.source_labels, shared_vars_map)
+                return input_np, (iv_map, if_map, iv_order), target_np, (tv_map, tf_map, tv_order), source_np, (sv_map, sf_map, sv_order), shared_vars_map
+            
+            return input_np, (iv_map, if_map, iv_order), target_np , (tv_map, tf_map, tv_order), shared_vars_map
 
             
-    def generate_ds(self, mode, n, save_dir: Union[str, Path]=None, meta_dict: dict=None, seed=42):
+    def generate_ds(self, mode, n, save_dir: Union[str, Path]=None, meta_dict: dict=None, 
+                    normalize: bool = True, normalize_method: str = "standardize", seed=42,
+                    shared_embedding: bool = False):
         
-        # get numpy array
-        input_np, (iv_map, if_map, iv_order), target_np , (tv_map, tf_map, tv_order) = self.get_numpy(mode, n, seed)
-        print("numpy arrays generated")
+        # get numpy array - handle both cases (with and without source_labels)
+        get_numpy_result = self.get_numpy(mode, n, seed, shared_embedding=shared_embedding)
+        
+        if self.source_labels is not None:
+            # Unpack with source data
+            input_np, (iv_map, if_map, iv_order), target_np, (tv_map, tf_map, tv_order), source_np, (sv_map, sf_map, sv_order), shared_vars_map = get_numpy_result
+            print("numpy arrays generated (including source)")
+        else:
+            # Unpack without source data
+            input_np, (iv_map, if_map, iv_order), target_np, (tv_map, tf_map, tv_order), shared_vars_map = get_numpy_result
+            source_np, sv_map, sf_map, sv_order = None, None, None, None
+            print("numpy arrays generated")
+        
+        # Normalize if requested
+        norm_stats = {}
+        if normalize:
+            input_np, input_stats = self._normalize(input_np, method=normalize_method)
+            target_np, target_stats = self._normalize(target_np, method=normalize_method)
+            norm_stats = {"input": input_stats, "target": target_stats}
+            
+            # Normalize source data if present
+            if source_np is not None:
+                source_np, source_stats = self._normalize(source_np, method=normalize_method)
+                norm_stats["source"] = source_stats
+                print(f"Data normalized using {normalize_method}")
+                print(f"  Input - mean: {input_stats.get('mean', 'N/A')}, std: {input_stats.get('std', 'N/A')}")
+                print(f"  Target - mean: {target_stats.get('mean', 'N/A')}, std: {target_stats.get('std', 'N/A')}")
+                print(f"  Source - mean: {source_stats.get('mean', 'N/A')}, std: {source_stats.get('std', 'N/A')}")
+            else:
+                print(f"Data normalized using {normalize_method}")
+                print(f"  Input - mean: {input_stats.get('mean', 'N/A')}, std: {input_stats.get('std', 'N/A')}")
+                print(f"  Target - mean: {target_stats.get('mean', 'N/A')}, std: {target_stats.get('std', 'N/A')}")
         
         # todo train/test split
         
         
         # ------------------ make attention masks -----------------------
-        # rows for queries
-        # cols for keys
+        # Branching logic: if source_labels is None, create specific attention masks
+        # Otherwise, export full DAG adjacency matrix
         
-        df_adj = self.scm.adjacency(positive_child= True, as_dataframe=True)
-        
-        # encoder self-attention
-        df_esa = df_adj.loc[self.input_labels, self.input_labels]
-        assert np.array_equal(df_esa.index.to_numpy(), df_esa.columns.to_numpy()) # self-attention: rows == cols
-        assert np.array_equal(df_esa.index.map(iv_map).to_numpy(), iv_order)      # rows == input variable sequential order
-        
-        # decoder self-attention
-        df_dsa = df_adj.loc[self.target_labels, self.target_labels]
-        assert np.array_equal(df_dsa.index.to_numpy(), df_dsa.columns.to_numpy()) # self-attention: rows == cols
-        assert np.array_equal(df_dsa.index.map(tv_map).to_numpy(), tv_order)      # rows == target variable sequential order
-        
-        # decoder cross-attention
-        df_dca = df_adj.loc[self.target_labels, self.input_labels]
-        assert np.array_equal(df_dca.index.map(tv_map).to_numpy(), tv_order)      # rows == target variable sequential order
-        assert np.array_equal(df_dca.columns.map(iv_map).to_numpy(), iv_order)    # cols == input variable sequential order
+        if self.source_labels is None:
+            df_adj = self.scm.adjacency(positive_child=True, as_dataframe=True)
+            # Original behavior: create three separate attention masks
+            # rows for queries, cols for keys
+            
+            # encoder self-attention
+            df_esa = df_adj.loc[self.input_labels, self.input_labels]
+            assert np.array_equal(df_esa.index.to_numpy(), df_esa.columns.to_numpy()) # self-attention: rows == cols
+            assert np.array_equal(df_esa.index.map(iv_map).to_numpy(), iv_order)      # rows == input variable sequential order
+            
+            # decoder self-attention
+            df_dsa = df_adj.loc[self.target_labels, self.target_labels]
+            assert np.array_equal(df_dsa.index.to_numpy(), df_dsa.columns.to_numpy()) # self-attention: rows == cols
+            assert np.array_equal(df_dsa.index.map(tv_map).to_numpy(), tv_order)      # rows == target variable sequential order
+            
+            # decoder cross-attention
+            df_dca = df_adj.loc[self.target_labels, self.input_labels]
+            assert np.array_equal(df_dca.index.map(tv_map).to_numpy(), tv_order)      # rows == target variable sequential order
+            assert np.array_equal(df_dca.columns.map(iv_map).to_numpy(), iv_order)    # cols == input variable sequential order
+        else:
+            # Build the order for DAG adjacency matrix based on shared_embedding flag
+            if shared_embedding:
+                # Use shared ordering: source -> input -> target (sorted by shared ID)
+                all_labels = self.source_labels + self.input_labels + self.target_labels
+                df_adj = self.scm.adjacency(nodes=all_labels, positive_child=True, as_dataframe=True)
+            else:
+                df_adj = self.scm.adjacency(positive_child=True, as_dataframe=True)
+            
+            # Create 4 sliced attention masks for transformer
+            # Rows are queries, columns are keys
+            
+            # Decoder 1 cross-attention: X attends to S (rows=input, cols=source)
+            df_d1ca = df_adj.loc[self.input_labels, self.source_labels]
+            assert np.array_equal(df_d1ca.index.map(iv_map).to_numpy(), iv_order)      # rows == input variable sequential order
+            assert np.array_equal(df_d1ca.columns.map(sv_map).to_numpy(), sv_order)    # cols == source variable sequential order
+            
+            # Decoder 1 self-attention: X attends to X (rows=input, cols=input)
+            df_d1sa = df_adj.loc[self.input_labels, self.input_labels]
+            assert np.array_equal(df_d1sa.index.to_numpy(), df_d1sa.columns.to_numpy()) # self-attention: rows == cols
+            assert np.array_equal(df_d1sa.index.map(iv_map).to_numpy(), iv_order)       # rows == input variable sequential order
+            
+            # Decoder 2 cross-attention: Y attends to X (rows=target, cols=input)
+            df_d2ca = df_adj.loc[self.target_labels, self.input_labels]
+            assert np.array_equal(df_d2ca.index.map(tv_map).to_numpy(), tv_order)       # rows == target variable sequential order
+            assert np.array_equal(df_d2ca.columns.map(iv_map).to_numpy(), iv_order)     # cols == input variable sequential order
+            
+            # Decoder 2 self-attention: Y attends to Y (rows=target, cols=target)
+            df_d2sa = df_adj.loc[self.target_labels, self.target_labels]
+            assert np.array_equal(df_d2sa.index.to_numpy(), df_d2sa.columns.to_numpy()) # self-attention: rows == cols
+            assert np.array_equal(df_d2sa.index.map(tv_map).to_numpy(), tv_order)       # rows == target variable sequential order
         
         
         # ------------ get SCM graph visualization --------------------
@@ -601,26 +712,68 @@ class SCMDataset:
         
         # ---------------------- export -------------------------------
         makedirs(save_dir, exist_ok=True)
-        np.savez_compressed(join(save_dir, "ds.npz"), x=input_np, y=target_np)
         
-        df_esa.to_csv(join(save_dir, "enc_sef_att_mask.csv"))
-        df_dsa.to_csv(join(save_dir, "dec_self_att_mask.csv"))
-        df_dca.to_csv(join(save_dir, "dec_cross_att_mask.csv"))
+        # Export data arrays
+        if source_np is not None:
+            np.savez_compressed(join(save_dir, "ds.npz"), x=input_np, y=target_np, s=source_np)
+        else:
+            np.savez_compressed(join(save_dir, "ds.npz"), x=input_np, y=target_np)
         
+        # Export attention masks based on source_labels presence
+        if self.source_labels is None:
+            # Export three separate attention mask files
+            df_esa.to_csv(join(save_dir, "enc_sef_att_mask.csv"))
+            df_dsa.to_csv(join(save_dir, "dec_self_att_mask.csv"))
+            df_dca.to_csv(join(save_dir, "dec_cross_att_mask.csv"))
+        else:
+            # Export full DAG adjacency matrix
+            df_adj.to_csv(join(save_dir, "dag_adj_mask.csv"))
+            
+            # Export 4 sliced attention masks for transformer
+            df_d1ca.to_csv(join(save_dir, "dec1_cross_att_mask.csv"))  # X attends to S
+            df_d1sa.to_csv(join(save_dir, "dec1_self_att_mask.csv"))   # X attends to X
+            df_d2ca.to_csv(join(save_dir, "dec2_cross_att_mask.csv"))  # Y attends to X
+            df_d2sa.to_csv(join(save_dir, "dec2_self_att_mask.csv"))   # Y attends to Y
+            print("Exported 4 sliced attention masks: dec1_cross, dec1_self, dec2_cross, dec2_self")
+        
+        # Export metadata
         with open(join(save_dir, 'meta.json'),'w', encoding="utf-8")  as file:
             json.dump(self.meta, file, indent=2, sort_keys=True, ensure_ascii=False)
+        
+        # Export variable mappings based on shared_embedding flag
+        if shared_embedding and shared_vars_map is not None:
+            # Export single shared variable mapping
+            with open(join(save_dir, 'shared_vars_map.json'),'w', encoding="utf-8")  as file:
+                json.dump(shared_vars_map, file, indent=2, sort_keys=True, ensure_ascii=False)
+            print(f"Exported shared variable mapping with {len(shared_vars_map)} variables")
+        else:
+            # Export category-specific variable mappings (original behavior)
+            # Export input mappings
+            with open(join(save_dir, 'input_vars_map.json'),'w', encoding="utf-8")  as file:
+                json.dump(iv_map, file, indent=2, sort_keys=True, ensure_ascii=False)
+                
+            with open(join(save_dir, 'input_feat_map.json'),'w', encoding="utf-8")  as file:
+                json.dump(if_map, file, indent=2, sort_keys=True, ensure_ascii=False)
+                
+            # Export target mappings
+            with open(join(save_dir, 'target_vars_map.json'),'w', encoding="utf-8")  as file:
+                json.dump(tv_map, file, indent=2, sort_keys=True, ensure_ascii=False)
+                
+            with open(join(save_dir, 'target_feat_map.json'),'w', encoding="utf-8")  as file:
+                json.dump(tf_map, file, indent=2, sort_keys=True, ensure_ascii=False)
             
-        with open(join(save_dir, 'input_vars_map.json'),'w', encoding="utf-8")  as file:
-            json.dump(iv_map, file, indent=2, sort_keys=True, ensure_ascii=False)
-            
-        with open(join(save_dir, 'input_feat_map.json'),'w', encoding="utf-8")  as file:
-            json.dump(if_map, file, indent=2, sort_keys=True, ensure_ascii=False)
-            
-        with open(join(save_dir, 'target_vars_map.json'),'w', encoding="utf-8")  as file:
-            json.dump(tv_map, file, indent=2, sort_keys=True, ensure_ascii=False)
-            
-        with open(join(save_dir, 'target_feat_map.json'),'w', encoding="utf-8")  as file:
-            json.dump(tf_map, file, indent=2, sort_keys=True, ensure_ascii=False)
+            # Export source mappings if present
+            if sv_map is not None:
+                with open(join(save_dir, 'source_vars_map.json'),'w', encoding="utf-8")  as file:
+                    json.dump(sv_map, file, indent=2, sort_keys=True, ensure_ascii=False)
+                    
+                with open(join(save_dir, 'source_feat_map.json'),'w', encoding="utf-8")  as file:
+                    json.dump(sf_map, file, indent=2, sort_keys=True, ensure_ascii=False)
+        
+        # Export normalization stats if normalization was applied
+        if norm_stats:
+            with open(join(save_dir, 'normalization.json'),'w', encoding="utf-8")  as file:
+                json.dump(norm_stats, file, indent=2, sort_keys=True, ensure_ascii=False)
 
         graph.render(str(join(save_dir, 'graph')), format="pdf", cleanup=True)
 
