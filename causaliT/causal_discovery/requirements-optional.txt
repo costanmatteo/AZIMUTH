@@ -1,0 +1,22 @@
+# Optional dependencies for causaliT.causal_discovery
+#
+# Core module requires only: numpy, pandas, torch, sympy, reportlab
+# (already present in the main AZIMUTH environment)
+#
+# The following are optional and enable additional features:
+
+# Classical causal discovery baselines (GES, PC algorithms)
+causal-learn>=0.1.3
+
+# Symbolic regression (PySR backend)
+pysr>=0.18
+
+# Statistical tests for distributional comparisons
+scipy>=1.10
+
+# PDF post-processing (2-up layout)
+pypdf>=3.0
+
+# Plotting (heatmaps, DAG visualizations in reports)
+matplotlib>=3.5
+networkx>=2.8
