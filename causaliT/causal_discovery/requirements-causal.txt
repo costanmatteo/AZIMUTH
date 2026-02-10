@@ -1,0 +1,19 @@
+# Optional dependencies for causaliT.causal_discovery
+#
+# Core (already in base requirements):
+#   numpy, pandas, torch, sympy, matplotlib, scipy, scikit-learn, reportlab
+#
+# Classical causal discovery algorithms (GES, PC):
+causal-learn>=0.1.3
+
+# Symbolic regression (high-quality, Julia-based):
+# NOTE: PySR requires Julia. If not installable, the module falls back
+# to polynomial regression automatically.
+# pysr>=0.16
+
+# Statistical tests:
+scipy>=1.10
+
+# Visualization (for notebook and report):
+seaborn>=0.12
+networkx>=3.0
