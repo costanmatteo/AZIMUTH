@@ -19,14 +19,14 @@ Model Architecture:
 SURROGATE_CONFIG = {
     # Data generation
     'data': {
-        'n_trajectories': 10000,       # Number of training trajectories
-        'n_val_trajectories': 2000,    # Validation trajectories
-        'n_test_trajectories': 2000,   # Test trajectories
-        'batch_size_generation': 100,  # Batch size for trajectory generation
+        'n_trajectories': 3000,        # Training trajectories (sufficient for 4-step → scalar mapping)
+        'n_val_trajectories': 500,     # Validation trajectories
+        'n_test_trajectories': 500,    # Test trajectories
+        'batch_size_generation': 200,  # Larger batches for faster generation
         'random_seed': 42,
 
         # Scenario diversity
-        'n_scenarios': 50,             # Number of different scenario conditions
+        'n_scenarios': 10,             # Enough diversity without excessive generation time
         'scenario_seed_offset': 1000,  # Seed offset between scenarios
 
         # Process selection
@@ -35,16 +35,16 @@ SURROGATE_CONFIG = {
 
     # Model architecture
     'model': {
-        # Embedding dimensions
-        'd_model_enc': 64,             # Encoder model dimension
-        'd_model_dec': 32,             # Decoder model dimension
-        'd_ff': 128,                   # Feed-forward dimension
-        'd_qk': 32,                    # Query/key dimension
+        # Embedding dimensions (compact: sequence is only 4 process steps)
+        'd_model_enc': 32,             # Encoder model dimension
+        'd_model_dec': 16,             # Decoder model dimension
+        'd_ff': 64,                    # Feed-forward dimension
+        'd_qk': 16,                    # Query/key dimension
 
-        # Transformer layers
-        'e_layers': 2,                 # Encoder layers
+        # Transformer layers (1 encoder layer is enough for 4 steps)
+        'e_layers': 1,                 # Encoder layers
         'd_layers': 1,                 # Decoder layers
-        'n_heads': 4,                  # Attention heads
+        'n_heads': 2,                  # Attention heads (2 heads can capture pairwise process relations)
 
         # Regularization
         'dropout_emb': 0.1,
@@ -59,14 +59,14 @@ SURROGATE_CONFIG = {
 
     # Training
     'training': {
-        'max_epochs': 500,
-        'batch_size': 64,
+        'max_epochs': 200,
+        'batch_size': 128,             # Larger batch with fewer samples = faster epochs
         'learning_rate': 1e-3,
         'weight_decay': 0.01,
         'loss_fn': 'mse',
-        'k_fold': 3,                   # K-fold cross validation
+        'k_fold': 1,                   # No cross-validation (saves 3x training time)
         'seed': 42,
-        'patience': 50,                # Early stopping patience
+        'patience': 30,                # Early stopping patience
 
         # Scheduler
         'use_scheduler': True,
