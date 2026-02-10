@@ -493,7 +493,7 @@ class CasualiTSurrogate:
         Returns:
             Loaded model in eval mode
         """
-        from causaliT.proT.training.forecasters.transformer_forecaster import TransformerForecaster
+        from causaliT.training.forecasters.transformer_forecaster import TransformerForecaster
 
         # Load model from checkpoint
         model = TransformerForecaster.load_from_checkpoint(
