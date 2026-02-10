@@ -17,63 +17,57 @@ Model Architecture:
 """
 
 SURROGATE_CONFIG = {
-    # Data generation
+    # Data generation (minimal for pipeline testing)
     'data': {
-        'n_trajectories': 3000,        # Training trajectories (sufficient for 4-step → scalar mapping)
-        'n_val_trajectories': 500,     # Validation trajectories
-        'n_test_trajectories': 500,    # Test trajectories
-        'batch_size_generation': 200,  # Larger batches for faster generation
+        'n_trajectories': 200,         # Minimal for pipeline test
+        'n_val_trajectories': 50,      # Minimal validation
+        'n_test_trajectories': 50,     # Minimal test
+        'batch_size_generation': 200,  # Generate all in one batch
         'random_seed': 42,
 
         # Scenario diversity
-        'n_scenarios': 10,             # Enough diversity without excessive generation time
-        'scenario_seed_offset': 1000,  # Seed offset between scenarios
+        'n_scenarios': 2,              # Just 2 scenarios for speed
+        'scenario_seed_offset': 1000,
 
         # Process selection
         'process_names': ['laser', 'plasma', 'galvanic', 'microetch'],
     },
 
-    # Model architecture
+    # Model architecture (tiny)
     'model': {
-        # Embedding dimensions (compact: sequence is only 4 process steps)
-        'd_model_enc': 32,             # Encoder model dimension
-        'd_model_dec': 16,             # Decoder model dimension
-        'd_ff': 64,                    # Feed-forward dimension
-        'd_qk': 16,                    # Query/key dimension
+        'd_model_enc': 16,
+        'd_model_dec': 8,
+        'd_ff': 32,
+        'd_qk': 8,
 
-        # Transformer layers (1 encoder layer is enough for 4 steps)
-        'e_layers': 1,                 # Encoder layers
-        'd_layers': 1,                 # Decoder layers
-        'n_heads': 2,                  # Attention heads (2 heads can capture pairwise process relations)
+        'e_layers': 1,
+        'd_layers': 1,
+        'n_heads': 2,
 
-        # Regularization
-        'dropout_emb': 0.1,
-        'dropout_attn_out': 0.1,
-        'dropout_ff': 0.1,
+        'dropout_emb': 0.0,
+        'dropout_attn_out': 0.0,
+        'dropout_ff': 0.0,
 
-        # Architecture options
         'activation': 'gelu',
         'norm': 'batch',
         'use_final_norm': True,
     },
 
-    # Training
+    # Training (fast)
     'training': {
-        'max_epochs': 200,
-        'batch_size': 128,             # Larger batch with fewer samples = faster epochs
+        'max_epochs': 20,
+        'batch_size': 64,
         'learning_rate': 1e-3,
         'weight_decay': 0.01,
         'loss_fn': 'mse',
-        'k_fold': 1,                   # No cross-validation (saves 3x training time)
+        'k_fold': 1,
         'seed': 42,
-        'patience': 30,                # Early stopping patience
+        'patience': 10,
 
-        # Scheduler
-        'use_scheduler': True,
+        'use_scheduler': False,
         'scheduler_factor': 0.5,
         'scheduler_patience': 10,
 
-        # Entropy regularization
         'entropy_regularizer': False,
         'gamma': 0.05,
     },
