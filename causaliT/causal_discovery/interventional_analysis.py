@@ -34,7 +34,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from scm_ds.scm import SCMDataset
 
-from .ground_truth import DEFAULT_PROCESS_ORDER, get_observable_variables
+from .ground_truth import DEFAULT_PROCESS_ORDER, _prefixed, get_observable_variables
 
 
 class InterventionalAnalyzer:
@@ -91,7 +91,7 @@ class InterventionalAnalyzer:
         seed: int,
         interventions: Optional[Dict[str, float]] = None,
     ) -> pd.DataFrame:
-        """Sample all processes and return observable-variable DataFrame."""
+        """Sample all processes and return DataFrame with prefixed columns."""
         merged = pd.DataFrame(index=range(n))
         for proc in self.process_order:
             if proc not in self.datasets:
@@ -100,9 +100,8 @@ class InterventionalAnalyzer:
             ds = self.datasets[proc]
             obs = [v for v in ds.input_labels + ds.target_labels if v in df_full.columns]
             for col in obs:
-                if col not in merged.columns:
-                    merged[col] = df_full[col].values
-        return merged[[v for v in self.obs_vars if v in merged.columns]]
+                merged[_prefixed(proc, col)] = df_full[col].values
+        return merged[self.obs_vars]
 
     # ------------------------------------------------------------------
     # Intervention effect analysis
@@ -259,7 +258,9 @@ class InterventionalAnalyzer:
             if proc not in self.datasets:
                 continue
             ds = self.datasets[proc]
-            output_cols = [c for c in ds.target_labels if c in df_int.columns]
+            # Map prefixed columns back to raw names for ReliabilityFunction
+            output_cols = [_prefixed(proc, t) for t in ds.target_labels
+                           if _prefixed(proc, t) in df_int.columns]
             if output_cols:
                 trajectory[proc] = {
                     "outputs_mean": torch.tensor(
@@ -345,9 +346,10 @@ class InterventionalAnalyzer:
 
         pvals = np.ones((len(intervention_vars), len(self.obs_vars)))
         for i, ivar in enumerate(intervention_vars):
-            # Determine a meaningful intervention value
-            if ivar in df_obs.columns:
-                int_value = float(df_obs[ivar].quantile(0.9))
+            # Find the prefixed column to determine a meaningful value
+            prefixed_cols = [c for c in df_obs.columns if c.endswith(f"/{ivar}")]
+            if prefixed_cols:
+                int_value = float(df_obs[prefixed_cols[0]].quantile(0.9))
             else:
                 int_value = 1.0
             df_int = self._sample_observable(

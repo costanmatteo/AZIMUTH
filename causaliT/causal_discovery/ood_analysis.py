@@ -36,7 +36,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from scm_ds.scm import SCMDataset, NoiseModel, SCM
 
-from .ground_truth import DEFAULT_PROCESS_ORDER, get_observable_variables
+from .ground_truth import DEFAULT_PROCESS_ORDER, _prefixed, get_observable_variables
 from .metrics import compare_graphs
 
 
@@ -201,10 +201,9 @@ class OODAnalyzer:
 
             obs = [v for v in ds.input_labels + ds.target_labels if v in df_full.columns]
             for col in obs:
-                if col not in merged.columns:
-                    merged[col] = df_full[col].values
+                merged[_prefixed(proc, col)] = df_full[col].values
 
-        return merged[[v for v in self.obs_vars if v in merged.columns]]
+        return merged[self.obs_vars]
 
     # ------------------------------------------------------------------
     # OOD comparison

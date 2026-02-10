@@ -31,6 +31,7 @@ from scm_ds.scm import SCMDataset
 
 from .ground_truth import (
     DEFAULT_PROCESS_ORDER,
+    _prefixed,
     extract_ground_truth_dag,
     get_observable_variables,
 )
@@ -70,6 +71,56 @@ class DiscoveryValidator:
     # Data generation helpers
     # ------------------------------------------------------------------
 
+    def _sample_chain(
+        self,
+        n_samples: int,
+        seed: int,
+        interventions: Optional[Dict[str, float]] = None,
+    ) -> pd.DataFrame:
+        """Sample all processes and return a DataFrame with prefixed columns.
+
+        Column names follow the ``process/var`` convention used by
+        :func:`get_observable_variables`.
+
+        Parameters
+        ----------
+        n_samples : int
+            Number of i.i.d. samples.
+        seed : int
+            Random seed.
+        interventions : dict, optional
+            ``{raw_var_name: value}`` — applied to whichever process
+            owns that variable.
+
+        Returns
+        -------
+        pd.DataFrame
+            ``(n_samples, n_obs_vars)`` with prefixed column names.
+        """
+        interventions = interventions or {}
+        merged = pd.DataFrame(index=range(n_samples))
+
+        for proc in self.process_order:
+            if proc not in self.datasets:
+                continue
+            ds = self.datasets[proc]
+            # Check if any intervention targets this process
+            local_int = {
+                k: v for k, v in interventions.items() if k in ds.scm.specs
+            }
+            if local_int:
+                scm_do = ds.scm.do(local_int)
+                df_full = scm_do.sample(n_samples, seed=seed)
+            else:
+                df_full = ds.scm.sample(n_samples, seed=seed)
+
+            obs = [v for v in ds.input_labels + ds.target_labels
+                   if v in df_full.columns]
+            for col in obs:
+                merged[_prefixed(proc, col)] = df_full[col].values
+
+        return merged[self.obs_vars]
+
     def generate_iid_data(
         self,
         n_samples: int = 5000,
@@ -78,7 +129,8 @@ class DiscoveryValidator:
         """Generate i.i.d. observational data from all processes.
 
         Samples each process SCM independently and concatenates columns
-        for the observable variables.
+        for the observable variables.  Column names are prefixed with
+        the process name (``process/var``).
 
         Parameters
         ----------
@@ -92,24 +144,7 @@ class DiscoveryValidator:
         pd.DataFrame
             ``(n_samples, n_obs_vars)`` data frame.
         """
-        dfs: Dict[str, pd.DataFrame] = {}
-        for proc in self.process_order:
-            if proc not in self.datasets:
-                continue
-            ds = self.datasets[proc]
-            df_full = ds.scm.sample(n_samples, seed=seed)
-            obs = [v for v in ds.input_labels + ds.target_labels if v in df_full.columns]
-            dfs[proc] = df_full[obs]
-
-        # Merge on sample index, keeping unique columns
-        merged = pd.DataFrame(index=range(n_samples))
-        for proc in self.process_order:
-            if proc in dfs:
-                for col in dfs[proc].columns:
-                    if col not in merged.columns:
-                        merged[col] = dfs[proc][col].values
-
-        return merged[self.obs_vars]
+        return self._sample_chain(n_samples, seed)
 
     def generate_interventional_data(
         self,
@@ -123,7 +158,7 @@ class DiscoveryValidator:
         Parameters
         ----------
         intervention_var : str
-            Variable to intervene on.
+            Raw variable name to intervene on (e.g. ``"PowerTarget"``).
         intervention_value : float
             Constant value to set.
         n_samples : int
@@ -134,28 +169,12 @@ class DiscoveryValidator:
         Returns
         -------
         pd.DataFrame
-            Interventional data.
+            Interventional data with prefixed column names.
         """
-        dfs: Dict[str, pd.DataFrame] = {}
-        for proc in self.process_order:
-            if proc not in self.datasets:
-                continue
-            ds = self.datasets[proc]
-            if intervention_var in ds.scm.specs:
-                scm_do = ds.scm.do({intervention_var: intervention_value})
-                df_full = scm_do.sample(n_samples, seed=seed)
-            else:
-                df_full = ds.scm.sample(n_samples, seed=seed)
-            obs = [v for v in ds.input_labels + ds.target_labels if v in df_full.columns]
-            dfs[proc] = df_full[obs]
-
-        merged = pd.DataFrame(index=range(n_samples))
-        for proc in self.process_order:
-            if proc in dfs:
-                for col in dfs[proc].columns:
-                    if col not in merged.columns:
-                        merged[col] = dfs[proc][col].values
-        return merged[[v for v in self.obs_vars if v in merged.columns]]
+        return self._sample_chain(
+            n_samples, seed,
+            interventions={intervention_var: intervention_value},
+        )
 
     # ------------------------------------------------------------------
     # Validation
