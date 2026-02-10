@@ -29,6 +29,7 @@ sys.modules['uncertainty_nn'] = uncertainty_nn  # Register for pickle
 spec_nn.loader.exec_module(uncertainty_nn)
 UncertaintyPredictor = uncertainty_nn.UncertaintyPredictor
 EnsembleUncertaintyPredictor = uncertainty_nn.EnsembleUncertaintyPredictor
+SWAGUncertaintyPredictor = uncertainty_nn.SWAGUncertaintyPredictor
 
 # Load preprocessing module for pickle compatibility
 spec_preprocessing = importlib.util.spec_from_file_location(
@@ -62,8 +63,9 @@ def load_uncertainty_predictor(checkpoint_path, input_dim, output_dim, model_con
     # Load weights first to detect model type
     state_dict = torch.load(checkpoint_path, map_location=device)
 
-    # Detect if this is an ensemble model by checking for "models.X." prefix in keys
+    # Detect model type from state_dict keys
     is_ensemble = any(key.startswith('models.') for key in state_dict.keys())
+    is_swag = any(key.startswith('base_model.') for key in state_dict.keys())
 
     if is_ensemble:
         # Count number of models in ensemble
@@ -85,6 +87,18 @@ def load_uncertainty_predictor(checkpoint_path, input_dim, output_dim, model_con
             min_variance=model_config.get('min_variance', 1e-6),
             n_models=n_models
         )
+    elif is_swag:
+        # Create base model, then wrap in SWAG
+        base_model = UncertaintyPredictor(
+            input_size=input_dim,
+            output_size=output_dim,
+            hidden_sizes=model_config['hidden_sizes'],
+            dropout_rate=model_config.get('dropout_rate', 0.2),
+            use_batchnorm=model_config.get('use_batchnorm', False),
+            min_variance=model_config.get('min_variance', 1e-6)
+        )
+        max_rank = state_dict['deviation_matrix'].shape[1] if 'deviation_matrix' in state_dict else 20
+        model = SWAGUncertaintyPredictor(base_model, max_rank=max_rank)
     else:
         # Create single model
         model = UncertaintyPredictor(
