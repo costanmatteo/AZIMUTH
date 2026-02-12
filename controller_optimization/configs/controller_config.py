@@ -114,7 +114,7 @@ CONTROLLER_CONFIG = {
     # Training parameters
     'training': {
         'epochs': 1500,  # Each epoch cycles through all training scenarios once
-        'batch_size': 2500,  # Total samples per epoch (split equally across scenarios)
+        'batch_size': 3000,  # Total samples per epoch (split equally across scenarios)
         'learning_rate': 0.0019017383571692538,
         'weight_decay': 0.001,
         'lambda_bc': 0.001,  # Behavior cloning weight
@@ -161,7 +161,7 @@ CONTROLLER_CONFIG = {
 
     # Scenario generation (train/test split)
     'scenarios': {
-        'n_train': 1,         # Training scenarios (diverse operating conditions)
+        'n_train': 30,        # Training scenarios (diverse operating conditions)
         'n_test': 1,          # Test scenarios (final evaluation, never seen during training)
         'seed_target': 64,     # Seed for target trajectory generation (train)
         'seed_baseline': 134,   # Seed for baseline process noise (same inputs, different noise)
