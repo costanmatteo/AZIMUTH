@@ -428,6 +428,65 @@ class CausalAnalysisReportGenerator:
 
         self.add_page_break()
 
+    def add_validation_section(self, results: dict, figure_dir: Path):
+        """Add Causal Validation section (pipeline p-value matrices + F)."""
+        self.add_section('Section 5 — Causal Validation')
+
+        self.add_text(
+            'This section validates the ground truth causal edges using two-sample '
+            'KS tests (Kolmogorov-Smirnov), following the methodology of the Causal '
+            'Chamber paper (Gamella et al., Tables 5-8). For each edge, we intervene '
+            'on the parent and test whether the child distribution changes. '
+            'Joint pipeline trajectories are assembled through all 4 processes and '
+            'reliability F is computed via the ReliabilityFunction, validating '
+            'inter-process coupling.'
+        )
+
+        # Summary stats
+        s = results.get('summary', {})
+        self.add_subsection('Summary')
+        self.add_bullet(f"Ground truth edges: {s.get('n_ground_truth_edges', 0)}")
+        self.add_bullet(f"Intra-process edges checked: {s.get('n_intra', 0)}")
+        self.add_bullet(f"Pipeline edges checked (inter-process + F): {s.get('n_pipeline', 0)}")
+        self.add_bullet(f"Validated: {s.get('n_validated', 0)}")
+        self.add_bullet(f"Invalidated: {s.get('n_invalidated', 0)}")
+        self.add_bullet(f"Validation rate: {s.get('validation_rate', 0):.1%}")
+
+        # Validation heatmap figure
+        val_path = figure_dir / 'causal_validation_summary.png'
+        if val_path.exists():
+            self.add_image(
+                str(val_path), width=16 * cm,
+                caption='Figure 10: Per-process p-value heatmaps + pipeline F row. '
+                        'Red boxes = ground truth edges. Dark = significant.'
+            )
+
+        # Validated edges table
+        if results.get('validated_edges'):
+            from causal_chamber.causal_validation import format_pvalue
+            table_data = [['Parent', 'Child', 'p-value', 'Type']]
+            for parent, child, p, edge_type in sorted(results['validated_edges'], key=lambda x: x[2]):
+                table_data.append([parent, child, format_pvalue(p), edge_type])
+            self.add_subsection('Validated Edges')
+            self.add_table(table_data)
+
+        if results.get('invalidated_edges'):
+            from causal_chamber.causal_validation import format_pvalue
+            table_data = [['Parent', 'Child', 'p-value', 'Type']]
+            for parent, child, p, edge_type in results['invalidated_edges']:
+                table_data.append([parent, child, format_pvalue(p), edge_type])
+            self.add_subsection('Invalidated Edges')
+            self.add_table(table_data)
+            self.add_text(
+                '<i>Note: Inter-process output-to-output edges (e.g. ActualPower -> '
+                'RemovalRate) are coupled only through the reliability function F\'s '
+                'adaptive targets, not through direct data flow between SCMs. The KS '
+                'test correctly shows no distributional effect on the downstream output '
+                'itself. The coupling is validated through the output -> F edges.</i>'
+            )
+
+        self.add_page_break()
+
     def add_conclusions(self, conclusions: dict):
         """Add conclusions section."""
         self.add_section('Conclusions')

@@ -40,6 +40,8 @@ def parse_args():
                         help='Run out-of-distribution analysis')
     parser.add_argument('--symbolic', action='store_true',
                         help='Run symbolic regression')
+    parser.add_argument('--validation', action='store_true',
+                        help='Run causal validation (p-value matrices + F)')
     parser.add_argument('--checkpoint', type=str, default=None,
                         help='Path to CausaliT checkpoint (.ckpt)')
     parser.add_argument('--output_dir', type=str, default='reports/causal_analysis',
@@ -280,12 +282,37 @@ def run_symbolic(args, output_dir: Path) -> dict:
     return results
 
 
+def run_validation(args, output_dir: Path) -> dict:
+    """Run causal validation (p-value matrices + pipeline F)."""
+    print('\n' + '=' * 60)
+    print('SECTION 5: Causal Validation')
+    print('=' * 60)
+
+    from causal_chamber.causal_validation import (
+        compute_pvalue_matrix, print_validation_table,
+    )
+    from causal_chamber.plotting import plot_validation_heatmap
+
+    figure_dir = output_dir / 'figures'
+    figure_dir.mkdir(parents=True, exist_ok=True)
+
+    results = compute_pvalue_matrix(n=args.n_samples, seed=args.seed)
+    print_validation_table(results)
+
+    # Plot p-value heatmaps
+    plot_validation_heatmap(results, figure_dir)
+    print('  Validation heatmap plotted.')
+
+    return results
+
+
 def generate_report(
     output_dir: Path,
     discovery_results: dict = None,
     interventional_results: dict = None,
     ood_results: dict = None,
     symbolic_results: dict = None,
+    validation_results: dict = None,
     skipped_analyses: list = None,
 ):
     """Generate the final PDF report."""
@@ -332,6 +359,14 @@ def generate_report(
                 mean_r2 = st['best_r2'].mean()
                 key_findings.append(f'Symbolic regression mean R²={mean_r2:.4f}.')
 
+    if validation_results is not None:
+        analyses_run.append('Causal Validation')
+        s = validation_results.get('summary', {})
+        key_findings.append(
+            f'{s.get("n_validated", 0)}/{s.get("n_total_checked", 0)} '
+            f'edges validated ({s.get("validation_rate", 0):.0%}).'
+        )
+
     n_vars = len(discovery_results.get('nodes', [])) if discovery_results else 0
     gen.add_executive_summary({
         'n_processes': 4,
@@ -352,6 +387,9 @@ def generate_report(
 
     if symbolic_results is not None:
         gen.add_symbolic_section(symbolic_results, figure_dir)
+
+    if validation_results is not None:
+        gen.add_validation_section(validation_results, figure_dir)
 
     # Conclusions
     conclusions = {
@@ -407,7 +445,7 @@ def main():
 
     # Determine which analyses to run
     run_all = args.all
-    if not (run_all or args.discovery or args.interventional or args.ood or args.symbolic):
+    if not (run_all or args.discovery or args.interventional or args.ood or args.symbolic or args.validation):
         print('No analysis specified. Use --all or specific flags. Use --help for options.')
         sys.exit(1)
 
@@ -427,6 +465,7 @@ def main():
     interventional_results = None
     ood_results = None
     symbolic_results = None
+    validation_results = None
     skipped = []
 
     # Run analyses
@@ -466,6 +505,15 @@ def main():
             traceback.print_exc()
             skipped.append(f'Symbolic Regression (error: {e})')
 
+    if run_all or args.validation:
+        try:
+            validation_results = run_validation(args, output_dir)
+        except Exception as e:
+            warnings.warn(f'Causal validation failed: {e}')
+            import traceback
+            traceback.print_exc()
+            skipped.append(f'Causal Validation (error: {e})')
+
     # Generate report
     try:
         report_path = generate_report(
@@ -474,6 +522,7 @@ def main():
             interventional_results=interventional_results,
             ood_results=ood_results,
             symbolic_results=symbolic_results,
+            validation_results=validation_results,
             skipped_analyses=skipped,
         )
     except Exception as e:

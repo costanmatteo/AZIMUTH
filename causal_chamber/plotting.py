@@ -729,3 +729,96 @@ def plot_ground_truth_dag(
     ax.axis('off')
     fig.tight_layout()
     _save_figure(fig, output_dir, name)
+
+
+# ===================================================================
+# 6. CAUSAL VALIDATION FIGURES
+# ===================================================================
+
+def plot_validation_heatmap(
+    results: Dict,
+    output_dir: Path,
+    name: str = 'causal_validation_summary',
+):
+    """
+    Multi-panel figure: per-process p-value heatmaps + pipeline F row.
+
+    Red boxes mark ground truth edges. Dark cells = significant (small p).
+    """
+    from causal_chamber.ground_truth import PROCESS_OBSERVABLE_VARS, get_ground_truth_edges
+
+    apply_style()
+
+    gt_edge_set = set(get_ground_truth_edges())
+    pvalue_matrices = results['pvalue_matrices']
+    pipeline_matrix = results['pipeline_pvalue_matrix']
+
+    n_panels = len(pvalue_matrices) + 1  # +1 for pipeline F row
+    fig, axes = plt.subplots(1, n_panels, figsize=(4 * n_panels, 5),
+                              gridspec_kw={'width_ratios': [1] * len(pvalue_matrices) + [1.5]})
+
+    # Per-process heatmaps
+    for idx, (proc_name, pmat) in enumerate(pvalue_matrices.items()):
+        ax = axes[idx]
+        info = PROCESS_OBSERVABLE_VARS[proc_name]
+
+        # Take -log10 for visualization (larger = more significant)
+        log_p = -np.log10(pmat.values.astype(float) + 1e-300)
+
+        im = ax.imshow(log_p, cmap='YlOrRd', aspect='auto', vmin=0, vmax=50)
+
+        # Mark ground truth edges with red border
+        for i, row_var in enumerate(pmat.index):
+            for j, col_label in enumerate(pmat.columns):
+                # Extract variable name from "do(Var=val)"
+                intv_var = col_label.split('(')[1].split('=')[0]
+                if (intv_var, row_var) in gt_edge_set:
+                    rect = plt.Rectangle((j - 0.5, i - 0.5), 1, 1,
+                                         linewidth=2, edgecolor=C_RED,
+                                         facecolor='none')
+                    ax.add_patch(rect)
+
+                # Annotate with p-value
+                p = pmat.iloc[i, j]
+                if p < 0.001:
+                    txt = f'{log_p[i, j]:.0f}'
+                else:
+                    txt = f'{p:.2f}'
+                color = 'white' if log_p[i, j] > 25 else C_BLACK
+                ax.text(j, i, txt, ha='center', va='center', fontsize=6, color=color)
+
+        ax.set_xticks(range(len(pmat.columns)))
+        ax.set_xticklabels([c.split('(')[1].rstrip(')') for c in pmat.columns],
+                           rotation=45, ha='right', fontsize=6)
+        ax.set_yticks(range(len(pmat.index)))
+        ax.set_yticklabels(pmat.index, fontsize=7)
+        ax.set_title(proc_name, fontsize=10, fontfamily='serif')
+
+    # Pipeline F heatmap (F row only)
+    ax = axes[-1]
+    if 'F' in pipeline_matrix.index:
+        f_row = pipeline_matrix.loc[['F']].values.astype(float)
+        log_p_f = -np.log10(f_row + 1e-300)
+
+        im = ax.imshow(log_p_f, cmap='YlOrRd', aspect='auto', vmin=0, vmax=50)
+
+        for j in range(f_row.shape[1]):
+            p = f_row[0, j]
+            if p < 0.001:
+                txt = f'{log_p_f[0, j]:.0f}'
+            else:
+                txt = f'{p:.2f}'
+            color = 'white' if log_p_f[0, j] > 25 else C_BLACK
+            ax.text(j, 0, txt, ha='center', va='center', fontsize=6, color=color)
+
+        ax.set_xticks(range(len(pipeline_matrix.columns)))
+        ax.set_xticklabels([c.split('(')[1].rstrip(')') for c in pipeline_matrix.columns],
+                           rotation=45, ha='right', fontsize=6)
+        ax.set_yticks([0])
+        ax.set_yticklabels(['F'], fontsize=7)
+        ax.set_title('Pipeline -> F', fontsize=10, fontfamily='serif')
+
+    fig.suptitle(r'Causal Validation: $-\log_{10}(p)$  (red box = ground truth edge)',
+                 fontsize=11, fontfamily='serif', y=1.02)
+    fig.tight_layout()
+    _save_figure(fig, output_dir, name)
