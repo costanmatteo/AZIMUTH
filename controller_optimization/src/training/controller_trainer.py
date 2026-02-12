@@ -496,22 +496,29 @@ class ControllerTrainer:
 
     def train_epoch(self, batch_size=32, reliability_weight=1.0, lambda_bc=None):
         """
-        Training per un epoch ACROSS ALL SCENARIOS.
+        Training per un epoch ACROSS ALL SCENARIOS with gradient accumulation.
 
         Each epoch cycles through ALL scenarios exactly once in shuffled order.
-        This ensures:
-        - Equal coverage: every scenario trained once per epoch
-        - Diversity: shuffled order prevents overfitting patterns
-        - Balanced generalization: no scenario over/under-represented
+        Gradients are accumulated across all scenarios and a single optimizer
+        step is performed at the end of the epoch. This ensures the NN learns
+        to satisfy all scenarios simultaneously, avoiding catastrophic forgetting
+        where the last scenario's update partially undoes earlier ones.
 
-        Per ogni scenario:
-        1. Forward pass → trajectory for that scenario
-        2. Compute F (surrogate) using scenario-specific F_star
-        3. Loss = reliability_weight * (F - F*_scenario)^2 + λ_BC * BC_loss
-        4. Backward + optimizer step
+        The batch_size parameter represents the TOTAL number of samples across
+        all scenarios. Samples are split equally: samples_per_scenario = batch_size // n_scenarios.
+        This keeps total computation per epoch constant regardless of n_scenarios.
+
+        Pattern:
+            optimizer.zero_grad()                        # once per epoch
+            for scenario_idx in scenario_order:
+                trajectory = forward(samples_per_scenario, scenario_idx)
+                loss = compute_loss(trajectory, scenario_idx)
+                (loss / n_scenarios).backward()           # accumulate gradients
+            optimizer.step()                              # single step per epoch
 
         Args:
-            batch_size: Number of samples per scenario (default 32)
+            batch_size: Total number of samples across all scenarios (default 32).
+                        Divided equally among scenarios: samples_per_scenario = batch_size // n_scenarios.
             reliability_weight: Weight for reliability loss (for curriculum learning)
             lambda_bc: BC weight (if None, uses self.lambda_bc)
 
@@ -534,33 +541,39 @@ class ControllerTrainer:
 
         n_scenarios = len(self.surrogate.F_star)
 
+        # Split total samples equally across scenarios
+        samples_per_scenario = max(1, batch_size // n_scenarios)
+
         # Calculate train/val batch sizes if within-scenario validation is enabled
         if self.within_scenario_validation_enabled and self.within_scenario_split > 0:
             # Generate more samples to split into train and val
-            val_batch_size = max(1, int(batch_size * self.within_scenario_split / (1 - self.within_scenario_split)))
-            total_batch_size = batch_size + val_batch_size
-            train_batch_size = batch_size
+            val_samples = max(1, int(samples_per_scenario * self.within_scenario_split / (1 - self.within_scenario_split)))
+            total_samples_per_scenario = samples_per_scenario + val_samples
+            train_samples_per_scenario = samples_per_scenario
         else:
-            total_batch_size = batch_size
-            train_batch_size = batch_size
-            val_batch_size = 0
+            total_samples_per_scenario = samples_per_scenario
+            train_samples_per_scenario = samples_per_scenario
+            val_samples = 0
 
         # Shuffle scenario order each epoch for diversity
         scenario_order = np.random.permutation(n_scenarios)
+
+        # Zero gradients once per epoch (gradient accumulation across scenarios)
+        self.optimizer.zero_grad()
 
         # Cycle through all scenarios exactly once
         for scenario_idx in scenario_order:
             # Forward pass through process chain for this scenario
             # Generate enough samples for both train and val
             trajectory = self.process_chain.forward(
-                batch_size=total_batch_size,
+                batch_size=total_samples_per_scenario,
                 scenario_idx=scenario_idx
             )
 
             # Split into train and val trajectories if within-scenario validation is enabled
-            if self.within_scenario_validation_enabled and val_batch_size > 0:
+            if self.within_scenario_validation_enabled and val_samples > 0:
                 train_trajectory, val_trajectory = self._split_trajectory(
-                    trajectory, train_batch_size, val_batch_size
+                    trajectory, train_samples_per_scenario, val_samples
                 )
             else:
                 train_trajectory = trajectory
@@ -597,9 +610,8 @@ class ControllerTrainer:
                 Q_mean = Q.detach().mean().item()
                 self.Q_history[proc_name].append(Q_mean)
 
-            # Backward pass
-            self.optimizer.zero_grad()
-            total_loss.backward()
+            # Backward pass: accumulate gradients (scaled by 1/n_scenarios)
+            (total_loss / n_scenarios).backward()
 
             # DEBUG: Check gradient flow on first scenario of first few epochs
             if hasattr(self, '_debug_gradients') and self._debug_gradients and scenario_idx == scenario_order[0]:
@@ -638,13 +650,14 @@ class ControllerTrainer:
 
                 print(f"{'='*60}\n")
 
-            self.optimizer.step()
-
             # Track metrics
             epoch_total_loss += total_loss.item()
             epoch_reliability_loss += rel_loss
             epoch_bc_loss += bc_loss
             epoch_F_values.append(F)
+
+        # Single optimizer step after accumulating gradients from all scenarios
+        self.optimizer.step()
 
         # Average over all scenarios
         avg_total_loss = epoch_total_loss / n_scenarios
@@ -826,10 +839,13 @@ class ControllerTrainer:
         Training loop completo con early stopping.
 
         Each epoch cycles through all scenarios exactly once in shuffled order.
+        Gradients are accumulated across all scenarios with a single optimizer
+        step per epoch to avoid catastrophic forgetting.
 
         Args:
             epochs: Number of training epochs
-            batch_size: Number of samples per scenario
+            batch_size: Total number of samples per epoch (split equally across scenarios).
+                        Each scenario gets samples_per_scenario = batch_size // n_scenarios.
             patience: Early stopping patience
             save_dir: Directory to save checkpoints
             verbose: Print training progress
@@ -856,8 +872,8 @@ class ControllerTrainer:
             print(f"{'='*70}")
             print(f"  Epochs: {epochs}")
             print(f"  Scenarios per epoch: {n_scenarios} (all scenarios)")
-            print(f"  Batch size per scenario: {batch_size}")
-            print(f"  Total batches: {epochs * n_scenarios}")
+            print(f"  Total batch size: {batch_size}")
+            print(f"  Samples per scenario: {max(1, batch_size // n_scenarios)}")
             print(f"  Patience: {patience}")
             print(f"  Save dir: {save_dir}")
             print(f"  F* (target, mean): {np.mean(self.surrogate.F_star):.6f} ± {np.std(self.surrogate.F_star):.6f}")

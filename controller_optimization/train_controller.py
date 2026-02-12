@@ -8,7 +8,7 @@ Usa: python train_controller.py [options]
 Command-line options (override config values):
     --learning_rate FLOAT      Learning rate (default: from config)
     --epochs INT               Number of training epochs
-    --batch_size INT           Batch size per scenario
+    --batch_size INT           Total batch size (split equally across scenarios)
     --lambda_bc FLOAT          Behavior cloning weight
     --weight_decay FLOAT       Weight decay for optimizer
     --reliability_loss_scale FLOAT  Scale factor for reliability loss
@@ -100,7 +100,7 @@ def parse_args():
     parser.add_argument('--epochs', type=int, default=None,
                         help='Number of training epochs')
     parser.add_argument('--batch_size', type=int, default=None,
-                        help='Batch size per scenario')
+                        help='Total batch size (split equally across scenarios)')
     parser.add_argument('--lambda_bc', type=float, default=None,
                         help='Behavior cloning weight')
     parser.add_argument('--weight_decay', type=float, default=None,
@@ -269,7 +269,7 @@ def main(config=None):
     print("\nActive configuration:")
     print(f"  Learning rate:        {cfg['training']['learning_rate']}")
     print(f"  Epochs:               {cfg['training']['epochs']}")
-    print(f"  Batch size:           {cfg['training']['batch_size']}")
+    print(f"  Total batch size:     {cfg['training']['batch_size']}")
     print(f"  Lambda BC:            {cfg['training']['lambda_bc']}")
     print(f"  Reliability scale:    {cfg['training']['reliability_loss_scale']}")
     print(f"  Output dir:           {cfg['training']['checkpoint_dir']}")

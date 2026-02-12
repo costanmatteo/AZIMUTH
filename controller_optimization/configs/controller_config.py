@@ -15,8 +15,8 @@ PROCESS SELECTION:
 
 TRAINING:
 - epochs: Number of training epochs (each epoch cycles through all training scenarios once)
-- batch_size: Number of replicas per scenario in each forward pass
-              (each replica has same inputs but different network dropout/stochasticity)
+- batch_size: Total number of samples per epoch, split equally across scenarios
+              (samples_per_scenario = batch_size // n_scenarios)
               Higher values = smoother gradients but more memory
 - learning_rate: Initial learning rate for optimizer
 - lambda_bc: Behavior cloning weight (balances reliability vs target-following)
@@ -86,7 +86,7 @@ MISC:
 
 Typical Modifications:
 =====================
-- Increase batch_size (64, 128) for smoother gradients (needs more GPU memory)
+- Increase batch_size for smoother gradients (needs more GPU memory)
 - Add gradient clipping (1.0) if training is unstable
 - Enable lr_scheduler for longer training (e.g., {'type': 'step', 'step_size': 50, 'gamma': 0.5})
 - Increase n_train (80, 100) for even more diverse training scenarios
@@ -114,7 +114,7 @@ CONTROLLER_CONFIG = {
     # Training parameters
     'training': {
         'epochs': 1500,  # Each epoch cycles through all training scenarios once
-        'batch_size': 2500,  # Replicas per scenario (same inputs, different dropout/stochasticity)
+        'batch_size': 2500,  # Total samples per epoch (split equally across scenarios)
         'learning_rate': 0.0019017383571692538,
         'weight_decay': 0.001,
         'lambda_bc': 0.001,  # Behavior cloning weight
