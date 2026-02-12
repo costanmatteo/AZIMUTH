@@ -1,0 +1,17 @@
+# Core dependencies (already in Azimuth)
+numpy
+pandas
+scipy
+matplotlib
+networkx
+scikit-learn
+torch
+reportlab
+
+# Optional: classical causal discovery baselines
+# pip install causal-learn
+# causal-learn
+
+# Optional: symbolic regression
+# pip install pysr
+# pysr
