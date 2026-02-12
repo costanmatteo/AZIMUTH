@@ -418,10 +418,25 @@ def plot_intervention_summary_violins(
 ):
     """
     Multi-panel violin plot for all interventions.
+
+    Each (intervention, variable) pair gets its own panel, so both
+    process outputs and F are shown when available.
     """
     apply_style()
 
-    n_panels = len(results_list)
+    # Flatten: one panel per (result, variable) pair
+    panels = []
+    for result in results_list:
+        proc = result['process']
+        intv = result['intervention']
+        intv_str = ', '.join(f"do({k}={v})" for k, v in intv.items())
+        obs_df = result['obs_data']
+        int_df = result['int_data']
+        for var, comp in result['comparisons'].items():
+            if var in obs_df.columns and var in int_df.columns:
+                panels.append((proc, intv_str, var, comp, obs_df, int_df))
+
+    n_panels = len(panels)
     if n_panels == 0:
         return
 
@@ -433,35 +448,28 @@ def plot_intervention_summary_violins(
         axes = np.array([axes])
     axes = axes.ravel()
 
-    for idx, result in enumerate(results_list):
+    for idx, (proc, intv_str, var, comp, obs_df, int_df) in enumerate(panels):
         ax = axes[idx]
-        proc = result['process']
-        intv = result['intervention']
-        intv_str = ', '.join(f"do({k}={v})" for k, v in intv.items())
 
-        for var, comp in result['comparisons'].items():
-            obs_df = result['obs_data']
-            int_df = result['int_data']
+        data = [obs_df[var].values, int_df[var].values]
+        parts = ax.violinplot(data, positions=[0, 1], showmeans=True,
+                              showmedians=True, showextrema=False)
+        for i, pc in enumerate(parts['bodies']):
+            pc.set_facecolor([C_BLUE, C_RED][i])
+            pc.set_alpha(0.6)
+        parts['cmeans'].set_color(C_BLACK)
+        parts['cmedians'].set_color(C_BLACK)
 
-            data = [obs_df[var].values, int_df[var].values]
-            parts = ax.violinplot(data, positions=[0, 1], showmeans=True,
-                                  showmedians=True, showextrema=False)
-            for i, pc in enumerate(parts['bodies']):
-                pc.set_facecolor([C_BLUE, C_RED][i])
-                pc.set_alpha(0.6)
-            parts['cmeans'].set_color(C_BLACK)
-            parts['cmedians'].set_color(C_BLACK)
+        ax.set_xticks([0, 1])
+        ax.set_xticklabels(['Obs', 'Int'], fontsize=7)
+        ax.set_ylabel(var, fontsize=7)
 
-            ax.set_xticks([0, 1])
-            ax.set_xticklabels(['Obs', 'Int'], fontsize=7)
-            ax.set_ylabel(var, fontsize=7)
-
-            pval = comp['p_value']
-            sig = '***' if pval < 0.001 else '**' if pval < 0.01 else '*' if pval < 0.05 else 'n.s.'
-            ax.set_title(f'{proc}: {intv_str}\np={pval:.1e} ({sig})',
-                         fontsize=7, fontfamily='serif')
-            ax.spines['top'].set_visible(False)
-            ax.spines['right'].set_visible(False)
+        pval = comp['p_value']
+        sig = '***' if pval < 0.001 else '**' if pval < 0.01 else '*' if pval < 0.05 else 'n.s.'
+        ax.set_title(f'{proc}: {intv_str}\n{var}: p={pval:.1e} ({sig})',
+                     fontsize=7, fontfamily='serif')
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
 
     # Hide unused axes
     for idx in range(n_panels, len(axes)):
@@ -480,17 +488,26 @@ def plot_ood_bar_chart(
     ood_metrics: Dict[str, Dict[str, float]],
     output_dir: Path,
     name: str = 'ood_bar_chart',
+    id_F_metrics: Optional[Dict[str, Dict[str, float]]] = None,
+    ood_F_metrics: Optional[Dict[str, Dict[str, float]]] = None,
 ):
     """
     Grouped bar chart: metrics (mean, std, etc.) in-distribution vs OOD per process.
     Blue = ID, Red = OOD.
+
+    If F metrics are provided, a second subplot shows F under each OOD shift.
     """
     apply_style()
 
     processes = list(id_metrics.keys())
     n_proc = len(processes)
+    has_F = id_F_metrics is not None and ood_F_metrics is not None
 
-    fig, ax = plt.subplots(figsize=(max(6, n_proc * 2), 4))
+    if has_F:
+        fig, (ax, ax_f) = plt.subplots(1, 2, figsize=(max(6, n_proc * 2) + 4, 4),
+                                        gridspec_kw={'width_ratios': [n_proc, n_proc]})
+    else:
+        fig, ax = plt.subplots(figsize=(max(6, n_proc * 2), 4))
 
     x = np.arange(n_proc)
     width = 0.35
@@ -513,9 +530,35 @@ def plot_ood_bar_chart(
     ax.set_xticks(x)
     ax.set_xticklabels(processes, fontsize=8)
     ax.set_ylabel('Output Mean', fontsize=9)
+    ax.set_title('Per-process outputs', fontsize=10, fontfamily='serif')
     ax.legend(frameon=False, fontsize=8)
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
+
+    # F subplot
+    if has_F:
+        id_F_vals = [id_F_metrics[p].get('mean', 0) for p in processes]
+        ood_F_vals = [ood_F_metrics[p].get('mean', 0) for p in processes]
+
+        bars_f1 = ax_f.bar(x - width / 2, id_F_vals, width, label='ID',
+                           color=C_BLUE, edgecolor='white', linewidth=0.5)
+        bars_f2 = ax_f.bar(x + width / 2, ood_F_vals, width, label='OOD',
+                           color=C_RED, edgecolor='white', linewidth=0.5)
+
+        for bar, val in zip(bars_f1, id_F_vals):
+            ax_f.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.002,
+                      f'{val:.3f}', ha='center', va='bottom', fontsize=7)
+        for bar, val in zip(bars_f2, ood_F_vals):
+            ax_f.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.002,
+                      f'{val:.3f}', ha='center', va='bottom', fontsize=7)
+
+        ax_f.set_xticks(x)
+        ax_f.set_xticklabels([f'{p}\nshift' for p in processes], fontsize=8)
+        ax_f.set_ylabel('Reliability $F$', fontsize=9)
+        ax_f.set_title('Pipeline $F$ under OOD shift', fontsize=10, fontfamily='serif')
+        ax_f.legend(frameon=False, fontsize=8)
+        ax_f.spines['top'].set_visible(False)
+        ax_f.spines['right'].set_visible(False)
 
     fig.tight_layout()
     _save_figure(fig, output_dir, name)

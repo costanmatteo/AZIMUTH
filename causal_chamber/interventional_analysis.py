@@ -2,9 +2,14 @@
 Interventional Validation Analysis.
 
 Uses Pearl's do-operator (SCM.do()) to generate data under interventions,
-validates that CausaliT and the reliability formula capture interventional
-effects correctly. Inspired by the causal_validation.ipynb from the
-Causal Chamber paper (Gamella et al., Nature Machine Intelligence 2025).
+validates that interventional effects propagate through the full trajectory
+(inputs -> process outputs -> reliability F).
+
+All analyses use joint pipeline trajectories via sample_joint_pipeline(),
+so every intervention comparison includes both per-process outputs and F.
+
+Inspired by the causal_validation.ipynb from the Causal Chamber paper
+(Gamella et al., Nature Machine Intelligence 2025).
 """
 
 import numpy as np
@@ -22,6 +27,7 @@ sys.path.insert(0, str(REPO_ROOT))
 from causal_chamber.ground_truth import (
     PROCESS_ORDER, PROCESS_DATASETS, PROCESS_OBSERVABLE_VARS,
 )
+from causal_chamber.generate_data import sample_joint_pipeline
 
 
 # ---------------------------------------------------------------------------
@@ -54,46 +60,6 @@ DEFAULT_INTERVENTIONS = {
         {'Concentration': 2.5},
     ],
 }
-
-
-def generate_observational_data(
-    process_name: str,
-    n: int = 2000,
-    seed: int = 42,
-) -> pd.DataFrame:
-    """Sample observational data from a single process SCM."""
-    ds = PROCESS_DATASETS[process_name]
-    return ds.sample(n, seed=seed)
-
-
-def generate_interventional_data(
-    process_name: str,
-    interventions: Dict[str, float],
-    n: int = 2000,
-    seed: int = 42,
-) -> pd.DataFrame:
-    """
-    Sample data from a process SCM under do-interventions.
-
-    Parameters
-    ----------
-    process_name : str
-        Process name (e.g., 'laser').
-    interventions : dict
-        Mapping variable_name -> constant value for do-operator.
-    n : int
-        Number of samples.
-    seed : int
-        Random seed.
-
-    Returns
-    -------
-    pd.DataFrame
-        Interventional samples.
-    """
-    ds = PROCESS_DATASETS[process_name]
-    scm_intervened = ds.scm.do(interventions)
-    return scm_intervened.sample(n, seed=seed)
 
 
 def compare_distributions(
@@ -153,25 +119,32 @@ def run_single_intervention_analysis(
     seed: int = 42,
 ) -> Dict:
     """
-    Run analysis for a single intervention on a single process.
+    Run analysis for a single intervention using the full trajectory.
+
+    Samples observational and interventional joint pipelines, then compares
+    distributions on the intervened process's output AND on F.
 
     Returns
     -------
     dict with keys:
         'process': process name
         'intervention': intervention dict
-        'obs_data': observational DataFrame
-        'int_data': interventional DataFrame
+        'obs_data': observational DataFrame (all vars + F)
+        'int_data': interventional DataFrame (all vars + F)
         'comparisons': dict of variable -> distribution comparison results
     """
-    obs_df = generate_observational_data(process_name, n=n, seed=seed)
-    int_df = generate_interventional_data(process_name, interventions, n=n, seed=seed + 1)
+    obs_df = sample_joint_pipeline(n=n, seed=seed)
+    int_df = sample_joint_pipeline(
+        n=n, seed=seed + 1,
+        interventions={process_name: interventions},
+    )
 
     info = PROCESS_OBSERVABLE_VARS[process_name]
-    downstream_vars = info['outputs']
+    # Compare the intervened process's outputs AND F
+    compare_vars = list(info['outputs']) + ['F']
 
     comparisons = {}
-    for var in downstream_vars:
+    for var in compare_vars:
         if var in obs_df.columns and var in int_df.columns:
             comparisons[var] = compare_distributions(
                 obs_df[var].values,
@@ -187,80 +160,6 @@ def run_single_intervention_analysis(
     }
 
 
-def compute_reliability_under_intervention(
-    process_name: str,
-    interventions: Dict[str, float],
-    n: int = 1000,
-    seed: int = 42,
-    device: str = 'cpu',
-) -> Dict:
-    """
-    Compute reliability F under intervention using the mathematical formula.
-
-    Generates full pipeline data with the specified process intervened upon,
-    then computes F using ReliabilityFunction.
-
-    Returns
-    -------
-    dict with 'F_obs' (observational F), 'F_int' (interventional F),
-         'obs_outputs', 'int_outputs' (per-process outputs).
-    """
-    try:
-        import torch
-        from reliability_function import compute_reliability, ReliabilityFunction
-    except ImportError as e:
-        warnings.warn(f"Dependency not available for F computation: {e}")
-        return None
-
-    obs_outputs = {}
-    int_outputs = {}
-
-    for proc in PROCESS_ORDER:
-        ds = PROCESS_DATASETS[proc]
-        info = PROCESS_OBSERVABLE_VARS[proc]
-        out_var = info['outputs'][0]
-
-        # Observational
-        obs_df = ds.sample(n, seed=seed)
-        obs_outputs[proc] = obs_df[out_var].values
-
-        # Interventional (only the target process is intervened)
-        if proc == process_name:
-            int_scm = ds.scm.do(interventions)
-            int_df = int_scm.sample(n, seed=seed + 1)
-        else:
-            int_df = ds.sample(n, seed=seed + 1)
-        int_outputs[proc] = int_df[out_var].values
-
-    # Compute F for observational and interventional
-    def _outputs_to_trajectory(outputs_dict):
-        trajectory = {}
-        for proc, vals in outputs_dict.items():
-            t = torch.tensor(vals, dtype=torch.float32, device=device).unsqueeze(-1)
-            trajectory[proc] = {
-                'outputs_mean': t,
-                'outputs_sampled': t,
-                'outputs_var': torch.zeros_like(t),
-            }
-        return trajectory
-
-    try:
-        rf = ReliabilityFunction(device=device)
-        F_obs = rf.compute_reliability(_outputs_to_trajectory(obs_outputs)).detach().cpu().numpy()
-        F_int = rf.compute_reliability(_outputs_to_trajectory(int_outputs)).detach().cpu().numpy()
-    except Exception as e:
-        warnings.warn(f"Reliability computation failed: {e}")
-        F_obs = None
-        F_int = None
-
-    return {
-        'F_obs': F_obs,
-        'F_int': F_int,
-        'obs_outputs': obs_outputs,
-        'int_outputs': int_outputs,
-    }
-
-
 def run_interventional_analysis(
     interventions: Optional[Dict[str, List[Dict[str, float]]]] = None,
     n: int = 2000,
@@ -269,6 +168,9 @@ def run_interventional_analysis(
 ) -> Dict:
     """
     Run full interventional validation analysis across all processes.
+
+    Every intervention is evaluated on the full trajectory (all outputs + F)
+    via sample_joint_pipeline().
 
     Parameters
     ----------
@@ -280,20 +182,18 @@ def run_interventional_analysis(
     seed : int
         Base random seed.
     device : str
-        Compute device.
+        Compute device (unused, kept for API compatibility).
 
     Returns
     -------
     dict with keys:
         'per_process': dict of process -> list of single-intervention results
-        'reliability': dict of process -> list of reliability comparison results
         'summary_table': pd.DataFrame with summary statistics
     """
     if interventions is None:
         interventions = DEFAULT_INTERVENTIONS
 
     per_process = {}
-    reliability_results = {}
     summary_rows = []
 
     for proc_name, int_list in interventions.items():
@@ -302,16 +202,14 @@ def run_interventional_analysis(
             continue
 
         per_process[proc_name] = []
-        reliability_results[proc_name] = []
 
         for i, intv in enumerate(int_list):
-            # Distribution comparison
             result = run_single_intervention_analysis(
                 proc_name, intv, n=n, seed=seed + i * 100,
             )
             per_process[proc_name].append(result)
 
-            # Build summary row
+            # Build summary rows (one per compared variable)
             intv_str = ', '.join(f"do({k}={v})" for k, v in intv.items())
             for var, comp in result['comparisons'].items():
                 summary_rows.append({
@@ -325,21 +223,9 @@ def run_interventional_analysis(
                     'significant': comp['p_value'] < 0.05,
                 })
 
-            # Reliability comparison
-            rel_result = compute_reliability_under_intervention(
-                proc_name, intv, n=min(n, 500), seed=seed + i * 100,
-                device=device,
-            )
-            if rel_result is not None:
-                reliability_results[proc_name].append({
-                    'intervention': intv,
-                    **rel_result,
-                })
-
     summary_table = pd.DataFrame(summary_rows) if summary_rows else pd.DataFrame()
 
     return {
         'per_process': per_process,
-        'reliability': reliability_results,
         'summary_table': summary_table,
     }

@@ -2,8 +2,10 @@
 Out-of-Distribution (OOD) Analysis.
 
 Generates trajectory data with shifted input distributions and measures
-degradation in: uncertainty predictor accuracy, CausaliT F prediction,
-and stability of attention-based causal structure.
+the impact on both per-process outputs and the pipeline reliability F.
+
+All analyses use joint pipeline trajectories so that each OOD shift is
+traced from the shifted input through the process output to F.
 
 Inspired by ood_sensors.ipynb from the Causal Chamber paper
 (Gamella et al., Nature Machine Intelligence 2025).
@@ -23,6 +25,9 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from causal_chamber.ground_truth import (
     PROCESS_ORDER, PROCESS_DATASETS, PROCESS_OBSERVABLE_VARS,
+)
+from causal_chamber.generate_data import (
+    sample_joint_pipeline, sample_joint_ood_pipeline,
 )
 
 
@@ -58,76 +63,6 @@ OOD_SHIFTS = {
         'description': 'Temperature shifted from [293,323] to [323,353]',
     },
 }
-
-
-def _make_shifted_noise_model(
-    process_name: str,
-    variable: str,
-    new_range: Tuple[float, float],
-):
-    """
-    Create a modified noise model with a shifted range for one variable.
-
-    Returns a new NoiseModel with the specified variable's sampler replaced.
-    """
-    from scm_ds.scm import NoiseModel
-
-    ds = PROCESS_DATASETS[process_name]
-    original = ds.noise_model
-
-    # Copy singles
-    new_singles = dict(original.singles)
-    low, high = new_range
-    new_singles[variable] = lambda rng, n, lo=low, hi=high: rng.uniform(lo, hi, size=n)
-
-    return NoiseModel(singles=new_singles, groups=original.groups)
-
-
-def sample_ood_data(
-    process_name: str,
-    n: int = 1000,
-    seed: int = 42,
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """
-    Sample in-distribution (ID) and out-of-distribution (OOD) data.
-
-    Parameters
-    ----------
-    process_name : str
-        Process name.
-    n : int
-        Number of samples per condition.
-    seed : int
-        Random seed.
-
-    Returns
-    -------
-    id_df, ood_df : pd.DataFrame
-        In-distribution and OOD samples.
-    """
-    from scm_ds.scm import SCM
-
-    ds = PROCESS_DATASETS[process_name]
-    shift = OOD_SHIFTS[process_name]
-
-    # ID data (standard sampling)
-    id_df = ds.sample(n, seed=seed)
-
-    # OOD data (shifted distribution)
-    ood_noise_model = _make_shifted_noise_model(
-        process_name, shift['variable'], shift['ood_range'],
-    )
-    ood_scm = SCM(
-        list(ds.scm.specs.values()),
-        noise_model=ood_noise_model,
-    )
-    rng = np.random.default_rng(seed + 1)
-    eps_draws = ood_noise_model.sample_all(rng, n)
-    ctx = {}
-    ood_scm.forward(ctx, eps_draws)
-    ood_df = pd.DataFrame({k: np.asarray(v).reshape(n) for k, v in ctx.items()})
-
-    return id_df, ood_df
 
 
 def compute_prediction_metrics(
@@ -242,15 +177,12 @@ def run_ood_analysis(
     seed: int = 42,
 ) -> Dict:
     """
-    Run OOD analysis for all processes.
+    Run OOD analysis for all processes using joint pipeline trajectories.
 
     For each process:
-    1. Sample ID and OOD data
-    2. Compare output distributions
-    3. Report shift statistics
-
-    CausaliT attention stability analysis requires a checkpoint and is
-    handled separately via run_analysis.py.
+    1. Sample ID joint trajectory (all outputs + F)
+    2. Sample OOD joint trajectory (one process shifted, all outputs + F)
+    3. Compare the shifted process's output AND F between ID and OOD
 
     Returns
     -------
@@ -258,22 +190,36 @@ def run_ood_analysis(
         'per_process': dict of process -> OOD analysis results
         'summary_table': pd.DataFrame
     """
+    from scipy.stats import ks_2samp
+
     per_process = {}
     summary_rows = []
+
+    # ID reference trajectory (shared across all OOD comparisons)
+    id_df = sample_joint_pipeline(n=n, seed=seed)
 
     for proc_name in PROCESS_ORDER:
         shift = OOD_SHIFTS[proc_name]
         info = PROCESS_OBSERVABLE_VARS[proc_name]
         out_var = info['outputs'][0]
 
-        id_df, ood_df = sample_ood_data(proc_name, n=n, seed=seed)
+        # OOD trajectory with one process shifted
+        ood_df = sample_joint_ood_pipeline(
+            n=n, seed=seed,
+            ood_process=proc_name,
+            ood_variable=shift['variable'],
+            ood_range=shift['ood_range'],
+        )
 
-        # Compare output distributions
+        # Compare process output
         id_out = id_df[out_var].values
         ood_out = ood_df[out_var].values
+        ks_stat_out, ks_pval_out = ks_2samp(id_out, ood_out)
 
-        from scipy.stats import ks_2samp
-        ks_stat, ks_pval = ks_2samp(id_out, ood_out)
+        # Compare F
+        id_F = id_df['F'].values
+        ood_F = ood_df['F'].values
+        ks_stat_F, ks_pval_F = ks_2samp(id_F, ood_F)
 
         result = {
             'process': proc_name,
@@ -292,8 +238,18 @@ def run_ood_analysis(
                 'min': float(ood_out.min()),
                 'max': float(ood_out.max()),
             },
-            'ks_statistic': float(ks_stat),
-            'ks_pvalue': float(ks_pval),
+            'ks_statistic': float(ks_stat_out),
+            'ks_pvalue': float(ks_pval_out),
+            'id_F_stats': {
+                'mean': float(id_F.mean()),
+                'std': float(id_F.std()),
+            },
+            'ood_F_stats': {
+                'mean': float(ood_F.mean()),
+                'std': float(ood_F.std()),
+            },
+            'ks_statistic_F': float(ks_stat_F),
+            'ks_pvalue_F': float(ks_pval_F),
         }
         per_process[proc_name] = result
 
@@ -304,8 +260,12 @@ def run_ood_analysis(
             'ood_range': f"[{shift['ood_range'][0]}, {shift['ood_range'][1]}]",
             f'{out_var}_id_mean': result['id_output_stats']['mean'],
             f'{out_var}_ood_mean': result['ood_output_stats']['mean'],
-            'ks_statistic': float(ks_stat),
-            'ks_pvalue': float(ks_pval),
+            'ks_statistic': float(ks_stat_out),
+            'ks_pvalue': float(ks_pval_out),
+            'F_id_mean': result['id_F_stats']['mean'],
+            'F_ood_mean': result['ood_F_stats']['mean'],
+            'ks_statistic_F': float(ks_stat_F),
+            'ks_pvalue_F': float(ks_pval_F),
         })
 
     summary_table = pd.DataFrame(summary_rows) if summary_rows else pd.DataFrame()

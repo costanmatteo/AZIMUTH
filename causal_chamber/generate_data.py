@@ -242,6 +242,89 @@ def sample_joint_pipeline(
     return df
 
 
+def sample_joint_ood_pipeline(
+    n: int,
+    seed: int,
+    ood_process: str,
+    ood_variable: str,
+    ood_range: tuple,
+) -> pd.DataFrame:
+    """
+    Sample a joint pipeline with one process under OOD conditions.
+
+    All processes except *ood_process* are sampled from their standard
+    noise model.  The OOD process uses a shifted noise model for the
+    specified variable.  Reliability F is computed on the full trajectory.
+
+    Parameters
+    ----------
+    n : int
+        Number of samples.
+    seed : int
+        Random seed.
+    ood_process : str
+        Process to shift (e.g. 'laser').
+    ood_variable : str
+        Variable whose noise range is shifted (e.g. 'AmbientTemp').
+    ood_range : tuple of (float, float)
+        New (low, high) range for the OOD variable.
+
+    Returns
+    -------
+    pd.DataFrame with all observable columns + 'F'.
+    """
+    from scm_ds.scm import SCM, NoiseModel
+
+    trajectory = {}
+    for proc_name in PROCESS_ORDER:
+        ds = PROCESS_DATASETS[proc_name]
+        info = PROCESS_OBSERVABLE_VARS[proc_name]
+
+        if proc_name == ood_process:
+            # Build shifted noise model
+            original = ds.noise_model
+            new_singles = dict(original.singles)
+            lo, hi = ood_range
+            new_singles[ood_variable] = (
+                lambda rng, n, lo=lo, hi=hi: rng.uniform(lo, hi, size=n)
+            )
+            ood_noise_model = NoiseModel(
+                singles=new_singles, groups=original.groups,
+            )
+            ood_scm = SCM(
+                list(ds.scm.specs.values()),
+                noise_model=ood_noise_model,
+            )
+            rng = np.random.default_rng(seed + 1)
+            eps_draws = ood_noise_model.sample_all(rng, n)
+            ctx = {}
+            ood_scm.forward(ctx, eps_draws)
+            df = pd.DataFrame(
+                {k: np.asarray(v).reshape(n) for k, v in ctx.items()},
+            )
+        else:
+            df = ds.sample(n, seed=seed)
+
+        inputs_np = df[info['inputs']].values.astype(np.float32)
+        outputs_np = df[info['outputs']].values.astype(np.float32)
+
+        inputs_t = torch.tensor(inputs_np)
+        outputs_t = torch.tensor(outputs_np)
+        outputs_var = torch.var(outputs_t, dim=0, keepdim=True).expand_as(outputs_t)
+
+        trajectory[proc_name] = {
+            'inputs': inputs_t,
+            'outputs_mean': outputs_t,
+            'outputs_var': outputs_var,
+            'outputs_sampled': outputs_t,
+        }
+
+    df_out = trajectory_to_dataframe(trajectory)
+    F = compute_F(trajectory)
+    df_out['F'] = F.numpy()
+    return df_out
+
+
 # ---------------------------------------------------------------------------
 # Per-process sampling (unchanged from paper pattern)
 # ---------------------------------------------------------------------------

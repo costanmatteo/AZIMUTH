@@ -3,6 +3,9 @@ Symbolic Regression Analysis.
 
 For each process SCM, generates (input, output) data and tests whether
 symbolic regression can rediscover the known structural equations.
+Additionally fits a symbolic expression for F as a function of all
+process outputs, using joint pipeline trajectories.
+
 Uses PySR if available, otherwise falls back to polynomial fitting.
 
 Inspired by symbolic_regression.ipynb from the Causal Chamber paper
@@ -27,6 +30,7 @@ sys.path.insert(0, str(REPO_ROOT))
 from causal_chamber.ground_truth import (
     PROCESS_ORDER, PROCESS_DATASETS, PROCESS_OBSERVABLE_VARS,
 )
+from causal_chamber.generate_data import sample_joint_pipeline
 
 
 # ---------------------------------------------------------------------------
@@ -61,6 +65,13 @@ KNOWN_EQUATIONS = {
         'equation_latex': r'$R = k_{etch} e^{-E_a/(RT)} C^\alpha \tau \cdot Z_{\ln} + \varepsilon_t$',
         'equation_description': 'Arrhenius: R = k * exp(-Ea/(R*T)) * C^alpha * tau * Zln + noise',
         'key_features': ['Arrhenius exponential', 'power-law concentration', 'linear time'],
+    },
+    'reliability': {
+        'output': 'F',
+        'inputs': ['ActualPower', 'RemovalRate', 'Thickness', 'RemovalDepth'],
+        'equation_latex': r'$F = \sum_i w_i \exp\!\bigl(-(y_i - \tau_i)^2 / s_i\bigr) \;/\; \sum_i w_i$',
+        'equation_description': 'Weighted Gaussian quality: F = sum(w_i * exp(-(y_i - tau_i)^2 / s_i)) / sum(w_i)',
+        'key_features': ['weighted average', 'Gaussian quality kernels', 'adaptive targets'],
     },
 }
 
@@ -209,6 +220,7 @@ def run_symbolic_analysis_single(
     seed: int = 42,
     use_pysr: bool = True,
     poly_degree: int = 3,
+    joint_df: pd.DataFrame = None,
 ) -> Dict:
     """
     Run symbolic regression for a single process.
@@ -216,30 +228,43 @@ def run_symbolic_analysis_single(
     Generates data from the SCM and attempts to rediscover the structural
     equation using symbolic regression.
 
+    Parameters
+    ----------
+    process_name : str
+        Process name or 'reliability' for the F equation.
+    n : int
+        Number of samples (ignored if joint_df provided).
+    seed : int
+        Random seed (ignored if joint_df provided).
+    use_pysr : bool
+        Whether to attempt PySR.
+    poly_degree : int
+        Polynomial degree for fallback.
+    joint_df : pd.DataFrame, optional
+        Pre-sampled joint pipeline DataFrame (all vars + F).
+        If None, sampled via sample_joint_pipeline().
+
     Returns
     -------
     dict with analysis results.
     """
-    ds = PROCESS_DATASETS[process_name]
-    info = PROCESS_OBSERVABLE_VARS[process_name]
     known = KNOWN_EQUATIONS[process_name]
 
-    # Sample data
-    df = ds.sample(n, seed=seed)
+    if joint_df is None:
+        joint_df = sample_joint_pipeline(n=n, seed=seed)
 
-    # Extract inputs and output
-    input_cols = info['inputs']
-    output_col = info['outputs'][0]
+    input_cols = known['inputs']
+    output_col = known['output']
 
-    X = df[input_cols].values
-    y = df[output_col].values
+    X = joint_df[input_cols].values
+    y = joint_df[output_col].values
 
     results = {
         'process': process_name,
         'input_vars': input_cols,
         'output_var': output_col,
         'known_equation': known,
-        'n_samples': n,
+        'n_samples': len(joint_df),
         'X': X,
         'y_true': y,
         'fits': {},
@@ -275,7 +300,10 @@ def run_symbolic_analysis(
     poly_degree: int = 3,
 ) -> Dict:
     """
-    Run symbolic regression analysis for all processes.
+    Run symbolic regression analysis for all processes + F.
+
+    Uses a single joint pipeline sample for all analyses, ensuring
+    consistency across process-level and F-level symbolic fits.
 
     Returns
     -------
@@ -283,13 +311,19 @@ def run_symbolic_analysis(
         'per_process': dict of process_name -> analysis results
         'summary_table': pd.DataFrame with summary
     """
+    # Single joint trajectory for all fits
+    joint_df = sample_joint_pipeline(n=n, seed=seed)
+
     per_process = {}
     summary_rows = []
 
-    for proc_name in PROCESS_ORDER:
+    # Per-process symbolic regression + reliability F
+    all_targets = list(PROCESS_ORDER) + ['reliability']
+
+    for proc_name in all_targets:
         result = run_symbolic_analysis_single(
             proc_name, n=n, seed=seed, use_pysr=use_pysr,
-            poly_degree=poly_degree,
+            poly_degree=poly_degree, joint_df=joint_df,
         )
         per_process[proc_name] = result
 

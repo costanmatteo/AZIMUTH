@@ -65,8 +65,9 @@ def run_discovery_analysis(args, output_dir: Path) -> dict:
 
     from causal_chamber.ground_truth import (
         get_ground_truth_edges, get_ground_truth_adjacency_parent_convention,
-        get_all_observable_vars, sample_pipeline_data,
+        get_all_observable_vars,
     )
+    from causal_chamber.generate_data import sample_joint_pipeline
     from causal_chamber.metrics import compute_all_metrics, run_classical_baselines
     from causal_chamber.plotting import (
         plot_ground_truth_dag, plot_dag_comparison, plot_attention_heatmap,
@@ -101,8 +102,8 @@ def run_discovery_analysis(args, output_dir: Path) -> dict:
             from causal_chamber.attention_discovery import run_attention_discovery
             import torch
 
-            # Generate data for forward pass
-            data = sample_pipeline_data(n=args.n_samples, seed=args.seed)
+            # Generate joint trajectory data (all processes + F)
+            data = sample_joint_pipeline(n=args.n_samples, seed=args.seed)
 
             # For now, we work with the raw attention matrices.
             # A full implementation would format data into ProT input tensors.
@@ -164,7 +165,7 @@ def run_discovery_analysis(args, output_dir: Path) -> dict:
 
     # Classical baselines (optional)
     try:
-        data = sample_pipeline_data(n=args.n_samples, seed=args.seed)
+        data = sample_joint_pipeline(n=args.n_samples, seed=args.seed)
         data_np = data[nodes[:len(data.columns)]].values if len(data.columns) >= len(nodes) else data.values
         baselines = run_classical_baselines(
             data_np, node_names=list(data.columns),
@@ -236,16 +237,28 @@ def run_ood(args, output_dir: Path) -> dict:
     # Build bar chart data
     id_metrics = {}
     ood_metrics = {}
+    id_F_metrics = {}
+    ood_F_metrics = {}
     for proc, res in results['per_process'].items():
         id_metrics[proc] = res['id_output_stats']
         ood_metrics[proc] = res['ood_output_stats']
+        if 'id_F_stats' in res and 'ood_F_stats' in res:
+            id_F_metrics[proc] = res['id_F_stats']
+            ood_F_metrics[proc] = res['ood_F_stats']
 
-    plot_ood_bar_chart(id_metrics, ood_metrics, figure_dir)
+    plot_ood_bar_chart(
+        id_metrics, ood_metrics, figure_dir,
+        id_F_metrics=id_F_metrics if id_F_metrics else None,
+        ood_F_metrics=ood_F_metrics if ood_F_metrics else None,
+    )
 
     for proc, res in results['per_process'].items():
         print(f'  {proc}: ID mean={res["id_output_stats"]["mean"]:.3f}, '
               f'OOD mean={res["ood_output_stats"]["mean"]:.3f}, '
-              f'KS p={res["ks_pvalue"]:.2e}')
+              f'KS p={res["ks_pvalue"]:.2e}, '
+              f'F ID={res["id_F_stats"]["mean"]:.3f}, '
+              f'F OOD={res["ood_F_stats"]["mean"]:.3f}, '
+              f'F KS p={res["ks_pvalue_F"]:.2e}')
 
     return results
 
