@@ -865,3 +865,142 @@ def plot_validation_heatmap(
                  fontsize=11, fontfamily='serif', y=1.02)
     fig.tight_layout()
     _save_figure(fig, output_dir, name)
+
+
+# ===================================================================
+# 7. OOD RADAR/SPIDER PLOTS (reproduces paper methodology)
+# ===================================================================
+
+# Colorblind-friendly palette for models (IBM design)
+_RADAR_COLORS = [
+    '#648FFF',  # blue
+    '#DC267F',  # magenta
+    '#FE6100',  # orange
+    '#FFB000',  # yellow
+    '#785EF0',  # purple
+    '#009E73',  # green
+]
+
+
+def plot_ood_radar(
+    model_results: Dict[str, Dict[str, Dict[str, float]]],
+    env_names: List[str],
+    output_dir: Path,
+    name: str = 'ood_radar',
+    title: str = '',
+):
+    """
+    Radar/spider plot of MAE across environments for multiple models.
+
+    Reproduces the Causal Chamber paper's ood_sensors.ipynb visualization:
+    - Polar plot with one axis per environment
+    - One closed polygon per model
+    - Cube-root transformation for better readability
+    - Dashed line for baseline 'mean' model
+
+    Parameters
+    ----------
+    model_results : dict
+        {model_name: {env_name: {'mean': float, 'std': float}}}.
+    env_names : list of str
+        Environment names (axes of the radar plot).
+    output_dir : Path
+        Output directory.
+    name : str
+        Figure filename (without extension).
+    title : str
+        Figure title.
+    """
+    apply_style()
+
+    models = list(model_results.keys())
+    N = len(env_names)
+    if N == 0 or len(models) == 0:
+        return
+
+    # Compute angles
+    angles = [n / float(N) * 2 * np.pi for n in range(N)]
+    angles += angles[:1]  # close the polygon
+
+    fig, ax = plt.subplots(figsize=(7, 7), subplot_kw=dict(polar=True))
+    ax.set_theta_offset(np.pi / 2)
+    ax.set_theta_direction(-1)
+
+    # Cube root transform (as in the paper)
+    def t(x):
+        return np.power(np.maximum(x, 0), 1.0 / 3.0)
+
+    for idx, model_name in enumerate(models):
+        values = []
+        for env in env_names:
+            mae = model_results[model_name].get(env, {}).get('mean', 0)
+            values.append(mae)
+        values += values[:1]  # close
+        values_t = [t(v) for v in values]
+
+        color = _RADAR_COLORS[idx % len(_RADAR_COLORS)]
+        if model_name == 'mean':
+            label = 'Regr. to mean'
+            linestyle = '--'
+            color = C_BLACK
+        else:
+            label = model_name
+            linestyle = '-'
+
+        ax.plot(angles, values_t, linewidth=1.2, linestyle=linestyle,
+                label=label, color=color)
+        ax.fill(angles, values_t, alpha=0.08, color=color)
+
+    # Set axis labels
+    ax.set_xticks(angles[:-1])
+    ax.set_xticklabels(env_names, fontsize=7)
+
+    ax.set_ylabel(r'MAE$^{1/3}$', fontsize=8, labelpad=20)
+    if title:
+        ax.set_title(title, fontsize=10, fontfamily='serif', pad=20)
+
+    ax.legend(loc='lower left', bbox_to_anchor=(1.05, -0.05),
+              frameon=False, fontsize=7, title='Model', title_fontsize=8)
+
+    fig.tight_layout()
+    _save_figure(fig, output_dir, name)
+
+
+def plot_ood_radar_multi(
+    results: Dict,
+    output_dir: Path,
+    name: str = 'ood_radar_all',
+):
+    """
+    Multi-panel radar plots: one per process + one for F.
+
+    Parameters
+    ----------
+    results : dict
+        Output of run_ood_analysis(), with 'per_process' and 'reliability' keys.
+    """
+    apply_style()
+
+    processes = list(results.get('per_process', {}).keys())
+    has_F = 'reliability' in results and results['reliability']
+    n_panels = len(processes) + (1 if has_F else 0)
+
+    if n_panels == 0:
+        return
+
+    for proc_name, proc_data in results['per_process'].items():
+        env_names = proc_data.get('env_names', [])
+        model_results = proc_data.get('model_results', {})
+        plot_ood_radar(
+            model_results, env_names, output_dir,
+            name=f'ood_radar_{proc_name}',
+            title=f'{proc_name}: {proc_data["output_var"]}',
+        )
+
+    if has_F:
+        rel = results['reliability']
+        plot_ood_radar(
+            rel['model_results'], rel['env_names'], output_dir,
+            name='ood_radar_F',
+            title='Pipeline Reliability $F$',
+        )

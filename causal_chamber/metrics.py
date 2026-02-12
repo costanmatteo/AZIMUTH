@@ -254,3 +254,196 @@ def run_classical_baselines(
         )
 
     return results
+
+
+# ---------------------------------------------------------------------------
+# UT-IGSP with grid search (reproduces Causal Chamber paper methodology)
+# ---------------------------------------------------------------------------
+
+def _check_causaldag():
+    """Check if causaldag is available."""
+    try:
+        from causaldag import unknown_target_igsp, hsic_test
+        return True
+    except ImportError:
+        return False
+
+
+CAUSALDAG_AVAILABLE = _check_causaldag()
+
+
+def run_ut_igsp(
+    observational_data: np.ndarray,
+    interventional_data_list: list,
+    alpha_ci: float = 0.01,
+    alpha_inv: float = 0.01,
+    test: str = 'hsic',
+) -> Optional[np.ndarray]:
+    """
+    Run UT-IGSP (Unknown Target Interventional GSP) from causaldag.
+
+    Reproduces the Causal Chamber paper methodology (Gamella et al. 2025,
+    Appendix IV / causal_discovery_iid.ipynb).
+
+    Parameters
+    ----------
+    observational_data : np.ndarray
+        Observational (reference) samples, shape (n_obs, p).
+    interventional_data_list : list of np.ndarray
+        List of interventional samples, each shape (n_int, p).
+    alpha_ci : float
+        Significance level for conditional independence tests.
+    alpha_inv : float
+        Significance level for invariance tests.
+    test : str
+        'hsic' for kernel-based (non-parametric) or 'gauss' for Gaussian.
+
+    Returns
+    -------
+    np.ndarray or None
+        Estimated adjacency matrix (A[i,j]=1 means i->j) or None if unavailable.
+    """
+    if not CAUSALDAG_AVAILABLE:
+        warnings.warn("causaldag not installed. UT-IGSP unavailable.")
+        return None
+
+    from causaldag import (
+        unknown_target_igsp,
+        hsic_test, hsic_invariance_test,
+        gauss_invariance_suffstat, gauss_invariance_test,
+        partial_correlation_suffstat, partial_correlation_test,
+        MemoizedCI_Tester, MemoizedInvarianceTester,
+    )
+
+    # Combine into data list: [observational, interventional_1, ...]
+    data = [observational_data] + interventional_data_list
+    p = observational_data.shape[1]
+    nodes = set(range(p))
+
+    if test == 'gauss':
+        ci_suffstat = partial_correlation_suffstat(observational_data)
+        invariance_suffstat = gauss_invariance_suffstat(
+            observational_data, interventional_data_list,
+        )
+        ci_tester = MemoizedCI_Tester(
+            partial_correlation_test, ci_suffstat, alpha=alpha_ci,
+        )
+        invariance_tester = MemoizedInvarianceTester(
+            gauss_invariance_test, invariance_suffstat, alpha=alpha_inv,
+        )
+    elif test == 'hsic':
+        ci_tester = MemoizedCI_Tester(
+            hsic_test, observational_data, alpha=alpha_ci,
+        )
+        suffstat = {i: sample for i, sample in enumerate(interventional_data_list)}
+        suffstat['obs_samples'] = observational_data
+        invariance_tester = MemoizedInvarianceTester(
+            hsic_invariance_test, suffstat, alpha=alpha_inv,
+        )
+    else:
+        raise ValueError(f'Invalid test type: {test}')
+
+    # Run UT-IGSP
+    setting_list = [dict(known_interventions=[])] * len(interventional_data_list)
+    estimated_dag, est_targets_list = unknown_target_igsp(
+        setting_list, nodes, ci_tester, invariance_tester,
+    )
+    return estimated_dag.to_amat()[0]
+
+
+def run_ut_igsp_grid_search(
+    observational_data: np.ndarray,
+    interventional_data_list: list,
+    truth: np.ndarray,
+    n_alphas: int = 10,
+    alpha_range: tuple = (1e-4, 1e-2),
+    test: str = 'hsic',
+) -> Dict:
+    """
+    Grid search over (alpha_ci, alpha_inv) for UT-IGSP, selecting the
+    hyperparameters that minimize L2 distance to (1,1) in precision-recall
+    space.
+
+    Reproduces the Causal Chamber paper methodology exactly
+    (Gamella et al. 2025, causal_discovery_iid.ipynb).
+
+    Parameters
+    ----------
+    observational_data : np.ndarray
+        Observational (reference) samples, shape (n_obs, p).
+    interventional_data_list : list of np.ndarray
+        List of interventional samples, each shape (n_int, p).
+    truth : np.ndarray
+        Ground truth adjacency matrix.
+    n_alphas : int
+        Grid resolution (n_alphas x n_alphas).
+    alpha_range : tuple
+        (min_alpha, max_alpha) for both CI and invariance tests.
+    test : str
+        'hsic' or 'gauss'.
+
+    Returns
+    -------
+    dict with keys:
+        'best_dag': np.ndarray — best estimated adjacency matrix
+        'best_alpha_ci': float
+        'best_alpha_inv': float
+        'best_metrics': dict with precision, recall, f1, shd
+        'all_dags': np.ndarray of shape (n_alphas, n_alphas, p, p)
+        'all_metrics': np.ndarray of shape (n_alphas, n_alphas, 2)
+        'l2_distances': np.ndarray of shape (n_alphas, n_alphas)
+        'alphas': np.ndarray
+        'betas': np.ndarray
+    """
+    if not CAUSALDAG_AVAILABLE:
+        warnings.warn("causaldag not installed. UT-IGSP grid search unavailable.")
+        return None
+
+    alphas = np.linspace(alpha_range[0], alpha_range[1], n_alphas)
+    betas = np.linspace(alpha_range[0], alpha_range[1], n_alphas)
+    p = observational_data.shape[1]
+
+    all_dags = np.zeros((n_alphas, n_alphas, p, p))
+    all_metrics = np.zeros((n_alphas, n_alphas, 2))  # precision, recall
+
+    for i, alpha_ci in enumerate(alphas):
+        for j, alpha_inv in enumerate(betas):
+            try:
+                dag = run_ut_igsp(
+                    observational_data, interventional_data_list,
+                    alpha_ci=alpha_ci, alpha_inv=alpha_inv, test=test,
+                )
+                if dag is not None:
+                    all_dags[i, j] = dag
+                    all_metrics[i, j, 0] = edge_precision(dag, truth)
+                    all_metrics[i, j, 1] = edge_recall(dag, truth)
+            except Exception as e:
+                warnings.warn(f"UT-IGSP failed at alpha_ci={alpha_ci:.4f}, "
+                              f"alpha_inv={alpha_inv:.4f}: {e}")
+
+    # Select best by L2 distance to (1,1) in P/R space
+    l2_dist = np.sqrt(((1 - all_metrics) ** 2).sum(axis=2))
+    best_idx = np.unravel_index(np.argmin(l2_dist), l2_dist.shape)
+    i_best, j_best = best_idx
+
+    best_dag = all_dags[i_best, j_best]
+    best_prec = all_metrics[i_best, j_best, 0]
+    best_rec = all_metrics[i_best, j_best, 1]
+    best_f1 = 2 * best_prec * best_rec / (best_prec + best_rec) if (best_prec + best_rec) > 0 else 0.0
+
+    return {
+        'best_dag': best_dag,
+        'best_alpha_ci': float(alphas[i_best]),
+        'best_alpha_inv': float(betas[j_best]),
+        'best_metrics': {
+            'precision': float(best_prec),
+            'recall': float(best_rec),
+            'f1': float(best_f1),
+            'shd': structural_hamming_distance(best_dag, truth),
+        },
+        'all_dags': all_dags,
+        'all_metrics': all_metrics,
+        'l2_distances': l2_dist,
+        'alphas': alphas,
+        'betas': betas,
+    }

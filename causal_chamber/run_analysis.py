@@ -180,6 +180,59 @@ def run_discovery_analysis(args, output_dir: Path) -> dict:
     except Exception as e:
         print(f'  Classical baselines skipped: {e}')
 
+    # UT-IGSP with grid search (paper methodology)
+    try:
+        from causal_chamber.metrics import run_ut_igsp_grid_search, CAUSALDAG_AVAILABLE
+        from causal_chamber.generate_data import (
+            sample_joint_pipeline, INTERVENTION_SCHEDULE,
+        )
+
+        if CAUSALDAG_AVAILABLE:
+            print('  Running UT-IGSP with grid search (paper methodology)...')
+
+            # Build multi-environment data: observational + interventional
+            obs_data = sample_joint_pipeline(
+                n=args.n_samples, seed=args.seed,
+            )
+            obs_cols = [c for c in obs_data.columns if c != 'F']
+            obs_np = obs_data[obs_cols].values
+
+            int_data_list = []
+            for proc_name in ['laser', 'plasma', 'galvanic', 'microetch']:
+                schedule = INTERVENTION_SCHEDULE[proc_name]
+                for var_name, interventions in schedule.items():
+                    for intv in interventions:
+                        int_df = sample_joint_pipeline(
+                            n=min(args.n_samples, 1000),
+                            seed=args.seed + len(int_data_list) + 1,
+                            interventions={proc_name: {var_name: intv['value']}},
+                        )
+                        int_data_list.append(int_df[obs_cols].values)
+
+            print(f'  Environments: 1 observational + {len(int_data_list)} interventional')
+
+            for test_type in ['gauss', 'hsic']:
+                try:
+                    grid_result = run_ut_igsp_grid_search(
+                        obs_np, int_data_list, truth=gt_adj[:len(obs_cols), :len(obs_cols)],
+                        n_alphas=10, alpha_range=(1e-4, 1e-2), test=test_type,
+                    )
+                    if grid_result is not None:
+                        m = grid_result['best_metrics']
+                        method_name = f'UT-IGSP ({test_type})'
+                        results['metrics'][method_name] = m
+                        print(f'  {method_name}: P={m["precision"]:.3f}, '
+                              f'R={m["recall"]:.3f}, F1={m["f1"]:.3f}, '
+                              f'SHD={m["shd"]}, '
+                              f'alpha_ci={grid_result["best_alpha_ci"]:.4f}, '
+                              f'alpha_inv={grid_result["best_alpha_inv"]:.4f}')
+                except Exception as e:
+                    print(f'  UT-IGSP ({test_type}) failed: {e}')
+        else:
+            print('  causaldag not installed. UT-IGSP skipped.')
+    except Exception as e:
+        print(f'  UT-IGSP skipped: {e}')
+
     # Plot metrics bar chart
     if results['metrics']:
         plot_metrics_bar_chart(results['metrics'], figure_dir)
@@ -221,44 +274,49 @@ def run_interventional_validation(args, output_dir: Path) -> dict:
 
 
 def run_ood(args, output_dir: Path) -> dict:
-    """Run OOD analysis."""
+    """Run OOD analysis (paper methodology: train -> evaluate across environments)."""
     print('\n' + '=' * 60)
     print('SECTION 3: OOD Robustness')
     print('=' * 60)
 
     from causal_chamber.ood_analysis import run_ood_analysis
-    from causal_chamber.plotting import plot_ood_bar_chart
+    from causal_chamber.plotting import plot_ood_radar_multi
 
     figure_dir = output_dir / 'figures'
     figure_dir.mkdir(parents=True, exist_ok=True)
 
-    results = run_ood_analysis(n=args.n_samples, seed=args.seed)
-
-    # Build bar chart data
-    id_metrics = {}
-    ood_metrics = {}
-    id_F_metrics = {}
-    ood_F_metrics = {}
-    for proc, res in results['per_process'].items():
-        id_metrics[proc] = res['id_output_stats']
-        ood_metrics[proc] = res['ood_output_stats']
-        if 'id_F_stats' in res and 'ood_F_stats' in res:
-            id_F_metrics[proc] = res['id_F_stats']
-            ood_F_metrics[proc] = res['ood_F_stats']
-
-    plot_ood_bar_chart(
-        id_metrics, ood_metrics, figure_dir,
-        id_F_metrics=id_F_metrics if id_F_metrics else None,
-        ood_F_metrics=ood_F_metrics if ood_F_metrics else None,
+    n_seeds = getattr(args, 'n_seeds', 8)
+    results = run_ood_analysis(
+        n_train=100, n_test=min(args.n_samples, 1000),
+        seed=args.seed, n_seeds=n_seeds,
     )
 
+    # Radar plots (paper style)
+    plot_ood_radar_multi(results, figure_dir)
+
+    # Print summary
     for proc, res in results['per_process'].items():
-        print(f'  {proc}: ID mean={res["id_output_stats"]["mean"]:.3f}, '
-              f'OOD mean={res["ood_output_stats"]["mean"]:.3f}, '
-              f'KS p={res["ks_pvalue"]:.2e}, '
-              f'F ID={res["id_F_stats"]["mean"]:.3f}, '
-              f'F OOD={res["ood_F_stats"]["mean"]:.3f}, '
-              f'F KS p={res["ks_pvalue_F"]:.2e}')
+        mr = res['model_results']
+        best_model = max(
+            (m for m in mr if m != 'mean'),
+            key=lambda m: -mr[m].get('ID', {}).get('mean', float('inf')),
+            default=None,
+        )
+        if best_model:
+            id_mae = mr[best_model]['ID']['mean']
+            ood_maes = [f'{e}={mr[best_model][e]["mean"]:.3f}'
+                        for e in res['env_names'] if e != 'ID']
+            print(f'  {proc} [{best_model}]: ID MAE={id_mae:.3f}, '
+                  + ', '.join(ood_maes))
+
+    if results.get('reliability'):
+        rel = results['reliability']
+        mr = rel['model_results']
+        best = max((m for m in mr if m != 'mean'),
+                   key=lambda m: -mr[m].get('ID', {}).get('mean', float('inf')),
+                   default=None)
+        if best:
+            print(f'  F [{best}]: ID MAE={mr[best]["ID"]["mean"]:.3f}')
 
     return results
 
