@@ -531,6 +531,63 @@ def compute_multi_process_L_min(
     return combined_components, per_process_components
 
 
+def compute_empirical_L_min(
+    F_samples: np.ndarray,
+    F_star: float,
+    loss_scale: float = 1.0
+) -> TheoreticalLossComponents:
+    """
+    Compute L_min empirically from forward-pass samples.
+
+    Instead of deriving L_min from analytical formulas (which require per-process
+    δ, σ², s extraction), this estimates L_min directly from N stochastic forward
+    passes:
+
+        L_min = (Var(F_samples) + (mean(F_samples) - F*)²) × loss_scale
+
+    This is simpler, more robust (works with non-Gaussian noise, correlations,
+    any quality function shape), and avoids the complexity of multi-process
+    parameter extraction.
+
+    Args:
+        F_samples: Array of F values from N stochastic forward passes.
+                   Should contain at least ~100 samples for stable estimates.
+        F_star: Target reliability (deterministic F*).
+        loss_scale: Scale factor for the loss (training typically uses 100.0).
+
+    Returns:
+        TheoreticalLossComponents populated with empirical values.
+        Note: sigma2, delta, s fields are set to 0.0 (not meaningful for
+        empirical computation).
+    """
+    F_samples = np.asarray(F_samples)
+
+    if len(F_samples) == 0:
+        return TheoreticalLossComponents(
+            L_min=0.0, E_F=F_star, E_F2=F_star**2,
+            Var_F=0.0, Bias2=0.0, F_star=F_star,
+            sigma2=0.0, delta=0.0, s=0.0
+        )
+
+    E_F = float(np.mean(F_samples))
+    E_F2 = float(np.mean(F_samples**2))
+    Var_F = float(np.var(F_samples))  # unbiased not needed; N is large
+    Bias2 = (E_F - F_star) ** 2
+    L_min = (Var_F + Bias2) * loss_scale
+
+    return TheoreticalLossComponents(
+        L_min=L_min,
+        E_F=E_F,
+        E_F2=E_F2,
+        Var_F=Var_F * loss_scale,
+        Bias2=Bias2 * loss_scale,
+        F_star=F_star,
+        sigma2=0.0,   # not applicable for empirical
+        delta=0.0,     # not applicable for empirical
+        s=0.0          # not applicable for empirical
+    )
+
+
 @dataclass
 class TheoreticalLossTracker:
     """
