@@ -168,7 +168,7 @@ class TrajectoryDataGenerator:
                 all_X.append(X.cpu().numpy())
                 all_Y.append(F_tensor.numpy())
                 all_scenario_idx.extend([scenario_idx] * current_batch_size)
-                all_F_star.extend([surrogate.F_star[0]] * current_batch_size)
+                all_F_star.extend([surrogate.F_star] * current_batch_size)
 
         # Concatenate all batches
         X = np.concatenate(all_X, axis=0)

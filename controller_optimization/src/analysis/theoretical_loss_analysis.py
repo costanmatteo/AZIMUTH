@@ -949,7 +949,7 @@ def run_validation_sampling(
                 sigma2 = data['outputs_var'].mean().item()
                 sigma2_samples.append(sigma2)
 
-    F_star = surrogate.F_star[scenario_idx]
+    F_star = surrogate.F_star  # Single scalar value
     mean_sigma2 = np.mean(sigma2_samples)
 
     return np.array(F_samples), mean_sigma2, F_star

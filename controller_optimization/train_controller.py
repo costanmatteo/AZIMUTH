@@ -433,13 +433,10 @@ def main(config=None):
         print(f"  Surrogate type: reliability_function (mathematical formula)")
 
     print(f"  Sampling mode: {'DETERMINISTIC (mean)' if use_deterministic_sampling else 'STOCHASTIC (reparameterization trick)'}")
-    F_star_array = surrogate.F_star  # Now an array of (n_scenarios,)
-    F_star_mean = np.mean(F_star_array)
-    F_star_std = np.std(F_star_array)
+    F_star = surrogate.F_star  # Single scalar from scenario 0
     print(f"  ✓ Surrogate initialized")
-    print(f"    F* per scenario computed for {n_scenarios} scenarios")
-    print(f"    F* (mean): {F_star_mean:.6f} ± {F_star_std:.6f}")
-    print(f"    F* (range): [{F_star_array.min():.6f}, {F_star_array.max():.6f}]")
+    print(f"    F* (from scenario 0): {F_star:.6f}")
+    print(f"    Training scenarios: {n_scenarios}")
 
     # 5. Create Trainer
     print("\n[5/9] Creating controller trainer...")
@@ -589,13 +586,11 @@ def main(config=None):
     mode_str = f"{n_scenarios} scenarios × {eval_batch_size} samples" if plot_all_samples else f"{n_scenarios} scenarios"
     print(f"  Computing baseline reliability for {mode_str}...")
     F_baseline_values = []
-    F_star_values = []
 
     with torch.no_grad():
         for scenario_idx in range(n_scenarios):
-            # Extract scenario from baseline and target trajectories
+            # Extract scenario from baseline trajectory
             baseline_scenario = {}
-            target_scenario = {}
 
             for process_name, data in baseline_trajectory.items():
                 baseline_scenario[process_name] = {
@@ -603,37 +598,31 @@ def main(config=None):
                     'outputs': data['outputs'][scenario_idx:scenario_idx+1]
                 }
 
-            for process_name, data in target_trajectory.items():
-                target_scenario[process_name] = {
-                    'inputs': data['inputs'][scenario_idx:scenario_idx+1],
-                    'outputs': data['outputs'][scenario_idx:scenario_idx+1]
-                }
-
             # Convert to tensors
             baseline_scenario_tensor = convert_numpy_to_tensor(baseline_scenario, device=device)
-            target_scenario_tensor = convert_numpy_to_tensor(target_scenario, device=device)
 
-            # Compute reliability for baseline and target
+            # Compute reliability for baseline
             F_baseline_i = surrogate.compute_reliability(baseline_scenario_tensor).item()
-            F_star_i = surrogate.compute_reliability(target_scenario_tensor).item()
 
             # If plotting all samples, replicate for each sample in the batch
             # Otherwise, just add once per scenario
             n_replicas = eval_batch_size if plot_all_samples else 1
             for _ in range(n_replicas):
                 F_baseline_values.append(F_baseline_i)
-                F_star_values.append(F_star_i)
 
     F_baseline_array = np.array(F_baseline_values)
     F_baseline_mean = np.mean(F_baseline_array)
     F_baseline_std = np.std(F_baseline_array)
 
-    F_star_array = np.array(F_star_values)
-    F_star_mean = np.mean(F_star_array)
-    F_star_std = np.std(F_star_array)
+    # F* is a single value (from scenario 0)
+    F_star_value = surrogate.F_star
+    n_total_samples = n_scenarios * eval_batch_size if plot_all_samples else n_scenarios
+    F_star_array = np.full(n_total_samples, F_star_value)
+    F_star_mean = F_star_value
+    F_star_std = 0.0
 
     print(f"  Total baseline samples: {len(F_baseline_array)}")
-    print(f"  Total target samples: {len(F_star_array)}")
+    print(f"  F* (from scenario 0): {F_star_value:.6f}")
 
     # Aggregate final metrics
     improvement = (F_actual_mean - F_baseline_mean) / abs(F_baseline_mean) * 100 if F_baseline_mean != 0 else 0
@@ -646,9 +635,7 @@ def main(config=None):
     print(f"Number of scenarios:           {n_scenarios}")
     print(f"Samples per scenario:          {eval_batch_size}")
     print(f"Total samples:                 {len(F_actual_per_sample)}")
-    print(f"\nF* (target, optimal):")
-    print(f"  Mean:  {F_star_mean:.6f} ± {F_star_std:.6f}")
-    print(f"  Range: [{F_star_array.min():.6f}, {F_star_array.max():.6f}]")
+    print(f"\nF* (target, from scenario 0): {F_star_mean:.6f}")
     print(f"\nF' (baseline, no controller):")
     print(f"  Mean:  {F_baseline_mean:.6f} ± {F_baseline_std:.6f}")
     print(f"  Range: [{F_baseline_array.min():.6f}, {F_baseline_array.max():.6f}]")
@@ -754,11 +741,10 @@ def main(config=None):
             target_test_tensor = convert_numpy_to_tensor(target_test_scenario, device=device)
             baseline_test_tensor = convert_numpy_to_tensor(baseline_test_scenario, device=device)
 
-            # Compute F_star and F_baseline for this test scenario
-            F_star_test_i = surrogate.compute_reliability(target_test_tensor).item()
+            # Compute F_baseline for this test scenario (F* is single value)
             F_baseline_test_i = surrogate.compute_reliability(baseline_test_tensor).item()
 
-            F_star_test_values.append(F_star_test_i)
+            F_star_test_values.append(surrogate.F_star)  # Same F* for all
             F_baseline_test_values.append(F_baseline_test_i)
 
             # Run controller on test scenario
@@ -1125,51 +1111,93 @@ def main(config=None):
                 process_configs_surrogate = ProTSurrogate.PROCESS_CONFIGS
 
                 # ── Empirical sampling ──────────────────────────────────────
-                # Collect F_samples from N stochastic forward passes.
-                # These are the PRIMARY source for L_min (replaces analytical formulas).
-                print("  Running validation sampling (empirical L_min)...")
-                n_validation_samples = 500
+                # Compute L_min per-scenario, matching training regime:
+                # - Same number of scenarios as training
+                # - Same samples_per_scenario as training (batch_size // n_scenarios)
+                # - Single F* for all scenarios
+                # Then average L_min across scenarios (same as training loss averaging).
+                from controller_optimization.src.analysis import compute_empirical_L_min
+                loss_scale = CONTROLLER_CONFIG['training']['reliability_loss_scale']
+                training_batch_size = cfg['training']['batch_size']
+                samples_per_scenario = max(1, training_batch_size // n_scenarios)
+                n_repetitions = 500  # Repeat to get stable statistics
 
-                F_samples_all = []
+                print(f"  Running per-scenario L_min sampling...")
+                print(f"    Scenarios: {n_scenarios}")
+                print(f"    Samples per scenario: {samples_per_scenario} (batch_size={training_batch_size} // n_scenarios={n_scenarios})")
+                print(f"    Repetitions: {n_repetitions}")
+
                 sigma2_per_process = {proc_name: [] for proc_name in active_processes}
+                L_min_per_scenario = []
+                Var_F_per_scenario = []
+                Bias2_per_scenario = []
+                E_F_per_scenario = []
 
                 with torch.no_grad():
                     process_chain.eval()
-                    for sample_idx in range(n_validation_samples):
-                        for scenario_idx in range(min(5, n_scenarios)):
-                            trajectory = process_chain.forward(batch_size=1, scenario_idx=scenario_idx)
+                    for scenario_idx in range(n_scenarios):
+                        # Collect F samples for this scenario
+                        F_samples_scenario = []
+                        for _ in range(n_repetitions):
+                            trajectory = process_chain.forward(
+                                batch_size=samples_per_scenario,
+                                scenario_idx=scenario_idx
+                            )
                             F = surrogate.compute_reliability(trajectory).item()
-                            F_samples_all.append(F)
+                            F_samples_scenario.append(F)
 
                             # Collect sigma2 per process (informational)
                             for proc_name, data in trajectory.items():
                                 if proc_name in sigma2_per_process:
                                     sigma2_per_process[proc_name].append(data['outputs_var'].mean().item())
 
-                F_samples_array = np.array(F_samples_all)
-                print(f"  Validation samples: {len(F_samples_array)}")
-                print(f"  Empirical E[F]: {np.mean(F_samples_array):.6f}")
-                print(f"  Empirical Var[F]: {np.var(F_samples_array):.8f}")
+                        # Compute L_min for this scenario using single F*
+                        F_samples_arr = np.array(F_samples_scenario)
+                        scenario_components = compute_empirical_L_min(
+                            F_samples=F_samples_arr,
+                            F_star=F_star,
+                            loss_scale=loss_scale
+                        )
+                        L_min_per_scenario.append(scenario_components.L_min)
+                        Var_F_per_scenario.append(scenario_components.Var_F)
+                        Bias2_per_scenario.append(scenario_components.Bias2)
+                        E_F_per_scenario.append(scenario_components.E_F)
 
-                # ── Compute L_min from samples ──────────────────────────────
-                from controller_optimization.src.analysis import compute_empirical_L_min
-                loss_scale = CONTROLLER_CONFIG['training']['reliability_loss_scale']
+                # Average L_min across scenarios (same aggregation as training loss)
+                correct_L_min = float(np.mean(L_min_per_scenario))
+                correct_Var_F = float(np.mean(Var_F_per_scenario))
+                correct_Bias2 = float(np.mean(Bias2_per_scenario))
+                correct_E_F = float(np.mean(E_F_per_scenario))
 
+                print(f"\n  Per-scenario L_min (averaged over {n_scenarios} scenarios):")
+                print(f"    L_min:            {correct_L_min:.6f}")
+                print(f"    Var[F] component: {correct_Var_F:.6f}")
+                print(f"    Bias² component:  {correct_Bias2:.6f}")
+                print(f"    E[F] (mean):      {correct_E_F:.6f}")
+                print(f"    F*:               {F_star:.6f}")
+                for i, (lm, vf, b2) in enumerate(zip(L_min_per_scenario, Var_F_per_scenario, Bias2_per_scenario)):
+                    print(f"    Scenario {i}: L_min={lm:.6f}  Var[F]={vf:.6f}  Bias²={b2:.6f}")
+
+                # Build combined_components for backward compatibility
                 combined_components = compute_empirical_L_min(
-                    F_samples=F_samples_array,
-                    F_star=F_star_mean,
+                    F_samples=np.array([correct_E_F]),  # dummy, values overridden below
+                    F_star=F_star,
                     loss_scale=loss_scale
                 )
-
-                print(f"\n  Empirical L_min = Var[F] + Bias² (from {len(F_samples_array)} samples):")
-                print(f"    L_min:            {combined_components.L_min:.6f}")
-                print(f"    Var[F] component: {combined_components.Var_F:.6f}")
-                print(f"    Bias² component:  {combined_components.Bias2:.6f}")
-                print(f"    E[F]:             {combined_components.E_F:.6f}")
-                print(f"    F*:               {combined_components.F_star:.6f}")
+                # Override with correct per-scenario averaged values
+                combined_components = type(combined_components)(
+                    L_min=correct_L_min,
+                    E_F=correct_E_F,
+                    E_F2=correct_E_F**2,
+                    Var_F=correct_Var_F,
+                    Bias2=correct_Bias2,
+                    F_star=F_star,
+                    sigma2=0.0,
+                    delta=0.0,
+                    s=0.0
+                )
 
                 # ── Per-process info (for reports, not for L_min) ───────────
-                # Log per-process sigma2 for informational purposes
                 process_params_for_report = {}
                 for proc_name in active_processes:
                     if proc_name not in process_configs_surrogate:
@@ -1179,8 +1207,8 @@ def main(config=None):
                     weight = proc_cfg.get('weight', 1.0)
                     sigma2_i = np.mean(sigma2_per_process[proc_name]) if sigma2_per_process[proc_name] else 0.01
                     process_params_for_report[proc_name] = {
-                        'F_star': 0.0,   # not extracted analytically
-                        'delta': 0.0,    # not extracted analytically
+                        'F_star': 0.0,
+                        'delta': 0.0,
                         'sigma2': sigma2_i,
                         's': s
                     }
@@ -1203,7 +1231,7 @@ def main(config=None):
                     theoretical_tracker.update(
                         epoch=epoch,
                         observed_loss_value=observed_loss,
-                        F_star=F_star_mean,
+                        F_star=F_star,
                         F_samples=F_samples_epoch,
                         sigma2_mean=combined_sigma2,
                         delta=0.0,
@@ -1213,19 +1241,15 @@ def main(config=None):
                 # ── Build theoretical_data dict ─────────────────────────────
                 theoretical_data = theoretical_tracker.to_dict()
 
-                # Store empirical combined L_min (same structure as before)
+                # Store empirical combined L_min
                 theoretical_data['combined_L_min'] = combined_components.to_dict()
-                theoretical_data['per_process_L_min'] = {}  # not computed analytically
-                theoretical_data['l_min_method'] = 'empirical'
-                theoretical_data['n_validation_samples'] = int(len(F_samples_array))
+                theoretical_data['per_process_L_min'] = {}
+                theoretical_data['l_min_method'] = 'empirical_per_scenario'
+                theoretical_data['n_validation_samples'] = n_repetitions * n_scenarios
+                theoretical_data['samples_per_scenario'] = samples_per_scenario
 
                 # Override tracker's per-epoch L_min with the empirical value
                 # (constant across epochs — measured at end of training)
-                correct_L_min = combined_components.L_min
-                correct_Var_F = combined_components.Var_F
-                correct_Bias2 = combined_components.Bias2
-                correct_E_F = combined_components.E_F
-
                 n_epochs = len(theoretical_data.get('theoretical_L_min', []))
                 if n_epochs > 0:
                     theoretical_data['theoretical_L_min'] = [correct_L_min] * n_epochs
