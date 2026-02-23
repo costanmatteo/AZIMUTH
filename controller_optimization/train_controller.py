@@ -433,18 +433,9 @@ def main(config=None):
         print(f"  Surrogate type: reliability_function (mathematical formula)")
 
     print(f"  Sampling mode: {'DETERMINISTIC (mean)' if use_deterministic_sampling else 'STOCHASTIC (reparameterization trick)'}")
-    use_single_F_star = surrogate_config.get('use_single_F_star', False)
-    if use_single_F_star:
-        print(f"  F* mode: SINGLE (from scenario 0, used for all scenarios)")
-    else:
-        print(f"  F* mode: PER-SCENARIO (different F* for each scenario)")
-    F_star_array = surrogate.F_star  # Now an array of (n_scenarios,)
-    F_star_mean = np.mean(F_star_array)
-    F_star_std = np.std(F_star_array)
+    F_star_value = surrogate.F_star  # Single scalar from scenario 0
     print(f"  ✓ Surrogate initialized")
-    print(f"    F* per scenario computed for {n_scenarios} scenarios")
-    print(f"    F* (mean): {F_star_mean:.6f} ± {F_star_std:.6f}")
-    print(f"    F* (range): [{F_star_array.min():.6f}, {F_star_array.max():.6f}]")
+    print(f"    F* = {F_star_value:.6f} (from scenario 0)")
 
     # 5. Create Trainer
     print("\n[5/9] Creating controller trainer...")
@@ -594,13 +585,11 @@ def main(config=None):
     mode_str = f"{n_scenarios} scenarios × {eval_batch_size} samples" if plot_all_samples else f"{n_scenarios} scenarios"
     print(f"  Computing baseline reliability for {mode_str}...")
     F_baseline_values = []
-    F_star_values = []
 
     with torch.no_grad():
         for scenario_idx in range(n_scenarios):
-            # Extract scenario from baseline and target trajectories
+            # Extract scenario from baseline trajectory
             baseline_scenario = {}
-            target_scenario = {}
 
             for process_name, data in baseline_trajectory.items():
                 baseline_scenario[process_name] = {
@@ -608,37 +597,28 @@ def main(config=None):
                     'outputs': data['outputs'][scenario_idx:scenario_idx+1]
                 }
 
-            for process_name, data in target_trajectory.items():
-                target_scenario[process_name] = {
-                    'inputs': data['inputs'][scenario_idx:scenario_idx+1],
-                    'outputs': data['outputs'][scenario_idx:scenario_idx+1]
-                }
-
             # Convert to tensors
             baseline_scenario_tensor = convert_numpy_to_tensor(baseline_scenario, device=device)
-            target_scenario_tensor = convert_numpy_to_tensor(target_scenario, device=device)
 
-            # Compute reliability for baseline and target
+            # Compute reliability for baseline
             F_baseline_i = surrogate.compute_reliability(baseline_scenario_tensor).item()
-            F_star_i = surrogate.compute_reliability(target_scenario_tensor).item()
 
             # If plotting all samples, replicate for each sample in the batch
             # Otherwise, just add once per scenario
             n_replicas = eval_batch_size if plot_all_samples else 1
             for _ in range(n_replicas):
                 F_baseline_values.append(F_baseline_i)
-                F_star_values.append(F_star_i)
 
     F_baseline_array = np.array(F_baseline_values)
     F_baseline_mean = np.mean(F_baseline_array)
     F_baseline_std = np.std(F_baseline_array)
 
-    F_star_array = np.array(F_star_values)
-    F_star_mean = np.mean(F_star_array)
-    F_star_std = np.std(F_star_array)
+    # F* is a single scalar (same for all scenarios) — replicate for plotting compatibility
+    F_star_mean = F_star_value
+    F_star_std = 0.0
+    F_star_array = np.full_like(F_baseline_array, F_star_value)
 
     print(f"  Total baseline samples: {len(F_baseline_array)}")
-    print(f"  Total target samples: {len(F_star_array)}")
 
     # Aggregate final metrics
     improvement = (F_actual_mean - F_baseline_mean) / abs(F_baseline_mean) * 100 if F_baseline_mean != 0 else 0
@@ -651,9 +631,7 @@ def main(config=None):
     print(f"Number of scenarios:           {n_scenarios}")
     print(f"Samples per scenario:          {eval_batch_size}")
     print(f"Total samples:                 {len(F_actual_per_sample)}")
-    print(f"\nF* (target, optimal):")
-    print(f"  Mean:  {F_star_mean:.6f} ± {F_star_std:.6f}")
-    print(f"  Range: [{F_star_array.min():.6f}, {F_star_array.max():.6f}]")
+    print(f"\nF* (target, optimal):          {F_star_value:.6f}")
     print(f"\nF' (baseline, no controller):")
     print(f"  Mean:  {F_baseline_mean:.6f} ± {F_baseline_std:.6f}")
     print(f"  Range: [{F_baseline_array.min():.6f}, {F_baseline_array.max():.6f}]")
@@ -678,25 +656,19 @@ def main(config=None):
         process_chain.eval()
         actual_trajectory_repr = process_chain.forward(batch_size=1, scenario_idx=representative_scenario_idx)
 
-    # Extract target and baseline for this scenario
-    target_scenario_repr = {}
+    # Extract baseline for this scenario
     baseline_scenario_repr = {}
-    for process_name, data in target_trajectory.items():
-        target_scenario_repr[process_name] = {
+    for process_name, data in baseline_trajectory.items():
+        baseline_scenario_repr[process_name] = {
             'inputs': data['inputs'][representative_scenario_idx:representative_scenario_idx+1],
             'outputs': data['outputs'][representative_scenario_idx:representative_scenario_idx+1]
         }
-        baseline_scenario_repr[process_name] = {
-            'inputs': baseline_trajectory[process_name]['inputs'][representative_scenario_idx:representative_scenario_idx+1],
-            'outputs': baseline_trajectory[process_name]['outputs'][representative_scenario_idx:representative_scenario_idx+1]
-        }
 
     # Convert to tensors for reliability computation
-    target_repr_tensor = convert_numpy_to_tensor(target_scenario_repr, device=device)
     baseline_repr_tensor = convert_numpy_to_tensor(baseline_scenario_repr, device=device)
 
     # Compute reliability for this specific scenario
-    F_star_repr = surrogate.compute_reliability(target_repr_tensor).item()
+    F_star_repr = F_star_value  # F* is a single scalar
     F_baseline_repr = surrogate.compute_reliability(baseline_repr_tensor).item()
     F_actual_repr = surrogate.compute_reliability(actual_trajectory_repr).item()
 
@@ -733,7 +705,6 @@ def main(config=None):
         )
 
     # Evaluate test scenarios
-    F_star_test_values = []
     F_baseline_test_values = []
     F_actual_test_values = []
 
@@ -741,29 +712,20 @@ def main(config=None):
 
     with torch.no_grad():
         for scenario_idx in range(n_test):
-            # Extract scenario from test trajectories
-            target_test_scenario = {}
+            # Extract baseline scenario
             baseline_test_scenario = {}
 
-            for process_name, data in target_trajectory_test.items():
-                target_test_scenario[process_name] = {
+            for process_name, data in baseline_trajectory_test.items():
+                baseline_test_scenario[process_name] = {
                     'inputs': data['inputs'][scenario_idx:scenario_idx+1],
                     'outputs': data['outputs'][scenario_idx:scenario_idx+1]
                 }
-                baseline_test_scenario[process_name] = {
-                    'inputs': baseline_trajectory_test[process_name]['inputs'][scenario_idx:scenario_idx+1],
-                    'outputs': baseline_trajectory_test[process_name]['outputs'][scenario_idx:scenario_idx+1]
-                }
 
             # Convert to tensors
-            target_test_tensor = convert_numpy_to_tensor(target_test_scenario, device=device)
             baseline_test_tensor = convert_numpy_to_tensor(baseline_test_scenario, device=device)
 
-            # Compute F_star and F_baseline for this test scenario
-            F_star_test_i = surrogate.compute_reliability(target_test_tensor).item()
+            # Compute F_baseline for this test scenario
             F_baseline_test_i = surrogate.compute_reliability(baseline_test_tensor).item()
-
-            F_star_test_values.append(F_star_test_i)
             F_baseline_test_values.append(F_baseline_test_i)
 
             # Run controller on test scenario
@@ -771,18 +733,19 @@ def main(config=None):
             F_actual_test_i = surrogate.compute_reliability(actual_test_trajectory).item()
             F_actual_test_values.append(F_actual_test_i)
 
-    F_star_test_array = np.array(F_star_test_values)
+    # F* is the same for test scenarios (single scalar)
+    F_star_test_array = np.full(n_test, F_star_value)
     F_baseline_test_array = np.array(F_baseline_test_values)
     F_actual_test_array = np.array(F_actual_test_values)
 
-    F_star_test_mean = np.mean(F_star_test_array)
+    F_star_test_mean = F_star_value
     F_baseline_test_mean = np.mean(F_baseline_test_array)
     F_actual_test_mean = np.mean(F_actual_test_array)
 
     improvement_test = (F_actual_test_mean - F_baseline_test_mean) / abs(F_baseline_test_mean) * 100 if F_baseline_test_mean != 0 else 0
 
     print(f"\nTest Results:")
-    print(f"  F* (test):        {F_star_test_mean:.6f}")
+    print(f"  F* (test):        {F_star_value:.6f}")
     print(f"  F' (test):        {F_baseline_test_mean:.6f}")
     print(f"  F  (test):        {F_actual_test_mean:.6f}")
     print(f"  Improvement:      {improvement_test:+.2f}%")
@@ -792,16 +755,16 @@ def main(config=None):
     print("-"*70)
 
     # Compute per-scenario means for metrics
+    # F* is a single scalar, replicated per scenario for metric functions
+    F_star_per_scenario_mean = np.full(n_scenarios, F_star_value)
     if plot_all_samples:
         # If plotting all samples: F_actual_per_sample has shape (n_scenarios * batch_size,)
         # Reshape to (n_scenarios, batch_size) and take mean along batch dimension
         F_actual_per_scenario_mean = F_actual_per_sample.reshape(n_scenarios, eval_batch_size).mean(axis=1)
-        F_star_per_scenario_mean = F_star_array.reshape(n_scenarios, eval_batch_size).mean(axis=1)
         F_baseline_per_scenario_mean = F_baseline_array.reshape(n_scenarios, eval_batch_size).mean(axis=1)
     else:
         # If using aggregated values: arrays already have shape (n_scenarios,)
         F_actual_per_scenario_mean = F_actual_per_sample
-        F_star_per_scenario_mean = F_star_array
         F_baseline_per_scenario_mean = F_baseline_array
 
     # Get success rate threshold from config
@@ -873,7 +836,7 @@ def main(config=None):
     print("\n[8/9] Generating visualizations...")
 
     # Add F_star mean to history for plotting
-    history['F_star'] = F_star_mean
+    history['F_star'] = F_star_value
 
     # Plot training history
     plot_training_history(
@@ -903,7 +866,7 @@ def main(config=None):
 
     # Plot reliability comparison (using mean values)
     plot_reliability_comparison(
-        F_star=F_star_mean,
+        F_star=F_star_value,
         F_baseline=F_baseline_mean,
         F_actual=F_actual_mean,
         save_path=str(checkpoint_dir / 'reliability_comparison.png')
@@ -998,13 +961,8 @@ def main(config=None):
     if cfg['report']['generate_pdf']:
         print("\n  Generating PDF report...")
 
-        # Prepare F values in dict format for multi-scenario
-        F_star_dict = {
-            'mean': float(F_star_mean),
-            'std': float(F_star_std),
-            'min': float(F_star_array.min()),
-            'max': float(F_star_array.max())
-        }
+        # F* is a single scalar
+        F_star_dict = float(F_star_value)
 
         F_baseline_dict = {
             'mean': float(F_baseline_mean),
@@ -1143,7 +1101,7 @@ def main(config=None):
                 sigma2_per_process = {proc_name: [] for proc_name in active_processes}
 
                 # Use single F* for L_min computation (same as training loss target)
-                F_star_for_L_min = surrogate.F_star[0]  # All values are the same when use_single_F_star=True
+                F_star_for_L_min = surrogate.F_star  # Single scalar
 
                 print(f"    n_scenarios:          {n_scenarios}")
                 print(f"    samples_per_scenario: {samples_per_scenario}")
@@ -1226,7 +1184,7 @@ def main(config=None):
                     theoretical_tracker.update(
                         epoch=epoch,
                         observed_loss_value=observed_loss,
-                        F_star=F_star_mean,
+                        F_star=F_star_value,
                         F_samples=F_samples_epoch,
                         sigma2_mean=combined_sigma2,
                         delta=0.0,
@@ -1359,7 +1317,7 @@ def main(config=None):
 
     # Convert history values to lists for JSON serialization
     history_serializable = {k: [float(v) for v in vals] for k, vals in history.items() if isinstance(vals, list)}
-    history_serializable['F_star'] = float(F_star_mean)
+    history_serializable['F_star'] = float(F_star_value)
 
     final_results = {
         'timestamp': datetime.now().isoformat(),
@@ -1369,8 +1327,7 @@ def main(config=None):
 
         # TRAIN metrics - Aggregated
         'train': {
-            'F_star_mean': float(F_star_mean),
-            'F_star_std': float(F_star_std),
+            'F_star': float(F_star_value),
             'F_baseline_mean': float(F_baseline_mean),
             'F_baseline_std': float(F_baseline_std),
             'F_actual_mean': float(F_actual_mean),
@@ -1382,7 +1339,7 @@ def main(config=None):
 
         # TRAIN metrics - Per sample (n_scenarios × batch_size)
         'train_per_sample': {
-            'F_star': F_star_array.tolist(),
+            'F_star': float(F_star_value),
             'F_baseline': F_baseline_array.tolist(),
             'F_actual': F_actual_per_sample.tolist(),
             'batch_size': int(eval_batch_size),
@@ -1390,14 +1347,14 @@ def main(config=None):
 
         # TRAIN metrics - Per scenario (aggregated means)
         'train_per_scenario_mean': {
-            'F_star': F_star_per_scenario_mean.tolist(),
+            'F_star': float(F_star_value),
             'F_baseline': F_baseline_per_scenario_mean.tolist(),
             'F_actual': F_actual_per_scenario_mean.tolist(),
         },
 
         # TEST metrics - Aggregated
         'test': {
-            'F_star_mean': float(F_star_test_mean),
+            'F_star': float(F_star_value),
             'F_baseline_mean': float(F_baseline_test_mean),
             'F_actual_mean': float(F_actual_test_mean),
             'improvement_pct': float(improvement_test),
@@ -1405,7 +1362,7 @@ def main(config=None):
 
         # TEST metrics - Per scenario
         'test_per_scenario': {
-            'F_star': F_star_test_array.tolist(),
+            'F_star': float(F_star_value),
             'F_baseline': F_baseline_test_array.tolist(),
             'F_actual': F_actual_test_array.tolist(),
         },
