@@ -1121,19 +1121,18 @@ def main(config=None):
             print("\n[8.6/9] Running theoretical loss analysis...")
 
             try:
-                # Compute per-process theoretical parameters from target_trajectory
-                print("  Computing per-process theoretical parameters...")
-    
                 # Get process configs from surrogate
                 process_configs_surrogate = ProTSurrogate.PROCESS_CONFIGS
-    
-                # Run validation sampling to collect per-process sigma2
-                print("  Running validation sampling for empirical statistics...")
-                n_validation_samples = 50
-    
+
+                # ── Empirical sampling ──────────────────────────────────────
+                # Collect F_samples from N stochastic forward passes.
+                # These are the PRIMARY source for L_min (replaces analytical formulas).
+                print("  Running validation sampling (empirical L_min)...")
+                n_validation_samples = 500
+
                 F_samples_all = []
                 sigma2_per_process = {proc_name: [] for proc_name in active_processes}
-    
+
                 with torch.no_grad():
                     process_chain.eval()
                     for sample_idx in range(n_validation_samples):
@@ -1141,164 +1140,60 @@ def main(config=None):
                             trajectory = process_chain.forward(batch_size=1, scenario_idx=scenario_idx)
                             F = surrogate.compute_reliability(trajectory).item()
                             F_samples_all.append(F)
-    
-                            # Collect sigma2 PER PROCESS
+
+                            # Collect sigma2 per process (informational)
                             for proc_name, data in trajectory.items():
                                 if proc_name in sigma2_per_process:
                                     sigma2_per_process[proc_name].append(data['outputs_var'].mean().item())
-    
+
                 F_samples_array = np.array(F_samples_all)
                 print(f"  Validation samples: {len(F_samples_array)}")
                 print(f"  Empirical E[F]: {np.mean(F_samples_array):.6f}")
                 print(f"  Empirical Var[F]: {np.var(F_samples_array):.8f}")
-    
-                # Compute per-process parameters correctly
-                # Use ADAPTIVE targets (same logic as compute_reliability in surrogate)
-                process_params_for_L_min = {}
-                print("\n  Per-process theoretical parameters (with adaptive τ):")
-    
-                # First, extract outputs for all scenarios for each process
-                process_outputs_per_scenario = {}
-                for proc_name in active_processes:
-                    if proc_name in target_trajectory:
-                        outputs = target_trajectory[proc_name]['outputs']
-                        if isinstance(outputs, torch.Tensor):
-                            outputs = outputs.numpy()
-                        # Ensure outputs is at least 1-dimensional
-                        outputs = np.atleast_1d(outputs.squeeze())
-                        process_outputs_per_scenario[proc_name] = outputs
-    
-                # Get number of scenarios
-                first_proc = list(process_outputs_per_scenario.keys())[0]
-                n_scenarios_for_delta = len(process_outputs_per_scenario[first_proc])
-    
-                for proc_name in active_processes:
-                    if proc_name not in process_configs_surrogate:
-                        continue
-    
-                    proc_cfg = process_configs_surrogate[proc_name]
-                    s = proc_cfg['scale']     # Quality scale
-                    weight = proc_cfg.get('weight', 1.0)
-    
-                    # Calculate adaptive τ and δ for each scenario, then average
-                    deltas_per_scenario = []
-    
-                    for scenario_idx in range(n_scenarios_for_delta):
-                        # Get output for this process in this scenario
-                        mu_i = process_outputs_per_scenario.get(proc_name, np.array([0.0]))[scenario_idx]
-    
-                        # Calculate adaptive τ (same logic as surrogate.compute_reliability)
-                        # Coefficients reduced by 10x to avoid negative targets
-                        if proc_name == 'laser':
-                            tau_adaptive = 0.8  # Fixed for laser
-                        elif proc_name == 'plasma':
-                            tau_adaptive = 3.0
-                            if 'laser' in process_outputs_per_scenario:
-                                laser_out = process_outputs_per_scenario['laser'][scenario_idx]
-                                tau_adaptive = tau_adaptive + 0.2 * (laser_out - 0.8)
-                        elif proc_name == 'galvanic':
-                            tau_adaptive = 10.0
-                            if 'plasma' in process_outputs_per_scenario:
-                                plasma_out = process_outputs_per_scenario['plasma'][scenario_idx]
-                                tau_adaptive = tau_adaptive + 0.5 * (plasma_out - 5.0)
-                            if 'laser' in process_outputs_per_scenario:
-                                laser_out = process_outputs_per_scenario['laser'][scenario_idx]
-                                tau_adaptive = tau_adaptive + 0.4 * (laser_out - 0.5)
-                        elif proc_name == 'microetch':
-                            tau_adaptive = 20.0
-                            if 'laser' in process_outputs_per_scenario:
-                                laser_out = process_outputs_per_scenario['laser'][scenario_idx]
-                                tau_adaptive = tau_adaptive + 1.5 * (laser_out - 0.5)
-                            if 'plasma' in process_outputs_per_scenario:
-                                plasma_out = process_outputs_per_scenario['plasma'][scenario_idx]
-                                tau_adaptive = tau_adaptive + 0.3 * (plasma_out - 5.0)
-                            if 'galvanic' in process_outputs_per_scenario:
-                                galvanic_out = process_outputs_per_scenario['galvanic'][scenario_idx]
-                                tau_adaptive = tau_adaptive - 0.15 * (galvanic_out - 10.0)
-                        else:
-                            # Fallback to fixed target
-                            tau_adaptive = proc_cfg['target']
-    
-                        # δ = μ_target - τ_adaptive
-                        delta_i = mu_i - tau_adaptive
-                        deltas_per_scenario.append(delta_i)
-    
-                    # Option 2: Average δ across scenarios
-                    delta = np.mean(deltas_per_scenario)
-                    tau_mean = np.mean([process_outputs_per_scenario.get(proc_name, [0.0])[i] - deltas_per_scenario[i]
-                                       for i in range(n_scenarios_for_delta)])
-                    mu_target = np.mean(process_outputs_per_scenario.get(proc_name, [0.0]))
-    
-                    # F* for this process: F*_i = exp(-δ²/s)
-                    F_star_i = np.exp(-delta**2 / s)
-    
-                    # Mean sigma2 for this process
-                    if sigma2_per_process[proc_name]:
-                        sigma2_i = np.mean(sigma2_per_process[proc_name])
-                    else:
-                        sigma2_i = 0.01  # Fallback
-    
-                    process_params_for_L_min[proc_name] = {
-                        'F_star': F_star_i,
-                        'delta': delta,
-                        'sigma2': sigma2_i,
-                        's': s
-                    }
-    
-                    print(f"    {proc_name}:")
-                    print(f"      τ_adaptive (mean) = {tau_mean:.4f}, μ_target = {mu_target:.4f}")
-                    print(f"      δ = E[μ - τ_adaptive] = {delta:.4f}")
-                    print(f"      σ² = {sigma2_i:.6f}, s = {s:.4f}")
-                    print(f"      F*_i = exp(-δ²/s) = {F_star_i:.6f}")
-    
-                    # Update tracker process configs
-                    theoretical_tracker.process_configs[proc_name] = {'tau': tau_mean, 's': s}
-                    theoretical_tracker.process_weights[proc_name] = weight
-    
-                # Get correlation matrix from trainer (if enabled in config)
-                use_correlation = cfg.get('theoretical_analysis', {}).get('use_correlation_for_L_min', True)
-    
-                if use_correlation:
-                    correlation_matrix = trainer.compute_correlation_matrix()
-                    if correlation_matrix:
-                        print("\n  Estimated process correlations (from training data):")
-                        print(trainer.get_correlation_summary())
-                    else:
-                        print("\n  No correlation data available (using independence assumption)")
-                else:
-                    correlation_matrix = None
-                    print("\n  Correlation disabled in config (using independence assumption)")
-    
-                # Compute combined L_min using multi-process formula
-                # L_min = Var[F] + Bias² where Bias² = (E[F] - F*)²
-                from controller_optimization.src.analysis import compute_multi_process_L_min
-                combined_components, per_process_components = compute_multi_process_L_min(
-                    process_params=process_params_for_L_min,
-                    process_weights={p: process_configs_surrogate[p].get('weight', 1.0)
-                                    for p in process_params_for_L_min.keys()},
-                    loss_scale=CONTROLLER_CONFIG['training']['reliability_loss_scale'],
-                    correlation_matrix=correlation_matrix if correlation_matrix else None
+
+                # ── Compute L_min from samples ──────────────────────────────
+                from controller_optimization.src.analysis import compute_empirical_L_min
+                loss_scale = CONTROLLER_CONFIG['training']['reliability_loss_scale']
+
+                combined_components = compute_empirical_L_min(
+                    F_samples=F_samples_array,
+                    F_star=F_star_mean,
+                    loss_scale=loss_scale
                 )
-    
-                print(f"\n  Theoretical L_min = Var[F] + Bias²:")
+
+                print(f"\n  Empirical L_min = Var[F] + Bias² (from {len(F_samples_array)} samples):")
                 print(f"    L_min:            {combined_components.L_min:.6f}")
                 print(f"    Var[F] component: {combined_components.Var_F:.6f}")
                 print(f"    Bias² component:  {combined_components.Bias2:.6f}")
                 print(f"    E[F]:             {combined_components.E_F:.6f}")
                 print(f"    F*:               {combined_components.F_star:.6f}")
-                if correlation_matrix:
-                    print(f"    (Computed with process correlations)")
-                else:
-                    print(f"    (Computed assuming process independence)")
-    
-                # Populate tracker with data from training history
+
+                # ── Per-process info (for reports, not for L_min) ───────────
+                # Log per-process sigma2 for informational purposes
+                process_params_for_report = {}
+                for proc_name in active_processes:
+                    if proc_name not in process_configs_surrogate:
+                        continue
+                    proc_cfg = process_configs_surrogate[proc_name]
+                    s = proc_cfg['scale']
+                    weight = proc_cfg.get('weight', 1.0)
+                    sigma2_i = np.mean(sigma2_per_process[proc_name]) if sigma2_per_process[proc_name] else 0.01
+                    process_params_for_report[proc_name] = {
+                        'F_star': 0.0,   # not extracted analytically
+                        'delta': 0.0,    # not extracted analytically
+                        'sigma2': sigma2_i,
+                        's': s
+                    }
+                    theoretical_tracker.process_configs[proc_name] = {'tau': proc_cfg['target'], 's': s}
+                    theoretical_tracker.process_weights[proc_name] = weight
+
+                # ── Populate tracker with training history ──────────────────
                 reliability_loss_history = history.get('reliability_loss', [])
                 F_values_history = history.get('F_values', [])
 
-                # Use combined parameters for tracker updates
-                combined_sigma2 = combined_components.sigma2
-                combined_delta = np.sqrt(combined_components.Bias2 / CONTROLLER_CONFIG['training']['reliability_loss_scale']) if combined_components.Bias2 > 0 else 0.0
-                combined_s = np.mean([p['s'] for p in process_params_for_L_min.values()]) if process_params_for_L_min else 1.0
+                combined_sigma2 = np.mean([
+                    np.mean(v) for v in sigma2_per_process.values() if v
+                ]) if any(sigma2_per_process.values()) else 0.0
 
                 for epoch_idx, (rel_loss, F_val) in enumerate(zip(reliability_loss_history, F_values_history)):
                     epoch = epoch_idx + 1
@@ -1311,37 +1206,33 @@ def main(config=None):
                         F_star=F_star_mean,
                         F_samples=F_samples_epoch,
                         sigma2_mean=combined_sigma2,
-                        delta=combined_delta,
-                        s=combined_s
+                        delta=0.0,
+                        s=1.0
                     )
 
-                # Get theoretical data for report
+                # ── Build theoretical_data dict ─────────────────────────────
                 theoretical_data = theoretical_tracker.to_dict()
 
-                # Add per-process L_min data to theoretical_data
-                theoretical_data['per_process_L_min'] = {
-                    proc_name: comp.to_dict() for proc_name, comp in per_process_components.items()
-                }
+                # Store empirical combined L_min (same structure as before)
                 theoretical_data['combined_L_min'] = combined_components.to_dict()
+                theoretical_data['per_process_L_min'] = {}  # not computed analytically
+                theoretical_data['l_min_method'] = 'empirical'
+                theoretical_data['n_validation_samples'] = int(len(F_samples_array))
 
-                # CRITICAL FIX: Override tracker's L_min with correctly computed multi-process values
-                # The tracker uses single-process formula which is incorrect for multi-process systems.
-                # Replace all L_min values in the tracker's lists with the correct combined value.
+                # Override tracker's per-epoch L_min with the empirical value
+                # (constant across epochs — measured at end of training)
                 correct_L_min = combined_components.L_min
                 correct_Var_F = combined_components.Var_F
                 correct_Bias2 = combined_components.Bias2
                 correct_E_F = combined_components.E_F
-                correct_F_star = combined_components.F_star
 
                 n_epochs = len(theoretical_data.get('theoretical_L_min', []))
                 if n_epochs > 0:
-                    # Replace with correct multi-process L_min (constant across epochs since params don't change)
                     theoretical_data['theoretical_L_min'] = [correct_L_min] * n_epochs
                     theoretical_data['theoretical_Var_F'] = [correct_Var_F] * n_epochs
                     theoretical_data['theoretical_Bias2'] = [correct_Bias2] * n_epochs
                     theoretical_data['theoretical_E_F'] = [correct_E_F] * n_epochs
 
-                    # Recompute gap and efficiency with correct L_min
                     observed_losses = theoretical_data.get('observed_loss', [])
                     theoretical_data['gap'] = [obs - correct_L_min for obs in observed_losses]
                     theoretical_data['efficiency'] = [
@@ -1349,11 +1240,9 @@ def main(config=None):
                         for obs in observed_losses
                     ]
 
-                    # Recount violations with correct L_min
                     n_violations = sum(1 for obs in observed_losses if obs < correct_L_min * 0.99)
                     theoretical_data['n_violations'] = n_violations
 
-                    # Update summary with correct values
                     if observed_losses:
                         final_loss = observed_losses[-1]
                         final_gap = final_loss - correct_L_min
@@ -1378,16 +1267,9 @@ def main(config=None):
                             'epoch_95_efficiency': next((i+1 for i, e in enumerate(theoretical_data['efficiency']) if e >= 0.95), None),
                         }
 
-                # Add correlation matrix to theoretical_data
-                if correlation_matrix:
-                    # Convert tuple keys to string keys for JSON serialization
-                    theoretical_data['correlation_matrix'] = {
-                        f"{k[0]},{k[1]}": v for k, v in correlation_matrix.items()
-                    }
-                    theoretical_data['correlation_used'] = True
-                else:
-                    theoretical_data['correlation_matrix'] = {}
-                    theoretical_data['correlation_used'] = False
+                # No correlation matrix needed for empirical approach
+                theoretical_data['correlation_matrix'] = {}
+                theoretical_data['correlation_used'] = False
 
                 # Generate theoretical analysis plots
                 print("  Generating theoretical analysis plots...")
@@ -1399,7 +1281,6 @@ def main(config=None):
 
                 # Generate and save text report
                 print("  Generating theoretical analysis text report...")
-                process_params_for_report = process_params_for_L_min
 
                 text_report = generate_full_report(
                     tracker_data=theoretical_data,
@@ -1414,14 +1295,14 @@ def main(config=None):
 
                 # Print summary
                 summary = theoretical_data.get('summary', {})
-                print(f"\n  THEORETICAL ANALYSIS SUMMARY:")
+                print(f"\n  THEORETICAL ANALYSIS SUMMARY (empirical):")
                 print(f"    Final Loss:   {summary.get('final_loss', 0):.6f}")
                 print(f"    L_min:        {summary.get('final_L_min', 0):.6f}")
                 print(f"    Gap:          {summary.get('final_gap', 0):.6f}")
                 print(f"    Efficiency:   {summary.get('final_efficiency', 0)*100:.1f}%")
                 print(f"    Violations:   {summary.get('n_violations', 0)}/{summary.get('total_epochs', 0)}")
 
-                print("  ✓ Theoretical analysis completed")
+                print("  ✓ Theoretical analysis completed (empirical L_min)")
 
             except Exception as e:
                 print(f"  ✗ Warning: Failed to run theoretical analysis: {e}")
