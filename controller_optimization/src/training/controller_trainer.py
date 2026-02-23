@@ -876,7 +876,10 @@ class ControllerTrainer:
             print(f"  Samples per scenario: {max(1, batch_size // n_scenarios)}")
             print(f"  Patience: {patience}")
             print(f"  Save dir: {save_dir}")
-            print(f"  F* (target, mean): {np.mean(self.surrogate.F_star):.6f} ± {np.std(self.surrogate.F_star):.6f}")
+            if hasattr(self.surrogate, 'use_single_F_star') and self.surrogate.use_single_F_star:
+                print(f"  F* (single, from scenario 0): {self.surrogate.F_star[0]:.6f}")
+            else:
+                print(f"  F* (target, mean): {np.mean(self.surrogate.F_star):.6f} ± {np.std(self.surrogate.F_star):.6f}")
 
             if self.curriculum_config['enabled']:
                 print(f"\n  CURRICULUM LEARNING STRATEGY:")
@@ -965,7 +968,10 @@ class ControllerTrainer:
                 print(f"  Reliability Loss: {avg_rel_loss:.6f} {'(ignored)' if reliability_weight == 0 else ''}")
                 print(f"  BC Loss:          {avg_bc_loss:.6f}")
                 print(f"  F (actual):       {avg_F:.6f}")
-                print(f"  F* (target, mean):{np.mean(self.surrogate.F_star):.6f}")
+                if hasattr(self.surrogate, 'use_single_F_star') and self.surrogate.use_single_F_star:
+                    print(f"  F* (single):      {self.surrogate.F_star[0]:.6f}")
+                else:
+                    print(f"  F* (target, mean):{np.mean(self.surrogate.F_star):.6f}")
                 # Print cross-scenario validation metrics if available
                 if self.validation_surrogate is not None and len(self.history['val_total_loss']) > 0:
                     val_loss = self.history['val_total_loss'][-1]
@@ -1112,7 +1118,10 @@ class ControllerTrainer:
             print(f"{'='*70}")
             print(f"  Best F: {self.best_F:.6f}")
             print(f"  Final F: {self.history['F_values'][-1]:.6f}")
-            print(f"  Target F* (mean): {np.mean(self.surrogate.F_star):.6f}")
+            if hasattr(self.surrogate, 'use_single_F_star') and self.surrogate.use_single_F_star:
+                print(f"  Target F* (single): {self.surrogate.F_star[0]:.6f}")
+            else:
+                print(f"  Target F* (mean): {np.mean(self.surrogate.F_star):.6f}")
 
         return self.history
 

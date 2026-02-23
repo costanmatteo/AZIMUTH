@@ -199,6 +199,11 @@ CONTROLLER_CONFIG = {
         # Common settings
         'use_deterministic_sampling': False,  # True = use mean (stable), False = use sampling (stochastic)
 
+        # Single F* mode: compute F* from scenario 0 only and use it for ALL scenarios
+        # When True, the same F* target is used across all scenarios in training loss.
+        # This avoids per-scenario F* variation and simplifies the optimization target.
+        'use_single_F_star': True,
+
         # CasualiT surrogate settings (used if type='casualit')
         # Requires a trained causaliT model checkpoint
         'casualit': {

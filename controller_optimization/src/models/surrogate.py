@@ -58,7 +58,8 @@ class ProTSurrogate:
         }
     }
 
-    def __init__(self, target_trajectory, device='cpu', use_deterministic_sampling=True):
+    def __init__(self, target_trajectory, device='cpu', use_deterministic_sampling=True,
+                 use_single_F_star=False):
         """
         Args:
             target_trajectory (dict): Target trajectory da target_generation
@@ -67,9 +68,12 @@ class ProTSurrogate:
             use_deterministic_sampling (bool): If True, use mean values directly (deterministic).
                                                If False, use reparameterization trick (stochastic).
                                                Default: True for stable training.
+            use_single_F_star (bool): If True, compute F* from scenario 0 only and use
+                                      the same value for all scenarios. Default: False.
         """
         self.device = device
         self.use_deterministic_sampling = use_deterministic_sampling
+        self.use_single_F_star = use_single_F_star
         self.n_scenarios = None  # Will be inferred from data
 
         # Convert target trajectory to tensors (all scenarios)
@@ -86,6 +90,12 @@ class ProTSurrogate:
 
         # Compute F_star for each scenario
         self.F_star = self.compute_all_target_reliabilities()
+
+        # If single F* mode, use F* from scenario 0 for all scenarios
+        if self.use_single_F_star and self.n_scenarios > 1:
+            F_star_0 = self.F_star[0]
+            self.F_star = np.full(self.n_scenarios, F_star_0)
+            print(f"  [Single F*] Using F* from scenario 0 for all {self.n_scenarios} scenarios: {F_star_0:.6f}")
 
     def compute_reliability(self, trajectory, return_quality_scores=False):
         """
@@ -393,10 +403,12 @@ def create_surrogate(config: Dict,
 
     if surrogate_type == 'reliability_function':
         # Use mathematical formula (ProTSurrogate)
+        use_single_F_star = config.get('use_single_F_star', False)
         return ProTSurrogate(
             target_trajectory=target_trajectory,
             device=device,
             use_deterministic_sampling=use_deterministic,
+            use_single_F_star=use_single_F_star,
         )
 
     elif surrogate_type == 'casualit':
