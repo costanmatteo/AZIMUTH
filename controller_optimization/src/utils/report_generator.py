@@ -313,6 +313,30 @@ class ControllerReportGenerator:
             self.story.append(Paragraph(tt_text, self.styles['BodyText']))
             self.story.append(Spacer(1, 0.15*cm))
 
+        # 3b. Within-Scenario Overfitting Check (intra-scenario)
+        ws_gap = advanced_metrics.get('within_scenario_gap')
+        if ws_gap is not None:
+            if abs(ws_gap['gap_train_minus_val']) < 0.005:
+                ws_interpretation = "consistent (no intra-scenario overfitting)"
+            elif ws_gap['gap_train_minus_val'] > 0:
+                ws_interpretation = "train F &gt; val F (possible intra-scenario overfitting)"
+            else:
+                ws_interpretation = "val F &gt; train F (no concern)"
+
+            divergent_str = f"{ws_gap['n_divergent_epochs']}/{ws_gap['total_epochs_compared']}"
+            if ws_gap['first_divergent_epoch'] is not None:
+                divergent_str += f" (first at epoch {ws_gap['first_divergent_epoch']})"
+
+            ws_text = f"""
+<b>3b. Within-Scenario Overfitting Check</b> (intra-scenario, last {ws_gap['n_tail_epochs']} epochs)<br/>
+• <b>Mean F (train split):</b> {ws_gap['mean_F_train_split']:.6f}<br/>
+• <b>Mean F (val split):</b> {ws_gap['mean_F_val_split']:.6f}<br/>
+• <b>Gap (train - val):</b> {ws_gap['gap_train_minus_val']:.6f} → {ws_interpretation}<br/>
+• <b>Divergent epochs (gap &gt; 0.01):</b> {divergent_str}
+"""
+            self.story.append(Paragraph(ws_text, self.styles['BodyText']))
+            self.story.append(Spacer(1, 0.15*cm))
+
         # 4. Dataset Characteristics - Scenario diversity
         if 'diversity_train' in advanced_metrics and 'diversity_test' in advanced_metrics:
             div_train = advanced_metrics['diversity_train']

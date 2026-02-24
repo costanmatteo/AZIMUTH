@@ -799,6 +799,41 @@ def main(config=None):
     else:
         print(f"    → Controller performs WORSE on test (overfitting concern)")
 
+    # Within-Scenario Overfitting Check (intra-scenario: train split vs val split)
+    if (len(history.get('val_within_F_values', [])) > 0
+            and len(history.get('F_values', [])) > 0):
+        # Use the last N epochs (stable region) for a robust estimate
+        n_tail = min(50, len(history['F_values']))
+        train_F_tail = np.array(history['F_values'][-n_tail:])
+        val_within_F_tail = np.array(history['val_within_F_values'][-n_tail:])
+
+        mean_train_F = float(np.mean(train_F_tail))
+        mean_val_within_F = float(np.mean(val_within_F_tail))
+        gap_intra = mean_train_F - mean_val_within_F
+
+        # Detect divergence: epochs where val_F < train_F by more than a tolerance
+        train_F_full = np.array(history['F_values'])
+        val_within_F_full = np.array(history['val_within_F_values'])
+        min_len = min(len(train_F_full), len(val_within_F_full))
+        divergence_mask = train_F_full[:min_len] - val_within_F_full[:min_len] > 0.01
+        n_divergent = int(np.sum(divergence_mask))
+        first_divergent = int(np.argmax(divergence_mask)) + 1 if np.any(divergence_mask) else None
+
+        print(f"\nWithin-Scenario Overfitting Check (intra-scenario):")
+        print(f"  Mean F (train split, last {n_tail} epochs):  {mean_train_F:.6f}")
+        print(f"  Mean F (val split,   last {n_tail} epochs):  {mean_val_within_F:.6f}")
+        print(f"  Gap (train - val):                           {gap_intra:.6f}")
+        if first_divergent is not None:
+            print(f"  Divergent epochs (gap > 0.01):               {n_divergent}/{min_len} (first at epoch {first_divergent})")
+        else:
+            print(f"  Divergent epochs (gap > 0.01):               0/{min_len}")
+        if abs(gap_intra) < 0.005:
+            print(f"    → Train/val F are consistent (no intra-scenario overfitting)")
+        elif gap_intra > 0:
+            print(f"    → Train F > Val F: possible intra-scenario overfitting")
+        else:
+            print(f"    → Val F > Train F: val split slightly easier (no concern)")
+
     # Scenario diversity (train only, test separately)
     train_structural_conditions = {}
     test_structural_conditions = {}
@@ -988,12 +1023,41 @@ def main(config=None):
         process_metrics = {}
 
         # Prepare advanced metrics for report
+        # Compute within-scenario overfitting metrics (if available)
+        within_scenario_gap_metrics = None
+        if (len(history.get('val_within_F_values', [])) > 0
+                and len(history.get('F_values', [])) > 0):
+            n_tail = min(50, len(history['F_values']))
+            train_F_tail = np.array(history['F_values'][-n_tail:])
+            val_within_F_tail = np.array(history['val_within_F_values'][-n_tail:])
+            mean_train_F = float(np.mean(train_F_tail))
+            mean_val_within_F = float(np.mean(val_within_F_tail))
+            gap_intra = mean_train_F - mean_val_within_F
+
+            train_F_full = np.array(history['F_values'])
+            val_within_F_full = np.array(history['val_within_F_values'])
+            min_len = min(len(train_F_full), len(val_within_F_full))
+            divergence_mask = train_F_full[:min_len] - val_within_F_full[:min_len] > 0.01
+            n_divergent = int(np.sum(divergence_mask))
+            first_divergent = int(np.argmax(divergence_mask)) + 1 if np.any(divergence_mask) else None
+
+            within_scenario_gap_metrics = {
+                'mean_F_train_split': mean_train_F,
+                'mean_F_val_split': mean_val_within_F,
+                'gap_train_minus_val': gap_intra,
+                'n_tail_epochs': n_tail,
+                'n_divergent_epochs': n_divergent,
+                'total_epochs_compared': min_len,
+                'first_divergent_epoch': first_divergent,
+            }
+
         advanced_metrics_for_report = {
             'worst_case_gap_train': worst_case_train,
             'worst_case_gap_test': worst_case_test,
             'success_rate_train': success_rate_train,
             'success_rate_test': success_rate_test,
             'train_test_gap': train_test_gap_metrics,
+            'within_scenario_gap': within_scenario_gap_metrics,
             'diversity_train': diversity_train,
             'diversity_test': diversity_test,
         }
@@ -1377,8 +1441,11 @@ def main(config=None):
             'success_rate_train': success_rate_train,
             'success_rate_test': success_rate_test,
 
-            # Train-test gap
+            # Train-test gap (inter-scenario)
             'train_test_gap': train_test_gap_metrics,
+
+            # Within-scenario gap (intra-scenario)
+            'within_scenario_gap': within_scenario_gap_metrics,
 
             # Scenario diversity
             'diversity_train': diversity_train,
