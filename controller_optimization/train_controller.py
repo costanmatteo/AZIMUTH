@@ -49,7 +49,8 @@ from controller_optimization.configs.processes_config import PROCESSES, get_filt
 from controller_optimization.configs.controller_config import CONTROLLER_CONFIG
 from controller_optimization.src.utils.target_generation import (
     generate_target_trajectory,
-    generate_baseline_trajectory
+    generate_baseline_trajectory,
+    build_expanded_target
 )
 from controller_optimization.src.utils.process_chain import ProcessChain
 from controller_optimization.src.models.surrogate import ProTSurrogate, CasualiTSurrogate, create_surrogate
@@ -133,6 +134,8 @@ def parse_args():
                         help='Seed for target trajectory generation')
     parser.add_argument('--seed_baseline', type=int, default=None,
                         help='Seed for baseline trajectory generation')
+    parser.add_argument('--seed_conditions', type=int, default=None,
+                        help='Seed for scenario structural conditions generation')
 
     # Output paths
     parser.add_argument('--output_dir', type=str, default=None,
@@ -197,12 +200,15 @@ def apply_args_to_config(args, config):
     if args.seed is not None:
         cfg['misc']['random_seed'] = args.seed
         cfg['scenarios']['seed_target'] = args.seed
+        cfg['scenarios']['seed_conditions'] = args.seed + 500
         cfg['scenarios']['seed_baseline'] = args.seed + 100
     # Individual seed overrides (take precedence over --seed)
     if args.seed_target is not None:
         cfg['scenarios']['seed_target'] = args.seed_target
     if args.seed_baseline is not None:
         cfg['scenarios']['seed_baseline'] = args.seed_baseline
+    if args.seed_conditions is not None:
+        cfg['scenarios']['seed_conditions'] = args.seed_conditions
 
     # Output directory
     if args.output_dir is not None:
@@ -300,29 +306,50 @@ def main(config=None):
     checkpoint_dir = Path(cfg['training']['checkpoint_dir'])
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Generate TRAINING scenarios (diverse structural + zero process noise)
+    # 1. Generate TRAINING scenarios (single target + diverse structural conditions)
     print("\n[1/9] Generating training scenarios...")
     n_train = cfg['scenarios']['n_train']
     n_test = cfg['scenarios']['n_test']
+    seed_conditions = cfg['scenarios'].get('seed_conditions', cfg['scenarios']['seed_target'] + 500)
     print(f"  Training scenarios: {n_train}")
     print(f"  Test scenarios: {n_test} (for future evaluation)")
 
-    # Generate TRAIN target trajectory
-    print("\n  Generating TRAIN target trajectory (a*)...")
-    target_trajectory_train = generate_target_trajectory(
+    # Step 1a: Generate SINGLE ideal target (n_samples=1, deterministic)
+    print("\n  [1a] Generating SINGLE ideal target (a*, n=1, process noise=0)...")
+    single_target = generate_target_trajectory(
         process_configs=selected_processes,
-        n_samples=n_train,
+        n_samples=1,
         seed=cfg['scenarios']['seed_target']
     )
 
-    print("  Train target trajectory generated:")
+    print("  Single target generated:")
+    for process_name, data in single_target.items():
+        print(f"    {process_name}: inputs={data['inputs'][0]}, outputs={data['outputs'][0]}")
+
+    # Step 1b: Generate N diverse structural conditions (scenario diversity)
+    print(f"\n  [1b] Generating {n_train} scenario conditions (diverse structural noise)...")
+    scenario_conditions_train = generate_target_trajectory(
+        process_configs=selected_processes,
+        n_samples=n_train,
+        seed=seed_conditions
+    )
+
+    # Step 1c: Build expanded target (single controllable target + N structural conditions)
+    print(f"\n  [1c] Building expanded target (single target × {n_train} scenarios)...")
+    target_trajectory_train = build_expanded_target(
+        single_target=single_target,
+        scenario_conditions=scenario_conditions_train,
+        process_configs=selected_processes
+    )
+
+    print("  Train expanded target built:")
     for process_name, data in target_trajectory_train.items():
         print(f"    {process_name}: inputs={data['inputs'].shape}, outputs={data['outputs'].shape}")
         if 'structural_conditions' in data and data['structural_conditions']:
             for var, vals in data['structural_conditions'].items():
                 print(f"      {var}: [{vals.min():.2f}, {vals.max():.2f}] (range)")
 
-    # Generate TRAIN baseline trajectory
+    # Generate TRAIN baseline trajectory (same controllable inputs + scenario conditions + process noise)
     print("\n  Generating TRAIN baseline trajectory (a')...")
     baseline_trajectory_train = generate_baseline_trajectory(
         process_configs=selected_processes,
@@ -335,21 +362,31 @@ def main(config=None):
     for process_name, data in baseline_trajectory_train.items():
         print(f"    {process_name}: inputs={data['inputs'].shape}, outputs={data['outputs'].shape}")
 
-    # 2. Generate TEST scenarios (for future evaluation, not used yet)
+    # 2. Generate TEST scenarios (same single target, different structural conditions)
     print("\n[2/9] Generating test scenarios (not used in training)...")
 
     # Use seed offset from config to ensure test scenarios are truly unseen
     test_seed_offset = cfg['scenarios']['test_seed_offset']
 
     print(f"  Test seed offset: {test_seed_offset}")
-    print(f"  Generating TEST target trajectory (a*)...")
-    target_trajectory_test = generate_target_trajectory(
+
+    # Test uses SAME single target (same ideal operating point)
+    # but different structural conditions
+    print(f"  Generating TEST scenario conditions...")
+    scenario_conditions_test = generate_target_trajectory(
         process_configs=selected_processes,
         n_samples=n_test,
-        seed=cfg['scenarios']['seed_target'] + test_seed_offset
+        seed=seed_conditions + test_seed_offset
     )
 
-    print("  Test target trajectory generated:")
+    print(f"  Building TEST expanded target (same single target × {n_test} test conditions)...")
+    target_trajectory_test = build_expanded_target(
+        single_target=single_target,
+        scenario_conditions=scenario_conditions_test,
+        process_configs=selected_processes
+    )
+
+    print("  Test expanded target built:")
     for process_name, data in target_trajectory_test.items():
         print(f"    {process_name}: inputs={data['inputs'].shape}, outputs={data['outputs'].shape}")
 
