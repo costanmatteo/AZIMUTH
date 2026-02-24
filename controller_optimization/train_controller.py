@@ -1117,8 +1117,8 @@ def main(config=None):
                                 batch_size=samples_per_scenario,
                                 scenario_idx=scenario_idx
                             )
-                            F = surrogate.compute_reliability(trajectory).mean().item()
-                            F_samples_all.append(F)
+                            F_batch = surrogate.compute_reliability(trajectory)
+                            F_samples_all.extend(F_batch.detach().cpu().numpy().tolist())
 
                             # Collect sigma2 per process (informational)
                             for proc_name, data in trajectory.items():
@@ -1126,7 +1126,7 @@ def main(config=None):
                                     sigma2_per_process[proc_name].append(data['outputs_var'].mean().item())
 
                 F_samples_array = np.array(F_samples_all)
-                print(f"  Total F samples: {len(F_samples_array)} ({n_L_min_repeats} repeats × {n_scenarios} scenarios)")
+                print(f"  Total F samples: {len(F_samples_array)} ({n_L_min_repeats} repeats × {n_scenarios} scenarios × {samples_per_scenario} samples)")
                 print(f"  Empirical E[F]: {np.mean(F_samples_array):.6f}")
                 print(f"  Empirical Var[F]: {np.var(F_samples_array):.8f}")
 
