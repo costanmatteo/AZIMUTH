@@ -309,7 +309,7 @@ class ControllerTrainer:
         if not hasattr(self.process_chain, 'scenario_encoder') or self.process_chain.scenario_encoder is None:
             return None, None, None
 
-        n_scenarios = len(self.surrogate.F_star)
+        n_scenarios = self.surrogate.n_scenarios
         embedding_dim = self.process_chain.scenario_embedding_dim
 
         embeddings_list = []
@@ -400,7 +400,7 @@ class ControllerTrainer:
                     'outputs': data['outputs'][representative_scenario_idx:representative_scenario_idx+1].cpu().numpy()
                 }
 
-            F_star = self.surrogate.F_star[representative_scenario_idx]
+            F_star = self.surrogate.F_star
 
             # Save snapshot with all 3 samples
             snapshot = {
@@ -448,9 +448,7 @@ class ControllerTrainer:
         # Scale prevents vanishing gradients when delta F is small (~0.1)
         F, quality_scores = self.surrogate.compute_reliability(trajectory, return_quality_scores=True)
 
-        # Get F_star for this specific scenario
-        F_star_value = self.surrogate.F_star[scenario_idx]
-        F_star_tensor = torch.tensor(F_star_value, dtype=torch.float32, device=self.device)
+        F_star_tensor = torch.tensor(self.surrogate.F_star, dtype=torch.float32, device=self.device)
         reliability_loss = self.reliability_loss_scale * (F - F_star_tensor) ** 2
 
         # Behavior cloning loss: mean( ||a_t - a_t*||^2 ) across all processes
@@ -539,7 +537,7 @@ class ControllerTrainer:
         epoch_val_bc_loss = 0.0
         epoch_val_F_values = []
 
-        n_scenarios = len(self.surrogate.F_star)
+        n_scenarios = self.surrogate.n_scenarios
 
         # Split total samples equally across scenarios
         samples_per_scenario = max(1, batch_size // n_scenarios)
@@ -692,7 +690,7 @@ class ControllerTrainer:
         """
         self.validation_surrogate = validation_surrogate
         self.validation_process_chain = validation_process_chain
-        print(f"  Cross-scenario validation data set: {len(validation_surrogate.F_star)} test scenarios")
+        print(f"  Cross-scenario validation data set: {validation_surrogate.n_scenarios} test scenarios")
 
     def set_within_scenario_validation(self, enabled=True, split_fraction=0.2):
         """
@@ -775,7 +773,7 @@ class ControllerTrainer:
         if lambda_bc is None:
             lambda_bc = self.lambda_bc
 
-        n_val_scenarios = len(self.validation_surrogate.F_star)
+        n_val_scenarios = self.validation_surrogate.n_scenarios
 
         val_total_loss = 0.0
         val_reliability_loss = 0.0
@@ -793,9 +791,7 @@ class ControllerTrainer:
                 # Compute reliability
                 F = self.validation_surrogate.compute_reliability(trajectory)
 
-                # Get F_star for this validation scenario
-                F_star_value = self.validation_surrogate.F_star[scenario_idx]
-                F_star_tensor = torch.tensor(F_star_value, dtype=torch.float32, device=self.device)
+                F_star_tensor = torch.tensor(self.validation_surrogate.F_star, dtype=torch.float32, device=self.device)
 
                 # Reliability loss
                 rel_loss = self.reliability_loss_scale * (F - F_star_tensor) ** 2
@@ -856,7 +852,7 @@ class ControllerTrainer:
         save_dir = Path(save_dir)
         save_dir.mkdir(parents=True, exist_ok=True)
 
-        n_scenarios = len(self.surrogate.F_star)
+        n_scenarios = self.surrogate.n_scenarios
 
         # Calculate warmup epochs for curriculum learning
         warmup_epochs = 0
@@ -876,7 +872,7 @@ class ControllerTrainer:
             print(f"  Samples per scenario: {max(1, batch_size // n_scenarios)}")
             print(f"  Patience: {patience}")
             print(f"  Save dir: {save_dir}")
-            print(f"  F* (target, mean): {np.mean(self.surrogate.F_star):.6f} ± {np.std(self.surrogate.F_star):.6f}")
+            print(f"  F* (target): {self.surrogate.F_star:.6f}")
 
             if self.curriculum_config['enabled']:
                 print(f"\n  CURRICULUM LEARNING STRATEGY:")
@@ -965,7 +961,7 @@ class ControllerTrainer:
                 print(f"  Reliability Loss: {avg_rel_loss:.6f} {'(ignored)' if reliability_weight == 0 else ''}")
                 print(f"  BC Loss:          {avg_bc_loss:.6f}")
                 print(f"  F (actual):       {avg_F:.6f}")
-                print(f"  F* (target, mean):{np.mean(self.surrogate.F_star):.6f}")
+                print(f"  F* (target):      {self.surrogate.F_star:.6f}")
                 # Print cross-scenario validation metrics if available
                 if self.validation_surrogate is not None and len(self.history['val_total_loss']) > 0:
                     val_loss = self.history['val_total_loss'][-1]
@@ -1112,7 +1108,7 @@ class ControllerTrainer:
             print(f"{'='*70}")
             print(f"  Best F: {self.best_F:.6f}")
             print(f"  Final F: {self.history['F_values'][-1]:.6f}")
-            print(f"  Target F* (mean): {np.mean(self.surrogate.F_star):.6f}")
+            print(f"  Target F*: {self.surrogate.F_star:.6f}")
 
         return self.history
 
@@ -1138,7 +1134,7 @@ class ControllerTrainer:
         """
         self.process_chain.eval()
 
-        n_scenarios = len(self.surrogate.F_star)
+        n_scenarios = self.surrogate.n_scenarios
         F_actual_values = []
         trajectories = []
 
@@ -1180,8 +1176,8 @@ class ControllerTrainer:
             'F_actual_per_sample': F_actual_array,
             'F_actual_mean': np.mean(F_actual_array),
             'F_actual_std': np.std(F_actual_array),
-            'F_star_mean': np.mean(self.surrogate.F_star),
-            'F_star_std': np.std(self.surrogate.F_star),
+            'F_star_mean': self.surrogate.F_star,
+            'F_star_std': 0.0,
             'trajectories': trajectories
         }
 

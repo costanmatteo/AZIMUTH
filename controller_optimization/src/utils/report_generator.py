@@ -175,27 +175,24 @@ class ControllerReportGenerator:
         improvement = final_metrics.get('improvement', 0) * 100
         target_gap = final_metrics.get('target_gap', 0) * 100
 
-        # Check if multi-scenario format (dict with mean/std)
-        if isinstance(F_star, dict):
-            reliability_text = f"""• <b>Target Reliability (F*):</b><br/>
-  Mean: {F_star['mean']:.6f} ± {F_star['std']:.6f}<br/>
-  Range: [{F_star['min']:.6f}, {F_star['max']:.6f}]<br/>
-• <b>Baseline Reliability (F'):</b><br/>
-  Mean: {F_baseline['mean']:.6f} ± {F_baseline['std']:.6f}<br/>
-  Range: [{F_baseline['min']:.6f}, {F_baseline['max']:.6f}]<br/>
-• <b>Controller Reliability (F):</b><br/>
-  Mean: {F_actual['mean']:.6f} ± {F_actual['std']:.6f}<br/>
-  Range: [{F_actual['min']:.6f}, {F_actual['max']:.6f}]<br/>
-• <b>Improvement over Baseline:</b> {improvement:+.2f}%<br/>
-• <b>Gap from Target:</b> {target_gap:.2f}%<br/>
-• <b>Robustness (std):</b> {F_actual['std']:.6f}"""
+        # Format F* (always scalar)
+        F_star_val = F_star['mean'] if isinstance(F_star, dict) else F_star
+
+        # Format F_baseline and F_actual (may be scalar or dict)
+        if isinstance(F_baseline, dict):
+            F_bl_text = f"Mean: {F_baseline['mean']:.6f} ± {F_baseline['std']:.6f}"
+            F_act_text = f"Mean: {F_actual['mean']:.6f} ± {F_actual['std']:.6f}"
+            robustness_text = f"<br/>• <b>Robustness (std):</b> {F_actual['std']:.6f}"
         else:
-            # Single scenario format (backward compatible)
-            reliability_text = f"""• <b>Target Reliability (F*):</b> {F_star:.6f}<br/>
-• <b>Baseline Reliability (F'):</b> {F_baseline:.6f}<br/>
-• <b>Controller Reliability (F):</b> {F_actual:.6f}<br/>
+            F_bl_text = f"{F_baseline:.6f}"
+            F_act_text = f"{F_actual:.6f}"
+            robustness_text = ""
+
+        reliability_text = f"""• <b>Target Reliability (F*):</b> {F_star_val:.6f}<br/>
+• <b>Baseline Reliability (F'):</b> {F_bl_text}<br/>
+• <b>Controller Reliability (F):</b> {F_act_text}<br/>
 • <b>Improvement over Baseline:</b> {improvement:+.2f}%<br/>
-• <b>Gap from Target:</b> {target_gap:.2f}%"""
+• <b>Gap from Target:</b> {target_gap:.2f}%{robustness_text}"""
 
         right_col.append(Paragraph(reliability_text, self.styles['BodyText']))
         right_col.append(Spacer(1, 0.15*cm))
