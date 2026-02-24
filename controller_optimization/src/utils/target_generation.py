@@ -1,19 +1,22 @@
 """
-Multi-scenario target and baseline trajectory generation.
+Single-target + multi-scenario trajectory generation.
 
-Key Concepts:
-- Structural Noise: Environmental conditions that create scenario diversity (ACTIVE in target)
-- Process Noise: Measurement/actuator imperfections (ZERO in target, ACTIVE in baseline)
+Design:
+- ONE ideal target: A single operating point with process noise = 0.
+  Represents the quality specification (controllable inputs + expected outputs).
+- N scenario conditions: Diverse structural conditions (temperature, etc.)
+  generated independently. Define the environmental diversity.
+- Expanded target: Combines the single target's controllable inputs
+  (replicated N times) with each scenario's structural conditions.
+  BC loss always compares to the SAME controllable target.
+- Baseline trajectory: Same controllable inputs as target + same scenario
+  structural conditions + ACTIVE process noise.
+  Represents "actual performance WITHOUT controller".
 
-Target Trajectory (a*):
-- Diverse structural conditions (50 scenarios with different temperatures, etc.)
-- Zero process noise (ideal deterministic behavior)
-- Represents: "Best achievable performance under varying conditions"
-
-Baseline Trajectory (a'):
-- SAME structural conditions as target (fair comparison)
-- Active process noise (realistic equipment variability)
-- Represents: "Actual performance WITHOUT controller"
+Key functions:
+- generate_target_trajectory(): Generate target or conditions via SCM sampling
+- build_expanded_target(): Merge single target + N conditions into multi-scenario target
+- generate_baseline_trajectory(): Baseline with process noise using expanded target inputs
 """
 
 import sys
@@ -250,99 +253,189 @@ def generate_baseline_trajectory(process_configs, target_trajectory, n_samples=5
     return trajectory
 
 
+def build_expanded_target(single_target, scenario_conditions, process_configs):
+    """
+    Build an expanded multi-scenario target trajectory by combining:
+    - Controllable inputs from single_target (replicated N times)
+    - Non-controllable inputs from scenario_conditions (per scenario)
+    - Outputs from single_target (replicated N times)
+
+    This creates a target where:
+    - All scenarios share the SAME controllable target (ideal operating point)
+    - Each scenario has DIFFERENT structural conditions (environmental diversity)
+    - All scenarios share the SAME target outputs (quality specification)
+
+    The BC loss will always compare to the same controllable inputs,
+    while the controller receives different structural conditions per scenario.
+
+    Args:
+        single_target: dict from generate_target_trajectory(n_samples=1)
+            Contains the ideal operating point for each process.
+        scenario_conditions: dict from generate_target_trajectory(n_samples=N)
+            Only its non-controllable input values and structural_conditions are used.
+        process_configs: list of process configurations (from PROCESSES)
+
+    Returns:
+        dict: expanded target with shape (N, ...) for each process:
+            {
+                process_name: {
+                    'inputs': np.array (N, input_dim),
+                    'outputs': np.array (N, output_dim),
+                    'structural_conditions': dict of structural variable values
+                }
+            }
+    """
+    from controller_optimization.configs.processes_config import get_controllable_inputs
+
+    n_scenarios = None
+    expanded = {}
+
+    for process_config in process_configs:
+        process_name = process_config['name']
+        input_labels = process_config['input_labels']
+        controllable = get_controllable_inputs(process_config)
+
+        # Get single target values
+        target_inputs = single_target[process_name]['inputs']    # (1, input_dim)
+        target_outputs = single_target[process_name]['outputs']  # (1, output_dim)
+
+        # Get scenario conditions (full input arrays with diverse structural values)
+        conditions_inputs = scenario_conditions[process_name]['inputs']  # (N, input_dim)
+
+        if n_scenarios is None:
+            n_scenarios = conditions_inputs.shape[0]
+
+        # Build expanded inputs:
+        # - Controllable: replicate single target value across all scenarios
+        # - Non-controllable: keep from scenario_conditions (diverse per scenario)
+        expanded_inputs = np.copy(conditions_inputs)
+
+        for idx, label in enumerate(input_labels):
+            if label in controllable:
+                # Overwrite controllable values with single target's values
+                expanded_inputs[:, idx] = target_inputs[0, idx]
+
+        # Outputs: replicate single target outputs across all scenarios
+        # (the quality specification is always the same)
+        expanded_outputs = np.tile(target_outputs, (n_scenarios, 1))
+
+        # Structural conditions: take from scenario_conditions
+        structural_conditions = {}
+        if 'structural_conditions' in scenario_conditions[process_name]:
+            structural_conditions = scenario_conditions[process_name]['structural_conditions']
+
+        expanded[process_name] = {
+            'inputs': expanded_inputs,
+            'outputs': expanded_outputs,
+            'structural_conditions': structural_conditions
+        }
+
+        print(f"  Expanded target for {process_name}:")
+        print(f"    Shape: {expanded_inputs.shape}")
+        for idx, label in enumerate(input_labels):
+            vals = expanded_inputs[:, idx]
+            source = "target (fixed)" if label in controllable else "conditions (variable)"
+            if label in controllable:
+                print(f"    {label} [{source}]: {vals[0]:.4f} (same for all scenarios)")
+            else:
+                print(f"    {label} [{source}]: [{vals.min():.4f}, {vals.max():.4f}]")
+
+    print(f"  Total: {n_scenarios} scenarios, single controllable target")
+
+    return expanded
+
+
 if __name__ == '__main__':
-    # Test multi-scenario trajectory generation
+    # Test single-target + multi-scenario trajectory generation
     from controller_optimization.configs.processes_config import PROCESSES
 
     print("="*70)
-    print("TESTING MULTI-SCENARIO TRAJECTORY GENERATION")
+    print("TESTING SINGLE-TARGET + MULTI-SCENARIO TRAJECTORY GENERATION")
     print("="*70)
 
-    # Generate target trajectory with 10 scenarios (testing with smaller number)
-    print("\n" + "="*70)
-    print("GENERATING TARGET TRAJECTORY (a*, diverse structural + zero process noise)")
-    print("="*70)
     n_test_scenarios = 10
-    target_traj = generate_target_trajectory(PROCESSES, n_samples=n_test_scenarios, seed=42)
 
+    # Step 1: Generate SINGLE ideal target (n=1)
     print("\n" + "="*70)
-    print("TARGET TRAJECTORY ANALYSIS")
+    print("STEP 1: SINGLE IDEAL TARGET (a*, n=1, process noise=0)")
     print("="*70)
-    for process_name, data in target_traj.items():
+    single_target = generate_target_trajectory(PROCESSES, n_samples=1, seed=42)
+
+    for process_name, data in single_target.items():
         print(f"\n{process_name.upper()}:")
-        print(f"  Inputs shape: {data['inputs'].shape}")
-        print(f"  Outputs shape: {data['outputs'].shape}")
+        print(f"  Inputs:  {data['inputs'][0]}")
+        print(f"  Outputs: {data['outputs'][0]}")
 
-        # Show first 3 scenarios
-        print(f"  First 3 scenarios:")
-        for i in range(min(3, n_test_scenarios)):
-            print(f"    Scenario {i}: inputs={data['inputs'][i]}, output={data['outputs'][i]}")
-
-        # Show output variance (should still vary due to input/structural variation)
-        output_var = np.var(data['outputs'])
-        output_std = np.std(data['outputs'])
-        print(f"  Output variance: {output_var:.6f} (std: {output_std:.6f})")
-
-        # Show structural conditions
-        if data['structural_conditions']:
-            print(f"  Structural conditions:")
-            for var, vals in data['structural_conditions'].items():
-                print(f"    {var}: min={vals.min():.4f}, max={vals.max():.4f}, std={vals.std():.4f}")
-
-    # Generate baseline trajectory (aligned structural conditions)
+    # Step 2: Generate N scenario conditions (diverse structural noise)
     print("\n" + "="*70)
-    print("GENERATING BASELINE TRAJECTORY (a', same structural + active process noise)")
+    print(f"STEP 2: {n_test_scenarios} SCENARIO CONDITIONS (diverse structural noise)")
+    print("="*70)
+    scenario_conditions = generate_target_trajectory(PROCESSES, n_samples=n_test_scenarios, seed=542)
+
+    for process_name, data in scenario_conditions.items():
+        print(f"\n{process_name.upper()}:")
+        print(f"  Shape: {data['inputs'].shape}")
+        if data['structural_conditions']:
+            for var, vals in data['structural_conditions'].items():
+                print(f"  {var}: [{vals.min():.4f}, {vals.max():.4f}] (range)")
+
+    # Step 3: Build expanded target
+    print("\n" + "="*70)
+    print("STEP 3: BUILD EXPANDED TARGET (single target × N conditions)")
+    print("="*70)
+    expanded_target = build_expanded_target(
+        single_target=single_target,
+        scenario_conditions=scenario_conditions,
+        process_configs=PROCESSES
+    )
+
+    print("\n  VERIFICATION: Controllable inputs should be IDENTICAL across all scenarios")
+    from controller_optimization.configs.processes_config import get_controllable_inputs
+    for process_config in PROCESSES:
+        process_name = process_config['name']
+        controllable = get_controllable_inputs(process_config)
+        inputs = expanded_target[process_name]['inputs']
+        for idx, label in enumerate(process_config['input_labels']):
+            vals = inputs[:, idx]
+            if label in controllable:
+                assert np.all(vals == vals[0]), f"{label} should be identical across scenarios!"
+                print(f"  {process_name}.{label}: {vals[0]:.4f} (same for all {n_test_scenarios} scenarios) ✓")
+            else:
+                assert np.std(vals) > 0, f"{label} should vary across scenarios!"
+                print(f"  {process_name}.{label}: [{vals.min():.4f}, {vals.max():.4f}] (varies) ✓")
+
+    # Step 4: Generate baseline from expanded target
+    print("\n" + "="*70)
+    print("STEP 4: BASELINE TRAJECTORY (same inputs + active process noise)")
     print("="*70)
     baseline_traj = generate_baseline_trajectory(
         PROCESSES,
-        target_trajectory=target_traj,
+        target_trajectory=expanded_target,
         n_samples=n_test_scenarios,
         seed=43
     )
 
+    # Compare
     print("\n" + "="*70)
-    print("BASELINE TRAJECTORY ANALYSIS")
+    print("COMPARISON: EXPANDED TARGET vs BASELINE")
     print("="*70)
-    for process_name, data in baseline_traj.items():
-        print(f"\n{process_name.upper()}:")
-        print(f"  Inputs shape: {data['inputs'].shape}")
-        print(f"  Outputs shape: {data['outputs'].shape}")
-
-        # Show first 3 scenarios
-        print(f"  First 3 scenarios:")
-        for i in range(min(3, n_test_scenarios)):
-            print(f"    Scenario {i}: inputs={data['inputs'][i]}, output={data['outputs'][i]}")
-
-        # Show output variance (should be higher due to process noise)
-        output_var = np.var(data['outputs'])
-        output_std = np.std(data['outputs'])
-        print(f"  Output variance: {output_var:.6f} (std: {output_std:.6f})")
-
-    # Compare target vs baseline
-    print("\n" + "="*70)
-    print("COMPARISON: TARGET vs BASELINE")
-    print("="*70)
-    for process_name in target_traj.keys():
-        target_outputs = target_traj[process_name]['outputs']
+    for process_name in expanded_target.keys():
+        target_outputs = expanded_target[process_name]['outputs']
         baseline_outputs = baseline_traj[process_name]['outputs']
 
         print(f"\n{process_name.upper()}:")
-        print(f"  Target output std:   {np.std(target_outputs):.6f}")
-        print(f"  Baseline output std: {np.std(baseline_outputs):.6f}")
-        print(f"  Std ratio (baseline/target): {np.std(baseline_outputs) / np.std(target_outputs):.3f}")
+        print(f"  Target output std:   {np.std(target_outputs):.6f} (should be 0 — same single target)")
+        print(f"  Baseline output std: {np.std(baseline_outputs):.6f} (varies due to process noise + structural)")
 
-        # CRITICAL CHECK: Verify that ALL inputs are identical
-        target_inputs = target_traj[process_name]['inputs']
+        # CRITICAL CHECK: Verify that ALL inputs are identical between target and baseline
+        target_inputs = expanded_target[process_name]['inputs']
         baseline_inputs = baseline_traj[process_name]['inputs']
 
-        input_labels = PROCESSES[[p['name'] for p in PROCESSES].index(process_name)]['input_labels']
-        print(f"\n  INPUT ALIGNMENT CHECK (should be exactly 0.0):")
+        input_labels = [p for p in PROCESSES if p['name'] == process_name][0]['input_labels']
+        print(f"  INPUT ALIGNMENT CHECK (should be exactly 0.0):")
         for i, input_label in enumerate(input_labels):
-            target_vals = target_inputs[:, i]
-            baseline_vals = baseline_inputs[:, i]
-            max_diff = np.max(np.abs(target_vals - baseline_vals))
-            mean_diff = np.mean(np.abs(target_vals - baseline_vals))
-            print(f"    {input_label}: max_diff={max_diff:.10f}, mean_diff={mean_diff:.10f}")
+            max_diff = np.max(np.abs(target_inputs[:, i] - baseline_inputs[:, i]))
+            print(f"    {input_label}: max_diff={max_diff:.10f}")
 
     print("\n" + "="*70)
     print("TEST COMPLETE")

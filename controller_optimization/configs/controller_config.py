@@ -53,12 +53,19 @@ POLICY GENERATOR:
 - scenario_embedding_dim: Dimension of scenario embedding vector (default: 16)
                          Higher = more expressive but more parameters
 
-SCENARIOS:
-- n_train: Number of scenarios for training (diverse operating conditions)
-- n_test: Number of scenarios for final evaluation (never seen during training)
-- seed_target: Seed for target trajectory generation (train scenarios)
+SCENARIOS (Single Target + Multiple Conditions):
+- n_train: Number of structural condition scenarios for training
+- n_test: Number of structural condition scenarios for final evaluation (never seen during training)
+- seed_target: Seed for the SINGLE ideal target (n=1, deterministic operating point)
+- seed_conditions: Seed for generating N diverse structural conditions (environmental scenarios)
 - seed_baseline: Seed for baseline process noise (same inputs as target, different noise realization)
 - test_seed_offset: Offset added to seeds for test scenarios (default 1000, ensures test != train)
+
+NOTE: The single-target design means:
+  * ONE ideal operating point (controllable inputs + outputs)
+  * N scenarios define ONLY structural conditions (temperature, etc.)
+  * BC loss always compares to the SAME controllable target
+  * F* is computed from the single target (coherent with BC loss)
 
 MULTI-SCENARIO:
 - shuffle_order: Shuffle scenario order each epoch (recommended: True)
@@ -163,7 +170,8 @@ CONTROLLER_CONFIG = {
     'scenarios': {
         'n_train': 30,        # Training scenarios (diverse operating conditions)
         'n_test': 1,          # Test scenarios (final evaluation, never seen during training)
-        'seed_target': 64,     # Seed for target trajectory generation (train)
+        'seed_target': 64,     # Seed for single ideal target (n=1)
+        'seed_conditions': 564, # Seed for scenario structural conditions (n=n_train)
         'seed_baseline': 134,   # Seed for baseline process noise (same inputs, different noise)
         'test_seed_offset': 1000,  # Offset added to seeds for test scenarios (ensures different from train)
     },
