@@ -115,6 +115,13 @@ class ControllerTrainer:
         self.best_F = -float('inf')
         self.epochs_without_improvement = 0
 
+        # Build mapping: process_name → controllable input indices
+        # BC loss should only compare controllable inputs (non-controllable can't be changed)
+        self.controllable_indices = {}
+        for i, process_name in enumerate(self.process_chain.process_names):
+            info = self.process_chain.controllable_info_per_process[i]
+            self.controllable_indices[process_name] = info['controllable_indices']
+
         # Compute normalization statistics from target trajectories
         self._compute_normalization_stats()
 
@@ -132,18 +139,26 @@ class ControllerTrainer:
 
     def _compute_normalization_stats(self):
         """
-        Compute normalization statistics (min, max) for each process's inputs
+        Compute normalization statistics (min, max) for each process's CONTROLLABLE inputs
         from the target trajectories to scale BC loss to [0,1] range.
+
+        Only controllable inputs are included since BC loss should not penalize
+        non-controllable inputs (the controller cannot change them).
         """
         self.input_stats = {}
 
         for process_name, data in self.surrogate.target_trajectory_tensors.items():
             inputs = data['inputs']  # Shape: (n_scenarios, seq_len, input_dim)
 
+            # Filter to controllable inputs only
+            ctrl_idx = self.controllable_indices[process_name]
+            if len(ctrl_idx) > 0:
+                inputs = inputs[..., ctrl_idx]
+
             # Compute min and max across all scenarios and timesteps
             # Add small epsilon to avoid division by zero
-            input_min = inputs.min(dim=0)[0].min(dim=0)[0]  # Shape: (input_dim,)
-            input_max = inputs.max(dim=0)[0].max(dim=0)[0]  # Shape: (input_dim,)
+            input_min = inputs.min(dim=0)[0].min(dim=0)[0]  # Shape: (n_controllable,)
+            input_max = inputs.max(dim=0)[0].max(dim=0)[0]  # Shape: (n_controllable,)
             input_range = input_max - input_min + 1e-8  # Avoid division by zero
 
             self.input_stats[process_name] = {
@@ -151,7 +166,7 @@ class ControllerTrainer:
                 'range': input_range.to(self.device)
             }
 
-        print(f"  Input normalization stats computed for {len(self.input_stats)} processes")
+        print(f"  Input normalization stats computed for {len(self.input_stats)} processes (controllable inputs only)")
 
     def _create_scheduler(self):
         """
@@ -451,16 +466,19 @@ class ControllerTrainer:
         F_star_tensor = torch.tensor(self.surrogate.F_star, dtype=torch.float32, device=self.device)
         reliability_loss = self.reliability_loss_scale * (F - F_star_tensor) ** 2
 
-        # Behavior cloning loss: mean( ||a_t - a_t*||^2 ) across all processes
-        # Compare to the specific scenario's target inputs
+        # Behavior cloning loss: mean( ||a_ctrl - a_ctrl*||^2 ) across all processes
+        # Only compares CONTROLLABLE inputs (non-controllable can't be changed by the controller)
         # Inputs are normalized to [0,1] range to match reliability loss scale
         bc_loss = torch.tensor(0.0, device=self.device)
         n_processes = len(trajectory.keys())
 
         for process_name in trajectory.keys():
-            actual_inputs = trajectory[process_name]['inputs']
-            # Select target inputs for this specific scenario
-            target_inputs_scenario = self.surrogate.target_trajectory_tensors[process_name]['inputs'][scenario_idx:scenario_idx+1]
+            ctrl_idx = self.controllable_indices[process_name]
+            if len(ctrl_idx) == 0:
+                continue
+
+            actual_inputs = trajectory[process_name]['inputs'][..., ctrl_idx]
+            target_inputs_scenario = self.surrogate.target_trajectory_tensors[process_name]['inputs'][scenario_idx:scenario_idx+1][..., ctrl_idx]
 
             # Normalize inputs to [0,1] using precomputed stats
             stats = self.input_stats[process_name]
@@ -469,7 +487,8 @@ class ControllerTrainer:
 
             # DEBUG: Print BC loss details on first call
             if hasattr(self, '_debug_bc_loss') and self._debug_bc_loss:
-                print(f"\n  BC Loss Debug [{process_name}]:")
+                print(f"\n  BC Loss Debug [{process_name}] (controllable only):")
+                print(f"    controllable_indices: {ctrl_idx}")
                 print(f"    actual_inputs (raw): {actual_inputs[0].tolist()}")
                 print(f"    target_inputs (raw): {target_inputs_scenario[0].tolist()}")
                 print(f"    stats['min']: {stats['min'].tolist()}")
@@ -478,7 +497,7 @@ class ControllerTrainer:
                 print(f"    target_inputs_norm: {target_inputs_norm[0].tolist()}")
                 print(f"    MSE per dim: {((actual_inputs_norm - target_inputs_norm) ** 2).mean(dim=0).tolist()}")
 
-            # Compute MSE on normalized inputs
+            # Compute MSE on normalized controllable inputs
             bc_loss = bc_loss + torch.mean((actual_inputs_norm - target_inputs_norm) ** 2)
 
         # Average BC loss across processes (not sum!)
@@ -801,10 +820,14 @@ class ControllerTrainer:
                 n_processes = len(trajectory.keys())
 
                 for process_name in trajectory.keys():
-                    actual_inputs = trajectory[process_name]['inputs']
-                    target_inputs = self.validation_surrogate.target_trajectory_tensors[process_name]['inputs'][scenario_idx:scenario_idx+1]
+                    ctrl_idx = self.controllable_indices[process_name]
+                    if len(ctrl_idx) == 0:
+                        continue
 
-                    # Use same normalization stats as training
+                    actual_inputs = trajectory[process_name]['inputs'][..., ctrl_idx]
+                    target_inputs = self.validation_surrogate.target_trajectory_tensors[process_name]['inputs'][scenario_idx:scenario_idx+1][..., ctrl_idx]
+
+                    # Use same normalization stats as training (controllable only)
                     stats = self.input_stats[process_name]
                     actual_inputs_norm = (actual_inputs - stats['min']) / stats['range']
                     target_inputs_norm = (target_inputs - stats['min']) / stats['range']
