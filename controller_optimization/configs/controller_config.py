@@ -198,6 +198,9 @@ CONTROLLER_CONFIG = {
 
         # Common settings
         'use_deterministic_sampling': False,  # True = use mean (stable), False = use sampling (stochastic)
+        'use_mean_for_adaptive_targets': False,  # True = use outputs_mean (deterministic) for adaptive tau_i
+                                                  # while still using outputs_sampled for Q_i evaluation.
+                                                  # Isolates noise propagation through adaptive targets.
 
         # CasualiT surrogate settings (used if type='casualit')
         # Requires a trained causaliT model checkpoint
