@@ -58,8 +58,7 @@ class ProTSurrogate:
         }
     }
 
-    def __init__(self, target_trajectory, device='cpu', use_deterministic_sampling=True,
-                 use_mean_for_adaptive_targets=False):
+    def __init__(self, target_trajectory, device='cpu', use_deterministic_sampling=True):
         """
         Args:
             target_trajectory (dict): Target trajectory da target_generation
@@ -68,15 +67,9 @@ class ProTSurrogate:
             use_deterministic_sampling (bool): If True, use mean values directly (deterministic).
                                                If False, use reparameterization trick (stochastic).
                                                Default: True for stable training.
-            use_mean_for_adaptive_targets (bool): If True, use outputs_mean (deterministic)
-                                                   for computing adaptive targets tau_i, while
-                                                   still using outputs_sampled for Q_i evaluation.
-                                                   This isolates noise propagation through targets.
-                                                   Default: False (original behavior).
         """
         self.device = device
         self.use_deterministic_sampling = use_deterministic_sampling
-        self.use_mean_for_adaptive_targets = use_mean_for_adaptive_targets
         self.n_scenarios = None  # Will be inferred from data
 
         # Convert target trajectory to tensors (all scenarios)
@@ -124,11 +117,7 @@ class ProTSurrogate:
                 where quality_scores maps process_name to per-process Q_i tensor
         """
         # Use already sampled outputs if available, otherwise sample here
-        # We maintain two output dicts:
-        #   outputs_for_quality: used in Q_i = exp(-(o_i - tau_i)^2 / s_i)  [stochastic]
-        #   outputs_for_targets: used to compute adaptive tau_i              [deterministic or stochastic]
         sampled_outputs = {}
-        mean_outputs = {}
 
         for process_name, data in trajectory.items():
             # Check if outputs are already sampled
@@ -151,27 +140,14 @@ class ProTSurrogate:
 
             sampled_outputs[process_name] = sample
 
-            # Store mean outputs for adaptive target computation
-            if 'outputs_mean' in data:
-                mean_outputs[process_name] = data['outputs_mean']
-            else:
-                mean_outputs[process_name] = sample  # fallback
-
         # ADAPTIVE RELIABILITY COMPUTATION WITH EXPLICIT PROCESS DEPENDENCIES
         # Formula adapted based on which processes are present
         # Processes influence each other through adaptive targets
 
         # Extract available process outputs (assume 1 output per process)
-        # outputs_for_quality: stochastic (sampled) - used in Q_i evaluation
-        # outputs_for_targets: deterministic (mean) or stochastic - used in adaptive tau_i
-        outputs_for_quality = {}
-        outputs_for_targets = {}
+        outputs = {}
         for process_name, sample in sampled_outputs.items():
-            outputs_for_quality[process_name] = sample.squeeze()
-            if self.use_mean_for_adaptive_targets:
-                outputs_for_targets[process_name] = mean_outputs[process_name].squeeze()
-            else:
-                outputs_for_targets[process_name] = sample.squeeze()
+            outputs[process_name] = sample.squeeze()
 
         # Compute ADAPTIVE TARGETS based on previous processes in chain
         # Each process target adapts based on outputs of processes that came before
@@ -180,25 +156,24 @@ class ProTSurrogate:
         quality_scores = {}
 
         # LASER: First process, fixed target
-        if 'laser' in outputs_for_quality:
-            laser_power = outputs_for_quality['laser']
+        if 'laser' in outputs:
+            laser_power = outputs['laser']
             adaptive_targets['laser'] = 0.8  # Fixed target
 
             laser_quality = torch.exp(-((laser_power - adaptive_targets['laser']) ** 2) / 0.1)
             quality_scores['laser'] = laser_quality
 
         # PLASMA: Target depends on Laser
-        if 'plasma' in outputs_for_quality:
-            plasma_rate = outputs_for_quality['plasma']
+        if 'plasma' in outputs:
+            plasma_rate = outputs['plasma']
 
             # Base target
             plasma_target = 3.0
 
             # Adapt based on Laser (if available)
             # If laser is too strong → plasma must compensate by increasing removal rate
-            # Uses outputs_for_targets (mean or sampled depending on flag)
-            if 'laser' in outputs_for_targets:
-                plasma_target = plasma_target + 0.2 * (outputs_for_targets['laser'] - 0.8)
+            if 'laser' in outputs:
+                plasma_target = plasma_target + 0.2 * (outputs['laser'] - 0.8)
 
             adaptive_targets['plasma'] = plasma_target
 
@@ -206,21 +181,20 @@ class ProTSurrogate:
             quality_scores['plasma'] = plasma_quality
 
         # GALVANIC: Target depends on Laser AND Plasma
-        if 'galvanic' in outputs_for_quality:
-            galvanic_thick = outputs_for_quality['galvanic']
+        if 'galvanic' in outputs:
+            galvanic_thick = outputs['galvanic']
 
             # Base target
             galvanic_target = 10.0
 
             # Adapt based on previous processes
-            # Uses outputs_for_targets (mean or sampled depending on flag)
             # If plasma removed too much → galvanic must deposit more thickness
-            if 'plasma' in outputs_for_targets:
-                galvanic_target = galvanic_target + 0.5 * (outputs_for_targets['plasma'] - 5.0)
+            if 'plasma' in outputs:
+                galvanic_target = galvanic_target + 0.5 * (outputs['plasma'] - 5.0)
 
             # If laser was strong → galvanic must compensate further
-            if 'laser' in outputs_for_targets:
-                galvanic_target = galvanic_target + 0.4 * (outputs_for_targets['laser'] - 0.5)
+            if 'laser' in outputs:
+                galvanic_target = galvanic_target + 0.4 * (outputs['laser'] - 0.5)
 
             adaptive_targets['galvanic'] = galvanic_target
 
@@ -228,25 +202,24 @@ class ProTSurrogate:
             quality_scores['galvanic'] = galvanic_quality
 
         # MICROETCH: Target depends on ALL previous processes
-        if 'microetch' in outputs_for_quality:
-            microetch_depth = outputs_for_quality['microetch']
+        if 'microetch' in outputs:
+            microetch_depth = outputs['microetch']
 
             # Base target
             microetch_target = 20.0
 
             # Adapt based on all previous processes
-            # Uses outputs_for_targets (mean or sampled depending on flag)
             # If laser was too strong → microetch must be deeper
-            if 'laser' in outputs_for_targets:
-                microetch_target = microetch_target + 1.5 * (outputs_for_targets['laser'] - 0.5)
+            if 'laser' in outputs:
+                microetch_target = microetch_target + 1.5 * (outputs['laser'] - 0.5)
 
             # If plasma was aggressive → microetch must compensate
-            if 'plasma' in outputs_for_targets:
-                microetch_target = microetch_target + 0.3 * (outputs_for_targets['plasma'] - 5.0)
+            if 'plasma' in outputs:
+                microetch_target = microetch_target + 0.3 * (outputs['plasma'] - 5.0)
 
             # If galvanic deposited too much → microetch must remove more
-            if 'galvanic' in outputs_for_targets:
-                microetch_target = microetch_target - 0.15 * (outputs_for_targets['galvanic'] - 10.0)
+            if 'galvanic' in outputs:
+                microetch_target = microetch_target - 0.15 * (outputs['galvanic'] - 10.0)
 
             adaptive_targets['microetch'] = microetch_target
 
@@ -415,7 +388,6 @@ def create_surrogate(config: Dict,
     """
     surrogate_type = config.get('type', 'reliability_function')
     use_deterministic = config.get('use_deterministic_sampling', True)
-    use_mean_for_adaptive = config.get('use_mean_for_adaptive_targets', False)
 
     if surrogate_type == 'reliability_function':
         # Use mathematical formula (ProTSurrogate)
@@ -423,7 +395,6 @@ def create_surrogate(config: Dict,
             target_trajectory=target_trajectory,
             device=device,
             use_deterministic_sampling=use_deterministic,
-            use_mean_for_adaptive_targets=use_mean_for_adaptive,
         )
 
     elif surrogate_type == 'casualit':
