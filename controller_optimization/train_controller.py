@@ -78,8 +78,7 @@ from controller_optimization.src.utils.model_utils import convert_numpy_to_tenso
 from controller_optimization.src.utils.scm_validation import validate_all_processes
 from controller_optimization.src.analysis import (
     TheoreticalLossTracker,
-    compute_theoretical_L_min,
-    estimate_effective_params_simple,
+    compute_empirical_L_min,
     generate_all_theoretical_plots,
     generate_full_report,
     save_report_txt,
@@ -520,18 +519,6 @@ def main(config=None):
             }
             theoretical_tracker.process_weights[proc_name] = proc_config.get('weight', 1.0)
 
-        # Compute effective s (weighted average for the active processes)
-        total_weight = sum(theoretical_tracker.process_weights.get(p, 1.0) for p in active_processes
-                           if theoretical_tracker.process_weights.get(p, 0) > 0)
-        if total_weight > 0:
-            effective_s = sum(
-                theoretical_tracker.process_configs.get(p, {}).get('s', 1.0) * theoretical_tracker.process_weights.get(p, 1.0)
-                for p in active_processes if theoretical_tracker.process_weights.get(p, 0) > 0
-            ) / total_weight
-        else:
-            effective_s = 1.0
-
-        print(f"  Effective scale parameter (s): {effective_s:.4f}")
         print(f"  Active processes with weights > 0:")
         for p in active_processes:
             w = theoretical_tracker.process_weights.get(p, 0)
@@ -1197,7 +1184,6 @@ def main(config=None):
                 # ── Compute L_min from samples ──────────────────────────────
                 # L_min = (Var[F] + (E[F] - F*)²) × loss_scale
                 # Uses single F* consistently with training loss
-                from controller_optimization.src.analysis import compute_empirical_L_min
                 loss_scale = cfg['training']['reliability_loss_scale']
 
                 combined_components = compute_empirical_L_min(

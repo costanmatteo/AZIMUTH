@@ -151,6 +151,35 @@ class ProcessChain(nn.Module):
 
         return torch.tensor(structural_values, dtype=torch.float32, device=self.device)
 
+    def train(self, mode=True):
+        """Override train() to keep frozen UncertaintyPredictors in eval() mode.
+
+        nn.Module.train() recursively sets ALL submodules to training mode.
+        This reactivates dropout in the frozen UncertaintyPredictors (dropout_rate=0.2),
+        causing their mean/variance predictions to fluctuate randomly during training.
+        Since L_min is computed in eval() mode (deterministic predictions), the dropout
+        noise can produce training loss values below L_min — a theoretical impossibility.
+
+        Fix: only set PolicyGenerators (and ScenarioEncoder) to train mode;
+        UncertaintyPredictors always stay in eval() mode.
+        """
+        # Set self.training flag without recursion
+        self.training = mode
+
+        # PolicyGenerators: respect train/eval mode (they have trainable dropout)
+        for policy in self.policy_generators:
+            policy.train(mode)
+
+        # ScenarioEncoder: respect train/eval mode (if present)
+        if hasattr(self, 'scenario_encoder') and self.scenario_encoder is not None:
+            self.scenario_encoder.train(mode)
+
+        # UncertaintyPredictors: ALWAYS eval (frozen, dropout must stay off)
+        for predictor in self.uncertainty_predictors:
+            predictor.eval()
+
+        return self
+
     def __init__(self, processes_config, target_trajectory, policy_config=None, device='cpu'):
         """
         Args:
