@@ -4,16 +4,15 @@
 
 The controller optimization pipeline relies on three key concepts:
 
-1. **Target trajectory (a\*)** — the ideal process behavior under no equipment noise
-2. **F\* (target reliability)** — a single scalar quality score computed from one target trajectory (scenario 0)
+1. **Target trajectory (a\*)** — there is only **one** a\*, the ideal process behavior
+   under no equipment noise, computed from a single scenario (scenario 0)
+2. **F\* (target reliability)** — a single scalar quality score computed from a\*
 3. **A training loop** that minimizes the gap between actual reliability F and F\*
 
-The target trajectory is generated for 50 scenarios, but this is **not** for computing F\*.
-F\* comes from a single scenario (scenario 0). The 50 scenarios exist to provide
-**training diversity**: each scenario has different environmental conditions (e.g., ambient
-temperature), and the controller must learn to produce good inputs across all of them.
-The per-scenario target inputs serve as reference for the behavior cloning (BC) loss and
-as initial/non-controllable inputs during the forward pass.
+The `generate_target_trajectory()` function samples multiple scenarios (default 30,
+configurable via `n_train` in `configs/controller_config.py:164`), but these are just
+**training data** — diverse environmental conditions the controller must learn to handle.
+They are NOT multiple target trajectories. a\* and F\* come from scenario 0 only.
 
 ---
 
@@ -21,27 +20,28 @@ as initial/non-controllable inputs during the forward pass.
 
 **Source**: `src/utils/target_generation.py` — `generate_target_trajectory()`
 
-The target trajectory answers: *"What would the process chain produce under perfect conditions?"*
+There is **one** target trajectory (a\*). It answers: *"What would the process chain
+produce under perfect conditions for a given set of environmental conditions?"*
 
-Given a set of environmental conditions (structural noise) and process inputs, process
-outputs are deterministically computed (because process noise is zeroed). From those
-outputs, F\* is calculated. There is conceptually **one** target trajectory — one set of
-conditions fully determines the ideal outputs and therefore F\*.
+Given a set of environmental conditions and process inputs, process outputs are
+deterministically computed (because process noise is zeroed). From those outputs, F\* is
+calculated. One set of conditions → one set of ideal outputs → one F\*.
 
-### Why 50 Scenarios Are Generated
+### Training Scenarios (NOT Multiple Target Trajectories)
 
-The 50 scenarios are **not** for computing F\*. They serve two purposes during training:
+The multiple scenarios sampled by `generate_target_trajectory()` are training data.
+They serve two purposes:
 
 1. **Initial inputs and non-controllable inputs per scenario** — during each forward pass,
    `process_chain.forward(scenario_idx=k)` pulls the first process's inputs and environmental
-   conditions from `target_trajectory[...]['inputs'][k]` (`process_chain.py:327-341, 442-457`).
+   conditions from the sampled data (`process_chain.py:327-341, 442-457`).
    Different scenarios have different ambient temperatures, so the controller faces diverse
    operating conditions.
 
 2. **Behavior cloning reference per scenario** — the BC loss compares the controller's
-   chosen inputs against `target_trajectory[...]['inputs'][scenario_idx]`
-   (`controller_trainer.py:462-463`). Each scenario has its own ideal input values
-   corresponding to its specific environmental conditions.
+   chosen **controllable** inputs against the ideal controllable inputs for that scenario
+   (`controller_trainer.py:460-482`). Non-controllable inputs are excluded since the
+   controller cannot change them.
 
 F\* itself is computed **only from scenario 0** (`surrogate.py:250-270`).
 
@@ -143,7 +143,7 @@ L = reliability_weight × 100 × (F - F*)² + λ_BC × BC_loss
 | Term | Purpose |
 |------|---------|
 | `(F - F*)²` | Push actual reliability toward target. Scaled by 100 to prevent vanishing gradients. |
-| `BC_loss` | Behavior cloning: MSE between controller's chosen inputs and the target trajectory's inputs (normalized). Anchors the controller near known-good operating points. |
+| `BC_loss` | Behavior cloning: MSE between the controller's chosen **controllable** inputs and the ideal controllable inputs for the current scenario (normalized to [0,1]). Anchors the controller near known-good operating points. Non-controllable inputs are excluded. |
 
 ### 4.2 Forward Pass (How F Is Computed)
 
@@ -174,9 +174,9 @@ The exponential decay for BC uses: `λ_BC = λ_start × exp(3 × ln(λ_end/λ_st
 
 Each epoch:
 
-1. Shuffles all 50 scenarios randomly
+1. Shuffles all training scenarios randomly
 2. For each scenario, runs a forward pass and computes the loss
-3. Accumulates gradients (scaled by 1/50 to average across scenarios)
+3. Accumulates gradients (scaled by 1/n_scenarios to average)
 4. Takes a **single optimizer step** after processing all scenarios
 
 This gradient accumulation ensures consistent learning across all operating conditions.
