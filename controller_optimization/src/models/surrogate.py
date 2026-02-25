@@ -173,7 +173,7 @@ class ProTSurrogate:
             # Adapt based on Laser (if available)
             # If laser is too strong → plasma must compensate by increasing removal rate
             if 'laser' in outputs:
-                plasma_target = plasma_target + 0.0 * (outputs['laser'] - 0.8)
+                plasma_target = plasma_target + 0.2 * (outputs['laser'] - 0.8)
 
             adaptive_targets['plasma'] = plasma_target
 
@@ -190,11 +190,11 @@ class ProTSurrogate:
             # Adapt based on previous processes
             # If plasma removed too much → galvanic must deposit more thickness
             if 'plasma' in outputs:
-                galvanic_target = galvanic_target + 0.0 * (outputs['plasma'] - 5.0)
+                galvanic_target = galvanic_target + 0.5 * (outputs['plasma'] - 5.0)
 
             # If laser was strong → galvanic must compensate further
             if 'laser' in outputs:
-                galvanic_target = galvanic_target + 0.0 * (outputs['laser'] - 0.5)
+                galvanic_target = galvanic_target + 0.4 * (outputs['laser'] - 0.5)
 
             adaptive_targets['galvanic'] = galvanic_target
 
@@ -211,15 +211,15 @@ class ProTSurrogate:
             # Adapt based on all previous processes
             # If laser was too strong → microetch must be deeper
             if 'laser' in outputs:
-                microetch_target = microetch_target + 0.0 * (outputs['laser'] - 0.5)
+                microetch_target = microetch_target + 1.5 * (outputs['laser'] - 0.5)
 
             # If plasma was aggressive → microetch must compensate
             if 'plasma' in outputs:
-                microetch_target = microetch_target + 0.0 * (outputs['plasma'] - 5.0)
+                microetch_target = microetch_target + 0.3 * (outputs['plasma'] - 5.0)
 
             # If galvanic deposited too much → microetch must remove more
             if 'galvanic' in outputs:
-                microetch_target = microetch_target - 0.0 * (outputs['galvanic'] - 10.0)
+                microetch_target = microetch_target - 0.15 * (outputs['galvanic'] - 10.0)
 
             adaptive_targets['microetch'] = microetch_target
 
