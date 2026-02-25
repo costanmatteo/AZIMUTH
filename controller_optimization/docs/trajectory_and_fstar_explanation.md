@@ -5,8 +5,15 @@
 The controller optimization pipeline relies on three key concepts:
 
 1. **Target trajectory (a\*)** — the ideal process behavior under no equipment noise
-2. **F\* (target reliability)** — a scalar quality score computed from the target trajectory
+2. **F\* (target reliability)** — a single scalar quality score computed from one target trajectory (scenario 0)
 3. **A training loop** that minimizes the gap between actual reliability F and F\*
+
+The target trajectory is generated for 50 scenarios, but this is **not** for computing F\*.
+F\* comes from a single scenario (scenario 0). The 50 scenarios exist to provide
+**training diversity**: each scenario has different environmental conditions (e.g., ambient
+temperature), and the controller must learn to produce good inputs across all of them.
+The per-scenario target inputs serve as reference for the behavior cloning (BC) loss and
+as initial/non-controllable inputs during the forward pass.
 
 ---
 
@@ -15,6 +22,28 @@ The controller optimization pipeline relies on three key concepts:
 **Source**: `src/utils/target_generation.py` — `generate_target_trajectory()`
 
 The target trajectory answers: *"What would the process chain produce under perfect conditions?"*
+
+Given a set of environmental conditions (structural noise) and process inputs, process
+outputs are deterministically computed (because process noise is zeroed). From those
+outputs, F\* is calculated. There is conceptually **one** target trajectory — one set of
+conditions fully determines the ideal outputs and therefore F\*.
+
+### Why 50 Scenarios Are Generated
+
+The 50 scenarios are **not** for computing F\*. They serve two purposes during training:
+
+1. **Initial inputs and non-controllable inputs per scenario** — during each forward pass,
+   `process_chain.forward(scenario_idx=k)` pulls the first process's inputs and environmental
+   conditions from `target_trajectory[...]['inputs'][k]` (`process_chain.py:327-341, 442-457`).
+   Different scenarios have different ambient temperatures, so the controller faces diverse
+   operating conditions.
+
+2. **Behavior cloning reference per scenario** — the BC loss compares the controller's
+   chosen inputs against `target_trajectory[...]['inputs'][scenario_idx]`
+   (`controller_trainer.py:462-463`). Each scenario has its own ideal input values
+   corresponding to its specific environmental conditions.
+
+F\* itself is computed **only from scenario 0** (`surrogate.py:250-270`).
 
 ### Generation Procedure
 
@@ -66,7 +95,7 @@ This serves as the "no intervention" benchmark.
 
 **Source**: `src/models/surrogate.py` — `compute_reliability()` and `_compute_F_star_from_scenario_0()`
 
-F\* is the reliability of the target trajectory — a single scalar representing the best quality the controller can aim for.
+F\* is the reliability of the target trajectory — a **single scalar** computed from **scenario 0 only** (`surrogate.py:250-270`). Given the environmental conditions and process inputs of scenario 0, the process outputs are deterministic (no process noise), and F\* follows directly from the quality function applied to those outputs.
 
 ### Quality Scoring Per Process
 
