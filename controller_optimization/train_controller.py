@@ -1181,23 +1181,40 @@ def main(config=None):
                 print(f"  Empirical E[F]: {np.mean(F_samples_array):.6f}")
                 print(f"  Empirical Var[F]: {np.var(F_samples_array):.8f}")
 
-                # ── Compute L_min from samples ──────────────────────────────
-                # L_min = (Var[F] + (E[F] - F*)²) × loss_scale
-                # Uses single F* consistently with training loss
+                # ── Compute L_min (Bellman + empirical) ─────────────────────
+                # Primary: Bellman backward induction (optimal reactive controller)
+                # Secondary: naive empirical (Var[F] + Bias²) as upper bound
                 loss_scale = cfg['training']['reliability_loss_scale']
+
+                # Build sigma_override from sampled sigma2 per process
+                sigma_override_dict = {}
+                for proc_name in active_processes:
+                    if sigma2_per_process[proc_name]:
+                        mean_var = np.mean(sigma2_per_process[proc_name])
+                        sigma_override_dict[proc_name] = float(np.sqrt(max(mean_var, 1e-10)))
 
                 combined_components = compute_empirical_L_min(
                     F_samples=F_samples_array,
                     F_star=F_star_for_L_min,
-                    loss_scale=loss_scale
+                    loss_scale=loss_scale,
+                    surrogate=surrogate,
+                    process_chain=process_chain,
+                    sigma_override=sigma_override_dict,
                 )
 
-                print(f"\n  Empirical L_min = Var[F] + Bias² (from {len(F_samples_array)} samples, single F*):")
-                print(f"    L_min:            {combined_components.L_min:.6f}")
-                print(f"    Var[F] component: {combined_components.Var_F:.6f}")
-                print(f"    Bias² component:  {combined_components.Bias2:.6f}")
-                print(f"    E[F]:             {combined_components.E_F:.6f}")
-                print(f"    F* (single):      {combined_components.F_star:.6f}")
+                print(f"\n  L_min analysis (from {len(F_samples_array)} samples, single F*):")
+                print(f"    L_min (Bellman):   {combined_components.L_min:.6f}")
+                print(f"    L_min (naive):     {combined_components.L_min_naive:.6f}")
+                print(f"    Var[F] component:  {combined_components.Var_F:.6f}")
+                print(f"    Bias² component:   {combined_components.Bias2:.6f}")
+                print(f"    E[F]:              {combined_components.E_F:.6f}")
+                print(f"    F* (single):       {combined_components.F_star:.6f}")
+                if combined_components.bellman_result is not None:
+                    br = combined_components.bellman_result
+                    if br.validation_L_min is not None:
+                        print(f"    Bellman validation: {br.validation_L_min * loss_scale:.6f} (forward sim)")
+                    print(f"    NOTE: L_min symmetric loss may cause controller to")
+                    print(f"          deliberately lower Q_i if upstream exceeded target.")
 
                 # ── Per-process info (for reports, not for L_min) ───────────
                 # Log per-process sigma2 for informational purposes
@@ -1244,11 +1261,12 @@ def main(config=None):
                 # ── Build theoretical_data dict ─────────────────────────────
                 theoretical_data = theoretical_tracker.to_dict()
 
-                # Store empirical combined L_min (same structure as before)
+                # Store L_min results (Bellman primary, naive as reference)
                 theoretical_data['combined_L_min'] = combined_components.to_dict()
                 theoretical_data['per_process_L_min'] = {}  # not computed analytically
-                theoretical_data['l_min_method'] = 'empirical'
+                theoretical_data['l_min_method'] = 'bellman' if combined_components.bellman_result is not None else 'empirical'
                 theoretical_data['n_validation_samples'] = int(len(F_samples_array))
+                theoretical_data['L_min_naive'] = combined_components.L_min_naive
 
                 # Override tracker's per-epoch L_min with the empirical value
                 # (constant across epochs — measured at end of training)
@@ -1326,14 +1344,16 @@ def main(config=None):
 
                 # Print summary
                 summary = theoretical_data.get('summary', {})
-                print(f"\n  THEORETICAL ANALYSIS SUMMARY (empirical):")
-                print(f"    Final Loss:   {summary.get('final_loss', 0):.6f}")
-                print(f"    L_min:        {summary.get('final_L_min', 0):.6f}")
-                print(f"    Gap:          {summary.get('final_gap', 0):.6f}")
-                print(f"    Efficiency:   {summary.get('final_efficiency', 0)*100:.1f}%")
-                print(f"    Violations:   {summary.get('n_violations', 0)}/{summary.get('total_epochs', 0)}")
+                method_label = theoretical_data.get('l_min_method', 'empirical')
+                print(f"\n  THEORETICAL ANALYSIS SUMMARY ({method_label} L_min):")
+                print(f"    Final Loss:      {summary.get('final_loss', 0):.6f}")
+                print(f"    L_min (Bellman): {summary.get('final_L_min', 0):.6f}")
+                print(f"    L_min (naive):   {theoretical_data.get('L_min_naive', 0):.6f}")
+                print(f"    Gap:             {summary.get('final_gap', 0):.6f}")
+                print(f"    Efficiency:      {summary.get('final_efficiency', 0)*100:.1f}%")
+                print(f"    Violations:      {summary.get('n_violations', 0)}/{summary.get('total_epochs', 0)}")
 
-                print("  ✓ Theoretical analysis completed (empirical L_min)")
+                print(f"  ✓ Theoretical analysis completed ({method_label} L_min)")
 
             except Exception as e:
                 print(f"  ✗ Warning: Failed to run theoretical analysis: {e}")

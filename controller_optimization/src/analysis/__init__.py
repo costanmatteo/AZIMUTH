@@ -9,6 +9,15 @@ from .theoretical_loss_analysis import (
     format_status
 )
 
+from .bellman_l_min import (
+    BellmanLMinResult,
+    compute_l_min_level1,
+    compute_l_min_level3,
+    compute_bellman_l_min_from_surrogate,
+    validate_bellman_policy,
+    extract_process_sigma_from_surrogate,
+)
+
 from .theoretical_visualization import (
     plot_loss_vs_L_min,
     plot_efficiency_over_time,
@@ -38,6 +47,13 @@ __all__ = [
     'run_validation_sampling',
     'compute_z_score',
     'format_status',
+    # Bellman L_min
+    'BellmanLMinResult',
+    'compute_l_min_level1',
+    'compute_l_min_level3',
+    'compute_bellman_l_min_from_surrogate',
+    'validate_bellman_policy',
+    'extract_process_sigma_from_surrogate',
     # Visualization
     'plot_loss_vs_L_min',
     'plot_efficiency_over_time',

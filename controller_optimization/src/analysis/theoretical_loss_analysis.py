@@ -1,13 +1,17 @@
 """
-Empirical Loss Analysis for Reliability-based Controller Optimization.
+Loss Analysis for Reliability-based Controller Optimization.
 
-Computes the minimum achievable loss (L_min) empirically from stochastic
-forward passes through the process chain.
+Computes the minimum achievable loss (L_min) via two methods:
 
-L_min = (Var[F] + (E[F] - F*)²) × loss_scale
+1. **Bellman backward induction** (primary): True L_min accounting for an
+   optimal reactive controller using dynamic programming.
+   L_min = V_1(F*) where V_i is the Bellman value function.
 
-Where F samples are collected by running N forward passes with the
-reparameterization trick (o = μ + ε·σ, ε ~ N(0,1)).
+2. **Empirical feedforward** (naive upper bound): L_min from stochastic
+   forward passes with the current (non-reactive) controller.
+   L_min_naive = (Var[F] + (E[F] - F*)^2) * loss_scale
+
+The Bellman L_min is always <= the naive empirical L_min.
 """
 
 import numpy as np
@@ -17,12 +21,20 @@ from typing import Dict, List, Optional, Tuple, Any
 from pathlib import Path
 import json
 
+from .bellman_l_min import (
+    compute_l_min_level1,
+    compute_bellman_l_min_from_surrogate,
+    validate_bellman_policy,
+    BellmanLMinResult,
+)
+
 
 @dataclass
 class TheoreticalLossComponents:
     """Components of L_min analysis."""
-    L_min: float           # Minimum achievable loss
-    E_F: float             # Expected value of F
+    L_min: float           # Minimum achievable loss (Bellman)
+    L_min_naive: float     # Naive empirical L_min (feedforward)
+    E_F: float             # Expected value of F (from empirical samples)
     E_F2: float            # Expected value of F^2
     Var_F: float           # Variance of F
     Bias2: float           # Bias squared (E[F] - F*)^2
@@ -30,11 +42,13 @@ class TheoreticalLossComponents:
     sigma2: float          # Predicted variance (informational)
     delta: float           # Not used (kept for interface compatibility)
     s: float               # Not used (kept for interface compatibility)
+    bellman_result: Optional[BellmanLMinResult] = None
 
     def to_dict(self) -> Dict[str, float]:
         """Convert to dictionary."""
-        return {
+        d = {
             'L_min': self.L_min,
+            'L_min_naive': self.L_min_naive,
             'E_F': self.E_F,
             'E_F2': self.E_F2,
             'Var_F': self.Var_F,
@@ -42,46 +56,94 @@ class TheoreticalLossComponents:
             'F_star': self.F_star,
             'sigma2': self.sigma2,
             'delta': self.delta,
-            's': self.s
+            's': self.s,
         }
+        if self.bellman_result is not None:
+            d['bellman'] = self.bellman_result.to_dict()
+        return d
 
 
 def compute_empirical_L_min(
     F_samples: np.ndarray,
     F_star: float,
-    loss_scale: float = 1.0
+    loss_scale: float = 1.0,
+    surrogate=None,
+    process_chain=None,
+    sigma_override: Optional[Dict[str, float]] = None,
 ) -> TheoreticalLossComponents:
     """
-    Compute L_min empirically from forward-pass samples.
+    Compute L_min using Bellman backward induction + empirical statistics.
 
-        L_min = (Var(F_samples) + (mean(F_samples) - F*)²) × loss_scale
+    The primary L_min is computed via Bellman dynamic programming (Level 1:
+    independent noise, fixed variance). The naive empirical L_min from
+    forward-pass samples is also computed for comparison.
 
     Args:
         F_samples: Array of F values from N stochastic forward passes.
-                   Should contain at least ~100 samples for stable estimates.
         F_star: Target reliability (deterministic F*).
         loss_scale: Scale factor for the loss (training typically uses 100.0).
+        surrogate: ProTSurrogate instance (for Bellman computation).
+                   If None, falls back to empirical-only.
+        process_chain: ProcessChain instance (for sigma estimation).
+        sigma_override: Dict of process_name -> sigma to override estimation.
 
     Returns:
-        TheoreticalLossComponents populated with empirical values.
+        TheoreticalLossComponents with Bellman L_min as primary and naive as reference.
     """
     F_samples = np.asarray(F_samples)
 
+    # Empirical statistics (always computed)
     if len(F_samples) == 0:
-        return TheoreticalLossComponents(
-            L_min=0.0, E_F=F_star, E_F2=F_star**2,
-            Var_F=0.0, Bias2=0.0, F_star=F_star,
-            sigma2=0.0, delta=0.0, s=0.0
-        )
+        E_F, E_F2, Var_F, Bias2 = F_star, F_star ** 2, 0.0, 0.0
+        L_min_naive = 0.0
+    else:
+        E_F = float(np.mean(F_samples))
+        E_F2 = float(np.mean(F_samples ** 2))
+        Var_F = float(np.var(F_samples))
+        Bias2 = (E_F - F_star) ** 2
+        L_min_naive = (Var_F + Bias2) * loss_scale
 
-    E_F = float(np.mean(F_samples))
-    E_F2 = float(np.mean(F_samples**2))
-    Var_F = float(np.var(F_samples))
-    Bias2 = (E_F - F_star) ** 2
-    L_min = (Var_F + Bias2) * loss_scale
+    # Bellman L_min (primary)
+    bellman_result = None
+    L_min_bellman = L_min_naive  # fallback
+
+    if surrogate is not None:
+        try:
+            bellman_result = compute_bellman_l_min_from_surrogate(
+                surrogate=surrogate,
+                process_chain=process_chain,
+                loss_scale=loss_scale,
+                level=1,
+                N_R=200,
+                N_delta=100,
+                K=2000,
+                validate=True,
+                sigma_override=sigma_override,
+            )
+            L_min_bellman = bellman_result.L_min_scaled
+
+            # Sanity checks
+            if L_min_bellman > L_min_naive * 1.01:
+                print(f"  WARNING: Bellman L_min ({L_min_bellman:.6f}) > naive L_min ({L_min_naive:.6f}).")
+                print(f"           This may indicate grid resolution issues. Using naive as fallback.")
+                L_min_bellman = L_min_naive
+            if L_min_bellman < 0:
+                print(f"  WARNING: Bellman L_min is negative ({L_min_bellman:.6f}). Clamping to 0.")
+                L_min_bellman = 0.0
+
+            print(f"\n  Bellman vs Naive comparison:")
+            print(f"    L_min (Bellman):  {L_min_bellman:.6f}")
+            print(f"    L_min (naive):    {L_min_naive:.6f}")
+            if L_min_naive > 0:
+                print(f"    Ratio:            {L_min_bellman / L_min_naive:.4f}")
+        except Exception as e:
+            print(f"  WARNING: Bellman L_min computation failed: {e}")
+            print(f"           Falling back to naive empirical L_min.")
+            L_min_bellman = L_min_naive
 
     return TheoreticalLossComponents(
-        L_min=L_min,
+        L_min=L_min_bellman,
+        L_min_naive=L_min_naive,
         E_F=E_F,
         E_F2=E_F2,
         Var_F=Var_F * loss_scale,
@@ -89,7 +151,8 @@ def compute_empirical_L_min(
         F_star=F_star,
         sigma2=0.0,
         delta=0.0,
-        s=0.0
+        s=0.0,
+        bellman_result=bellman_result,
     )
 
 
