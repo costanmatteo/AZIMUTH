@@ -17,7 +17,8 @@ def plot_loss_vs_L_min(
     theoretical_L_min: List[float],
     save_path: Optional[str] = None,
     title: str = "Loss vs Theoretical Minimum",
-    figsize: Tuple[int, int] = (10, 6)
+    figsize: Tuple[int, int] = (10, 6),
+    bellman_lmin: Optional[Dict[str, Any]] = None,
 ) -> plt.Figure:
     """
     Plot observed loss and theoretical L_min over epochs.
@@ -26,6 +27,7 @@ def plot_loss_vs_L_min(
     - Observed loss curve (solid blue)
     - Theoretical L_min curve (dashed red)
     - Shaded area showing reducible gap
+    - Bellman L_min horizontal line (if available)
 
     Args:
         epochs: List of epoch numbers
@@ -34,6 +36,7 @@ def plot_loss_vs_L_min(
         save_path: Path to save figure (optional)
         title: Plot title
         figsize: Figure size
+        bellman_lmin: Dict with Bellman results (keys: L_min_bellman, L_min_naive, L_min_forward)
 
     Returns:
         Matplotlib Figure object
@@ -47,8 +50,19 @@ def plot_loss_vs_L_min(
     # Plot observed loss
     ax.plot(epochs, observed, 'b-', linewidth=2, label='Observed Loss', marker='o', markersize=3)
 
-    # Plot theoretical L_min
-    ax.plot(epochs, theoretical, 'r--', linewidth=2, label='Theoretical L_min')
+    # Plot theoretical L_min (empirical)
+    ax.plot(epochs, theoretical, 'r--', linewidth=2, label='L_min (empirical)')
+
+    # Plot Bellman L_min lines if available
+    if bellman_lmin is not None:
+        bellman_val = bellman_lmin.get('L_min_bellman', None)
+        naive_val = bellman_lmin.get('L_min_naive', None)
+        if bellman_val is not None:
+            ax.axhline(y=bellman_val, color='green', linestyle='-.',
+                       linewidth=2.5, label=f'L_min Bellman = {bellman_val:.4f}')
+        if naive_val is not None:
+            ax.axhline(y=naive_val, color='purple', linestyle=':',
+                       linewidth=2, label=f'L_min naive = {naive_val:.4f}')
 
     # Fill area between L_min and observed (reducible gap)
     ax.fill_between(
@@ -61,6 +75,10 @@ def plot_loss_vs_L_min(
     )
 
     all_vals = np.concatenate([observed, theoretical])
+    if bellman_lmin is not None:
+        extra = [v for v in [bellman_lmin.get('L_min_bellman'), bellman_lmin.get('L_min_naive')] if v is not None]
+        if extra:
+            all_vals = np.concatenate([all_vals, extra])
 
     # Labels and legend
     ax.set_xlabel('Epoch', fontsize=12)
@@ -435,26 +453,45 @@ def create_summary_figure(
         final_Bias2 = 0
         final_gap = 0
 
+    # Extract Bellman data if available
+    bellman_data = tracker_data.get('bellman_lmin', None)
+
     # 1. Loss vs L_min (top left)
     ax1 = fig.add_subplot(2, 2, 1)
     ax1.plot(epochs, observed_loss, 'b-', linewidth=2, label='Observed Loss', marker='o', markersize=2)
-    ax1.plot(epochs, theoretical_L_min, 'r--', linewidth=2, label='Theoretical L_min')
+    ax1.plot(epochs, theoretical_L_min, 'r--', linewidth=2, label='L_min (empirical)')
+    if bellman_data is not None:
+        bellman_val = bellman_data.get('L_min_bellman', None)
+        naive_val = bellman_data.get('L_min_naive', None)
+        if bellman_val is not None:
+            ax1.axhline(y=bellman_val, color='green', linestyle='-.', linewidth=2,
+                        label=f'L_min Bellman = {bellman_val:.4f}')
+        if naive_val is not None:
+            ax1.axhline(y=naive_val, color='purple', linestyle=':', linewidth=1.5,
+                        label=f'L_min naive = {naive_val:.4f}')
     ax1.fill_between(epochs, theoretical_L_min, observed_loss, alpha=0.3, color='orange', label='Gap')
     ax1.set_xlabel('Epoch')
     ax1.set_ylabel('Loss')
     ax1.set_title('Loss vs Theoretical Minimum')
-    ax1.legend(loc='upper right', fontsize=8)
+    ax1.legend(loc='upper right', fontsize=7)
     ax1.grid(True, alpha=0.3)
 
     # 2. Efficiency (top right)
     ax2 = fig.add_subplot(2, 2, 2)
-    ax2.plot(epochs, efficiency, 'g-', linewidth=2, marker='o', markersize=2)
+    ax2.plot(epochs, efficiency, 'g-', linewidth=2, marker='o', markersize=2, label='Efficiency (empirical)')
     ax2.axhline(y=1.0, color='red', linestyle='--', linewidth=2, label='100%')
     ax2.axhline(y=0.9, color='orange', linestyle=':', linewidth=1, alpha=0.7)
+    if bellman_data is not None and bellman_data.get('L_min_bellman') is not None:
+        # Show Bellman-based efficiency for the final loss
+        bellman_val = bellman_data['L_min_bellman']
+        if len(observed_loss) > 0 and observed_loss[-1] > 0:
+            bellman_eff = bellman_val / observed_loss[-1]
+            ax2.axhline(y=bellman_eff, color='green', linestyle='-.', linewidth=2,
+                        label=f'Bellman eff = {bellman_eff*100:.1f}%')
     ax2.set_xlabel('Epoch')
     ax2.set_ylabel('Efficiency (L_min / Loss)')
     ax2.set_title('Training Efficiency')
-    ax2.legend(loc='lower right', fontsize=8)
+    ax2.legend(loc='lower right', fontsize=7)
     ax2.set_ylim(0, 1.1)
     ax2.grid(True, alpha=0.3)
 
@@ -462,14 +499,19 @@ def create_summary_figure(
     ax3 = fig.add_subplot(2, 2, 3)
     components = ['Var(F)', 'Bias²', 'Gap']
     values = [final_Var_F, final_Bias2, max(final_gap, 0)]
-    colors = ['#ff6b6b', '#feca57', '#48dbfb']
-    bars = ax3.bar(components, values, color=colors, edgecolor='black')
+    colors_bar = ['#ff6b6b', '#feca57', '#48dbfb']
+    bars = ax3.bar(components, values, color=colors_bar, edgecolor='black')
     for bar, val in zip(bars, values):
         ax3.annotate(f'{val:.4f}', xy=(bar.get_x() + bar.get_width()/2, bar.get_height()),
                     xytext=(0, 3), textcoords="offset points", ha='center', fontsize=9)
-    ax3.axhline(y=final_Var_F + final_Bias2, color='red', linestyle='--', linewidth=2)
+    ax3.axhline(y=final_Var_F + final_Bias2, color='red', linestyle='--', linewidth=2,
+                label=f'L_min emp = {final_Var_F + final_Bias2:.4f}')
+    if bellman_data is not None and bellman_data.get('L_min_bellman') is not None:
+        ax3.axhline(y=bellman_data['L_min_bellman'], color='green', linestyle='-.',
+                    linewidth=2, label=f'L_min Bellman = {bellman_data["L_min_bellman"]:.4f}')
     ax3.set_ylabel('Loss Value')
     ax3.set_title('Loss Decomposition (Final)')
+    ax3.legend(loc='upper right', fontsize=7)
 
     # 4. Scatter plot (bottom right)
     ax4 = fig.add_subplot(2, 2, 4)
@@ -524,13 +566,17 @@ def generate_all_theoretical_plots(
         print("  Warning: No epochs in tracker data, skipping plots")
         return plots
 
+    # Extract Bellman data if available
+    bellman_data = tracker_data.get('bellman_lmin', None)
+
     # 1. Loss vs L_min
     path = checkpoint_dir / 'loss_vs_L_min.png'
     plot_loss_vs_L_min(
         epochs=tracker_data['epochs'],
         observed_loss=tracker_data['observed_loss'],
         theoretical_L_min=tracker_data['theoretical_L_min'],
-        save_path=str(path)
+        save_path=str(path),
+        bellman_lmin=bellman_data,
     )
     plots['loss_vs_L_min'] = path
     plt.close()

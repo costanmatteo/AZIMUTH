@@ -30,6 +30,17 @@ from .theoretical_tables import (
     save_report_json
 )
 
+from .bellman_lmin import (
+    BellmanConfig,
+    BellmanLminResult,
+    compute_bellman_lmin,
+    estimate_noise_covariance,
+    compute_manifold,
+    backward_induction,
+    forward_simulation,
+    compute_naive_lmin,
+)
+
 __all__ = [
     # Core analysis
     'TheoreticalLossComponents',
@@ -54,5 +65,14 @@ __all__ = [
     'generate_validation_table',
     'generate_full_report',
     'save_report_txt',
-    'save_report_json'
+    'save_report_json',
+    # Bellman L_min
+    'BellmanConfig',
+    'BellmanLminResult',
+    'compute_bellman_lmin',
+    'estimate_noise_covariance',
+    'compute_manifold',
+    'backward_induction',
+    'forward_simulation',
+    'compute_naive_lmin',
 ]
