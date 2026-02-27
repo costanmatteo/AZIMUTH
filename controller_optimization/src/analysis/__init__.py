@@ -38,7 +38,6 @@ from .bellman_lmin import (
     compute_manifold,
     backward_induction,
     forward_simulation,
-    compute_naive_lmin,
 )
 
 __all__ = [
@@ -74,5 +73,4 @@ __all__ = [
     'compute_manifold',
     'backward_induction',
     'forward_simulation',
-    'compute_naive_lmin',
 ]

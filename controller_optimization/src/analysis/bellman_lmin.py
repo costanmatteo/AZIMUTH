@@ -68,7 +68,7 @@ class BellmanLminResult:
     L_min_bellman: float        # Bellman backward induction result
     L_min_forward: float        # Forward simulation estimate
     L_min_forward_se: float     # Standard error of forward estimate
-    L_min_naive: float          # Naive (non-reactive) lower bound
+    L_min_naive: float          # Kept for JSON compat (always 0.0, no longer computed)
     F_star: float               # Target reliability
     Sigma: np.ndarray           # Noise covariance matrix (4x4)
     w_bar: np.ndarray           # Normalised weights
@@ -651,7 +651,8 @@ def backward_induction(
     process_names: List[str],
     cfg: BellmanConfig,
     verbose: bool = True,
-) -> float:
+) -> Tuple[float, List[float], Dict[int, np.ndarray], np.ndarray, np.ndarray,
+           Dict[int, float], Dict[int, np.ndarray]]:
     """
     Run backward induction from i=3 (terminal) to i=0 (initial).
 
@@ -667,7 +668,8 @@ def backward_induction(
         verbose: print progress
 
     Returns:
-        L_min: scalar
+        Tuple of (L_min, taus, V_functions, grid_R, grid_eps, sigma2_cond, cond_weights)
+        where V_functions = {1: V1, 2: V2, 3: V3} for forward simulation.
     """
     n = 4
     grid_R, grid_eps = build_grids(F_star, cfg)
@@ -746,7 +748,8 @@ def backward_induction(
     if verbose:
         print(f"    Done in {time.time()-t0:.1f}s. L_min = {L_min:.8f}")
 
-    return float(L_min)
+    V_functions = {1: V1, 2: V2, 3: V3}
+    return (float(L_min), taus, V_functions, grid_R, grid_eps, sigma2_cond, cond_weights)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -982,9 +985,8 @@ def compute_bellman_lmin(
     This is the main entry point. It:
     1. Estimates Sigma from the process chain
     2. Computes manifolds M_i for each process
-    3. Runs backward induction
+    3. Runs backward induction (reuses V functions for forward sim)
     4. Validates with forward simulation
-    5. Computes naive L_min for comparison
 
     Args:
         process_chain: Trained ProcessChain
@@ -1063,7 +1065,7 @@ def compute_bellman_lmin(
     # ── Phase 2: Backward induction ──
     if verbose:
         print(f"\n[Phase 2] Running backward induction...")
-    L_min_bellman = backward_induction(
+    L_min_bellman, taus, V_functions, grid_R, grid_eps, sigma2_cond, cond_wts = backward_induction(
         F_star, Sigma, manifolds, w_bar, scales,
         target_outputs, process_names, cfg, verbose,
     )
@@ -1074,66 +1076,11 @@ def compute_bellman_lmin(
         if loss_scale != 1.0:
             print(f"  L_min (scaled) = {L_min_bellman_scaled:.6f}")
 
-    # ── Phase 2b: Naive L_min ──
-    if verbose:
-        print(f"\n[Phase 2b] Computing naive (non-reactive) L_min (N_mc=100000)...")
-
-    # Compute taus at operating point
-    taus = []
-    upstream = {}
-    for i in range(n):
-        tau_i = get_adaptive_target(i, upstream)
-        taus.append(tau_i)
-        upstream[process_names[i]] = target_outputs[process_names[i]]
-
-    t_phase = time.time()
-    L_min_naive = compute_naive_lmin(
-        F_star, Sigma, manifolds, w_bar, scales, taus,
-    )
-    L_min_naive_scaled = L_min_naive * loss_scale
-
-    if verbose:
-        print(f"  Done in {time.time()-t_phase:.1f}s")
-        print(f"  L_min (naive) = {L_min_naive:.8f}")
-        adv = (L_min_naive - L_min_bellman) / max(L_min_naive, 1e-10) * 100
-        print(f"  Bellman advantage: {adv:.1f}% (reactive vs non-reactive)")
-
     # ── Phase 3: Forward validation ──
+    # V_functions (V1, V2, V3) are reused from backward induction — no recomputation needed.
     if verbose:
         print(f"\n[Phase 3] Forward simulation validation (N={cfg.N_forward})...")
     t_phase = time.time()
-
-    grid_R, grid_eps = build_grids(F_star, cfg)
-    sigma2_cond, cond_wts = precompute_conditional_params(Sigma, n)
-
-    # Reconstruct V functions for forward simulation
-    # Re-run terminal step (fast, closed-form)
-    V3 = bellman_terminal(
-        grid_R, grid_eps, manifolds[3],
-        w_bar[3], scales[3], taus[3],
-        sigma2_cond[3], cond_wts[3],
-    )
-
-    # For forward sim, we need V1, V2, V3
-    # V2 and V1 were computed during backward_induction but not saved
-    # We reconstruct V2 by re-running step i=2
-    rng_fwd = np.random.default_rng(42)
-    V2 = bellman_non_terminal(
-        grid_R, grid_eps, V3, manifolds[2],
-        w_bar[2], scales[2], taus[2],
-        sigma2_cond[2], cond_wts[2],
-        process_idx=2, K=cfg.K_mc,
-        use_antithetic=cfg.use_antithetic, rng=rng_fwd,
-    )
-    V1 = bellman_non_terminal(
-        grid_R, grid_eps, V2, manifolds[1],
-        w_bar[1], scales[1], taus[1],
-        sigma2_cond[1], cond_wts[1],
-        process_idx=1, K=cfg.K_mc,
-        use_antithetic=cfg.use_antithetic, rng=rng_fwd,
-    )
-
-    V_functions = {1: V1, 2: V2, 3: V3}
 
     L_min_forward, L_min_forward_se = forward_simulation(
         F_star, Sigma, manifolds, w_bar, scales, taus,
@@ -1162,10 +1109,7 @@ def compute_bellman_lmin(
               (f"  (scaled: {L_min_bellman_scaled:.6f})" if loss_scale != 1.0 else ""))
         print(f"  L_min (forward):  {L_min_forward:.8f} ± {L_min_forward_se:.8f}" +
               (f"  (scaled: {L_min_forward_scaled:.6f})" if loss_scale != 1.0 else ""))
-        print(f"  L_min (naive):    {L_min_naive:.8f}" +
-              (f"  (scaled: {L_min_naive_scaled:.6f})" if loss_scale != 1.0 else ""))
-        print(f"  Bellman <= Naive? {L_min_bellman <= L_min_naive + 1e-8}")
-        print(f"  Forward ≈ Bellman? |diff| = {abs(L_min_forward - L_min_bellman):.8f}")
+        print(f"  Forward ~ Bellman? |diff| = {abs(L_min_forward - L_min_bellman):.8f}")
         print(f"  Computation time: {computation_time:.1f}s")
         print(f"{'='*70}\n")
 
@@ -1173,7 +1117,7 @@ def compute_bellman_lmin(
         L_min_bellman=L_min_bellman_scaled if loss_scale != 1.0 else L_min_bellman,
         L_min_forward=L_min_forward_scaled if loss_scale != 1.0 else L_min_forward,
         L_min_forward_se=L_min_forward_se_scaled if loss_scale != 1.0 else L_min_forward_se,
-        L_min_naive=L_min_naive_scaled if loss_scale != 1.0 else L_min_naive,
+        L_min_naive=0.0,  # No longer computed
         F_star=F_star,
         Sigma=Sigma,
         w_bar=w_bar,

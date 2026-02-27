@@ -349,7 +349,7 @@ def generate_full_report(
 def save_report_txt(report: str, path: Path):
     """Save report to text file."""
     path = Path(path)
-    with open(path, 'w') as f:
+    with open(path, 'w', encoding='utf-8') as f:
         f.write(report)
     print(f"  Saved report: {path}")
 
