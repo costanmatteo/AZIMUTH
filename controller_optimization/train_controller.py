@@ -84,6 +84,10 @@ from controller_optimization.src.analysis import (
     save_report_txt,
     save_report_json
 )
+from controller_optimization.src.analysis.bellman_lmin import (
+    BellmanConfig,
+    compute_bellman_lmin,
+)
 
 
 def parse_args():
@@ -1334,6 +1338,40 @@ def main(config=None):
                 print(f"    Violations:   {summary.get('n_violations', 0)}/{summary.get('total_epochs', 0)}")
 
                 print("  ✓ Theoretical analysis completed (empirical L_min)")
+
+                # ── Bellman backward-induction L_min ──────────────────────
+                try:
+                    print("\n  Running Bellman backward-induction L_min...")
+                    bellman_cfg = BellmanConfig(
+                        N_R=200, N_eps=30, K_mc=1000, M_actions=100,
+                        N_forward=10000, use_antithetic=True,
+                    )
+                    bellman_result = compute_bellman_lmin(
+                        process_chain=process_chain,
+                        surrogate=surrogate,
+                        cfg=bellman_cfg,
+                        loss_scale=loss_scale,
+                        scenario_idx=0,
+                        verbose=True,
+                    )
+                    # Save Bellman results alongside empirical
+                    bellman_result.save(checkpoint_dir / 'bellman_lmin_result.json')
+                    theoretical_data['bellman_lmin'] = bellman_result.to_dict()
+
+                    # Comparison
+                    print(f"\n  L_min COMPARISON:")
+                    print(f"    Empirical (naive):   {combined_components.L_min:.6f}")
+                    print(f"    Bellman (reactive):   {bellman_result.L_min_bellman:.6f}")
+                    print(f"    Bellman (naive):      {bellman_result.L_min_naive:.6f}")
+                    print(f"    Bellman (forward):    {bellman_result.L_min_forward:.6f} ± {bellman_result.L_min_forward_se:.6f}")
+                    if summary.get('final_loss', 0) > 0:
+                        print(f"    Observed loss:       {summary['final_loss']:.6f}")
+                        print(f"    Gap (obs - Bellman): {summary['final_loss'] - bellman_result.L_min_bellman:.6f}")
+                    print("  ✓ Bellman L_min completed")
+                except Exception as e:
+                    print(f"  ✗ Warning: Bellman L_min computation failed: {e}")
+                    import traceback
+                    traceback.print_exc()
 
             except Exception as e:
                 print(f"  ✗ Warning: Failed to run theoretical analysis: {e}")
