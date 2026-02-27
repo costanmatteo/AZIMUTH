@@ -34,22 +34,25 @@ import time
 @dataclass
 class BellmanConfig:
     """Configuration for backward induction grid."""
-    # Grid sizes
-    N_R: int = 200          # Grid points for remaining reliability R
-    N_eps: int = 30         # Grid points per noise dimension
+    # Grid sizes (kept small to avoid memory issues)
+    # Terminal step allocates (N_R, N_eps, N_eps, N_eps, M_actions) array
+    # With N_R=50, N_eps=8, M=50 → 1.3M elements ≈ 10 MB (safe)
+    # WARNING: N_eps=30, M=100 → 540M elements ≈ 4.3 GB (OOM!)
+    N_R: int = 50           # Grid points for remaining reliability R
+    N_eps: int = 8          # Grid points per noise dimension
     eps_range: float = 3.0  # Noise range: [-eps_range, +eps_range]
     R_min: float = -0.1     # Lower bound of R grid
     # R_max is set to F* dynamically
 
     # Manifold resolution
-    M_actions: int = 100    # Number of action candidates per process
+    M_actions: int = 50     # Number of action candidates per process
 
     # Monte Carlo
-    K_mc: int = 1000        # MC samples for non-terminal steps
+    K_mc: int = 500         # MC samples for non-terminal steps
     use_antithetic: bool = True  # Antithetic variates
 
     # Forward validation
-    N_forward: int = 10000  # Forward simulation trajectories
+    N_forward: int = 5000   # Forward simulation trajectories
 
     # Regularisation
     sigma_shrinkage: float = 0.01  # Shrinkage for Sigma if not PD
@@ -109,9 +112,11 @@ def estimate_noise_covariance(
     For each forward pass, compute eps_i = (o_sampled_i - mu_i) / sigma_i
     for each process i. Then compute the sample covariance of these residuals.
 
+    Uses a single batched forward pass for efficiency.
+
     Args:
         process_chain: ProcessChain with trained UPs
-        n_samples: Number of forward passes to collect
+        n_samples: Number of samples to collect
         scenario_idx: Scenario to use
         shrinkage: Ledoit-Wolf shrinkage parameter
 
@@ -123,16 +128,16 @@ def estimate_noise_covariance(
 
     process_chain.eval()
     with torch.no_grad():
-        for k in range(n_samples):
-            trajectory = process_chain.forward(batch_size=1, scenario_idx=scenario_idx)
+        # Single batched forward pass (much faster than n_samples individual calls)
+        trajectory = process_chain.forward(batch_size=n_samples, scenario_idx=scenario_idx)
 
-            for i, proc_name in enumerate(process_chain.process_names):
-                data = trajectory[proc_name]
-                mu = data['outputs_mean'].item()
-                var = data['outputs_var'].item()
-                sigma = np.sqrt(var + 1e-8)
-                o_sampled = data['outputs_sampled'].item()
-                residuals[k, i] = (o_sampled - mu) / sigma
+        for i, proc_name in enumerate(process_chain.process_names):
+            data = trajectory[proc_name]
+            mu = data['outputs_mean'].squeeze(-1).cpu().numpy()        # (n_samples,)
+            var = data['outputs_var'].squeeze(-1).cpu().numpy()        # (n_samples,)
+            sigma = np.sqrt(var + 1e-8)                                # (n_samples,)
+            o_sampled = data['outputs_sampled'].squeeze(-1).cpu().numpy()  # (n_samples,)
+            residuals[:, i] = (o_sampled - mu) / sigma
 
     # Sample covariance
     Sigma_hat = np.cov(residuals.T)
@@ -210,28 +215,26 @@ def compute_manifold(
     # Get target inputs for non-controllable values
     target_inputs = process_chain.target_trajectory[proc_name]['inputs'][scenario_idx]
 
-    results = []
+    # Build all full inputs at once (batched, much faster than looping)
+    n_grid = len(grid_values)
+    all_inputs = np.tile(np.array(target_inputs, dtype=np.float64), (n_grid, 1))
+    for out_idx, input_idx in enumerate(ctrl_indices):
+        all_inputs[:, input_idx] = grid_values[:, out_idx]
+
     process_chain.eval()
     with torch.no_grad():
-        for action in grid_values:
-            # Build full input: merge controllable action with non-controllable from target
-            full_input = np.array(target_inputs, dtype=np.float64).copy()
-            for out_idx, input_idx in enumerate(ctrl_indices):
-                full_input[input_idx] = action[out_idx]
+        input_tensor = torch.tensor(all_inputs, dtype=torch.float32).to(process_chain.device)
 
-            input_tensor = torch.tensor(full_input, dtype=torch.float32).unsqueeze(0).to(
-                process_chain.device
-            )
+        # Single batched UP call
+        scaled = process_chain.scale_inputs(input_tensor, process_idx)
+        mu_scaled, var_scaled = process_chain.uncertainty_predictors[process_idx](scaled)
+        mu = process_chain.unscale_outputs(mu_scaled, process_idx)
+        var = process_chain.unscale_variance(var_scaled, process_idx)
 
-            # Scale, predict, unscale
-            scaled = process_chain.scale_inputs(input_tensor, process_idx)
-            mu_scaled, var_scaled = process_chain.uncertainty_predictors[process_idx](scaled)
-            mu = process_chain.unscale_outputs(mu_scaled, process_idx)
-            var = process_chain.unscale_variance(var_scaled, process_idx)
-
-            results.append([mu.item(), var.item()])
-
-    manifold = np.array(results)  # (M, 2): [mu, sigma2]
+    manifold = np.column_stack([
+        mu.squeeze(-1).cpu().numpy(),
+        var.squeeze(-1).cpu().numpy(),
+    ])  # (M, 2): [mu, sigma2]
     return manifold
 
 
@@ -554,66 +557,49 @@ def bellman_non_terminal(
     if process_idx == 0:
         # i=0: state is (F*, empty) — single point
         # eps_0 ~ N(0, Sigma[0,0]) => eps_0 = sqrt(Sigma[0,0]) * z
-        # Here sigma2_cond_i = Sigma[0,0] for i=0
         eps_i_samples = sqrt_cond * z_all  # (K,)
-
-        # For each action m, for each sample k:
-        # Q_0_k = exp(-(delta_m + sigma_m * eps_i_k)^2 / s_i)
-        # R_1_k = F* - w_bar_i * Q_0_k (F* = grid_R[-1])
-        # V_next expects (R_1, eps_0): shape (K*M, 2)
         F_star = grid_R[-1]  # F* is the max R value
 
-        best_cost = np.inf
-        for m_idx in range(M):
-            d_km = delta_m[m_idx] + sigma_m[m_idx] * eps_i_samples  # (K,)
-            Q_km = np.exp(-(d_km ** 2) / s_i)  # (K,)
-            R_next = F_star - w_bar_i * Q_km  # (K,)
+        # Vectorise over all M actions: (M, K)
+        d_all = delta_m[:, None] + sigma_m[:, None] * eps_i_samples[None, :]  # (M, K)
+        Q_all = np.exp(-(d_all ** 2) / s_i)  # (M, K)
+        R_next_all = F_star - w_bar_i * Q_all  # (M, K)
 
-            # Clamp to grid bounds
-            R_next_c = np.clip(R_next, R_lo, R_hi)
-            eps_c = np.clip(eps_i_samples, eps_lo, eps_hi)
+        R_next_flat = np.clip(R_next_all.ravel(), R_lo, R_hi)
+        eps_flat = np.tile(np.clip(eps_i_samples, eps_lo, eps_hi), M)
 
-            # Interpolate V_next(R_next, eps_0)
-            points = np.column_stack([R_next_c, eps_c])  # (K, 2)
-            V_vals = interp(points)  # (K,)
-            cost_m = np.mean(V_vals)
+        points = np.column_stack([R_next_flat, eps_flat])  # (M*K, 2)
+        V_vals = interp(points).reshape(M, K_actual)  # (M, K)
+        costs = V_vals.mean(axis=1)  # (M,)
 
-            if cost_m < best_cost:
-                best_cost = cost_m
-
-        return best_cost  # scalar
+        return float(costs.min())  # scalar
 
     elif process_idx == 1:
         # i=1: state is (R_1, eps_0) -> output V shape (N_R, N_eps)
         V_out = np.zeros((N_R, N_eps))
+        eps_i_c_base = np.clip(sqrt_cond * z_all, eps_lo, eps_hi)  # pre-clip noise base
 
         for r_idx in range(N_R):
             R_val = grid_R[r_idx]
             for e0_idx in range(N_eps):
                 eps_0_val = grid_eps[e0_idx]
-
-                # eps_hat_1 = cond_weights_i[0] * eps_0
                 eps_hat = cond_weights_i[0] * eps_0_val
                 eps_i_samples = eps_hat + sqrt_cond * z_all  # (K,)
 
-                best_cost = np.inf
-                for m_idx in range(M):
-                    d_km = delta_m[m_idx] + sigma_m[m_idx] * eps_i_samples  # (K,)
-                    Q_km = np.exp(-(d_km ** 2) / s_i)  # (K,)
-                    R_next = R_val - w_bar_i * Q_km  # (K,)
+                # Vectorise over all M actions: (M, K)
+                d_all = delta_m[:, None] + sigma_m[:, None] * eps_i_samples[None, :]
+                Q_all = np.exp(-(d_all ** 2) / s_i)
+                R_next_all = R_val - w_bar_i * Q_all  # (M, K)
 
-                    R_next_c = np.clip(R_next, R_lo, R_hi)
-                    eps_0_c = np.full(K_actual, np.clip(eps_0_val, eps_lo, eps_hi))
-                    eps_i_c = np.clip(eps_i_samples, eps_lo, eps_hi)
+                R_flat = np.clip(R_next_all.ravel(), R_lo, R_hi)
+                eps_0_flat = np.full(M * K_actual, np.clip(eps_0_val, eps_lo, eps_hi))
+                eps_i_flat = np.tile(np.clip(eps_i_samples, eps_lo, eps_hi), M)
 
-                    points = np.column_stack([R_next_c, eps_0_c, eps_i_c])  # (K, 3)
-                    V_vals = interp(points)  # (K,)
-                    cost_m = np.mean(V_vals)
+                points = np.column_stack([R_flat, eps_0_flat, eps_i_flat])  # (M*K, 3)
+                V_vals = interp(points).reshape(M, K_actual)
+                costs = V_vals.mean(axis=1)  # (M,)
 
-                    if cost_m < best_cost:
-                        best_cost = cost_m
-
-                V_out[r_idx, e0_idx] = best_cost
+                V_out[r_idx, e0_idx] = costs.min()
 
         return V_out
 
@@ -632,25 +618,21 @@ def bellman_non_terminal(
                     eps_hat = cond_weights_i @ eps_less
                     eps_i_samples = eps_hat + sqrt_cond * z_all  # (K,)
 
-                    best_cost = np.inf
-                    for m_idx in range(M):
-                        d_km = delta_m[m_idx] + sigma_m[m_idx] * eps_i_samples
-                        Q_km = np.exp(-(d_km ** 2) / s_i)
-                        R_next = R_val - w_bar_i * Q_km
+                    # Vectorise over all M actions: (M, K)
+                    d_all = delta_m[:, None] + sigma_m[:, None] * eps_i_samples[None, :]
+                    Q_all = np.exp(-(d_all ** 2) / s_i)
+                    R_next_all = R_val - w_bar_i * Q_all  # (M, K)
 
-                        R_next_c = np.clip(R_next, R_lo, R_hi)
-                        eps_0_c = np.full(K_actual, np.clip(eps_0_val, eps_lo, eps_hi))
-                        eps_1_c = np.full(K_actual, np.clip(eps_1_val, eps_lo, eps_hi))
-                        eps_i_c = np.clip(eps_i_samples, eps_lo, eps_hi)
+                    R_flat = np.clip(R_next_all.ravel(), R_lo, R_hi)
+                    eps_0_flat = np.full(M * K_actual, np.clip(eps_0_val, eps_lo, eps_hi))
+                    eps_1_flat = np.full(M * K_actual, np.clip(eps_1_val, eps_lo, eps_hi))
+                    eps_i_flat = np.tile(np.clip(eps_i_samples, eps_lo, eps_hi), M)
 
-                        points = np.column_stack([R_next_c, eps_0_c, eps_1_c, eps_i_c])
-                        V_vals = interp(points)
-                        cost_m = np.mean(V_vals)
+                    points = np.column_stack([R_flat, eps_0_flat, eps_1_flat, eps_i_flat])
+                    V_vals = interp(points).reshape(M, K_actual)
+                    costs = V_vals.mean(axis=1)  # (M,)
 
-                        if cost_m < best_cost:
-                            best_cost = cost_m
-
-                    V_out[r_idx, e0_idx, e1_idx] = best_cost
+                    V_out[r_idx, e0_idx, e1_idx] = costs.min()
 
         return V_out
 
@@ -1046,7 +1028,7 @@ def compute_bellman_lmin(
     if verbose:
         print(f"\n[Phase 1] Estimating noise covariance Sigma...")
     Sigma = estimate_noise_covariance(
-        process_chain, n_samples=2000, scenario_idx=scenario_idx,
+        process_chain, n_samples=1000, scenario_idx=scenario_idx,
         shrinkage=cfg.sigma_shrinkage,
     )
     if verbose:

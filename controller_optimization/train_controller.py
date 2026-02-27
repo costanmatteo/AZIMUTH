@@ -1321,8 +1321,8 @@ def main(config=None):
                 try:
                     print("\n  Running Bellman backward-induction L_min...")
                     bellman_cfg = BellmanConfig(
-                        N_R=200, N_eps=30, K_mc=1000, M_actions=100,
-                        N_forward=10000, use_antithetic=True,
+                        N_R=50, N_eps=8, K_mc=500, M_actions=50,
+                        N_forward=5000, use_antithetic=True,
                     )
                     bellman_result = compute_bellman_lmin(
                         process_chain=process_chain,
