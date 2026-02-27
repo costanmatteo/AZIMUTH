@@ -1423,6 +1423,12 @@ def main(config=None):
                 import traceback
                 traceback.print_exc()
 
+        else:
+            print("\n[8.6/9] Theoretical loss analysis SKIPPED (theoretical_analysis.enabled = False)")
+            print("  To enable empirical L_min + Bellman backward-induction L_min:")
+            print("  Set 'theoretical_analysis': {'enabled': True} in your config.")
+            print("  This will add L_min plots and Bellman lines to the PDF report.")
+
         # Generate PDF report
         try:
             report_path = generate_controller_report(
