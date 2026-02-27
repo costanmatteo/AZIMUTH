@@ -1306,29 +1306,7 @@ def main(config=None):
                 theoretical_data['correlation_matrix'] = {}
                 theoretical_data['correlation_used'] = False
 
-                # Generate theoretical analysis plots
-                print("  Generating theoretical analysis plots...")
-                theoretical_plots = generate_all_theoretical_plots(
-                    tracker_data=theoretical_data,
-                    checkpoint_dir=checkpoint_dir,
-                    verbose=True
-                )
-
-                # Generate and save text report
-                print("  Generating theoretical analysis text report...")
-
-                text_report = generate_full_report(
-                    tracker_data=theoretical_data,
-                    process_params=process_params_for_report
-                )
-
-                # Save text report
-                save_report_txt(text_report, checkpoint_dir / 'theoretical_analysis_report.txt')
-
-                # Save JSON data
-                save_report_json(theoretical_data, checkpoint_dir / 'theoretical_analysis_data.json')
-
-                # Print summary
+                # Print empirical summary
                 summary = theoretical_data.get('summary', {})
                 print(f"\n  THEORETICAL ANALYSIS SUMMARY (empirical):")
                 print(f"    Final Loss:   {summary.get('final_loss', 0):.6f}")
@@ -1372,6 +1350,22 @@ def main(config=None):
                     print(f"  ✗ Warning: Bellman L_min computation failed: {e}")
                     import traceback
                     traceback.print_exc()
+
+                # ── Generate plots and reports (after Bellman, so plots include Bellman lines) ──
+                print("  Generating theoretical analysis plots...")
+                theoretical_plots = generate_all_theoretical_plots(
+                    tracker_data=theoretical_data,
+                    checkpoint_dir=checkpoint_dir,
+                    verbose=True
+                )
+
+                print("  Generating theoretical analysis text report...")
+                text_report = generate_full_report(
+                    tracker_data=theoretical_data,
+                    process_params=process_params_for_report
+                )
+                save_report_txt(text_report, checkpoint_dir / 'theoretical_analysis_report.txt')
+                save_report_json(theoretical_data, checkpoint_dir / 'theoretical_analysis_data.json')
 
             except Exception as e:
                 print(f"  ✗ Warning: Failed to run theoretical analysis: {e}")

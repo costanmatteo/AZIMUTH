@@ -485,12 +485,26 @@ class ControllerReportGenerator:
             summary_data = [
                 ['Metrica', 'Valore'],
                 ['Loss Finale', f"{summary.get('final_loss', 0):.6f}"],
-                ['L_min Teorico', f"{summary.get('final_L_min', 0):.6f}"],
+                ['L_min Empirico', f"{summary.get('final_L_min', 0):.6f}"],
                 ['Gap (Riducibile)', f"{summary.get('final_gap', 0):.6f}"],
                 ['Efficienza', f"{summary.get('final_efficiency', 0)*100:.1f}%"],
                 ['Migliore Efficienza', f"{summary.get('best_efficiency', 0)*100:.1f}%"],
                 ['Violazioni Teoriche', f"{summary.get('n_violations', 0)}/{summary.get('total_epochs', 0)}"]
             ]
+
+            # Add Bellman L_min rows if available
+            bellman = theoretical_data.get('bellman_lmin', None)
+            if bellman is not None:
+                summary_data.append(['L_min Bellman (reactive)', f"{bellman.get('L_min_bellman', 0):.6f}"])
+                summary_data.append(['L_min Bellman (naive)', f"{bellman.get('L_min_naive', 0):.6f}"])
+                summary_data.append(['L_min Bellman (forward)', f"{bellman.get('L_min_forward', 0):.6f}"])
+                final_loss = summary.get('final_loss', 0)
+                bellman_val = bellman.get('L_min_bellman', 0)
+                if final_loss > 0 and bellman_val > 0:
+                    bellman_gap = final_loss - bellman_val
+                    bellman_eff = bellman_val / final_loss
+                    summary_data.append(['Gap (obs - Bellman)', f"{bellman_gap:.6f}"])
+                    summary_data.append(['Efficienza Bellman', f"{bellman_eff*100:.1f}%"])
 
             table = Table(summary_data, colWidths=[8*cm, 6*cm])
             table.setStyle(TableStyle([
