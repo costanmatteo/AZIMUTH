@@ -1026,19 +1026,22 @@ def compute_bellman_lmin(
 
     # ── Phase 1: Estimate Sigma ──
     if verbose:
-        print(f"\n[Phase 1] Estimating noise covariance Sigma...")
+        print(f"\n[Phase 1a] Estimating noise covariance Sigma (n_samples=1000)...")
+    t_phase = time.time()
     Sigma = estimate_noise_covariance(
         process_chain, n_samples=1000, scenario_idx=scenario_idx,
         shrinkage=cfg.sigma_shrinkage,
     )
     if verbose:
+        print(f"  Done in {time.time()-t_phase:.1f}s")
         print(f"  Sigma diagonal: {np.diag(Sigma)}")
         print(f"  Sigma off-diag max: {np.max(np.abs(Sigma - np.diag(np.diag(Sigma)))):.4f}")
         print(f"  Sigma eigenvalues: {np.linalg.eigvalsh(Sigma)}")
 
-    # ── Phase 1: Compute manifolds ──
+    # ── Phase 1b: Compute manifolds ──
     if verbose:
-        print(f"\n[Phase 1] Computing achievable manifolds M_i...")
+        print(f"\n[Phase 1b] Computing achievable manifolds M_i (n_actions={cfg.M_actions})...")
+    t_phase = time.time()
     manifolds = []
     for i in range(n):
         M_i = compute_manifold(
@@ -1046,9 +1049,11 @@ def compute_bellman_lmin(
         )
         manifolds.append(M_i)
         if verbose:
-            print(f"  {process_names[i]}: {M_i.shape[0]} points, "
-                  f"mu range [{M_i[:,0].min():.3f}, {M_i[:,0].max():.3f}], "
-                  f"sigma2 range [{M_i[:,1].min():.6f}, {M_i[:,1].max():.6f}]")
+            print(f"  {process_names[i]:12s}: {M_i.shape[0]:3d} points, "
+                  f"mu=[{M_i[:,0].min():.3f}, {M_i[:,0].max():.3f}], "
+                  f"sigma2=[{M_i[:,1].min():.6f}, {M_i[:,1].max():.6f}]")
+    if verbose:
+        print(f"  Done in {time.time()-t_phase:.1f}s")
 
     # ── Get target outputs for adaptive targets ──
     target_outputs = get_target_outputs(process_chain, scenario_idx)
@@ -1071,7 +1076,7 @@ def compute_bellman_lmin(
 
     # ── Phase 2b: Naive L_min ──
     if verbose:
-        print(f"\n[Phase 2b] Computing naive (non-reactive) L_min...")
+        print(f"\n[Phase 2b] Computing naive (non-reactive) L_min (N_mc=100000)...")
 
     # Compute taus at operating point
     taus = []
@@ -1081,18 +1086,22 @@ def compute_bellman_lmin(
         taus.append(tau_i)
         upstream[process_names[i]] = target_outputs[process_names[i]]
 
+    t_phase = time.time()
     L_min_naive = compute_naive_lmin(
         F_star, Sigma, manifolds, w_bar, scales, taus,
     )
     L_min_naive_scaled = L_min_naive * loss_scale
 
     if verbose:
+        print(f"  Done in {time.time()-t_phase:.1f}s")
         print(f"  L_min (naive) = {L_min_naive:.8f}")
-        print(f"  Bellman advantage: {(L_min_naive - L_min_bellman) / L_min_naive * 100:.1f}%")
+        adv = (L_min_naive - L_min_bellman) / max(L_min_naive, 1e-10) * 100
+        print(f"  Bellman advantage: {adv:.1f}% (reactive vs non-reactive)")
 
     # ── Phase 3: Forward validation ──
     if verbose:
         print(f"\n[Phase 3] Forward simulation validation (N={cfg.N_forward})...")
+    t_phase = time.time()
 
     grid_R, grid_eps = build_grids(F_star, cfg)
     sigma2_cond, cond_wts = precompute_conditional_params(Sigma, n)
@@ -1136,9 +1145,12 @@ def compute_bellman_lmin(
     L_min_forward_se_scaled = L_min_forward_se * loss_scale
 
     if verbose:
+        print(f"  Done in {time.time()-t_phase:.1f}s")
         print(f"  L_min (forward) = {L_min_forward:.8f} ± {L_min_forward_se:.8f}")
         rel_diff = abs(L_min_forward - L_min_bellman) / max(abs(L_min_bellman), 1e-10)
         print(f"  Relative difference Bellman vs Forward: {rel_diff*100:.2f}%")
+        if rel_diff > 0.5:
+            print(f"  NOTE: Large forward/Bellman gap — may indicate coarse grid discretisation")
 
     # ── Summary ──
     computation_time = time.time() - t_start

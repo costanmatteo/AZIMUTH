@@ -1319,11 +1319,24 @@ def main(config=None):
 
                 # ── Bellman backward-induction L_min ──────────────────────
                 try:
-                    print("\n  Running Bellman backward-induction L_min...")
                     bellman_cfg = BellmanConfig(
                         N_R=50, N_eps=8, K_mc=500, M_actions=50,
                         N_forward=5000, use_antithetic=True,
                     )
+                    # Memory estimate for terminal step: (N_R, N_eps^3, M_actions)
+                    _mem_elements = bellman_cfg.N_R * bellman_cfg.N_eps**3 * bellman_cfg.M_actions
+                    _mem_mb = _mem_elements * 8 / 1e6
+                    print(f"\n  ── Bellman backward-induction L_min ──")
+                    print(f"  Grid config: N_R={bellman_cfg.N_R}, N_eps={bellman_cfg.N_eps}, "
+                          f"M_actions={bellman_cfg.M_actions}, K_mc={bellman_cfg.K_mc}")
+                    print(f"  Terminal step memory estimate: {_mem_mb:.1f} MB "
+                          f"({_mem_elements:,} elements)")
+                    print(f"  Forward validation: N={bellman_cfg.N_forward}, "
+                          f"antithetic={'yes' if bellman_cfg.use_antithetic else 'no'}")
+
+                    import time as _time
+                    _t0 = _time.time()
+
                     bellman_result = compute_bellman_lmin(
                         process_chain=process_chain,
                         surrogate=surrogate,
@@ -1332,24 +1345,62 @@ def main(config=None):
                         scenario_idx=0,
                         verbose=True,
                     )
+
+                    _elapsed = _time.time() - _t0
+
                     # Save Bellman results alongside empirical
                     bellman_result.save(checkpoint_dir / 'bellman_lmin_result.json')
                     theoretical_data['bellman_lmin'] = bellman_result.to_dict()
 
-                    # Comparison
-                    print(f"\n  L_min COMPARISON:")
-                    print(f"    Empirical (naive):   {combined_components.L_min:.6f}")
-                    print(f"    Bellman (reactive):   {bellman_result.L_min_bellman:.6f}")
-                    print(f"    Bellman (naive):      {bellman_result.L_min_naive:.6f}")
-                    print(f"    Bellman (forward):    {bellman_result.L_min_forward:.6f} ± {bellman_result.L_min_forward_se:.6f}")
+                    # ── Comprehensive comparison ──
+                    print(f"\n  {'─'*50}")
+                    print(f"  L_min COMPARISON TABLE")
+                    print(f"  {'─'*50}")
+                    print(f"    Empirical L_min (Var+Bias²): {combined_components.L_min:.6f}")
+                    print(f"    Bellman L_min (reactive):     {bellman_result.L_min_bellman:.6f}")
+                    print(f"    Bellman L_min (naive):        {bellman_result.L_min_naive:.6f}")
+                    print(f"    Bellman L_min (forward val.): {bellman_result.L_min_forward:.6f} "
+                          f"± {bellman_result.L_min_forward_se:.6f}")
+                    print(f"  {'─'*50}")
                     if summary.get('final_loss', 0) > 0:
-                        print(f"    Observed loss:       {summary['final_loss']:.6f}")
-                        print(f"    Gap (obs - Bellman): {summary['final_loss'] - bellman_result.L_min_bellman:.6f}")
-                    print("  ✓ Bellman L_min completed")
+                        obs_loss = summary['final_loss']
+                        print(f"    Observed loss (final):       {obs_loss:.6f}")
+                        gap_bellman = obs_loss - bellman_result.L_min_bellman
+                        eff_bellman = bellman_result.L_min_bellman / obs_loss * 100 if obs_loss > 0 else 0
+                        print(f"    Gap (obs - Bellman):          {gap_bellman:.6f}")
+                        print(f"    Bellman efficiency:           {eff_bellman:.1f}%")
+                    reactive_adv = ((bellman_result.L_min_naive - bellman_result.L_min_bellman)
+                                    / max(bellman_result.L_min_naive, 1e-10) * 100)
+                    print(f"    Reactive advantage:           {reactive_adv:.1f}%")
+                    print(f"  {'─'*50}")
+                    print(f"  Sigma (noise covariance diagonal): "
+                          f"{[f'{s:.4f}' for s in bellman_result.Sigma.diagonal().tolist()]}")
+                    print(f"  Manifold sizes: {bellman_result.n_manifold_points}")
+                    print(f"  Computation time: {_elapsed:.1f}s")
+                    print(f"  Saved: {checkpoint_dir / 'bellman_lmin_result.json'}")
+                    print(f"  ✓ Bellman L_min completed — results will appear in plots\n")
+
                 except Exception as e:
-                    print(f"  ✗ Warning: Bellman L_min computation failed: {e}")
                     import traceback
+                    print(f"\n  {'─'*50}")
+                    print(f"  ✗ Bellman L_min computation FAILED")
+                    print(f"  {'─'*50}")
+                    print(f"  Error type: {type(e).__name__}")
+                    print(f"  Error message: {e}")
+                    print(f"  {'─'*50}")
+                    print(f"  Grid config was: N_R={bellman_cfg.N_R}, N_eps={bellman_cfg.N_eps}, "
+                          f"M_actions={bellman_cfg.M_actions}, K_mc={bellman_cfg.K_mc}")
+                    _mem_est = bellman_cfg.N_R * bellman_cfg.N_eps**3 * bellman_cfg.M_actions * 8 / 1e6
+                    print(f"  Terminal step memory estimate: {_mem_est:.1f} MB")
+                    if isinstance(e, MemoryError):
+                        print(f"  HINT: Reduce N_eps or M_actions to lower memory usage.")
+                        print(f"        Current peak: ~{_mem_est*4:.0f} MB (with intermediates)")
+                    print(f"  Consequence: Bellman lines will NOT appear in theoretical plots.")
+                    print(f"  The empirical L_min plots will still be generated normally.")
+                    print(f"  {'─'*50}")
+                    print(f"  Full traceback:")
                     traceback.print_exc()
+                    print()
 
                 # ── Generate plots and reports (after Bellman, so plots include Bellman lines) ──
                 print("  Generating theoretical analysis plots...")
