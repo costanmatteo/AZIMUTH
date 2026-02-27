@@ -1358,7 +1358,6 @@ def main(config=None):
                     print(f"  {'─'*50}")
                     print(f"    Empirical L_min (Var+Bias²): {combined_components.L_min:.6f}")
                     print(f"    Bellman L_min (reactive):     {bellman_result.L_min_bellman:.6f}")
-                    print(f"    Bellman L_min (naive):        {bellman_result.L_min_naive:.6f}")
                     print(f"    Bellman L_min (forward val.): {bellman_result.L_min_forward:.6f} "
                           f"± {bellman_result.L_min_forward_se:.6f}")
                     print(f"  {'─'*50}")
@@ -1369,9 +1368,6 @@ def main(config=None):
                         eff_bellman = bellman_result.L_min_bellman / obs_loss * 100 if obs_loss > 0 else 0
                         print(f"    Gap (obs - Bellman):          {gap_bellman:.6f}")
                         print(f"    Bellman efficiency:           {eff_bellman:.1f}%")
-                    reactive_adv = ((bellman_result.L_min_naive - bellman_result.L_min_bellman)
-                                    / max(bellman_result.L_min_naive, 1e-10) * 100)
-                    print(f"    Reactive advantage:           {reactive_adv:.1f}%")
                     print(f"  {'─'*50}")
                     print(f"  Sigma (noise covariance diagonal): "
                           f"{[f'{s:.4f}' for s in bellman_result.Sigma.diagonal().tolist()]}")

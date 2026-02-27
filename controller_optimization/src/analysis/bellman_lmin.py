@@ -68,7 +68,6 @@ class BellmanLminResult:
     L_min_bellman: float        # Bellman backward induction result
     L_min_forward: float        # Forward simulation estimate
     L_min_forward_se: float     # Standard error of forward estimate
-    L_min_naive: float          # Naive (non-reactive) lower bound
     F_star: float               # Target reliability
     Sigma: np.ndarray           # Noise covariance matrix (4x4)
     w_bar: np.ndarray           # Normalised weights
@@ -81,7 +80,6 @@ class BellmanLminResult:
             'L_min_bellman': self.L_min_bellman,
             'L_min_forward': self.L_min_forward,
             'L_min_forward_se': self.L_min_forward_se,
-            'L_min_naive': self.L_min_naive,
             'F_star': self.F_star,
             'Sigma': self.Sigma.tolist(),
             'w_bar': self.w_bar.tolist(),
@@ -651,7 +649,7 @@ def backward_induction(
     process_names: List[str],
     cfg: BellmanConfig,
     verbose: bool = True,
-) -> float:
+) -> Tuple[float, Dict[int, np.ndarray], np.ndarray, np.ndarray, Dict[int, float], Dict[int, np.ndarray], List[float]]:
     """
     Run backward induction from i=3 (terminal) to i=0 (initial).
 
@@ -667,7 +665,7 @@ def backward_induction(
         verbose: print progress
 
     Returns:
-        L_min: scalar
+        Tuple of (L_min, V_functions, grid_R, grid_eps, sigma2_cond, cond_weights, taus)
     """
     n = 4
     grid_R, grid_eps = build_grids(F_star, cfg)
@@ -746,7 +744,8 @@ def backward_induction(
     if verbose:
         print(f"    Done in {time.time()-t0:.1f}s. L_min = {L_min:.8f}")
 
-    return float(L_min)
+    V_functions = {1: V1, 2: V2, 3: V3}
+    return float(L_min), V_functions, grid_R, grid_eps, sigma2_cond, cond_weights, taus
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -853,11 +852,9 @@ def forward_simulation(
     """
     Forward simulation using the optimal policy from backward induction.
 
-    For each trajectory:
-    1. Sample eps ~ N(0, Sigma) (full 4-vector)
-    2. At each step i, find the optimal action by looking up the policy
-    3. Compute Q_i and update R
-    4. Loss = R_5^2
+    Vectorized over all N trajectories: for each step i, we evaluate all M
+    actions for all N trajectories in one batch interpolation call, then
+    pick the best action per trajectory.
 
     Args:
         F_star: target reliability
@@ -885,9 +882,6 @@ def forward_simulation(
     eps_lo, eps_hi = grid_eps[0], grid_eps[-1]
 
     # Build interpolators for each V function (for policy lookup)
-    # V[1]: (N_R, N_eps) — used at i=1
-    # V[2]: (N_R, N_eps, N_eps) — used at i=2
-    # V[3]: (N_R, N_eps, N_eps, N_eps) — used at i=3
     interp_V = {}
     interp_V[1] = RegularGridInterpolator(
         (grid_R, grid_eps), V_functions[1],
@@ -902,63 +896,62 @@ def forward_simulation(
         method='linear', bounds_error=False, fill_value=None,
     )
 
-    losses = np.zeros(N)
+    # Sample all noise vectors at once: (N, 4)
+    Z = rng.standard_normal((N, n))
+    EPS = Z @ L_chol.T  # (N, 4)
 
-    for j in range(N):
-        # Sample noise vector
-        z = rng.standard_normal(n)
-        eps = L_chol @ z  # (4,)
+    # State vectors — all trajectories in parallel
+    R = np.full(N, F_star)                   # (N,)
+    eps_hist = np.empty((N, 0))              # grows to (N, i) at step i
 
-        R = F_star
-        eps_history = []
+    for i in range(n):
+        eps_i = EPS[:, i]                    # (N,)
+        M_i = manifolds[i].shape[0]
+        mu_m = manifolds[i][:, 0]            # (M,)
+        sigma2_m = manifolds[i][:, 1]
+        sigma_m = np.sqrt(np.maximum(sigma2_m, 1e-10))
+        delta_m = mu_m - taus[i]
 
-        for i in range(n):
-            eps_i = eps[i]
+        # d[m, j] = delta_m[m] + sigma_m[m] * eps_i[j]  — shape (M, N)
+        d_all = delta_m[:, None] + sigma_m[:, None] * eps_i[None, :]
+        Q_all = np.exp(-(d_all ** 2) / scales[i])       # (M, N)
+        R_next_all = R[None, :] - w_bar[i] * Q_all      # (M, N)
 
-            # Find optimal action: try all actions, pick best
-            best_cost = np.inf
-            best_m = 0
+        if i < n - 1:
+            # Build interpolation points for all M actions × N trajectories
+            R_c = np.clip(R_next_all, R_lo, R_hi)        # (M, N)
+            eps_i_c = np.clip(eps_i, eps_lo, eps_hi)      # (N,)
 
-            mu_m = manifolds[i][:, 0]
-            sigma2_m = manifolds[i][:, 1]
-            sigma_m_arr = np.sqrt(np.maximum(sigma2_m, 1e-10))
-            delta_m = mu_m - taus[i]
+            MN = M_i * N
+            R_flat = R_c.ravel()                          # (M*N,)
+            eps_i_flat = np.tile(eps_i_c, M_i)            # (M*N,)
 
-            for m_idx in range(len(mu_m)):
-                d_i = delta_m[m_idx] + sigma_m_arr[m_idx] * eps_i
-                Q_i = np.exp(-(d_i ** 2) / scales[i])
-                R_next = R - w_bar[i] * Q_i
+            if i == 0:
+                points = np.column_stack([R_flat, eps_i_flat])
+            elif i == 1:
+                e0_flat = np.tile(np.clip(eps_hist[:, 0], eps_lo, eps_hi), M_i)
+                points = np.column_stack([R_flat, e0_flat, eps_i_flat])
+            elif i == 2:
+                e0_flat = np.tile(np.clip(eps_hist[:, 0], eps_lo, eps_hi), M_i)
+                e1_flat = np.tile(np.clip(eps_hist[:, 1], eps_lo, eps_hi), M_i)
+                points = np.column_stack([R_flat, e0_flat, e1_flat, eps_i_flat])
 
-                if i < n - 1:
-                    # Look up continuation value
-                    R_c = np.clip(R_next, R_lo, R_hi)
-                    eps_hist_c = [np.clip(e, eps_lo, eps_hi) for e in eps_history]
-                    eps_i_c = np.clip(eps_i, eps_lo, eps_hi)
+            v_next = interp_V[i + 1](points).reshape(M_i, N)  # (M, N)
+        else:
+            # Terminal: cost is R_next^2
+            v_next = R_next_all ** 2                      # (M, N)
 
-                    if i == 0:
-                        point = np.array([R_c, eps_i_c])
-                    elif i == 1:
-                        point = np.array([R_c, eps_hist_c[0], eps_i_c])
-                    elif i == 2:
-                        point = np.array([R_c, eps_hist_c[0], eps_hist_c[1], eps_i_c])
+        # Pick best action per trajectory
+        best_m = np.argmin(v_next, axis=0)                # (N,)
 
-                    v_next = interp_V[i + 1](point.reshape(1, -1))[0]
-                else:
-                    # Terminal: cost is R_next^2
-                    v_next = R_next ** 2
+        # Apply chosen actions
+        d_best = d_all[best_m, np.arange(N)]
+        Q_best = np.exp(-(d_best ** 2) / scales[i])
+        R = R - w_bar[i] * Q_best
 
-                if v_next < best_cost:
-                    best_cost = v_next
-                    best_m = m_idx
+        eps_hist = np.column_stack([eps_hist, eps_i]) if eps_hist.size > 0 else eps_i[:, None]
 
-            # Apply best action
-            d_i = delta_m[best_m] + sigma_m_arr[best_m] * eps_i
-            Q_i = np.exp(-(d_i ** 2) / scales[i])
-            R = R - w_bar[i] * Q_i
-            eps_history.append(eps_i)
-
-        losses[j] = R ** 2
-
+    losses = R ** 2
     L_min_forward = float(np.mean(losses))
     se = float(np.std(losses) / np.sqrt(N))
     return L_min_forward, se
@@ -984,7 +977,6 @@ def compute_bellman_lmin(
     2. Computes manifolds M_i for each process
     3. Runs backward induction
     4. Validates with forward simulation
-    5. Computes naive L_min for comparison
 
     Args:
         process_chain: Trained ProcessChain
@@ -1063,7 +1055,8 @@ def compute_bellman_lmin(
     # ── Phase 2: Backward induction ──
     if verbose:
         print(f"\n[Phase 2] Running backward induction...")
-    L_min_bellman = backward_induction(
+    (L_min_bellman, V_functions, grid_R, grid_eps,
+     sigma2_cond, cond_wts, taus) = backward_induction(
         F_star, Sigma, manifolds, w_bar, scales,
         target_outputs, process_names, cfg, verbose,
     )
@@ -1074,66 +1067,12 @@ def compute_bellman_lmin(
         if loss_scale != 1.0:
             print(f"  L_min (scaled) = {L_min_bellman_scaled:.6f}")
 
-    # ── Phase 2b: Naive L_min ──
-    if verbose:
-        print(f"\n[Phase 2b] Computing naive (non-reactive) L_min (N_mc=100000)...")
-
-    # Compute taus at operating point
-    taus = []
-    upstream = {}
-    for i in range(n):
-        tau_i = get_adaptive_target(i, upstream)
-        taus.append(tau_i)
-        upstream[process_names[i]] = target_outputs[process_names[i]]
-
-    t_phase = time.time()
-    L_min_naive = compute_naive_lmin(
-        F_star, Sigma, manifolds, w_bar, scales, taus,
-    )
-    L_min_naive_scaled = L_min_naive * loss_scale
-
-    if verbose:
-        print(f"  Done in {time.time()-t_phase:.1f}s")
-        print(f"  L_min (naive) = {L_min_naive:.8f}")
-        adv = (L_min_naive - L_min_bellman) / max(L_min_naive, 1e-10) * 100
-        print(f"  Bellman advantage: {adv:.1f}% (reactive vs non-reactive)")
-
     # ── Phase 3: Forward validation ──
+    # V_functions, grid_R, grid_eps, sigma2_cond, cond_wts already
+    # returned from backward_induction — no recomputation needed.
     if verbose:
         print(f"\n[Phase 3] Forward simulation validation (N={cfg.N_forward})...")
     t_phase = time.time()
-
-    grid_R, grid_eps = build_grids(F_star, cfg)
-    sigma2_cond, cond_wts = precompute_conditional_params(Sigma, n)
-
-    # Reconstruct V functions for forward simulation
-    # Re-run terminal step (fast, closed-form)
-    V3 = bellman_terminal(
-        grid_R, grid_eps, manifolds[3],
-        w_bar[3], scales[3], taus[3],
-        sigma2_cond[3], cond_wts[3],
-    )
-
-    # For forward sim, we need V1, V2, V3
-    # V2 and V1 were computed during backward_induction but not saved
-    # We reconstruct V2 by re-running step i=2
-    rng_fwd = np.random.default_rng(42)
-    V2 = bellman_non_terminal(
-        grid_R, grid_eps, V3, manifolds[2],
-        w_bar[2], scales[2], taus[2],
-        sigma2_cond[2], cond_wts[2],
-        process_idx=2, K=cfg.K_mc,
-        use_antithetic=cfg.use_antithetic, rng=rng_fwd,
-    )
-    V1 = bellman_non_terminal(
-        grid_R, grid_eps, V2, manifolds[1],
-        w_bar[1], scales[1], taus[1],
-        sigma2_cond[1], cond_wts[1],
-        process_idx=1, K=cfg.K_mc,
-        use_antithetic=cfg.use_antithetic, rng=rng_fwd,
-    )
-
-    V_functions = {1: V1, 2: V2, 3: V3}
 
     L_min_forward, L_min_forward_se = forward_simulation(
         F_star, Sigma, manifolds, w_bar, scales, taus,
@@ -1162,9 +1101,6 @@ def compute_bellman_lmin(
               (f"  (scaled: {L_min_bellman_scaled:.6f})" if loss_scale != 1.0 else ""))
         print(f"  L_min (forward):  {L_min_forward:.8f} ± {L_min_forward_se:.8f}" +
               (f"  (scaled: {L_min_forward_scaled:.6f})" if loss_scale != 1.0 else ""))
-        print(f"  L_min (naive):    {L_min_naive:.8f}" +
-              (f"  (scaled: {L_min_naive_scaled:.6f})" if loss_scale != 1.0 else ""))
-        print(f"  Bellman <= Naive? {L_min_bellman <= L_min_naive + 1e-8}")
         print(f"  Forward ≈ Bellman? |diff| = {abs(L_min_forward - L_min_bellman):.8f}")
         print(f"  Computation time: {computation_time:.1f}s")
         print(f"{'='*70}\n")
@@ -1173,7 +1109,6 @@ def compute_bellman_lmin(
         L_min_bellman=L_min_bellman_scaled if loss_scale != 1.0 else L_min_bellman,
         L_min_forward=L_min_forward_scaled if loss_scale != 1.0 else L_min_forward,
         L_min_forward_se=L_min_forward_se_scaled if loss_scale != 1.0 else L_min_forward_se,
-        L_min_naive=L_min_naive_scaled if loss_scale != 1.0 else L_min_naive,
         F_star=F_star,
         Sigma=Sigma,
         w_bar=w_bar,
