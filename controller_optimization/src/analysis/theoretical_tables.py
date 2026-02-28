@@ -349,7 +349,7 @@ def generate_full_report(
 def save_report_txt(report: str, path: Path):
     """Save report to text file."""
     path = Path(path)
-    with open(path, 'w') as f:
+    with open(path, 'w', encoding='utf-8') as f:
         f.write(report)
     print(f"  Saved report: {path}")
 
@@ -357,7 +357,7 @@ def save_report_txt(report: str, path: Path):
 def save_report_json(tracker_data: Dict[str, Any], path: Path):
     """Save tracker data to JSON file."""
     path = Path(path)
-    with open(path, 'w') as f:
+    with open(path, 'w', encoding='utf-8') as f:
         json.dump(tracker_data, f, indent=2)
     print(f"  Saved JSON data: {path}")
 

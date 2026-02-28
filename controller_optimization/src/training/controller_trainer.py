@@ -156,14 +156,34 @@ class ControllerTrainer:
                 inputs = inputs[..., ctrl_idx]
 
             # Compute min and max across all scenarios and timesteps
-            # Add small epsilon to avoid division by zero
-            input_min = inputs.min(dim=0)[0].min(dim=0)[0]  # Shape: (n_controllable,)
-            input_max = inputs.max(dim=0)[0].max(dim=0)[0]  # Shape: (n_controllable,)
-            input_range = input_max - input_min + 1e-8  # Avoid division by zero
+            # reshape(-1) ensures 1D even with a single controllable dimension
+            input_min = inputs.min(dim=0)[0].min(dim=0)[0].reshape(-1)  # Shape: (n_controllable,)
+            input_max = inputs.max(dim=0)[0].max(dim=0)[0].reshape(-1)  # Shape: (n_controllable,)
+            input_range = input_max - input_min
+
+            # For constant dimensions (range ≈ 0), use |target_value| as scale
+            # instead of near-zero range which would cause normalization to explode.
+            # This gives a relative-deviation penalty: loss ∝ (Δ / |target|)²
+            RANGE_THRESHOLD = 1e-4
+            is_constant = input_range < RANGE_THRESHOLD
+
+            if is_constant.any():
+                # Fallback scale: max(|target_value|, 1.0) to avoid division issues near zero
+                fallback_scale = torch.clamp(torch.abs(input_min), min=1.0)
+                input_range = torch.where(is_constant, fallback_scale, input_range)
+
+                const_indices = [i for i, c in enumerate(is_constant.tolist()) if c]
+                const_values = [input_min[i].item() for i in const_indices]
+                const_scales = [fallback_scale[i].item() for i in const_indices]
+                print(f"  INFO [{process_name}]: constant controllable dims {const_indices} "
+                      f"(values={const_values}) — using fallback scale {const_scales}")
+
+            # Small epsilon for float precision safety
+            input_range = input_range + 1e-8
 
             self.input_stats[process_name] = {
                 'min': input_min.to(self.device),
-                'range': input_range.to(self.device)
+                'range': input_range.to(self.device),
             }
 
         print(f"  Input normalization stats computed for {len(self.input_stats)} processes (controllable inputs only)")
@@ -468,7 +488,7 @@ class ControllerTrainer:
 
         # Behavior cloning loss: mean( ||a_ctrl - a_ctrl*||^2 ) across all processes
         # Only compares CONTROLLABLE inputs (non-controllable can't be changed by the controller)
-        # Inputs are normalized to [0,1] range to match reliability loss scale
+        # Inputs are normalized using precomputed stats (with fallback scale for constant dims)
         bc_loss = torch.tensor(0.0, device=self.device)
         n_processes = len(trajectory.keys())
 
@@ -480,7 +500,9 @@ class ControllerTrainer:
             actual_inputs = trajectory[process_name]['inputs'][..., ctrl_idx]
             target_inputs_scenario = self.surrogate.target_trajectory_tensors[process_name]['inputs'][scenario_idx:scenario_idx+1][..., ctrl_idx]
 
-            # Normalize inputs to [0,1] using precomputed stats
+            # Normalize inputs using precomputed stats
+            # Non-constant dims: normalized by actual range → [0,1]
+            # Constant dims: normalized by max(|target|, 1.0) → relative deviation penalty
             stats = self.input_stats[process_name]
             actual_inputs_norm = (actual_inputs - stats['min']) / stats['range']
             target_inputs_norm = (target_inputs_scenario - stats['min']) / stats['range']
@@ -827,12 +849,12 @@ class ControllerTrainer:
                     actual_inputs = trajectory[process_name]['inputs'][..., ctrl_idx]
                     target_inputs = self.validation_surrogate.target_trajectory_tensors[process_name]['inputs'][scenario_idx:scenario_idx+1][..., ctrl_idx]
 
-                    # Use same normalization stats as training (controllable only)
+                    # Use same normalization stats as training (with fallback scale for constant dims)
                     stats = self.input_stats[process_name]
-                    actual_inputs_norm = (actual_inputs - stats['min']) / stats['range']
-                    target_inputs_norm = (target_inputs - stats['min']) / stats['range']
+                    actual_norm = (actual_inputs - stats['min']) / stats['range']
+                    target_norm = (target_inputs - stats['min']) / stats['range']
 
-                    bc_loss = bc_loss + torch.mean((actual_inputs_norm - target_inputs_norm) ** 2)
+                    bc_loss = bc_loss + torch.mean((actual_norm - target_norm) ** 2)
 
                 bc_loss = bc_loss / n_processes
 

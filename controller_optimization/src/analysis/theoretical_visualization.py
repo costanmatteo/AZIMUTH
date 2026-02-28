@@ -56,13 +56,9 @@ def plot_loss_vs_L_min(
     # Plot Bellman L_min lines if available
     if bellman_lmin is not None:
         bellman_val = bellman_lmin.get('L_min_bellman', None)
-        naive_val = bellman_lmin.get('L_min_naive', None)
         if bellman_val is not None:
             ax.axhline(y=bellman_val, color='green', linestyle='-.',
                        linewidth=2.5, label=f'L_min Bellman = {bellman_val:.4f}')
-        if naive_val is not None:
-            ax.axhline(y=naive_val, color='purple', linestyle=':',
-                       linewidth=2, label=f'L_min naive = {naive_val:.4f}')
 
     # Fill area between L_min and observed (reducible gap)
     ax.fill_between(
@@ -76,7 +72,7 @@ def plot_loss_vs_L_min(
 
     all_vals = np.concatenate([observed, theoretical])
     if bellman_lmin is not None:
-        extra = [v for v in [bellman_lmin.get('L_min_bellman'), bellman_lmin.get('L_min_naive')] if v is not None]
+        extra = [v for v in [bellman_lmin.get('L_min_bellman')] if v is not None]
         if extra:
             all_vals = np.concatenate([all_vals, extra])
 
@@ -462,13 +458,9 @@ def create_summary_figure(
     ax1.plot(epochs, theoretical_L_min, 'r--', linewidth=2, label='L_min (empirical)')
     if bellman_data is not None:
         bellman_val = bellman_data.get('L_min_bellman', None)
-        naive_val = bellman_data.get('L_min_naive', None)
         if bellman_val is not None:
             ax1.axhline(y=bellman_val, color='green', linestyle='-.', linewidth=2,
                         label=f'L_min Bellman = {bellman_val:.4f}')
-        if naive_val is not None:
-            ax1.axhline(y=naive_val, color='purple', linestyle=':', linewidth=1.5,
-                        label=f'L_min naive = {naive_val:.4f}')
     ax1.fill_between(epochs, theoretical_L_min, observed_loss, alpha=0.3, color='orange', label='Gap')
     ax1.set_xlabel('Epoch')
     ax1.set_ylabel('Loss')
