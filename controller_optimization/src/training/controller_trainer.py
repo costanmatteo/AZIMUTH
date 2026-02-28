@@ -156,8 +156,9 @@ class ControllerTrainer:
                 inputs = inputs[..., ctrl_idx]
 
             # Compute min and max across all scenarios and timesteps
-            input_min = inputs.min(dim=0)[0].min(dim=0)[0]  # Shape: (n_controllable,)
-            input_max = inputs.max(dim=0)[0].max(dim=0)[0]  # Shape: (n_controllable,)
+            # reshape(-1) ensures 1D even with a single controllable dimension
+            input_min = inputs.min(dim=0)[0].min(dim=0)[0].reshape(-1)  # Shape: (n_controllable,)
+            input_max = inputs.max(dim=0)[0].max(dim=0)[0].reshape(-1)  # Shape: (n_controllable,)
             input_range = input_max - input_min
 
             # For constant dimensions (range ≈ 0), use |target_value| as scale
