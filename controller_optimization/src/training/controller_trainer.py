@@ -156,14 +156,29 @@ class ControllerTrainer:
                 inputs = inputs[..., ctrl_idx]
 
             # Compute min and max across all scenarios and timesteps
-            # Add small epsilon to avoid division by zero
             input_min = inputs.min(dim=0)[0].min(dim=0)[0]  # Shape: (n_controllable,)
             input_max = inputs.max(dim=0)[0].max(dim=0)[0]  # Shape: (n_controllable,)
-            input_range = input_max - input_min + 1e-8  # Avoid division by zero
+            input_range = input_max - input_min
+
+            # Mask: True for dimensions with meaningful variation (non-constant)
+            # Constant dimensions (range ≈ 0) would cause normalized values to explode
+            RANGE_THRESHOLD = 1e-4
+            valid_mask = input_range > RANGE_THRESHOLD
+
+            # Add epsilon only on valid dimensions to avoid division by zero from float precision
+            input_range = input_range + 1e-8
+
+            n_valid = valid_mask.sum().item()
+            n_total = len(valid_mask)
+            if n_valid < n_total:
+                skipped = [i for i, v in enumerate(valid_mask.tolist()) if not v]
+                print(f"  WARNING [{process_name}]: {n_total - n_valid}/{n_total} controllable "
+                      f"dimensions are constant (indices: {skipped}) — excluded from BC loss")
 
             self.input_stats[process_name] = {
                 'min': input_min.to(self.device),
-                'range': input_range.to(self.device)
+                'range': input_range.to(self.device),
+                'valid_mask': valid_mask.to(self.device)
             }
 
         print(f"  Input normalization stats computed for {len(self.input_stats)} processes (controllable inputs only)")
@@ -469,39 +484,54 @@ class ControllerTrainer:
         # Behavior cloning loss: mean( ||a_ctrl - a_ctrl*||^2 ) across all processes
         # Only compares CONTROLLABLE inputs (non-controllable can't be changed by the controller)
         # Inputs are normalized to [0,1] range to match reliability loss scale
+        # Constant dimensions (near-zero range) are excluded via valid_mask
         bc_loss = torch.tensor(0.0, device=self.device)
-        n_processes = len(trajectory.keys())
+        n_contributing_processes = 0
 
         for process_name in trajectory.keys():
             ctrl_idx = self.controllable_indices[process_name]
             if len(ctrl_idx) == 0:
                 continue
 
+            stats = self.input_stats[process_name]
+            mask = stats['valid_mask']
+
+            # Skip process entirely if no controllable dimension has meaningful variation
+            if not mask.any():
+                continue
+
             actual_inputs = trajectory[process_name]['inputs'][..., ctrl_idx]
             target_inputs_scenario = self.surrogate.target_trajectory_tensors[process_name]['inputs'][scenario_idx:scenario_idx+1][..., ctrl_idx]
 
-            # Normalize inputs to [0,1] using precomputed stats
-            stats = self.input_stats[process_name]
-            actual_inputs_norm = (actual_inputs - stats['min']) / stats['range']
-            target_inputs_norm = (target_inputs_scenario - stats['min']) / stats['range']
+            # Select only non-constant dimensions, then normalize to [0,1]
+            actual_valid = actual_inputs[..., mask]
+            target_valid = target_inputs_scenario[..., mask]
+            min_valid = stats['min'][mask]
+            range_valid = stats['range'][mask]
+
+            actual_inputs_norm = (actual_valid - min_valid) / range_valid
+            target_inputs_norm = (target_valid - min_valid) / range_valid
 
             # DEBUG: Print BC loss details on first call
             if hasattr(self, '_debug_bc_loss') and self._debug_bc_loss:
                 print(f"\n  BC Loss Debug [{process_name}] (controllable only):")
                 print(f"    controllable_indices: {ctrl_idx}")
-                print(f"    actual_inputs (raw): {actual_inputs[0].tolist()}")
-                print(f"    target_inputs (raw): {target_inputs_scenario[0].tolist()}")
-                print(f"    stats['min']: {stats['min'].tolist()}")
-                print(f"    stats['range']: {stats['range'].tolist()}")
+                print(f"    valid_mask: {mask.tolist()} ({mask.sum().item()}/{len(mask)} dims)")
+                print(f"    actual_inputs (raw, valid dims): {actual_valid[0].tolist()}")
+                print(f"    target_inputs (raw, valid dims): {target_valid[0].tolist()}")
+                print(f"    min (valid): {min_valid.tolist()}")
+                print(f"    range (valid): {range_valid.tolist()}")
                 print(f"    actual_inputs_norm: {actual_inputs_norm[0].tolist()}")
                 print(f"    target_inputs_norm: {target_inputs_norm[0].tolist()}")
                 print(f"    MSE per dim: {((actual_inputs_norm - target_inputs_norm) ** 2).mean(dim=0).tolist()}")
 
-            # Compute MSE on normalized controllable inputs
+            # Compute MSE on normalized non-constant controllable inputs
             bc_loss = bc_loss + torch.mean((actual_inputs_norm - target_inputs_norm) ** 2)
+            n_contributing_processes += 1
 
-        # Average BC loss across processes (not sum!)
-        bc_loss = bc_loss / n_processes
+        # Average BC loss across contributing processes
+        if n_contributing_processes > 0:
+            bc_loss = bc_loss / n_contributing_processes
 
         # Total loss with dynamic weights
         # reliability_weight controls if reliability loss is active (0.0 during warm-up)
@@ -816,25 +846,33 @@ class ControllerTrainer:
                 rel_loss = self.reliability_loss_scale * (F - F_star_tensor) ** 2
 
                 # BC loss (compare to validation target inputs)
+                # Uses same valid_mask as training to exclude constant dimensions
                 bc_loss = torch.tensor(0.0, device=self.device)
-                n_processes = len(trajectory.keys())
+                n_contributing_processes = 0
 
                 for process_name in trajectory.keys():
                     ctrl_idx = self.controllable_indices[process_name]
                     if len(ctrl_idx) == 0:
                         continue
 
+                    stats = self.input_stats[process_name]
+                    mask = stats['valid_mask']
+
+                    if not mask.any():
+                        continue
+
                     actual_inputs = trajectory[process_name]['inputs'][..., ctrl_idx]
                     target_inputs = self.validation_surrogate.target_trajectory_tensors[process_name]['inputs'][scenario_idx:scenario_idx+1][..., ctrl_idx]
 
-                    # Use same normalization stats as training (controllable only)
-                    stats = self.input_stats[process_name]
-                    actual_inputs_norm = (actual_inputs - stats['min']) / stats['range']
-                    target_inputs_norm = (target_inputs - stats['min']) / stats['range']
+                    # Select only non-constant dimensions, then normalize
+                    actual_norm = (actual_inputs[..., mask] - stats['min'][mask]) / stats['range'][mask]
+                    target_norm = (target_inputs[..., mask] - stats['min'][mask]) / stats['range'][mask]
 
-                    bc_loss = bc_loss + torch.mean((actual_inputs_norm - target_inputs_norm) ** 2)
+                    bc_loss = bc_loss + torch.mean((actual_norm - target_norm) ** 2)
+                    n_contributing_processes += 1
 
-                bc_loss = bc_loss / n_processes
+                if n_contributing_processes > 0:
+                    bc_loss = bc_loss / n_contributing_processes
 
                 # Total loss
                 total_loss = reliability_weight * torch.mean(rel_loss) + lambda_bc * bc_loss
