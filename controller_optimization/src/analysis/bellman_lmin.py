@@ -34,12 +34,12 @@ import time
 @dataclass
 class BellmanConfig:
     """Configuration for backward induction grid."""
-    # Grid sizes (kept small to avoid memory issues)
-    # Terminal step allocates (N_R, N_eps, N_eps, N_eps, M_actions) array
-    # With N_R=50, N_eps=8, M=50 → 1.3M elements ≈ 10 MB (safe)
-    # WARNING: N_eps=30, M=100 → 540M elements ≈ 4.3 GB (OOM!)
+    # Grid sizes — memory budget for terminal step:
+    #   (N_R × N_eps³ × M) elements × 8 bytes
+    #   N_R=50, N_eps=16, M=50 → 102.4M elements ≈ 820 MB (peak, transient)
+    #   N_R=50, N_eps=20, M=50 → 200M elements ≈ 1.6 GB (approaching limit)
     N_R: int = 50           # Grid points for remaining reliability R
-    N_eps: int = 8          # Grid points per noise dimension
+    N_eps: int = 16         # Grid points per noise dimension (8 too coarse)
     eps_range: float = 3.0  # Noise range: [-eps_range, +eps_range]
     R_min: float = -0.1     # Lower bound of R grid
     # R_max is set to F* dynamically
@@ -574,63 +574,64 @@ def bellman_non_terminal(
 
     elif process_idx == 1:
         # i=1: state is (R_1, eps_0) -> output V shape (N_R, N_eps)
+        # Vectorized over R: loop N_eps iterations instead of N_R × N_eps
         V_out = np.zeros((N_R, N_eps))
-        eps_i_c_base = np.clip(sqrt_cond * z_all, eps_lo, eps_hi)  # pre-clip noise base
 
-        for r_idx in range(N_R):
-            R_val = grid_R[r_idx]
-            for e0_idx in range(N_eps):
-                eps_0_val = grid_eps[e0_idx]
-                eps_hat = cond_weights_i[0] * eps_0_val
-                eps_i_samples = eps_hat + sqrt_cond * z_all  # (K,)
+        for e0_idx in range(N_eps):
+            eps_0_val = grid_eps[e0_idx]
+            eps_hat = cond_weights_i[0] * eps_0_val
+            eps_i_samples = eps_hat + sqrt_cond * z_all  # (K,)
 
-                # Vectorise over all M actions: (M, K)
-                d_all = delta_m[:, None] + sigma_m[:, None] * eps_i_samples[None, :]
-                Q_all = np.exp(-(d_all ** 2) / s_i)
-                R_next_all = R_val - w_bar_i * Q_all  # (M, K)
+            # d, Q independent of R: (M, K)
+            d_all = delta_m[:, None] + sigma_m[:, None] * eps_i_samples[None, :]
+            Q_all = np.exp(-(d_all ** 2) / s_i)
 
-                R_flat = np.clip(R_next_all.ravel(), R_lo, R_hi)
-                eps_0_flat = np.full(M * K_actual, np.clip(eps_0_val, eps_lo, eps_hi))
-                eps_i_flat = np.tile(np.clip(eps_i_samples, eps_lo, eps_hi), M)
+            # Vectorize over all R grid points: (N_R, M, K)
+            R_next = grid_R[:, None, None] - w_bar_i * Q_all[None, :, :]
 
-                points = np.column_stack([R_flat, eps_0_flat, eps_i_flat])  # (M*K, 3)
-                V_vals = interp(points).reshape(M, K_actual)
-                costs = V_vals.mean(axis=1)  # (M,)
+            R_flat = np.clip(R_next.ravel(), R_lo, R_hi)  # (N_R*M*K,)
+            eps_0_flat = np.full(N_R * M * K_actual, np.clip(eps_0_val, eps_lo, eps_hi))
+            eps_i_flat = np.tile(np.clip(eps_i_samples, eps_lo, eps_hi), N_R * M)
 
-                V_out[r_idx, e0_idx] = costs.min()
+            points = np.column_stack([R_flat, eps_0_flat, eps_i_flat])
+            V_vals = interp(points).reshape(N_R, M, K_actual)
+            costs = V_vals.mean(axis=2)  # (N_R, M)
+
+            V_out[:, e0_idx] = costs.min(axis=1)  # (N_R,)
 
         return V_out
 
     elif process_idx == 2:
         # i=2: state is (R_2, eps_0, eps_1) -> output V shape (N_R, N_eps, N_eps)
+        # Vectorized over R: loop N_eps² iterations instead of N_R × N_eps²
         V_out = np.zeros((N_R, N_eps, N_eps))
 
-        for r_idx in range(N_R):
-            R_val = grid_R[r_idx]
-            for e0_idx in range(N_eps):
-                eps_0_val = grid_eps[e0_idx]
-                for e1_idx in range(N_eps):
-                    eps_1_val = grid_eps[e1_idx]
+        for e0_idx in range(N_eps):
+            eps_0_val = grid_eps[e0_idx]
+            for e1_idx in range(N_eps):
+                eps_1_val = grid_eps[e1_idx]
 
-                    eps_less = np.array([eps_0_val, eps_1_val])
-                    eps_hat = cond_weights_i @ eps_less
-                    eps_i_samples = eps_hat + sqrt_cond * z_all  # (K,)
+                eps_less = np.array([eps_0_val, eps_1_val])
+                eps_hat = cond_weights_i @ eps_less
+                eps_i_samples = eps_hat + sqrt_cond * z_all  # (K,)
 
-                    # Vectorise over all M actions: (M, K)
-                    d_all = delta_m[:, None] + sigma_m[:, None] * eps_i_samples[None, :]
-                    Q_all = np.exp(-(d_all ** 2) / s_i)
-                    R_next_all = R_val - w_bar_i * Q_all  # (M, K)
+                # d, Q independent of R: (M, K)
+                d_all = delta_m[:, None] + sigma_m[:, None] * eps_i_samples[None, :]
+                Q_all = np.exp(-(d_all ** 2) / s_i)
 
-                    R_flat = np.clip(R_next_all.ravel(), R_lo, R_hi)
-                    eps_0_flat = np.full(M * K_actual, np.clip(eps_0_val, eps_lo, eps_hi))
-                    eps_1_flat = np.full(M * K_actual, np.clip(eps_1_val, eps_lo, eps_hi))
-                    eps_i_flat = np.tile(np.clip(eps_i_samples, eps_lo, eps_hi), M)
+                # Vectorize over all R grid points: (N_R, M, K)
+                R_next = grid_R[:, None, None] - w_bar_i * Q_all[None, :, :]
 
-                    points = np.column_stack([R_flat, eps_0_flat, eps_1_flat, eps_i_flat])
-                    V_vals = interp(points).reshape(M, K_actual)
-                    costs = V_vals.mean(axis=1)  # (M,)
+                R_flat = np.clip(R_next.ravel(), R_lo, R_hi)  # (N_R*M*K,)
+                eps_0_flat = np.full(N_R * M * K_actual, np.clip(eps_0_val, eps_lo, eps_hi))
+                eps_1_flat = np.full(N_R * M * K_actual, np.clip(eps_1_val, eps_lo, eps_hi))
+                eps_i_flat = np.tile(np.clip(eps_i_samples, eps_lo, eps_hi), N_R * M)
 
-                    V_out[r_idx, e0_idx, e1_idx] = costs.min()
+                points = np.column_stack([R_flat, eps_0_flat, eps_1_flat, eps_i_flat])
+                V_vals = interp(points).reshape(N_R, M, K_actual)
+                costs = V_vals.mean(axis=2)  # (N_R, M)
+
+                V_out[:, e0_idx, e1_idx] = costs.min(axis=1)  # (N_R,)
 
         return V_out
 
@@ -958,6 +959,103 @@ def forward_simulation(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Phase 3b: Baseline forward simulations (policy discrimination)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def forward_simulation_greedy(
+    F_star: float,
+    Sigma: np.ndarray,
+    manifolds: List[np.ndarray],
+    w_bar: np.ndarray,
+    scales: np.ndarray,
+    taus: List[float],
+    N: int = 10000,
+    rng: Optional[np.random.Generator] = None,
+) -> Tuple[float, float]:
+    """
+    Forward simulation with greedy (myopic) policy: minimise R_next² at each step.
+
+    No V-function lookup — just picks the action that minimises immediate R².
+    If this matches the V-policy result, then V functions are not adding value
+    (the problem has excess control authority).
+    """
+    if rng is None:
+        rng = np.random.default_rng(777)
+
+    n = 4
+    L_chol = np.linalg.cholesky(Sigma)
+    Z = rng.standard_normal((N, n))
+    EPS = Z @ L_chol.T  # (N, 4)
+
+    R = np.full(N, F_star)
+
+    for i in range(n):
+        eps_i = EPS[:, i]
+        mu_m = manifolds[i][:, 0]
+        sigma2_m = manifolds[i][:, 1]
+        sigma_m = np.sqrt(np.maximum(sigma2_m, 1e-10))
+        delta_m = mu_m - taus[i]
+
+        d_all = delta_m[:, None] + sigma_m[:, None] * eps_i[None, :]  # (M, N)
+        Q_all = np.exp(-(d_all ** 2) / scales[i])
+        R_next_all = R[None, :] - w_bar[i] * Q_all  # (M, N)
+
+        # Greedy: pick action minimising R_next²
+        best_m = np.argmin(R_next_all ** 2, axis=0)  # (N,)
+
+        d_best = d_all[best_m, np.arange(N)]
+        Q_best = np.exp(-(d_best ** 2) / scales[i])
+        R = R - w_bar[i] * Q_best
+
+    losses = R ** 2
+    return float(np.mean(losses)), float(np.std(losses) / np.sqrt(N))
+
+
+def forward_simulation_random(
+    F_star: float,
+    Sigma: np.ndarray,
+    manifolds: List[np.ndarray],
+    w_bar: np.ndarray,
+    scales: np.ndarray,
+    taus: List[float],
+    N: int = 10000,
+    rng: Optional[np.random.Generator] = None,
+) -> Tuple[float, float]:
+    """
+    Forward simulation with uniformly random action selection.
+
+    Baseline: if this also gives loss ≈ 0, the problem has so much excess
+    control authority that no policy can fail.
+    """
+    if rng is None:
+        rng = np.random.default_rng(888)
+
+    n = 4
+    L_chol = np.linalg.cholesky(Sigma)
+    Z = rng.standard_normal((N, n))
+    EPS = Z @ L_chol.T  # (N, 4)
+
+    R = np.full(N, F_star)
+
+    for i in range(n):
+        eps_i = EPS[:, i]
+        M_i = manifolds[i].shape[0]
+        mu_m = manifolds[i][:, 0]
+        sigma2_m = manifolds[i][:, 1]
+        sigma_m = np.sqrt(np.maximum(sigma2_m, 1e-10))
+        delta_m = mu_m - taus[i]
+
+        # Random action per trajectory
+        random_m = rng.integers(0, M_i, size=N)
+        d = delta_m[random_m] + sigma_m[random_m] * eps_i
+        Q = np.exp(-(d ** 2) / scales[i])
+        R = R - w_bar[i] * Q
+
+    losses = R ** 2
+    return float(np.mean(losses)), float(np.std(losses) / np.sqrt(N))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Main entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1006,6 +1104,8 @@ def compute_bellman_lmin(
     w_bar = weights / weights.sum()
     scales = np.array([proc_configs[name]['scale'] for name in process_names])
 
+    budget_target_ratio = w_bar.sum() / F_star
+
     if verbose:
         print(f"\n{'='*70}")
         print(f"BELLMAN L_min COMPUTATION")
@@ -1014,6 +1114,11 @@ def compute_bellman_lmin(
         print(f"  Weights (raw):  {weights}")
         print(f"  Weights (norm): {w_bar}")
         print(f"  Scales:         {scales}")
+        print(f"  Budget/Target ratio: {budget_target_ratio:.2f}x "
+              f"(Σw̄={w_bar.sum():.3f} / F*={F_star:.3f})")
+        if budget_target_ratio > 2.0:
+            print(f"  ⚠ High ratio — reactive controller has excess authority; "
+                  f"forward validation may be uninformative")
         print(f"  Grid: N_R={cfg.N_R}, N_eps={cfg.N_eps}, K_mc={cfg.K_mc}")
 
     # ── Phase 1: Estimate Sigma ──
