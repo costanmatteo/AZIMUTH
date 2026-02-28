@@ -466,12 +466,11 @@ class ControllerReportGenerator:
         if not theoretical_data:
             return
 
-        self.add_section_title("Theoretical Loss Analysis")
+        self.add_section_title("Empirical Analysis")
 
         # Add description
         description = Paragraph(
-            "Analysis comparing observed loss with theoretical minimum (L_min). "
-            "L_min = Var[F] + Bias², where F is the reliability computed with sampling uncertainty.",
+            "Empirical statistics from stochastic forward passes: E[F], Var[F], Bias².",
             self.styles['Normal']
         )
         self.story.append(description)
@@ -485,26 +484,17 @@ class ControllerReportGenerator:
             summary_data = [
                 ['Metrica', 'Valore'],
                 ['Loss Finale', f"{summary.get('final_loss', 0):.6f}"],
-                ['L_min Empirico', f"{summary.get('final_L_min', 0):.6f}"],
-                ['Gap (Riducibile)', f"{summary.get('final_gap', 0):.6f}"],
-                ['Efficienza', f"{summary.get('final_efficiency', 0)*100:.1f}%"],
-                ['Migliore Efficienza', f"{summary.get('best_efficiency', 0)*100:.1f}%"],
-                ['Violazioni Teoriche', f"{summary.get('n_violations', 0)}/{summary.get('total_epochs', 0)}"]
+                ['Best Loss', f"{summary.get('best_loss', 0):.6f}"],
+                ['E[F] (empirico)', f"{summary.get('empirical_E_F_final', 0):.6f}"],
+                ['Var[F] (empirico)', f"{summary.get('empirical_Var_F_final', 0):.6f}"],
+                ['Epochs Totali', f"{summary.get('total_epochs', 0)}"],
             ]
 
             # Add Bellman L_min rows if available
             bellman = theoretical_data.get('bellman_lmin', None)
             if bellman is not None:
                 summary_data.append(['L_min Bellman (reactive)', f"{bellman.get('L_min_bellman', 0):.6f}"])
-                summary_data.append(['L_min Bellman (naive)', f"{bellman.get('L_min_naive', 0):.6f}"])
                 summary_data.append(['L_min Bellman (forward)', f"{bellman.get('L_min_forward', 0):.6f}"])
-                final_loss = summary.get('final_loss', 0)
-                bellman_val = bellman.get('L_min_bellman', 0)
-                if final_loss > 0 and bellman_val > 0:
-                    bellman_gap = final_loss - bellman_val
-                    bellman_eff = bellman_val / final_loss
-                    summary_data.append(['Gap (obs - Bellman)', f"{bellman_gap:.6f}"])
-                    summary_data.append(['Efficienza Bellman', f"{bellman_eff*100:.1f}%"])
 
             table = Table(summary_data, colWidths=[8*cm, 6*cm])
             table.setStyle(TableStyle([
@@ -523,26 +513,20 @@ class ControllerReportGenerator:
             self.story.append(Spacer(1, 0.2*cm))
 
             # Add decomposition table
-            if 'theoretical_Var_F' in theoretical_data and len(theoretical_data['theoretical_Var_F']) > 0:
-                var_f = theoretical_data['theoretical_Var_F'][-1]
-                bias2 = theoretical_data['theoretical_Bias2'][-1]
-                gap = theoretical_data['gap'][-1]
-                L_min = var_f + bias2
-                total = var_f + bias2 + gap
+            if 'empirical_Var_F' in theoretical_data and len(theoretical_data.get('empirical_Var_F', [])) > 0:
+                var_f = theoretical_data['empirical_Var_F'][-1]
+                bias2 = theoretical_data['empirical_Bias2'][-1]
+                total = var_f + bias2
 
                 decomp_data = [
-                    ['Componente', 'Valore', '% di L_min', '% di Loss'],
-                    ['Var(F) (Irreducibile)', f"{var_f:.6f}",
-                     f"{100*var_f/L_min:.1f}%" if L_min > 0 else "-",
+                    ['Componente', 'Valore', '%'],
+                    ['Var(F)', f"{var_f:.6f}",
                      f"{100*var_f/total:.1f}%" if total > 0 else "-"],
-                    ['Bias² (Irreducibile)', f"{bias2:.6f}",
-                     f"{100*bias2/L_min:.1f}%" if L_min > 0 else "-",
+                    ['Bias²', f"{bias2:.6f}",
                      f"{100*bias2/total:.1f}%" if total > 0 else "-"],
-                    ['Gap (Riducibile)', f"{gap:.6f}", "-",
-                     f"{100*gap/total:.1f}%" if total > 0 else "-"],
                 ]
 
-                table2 = Table(decomp_data, colWidths=[5*cm, 4*cm, 4*cm, 4*cm])
+                table2 = Table(decomp_data, colWidths=[5*cm, 5*cm, 4*cm])
                 table2.setStyle(TableStyle([
                     ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
                     ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
@@ -552,7 +536,7 @@ class ControllerReportGenerator:
                     ('LINEABOVE', (0, 1), (-1, 1), 0.5, colors.black),
                     ('LINEBELOW', (0, -1), (-1, -1), 1.5, colors.black),
                 ]))
-                self.story.append(Paragraph("<b>Loss Decomposition</b>", self.styles['SectionTitle']))
+                self.story.append(Paragraph("<b>Empirical Statistics Decomposition</b>", self.styles['SectionTitle']))
                 self.story.append(table2)
                 self.story.append(Spacer(1, 0.2*cm))
 
@@ -564,12 +548,10 @@ class ControllerReportGenerator:
         """
         checkpoint_dir = Path(checkpoint_dir)
 
-        # Check if theoretical analysis plots exist
+        # Check if analysis plots exist
         theoretical_plots = [
-            'loss_vs_L_min.png',
-            'training_efficiency.png',
+            'observed_loss.png',
             'loss_decomposition.png',
-            'loss_scatter.png',
             'theoretical_analysis_summary.png'
         ]
 
@@ -601,7 +583,7 @@ class ControllerReportGenerator:
             ]))
             self.story.append(img_table)
 
-            caption = Paragraph("<i>Theoretical Analysis: Loss vs L_min, Efficiency, Decomposition, Scatter</i>",
+            caption = Paragraph("<i>Empirical Analysis: Observed Loss and Statistics Decomposition</i>",
                                self.styles['Normal'])
             caption_table = Table([[caption]], colWidths=[18*cm])
             caption_table.setStyle(TableStyle([
@@ -611,9 +593,9 @@ class ControllerReportGenerator:
             self.story.append(Spacer(1, 0.3*cm))
 
         # Add individual plots if summary not available
-        elif 'loss_vs_L_min.png' in available_plots:
-            # Loss vs L_min plot
-            loss_plot = checkpoint_dir / 'loss_vs_L_min.png'
+        elif 'observed_loss.png' in available_plots:
+            # Observed loss plot
+            loss_plot = checkpoint_dir / 'observed_loss.png'
             img = Image(str(loss_plot))
             img_width, img_height = img.imageWidth, img.imageHeight
             aspect_ratio = img_height / img_width
@@ -633,7 +615,7 @@ class ControllerReportGenerator:
             ]))
             self.story.append(img_table)
 
-            caption = Paragraph("<i>Loss vs Theoretical Minimum (L_min)</i>", self.styles['Normal'])
+            caption = Paragraph("<i>Observed Loss Over Training</i>", self.styles['Normal'])
             caption_table = Table([[caption]], colWidths=[18*cm])
             caption_table.setStyle(TableStyle([('ALIGN', (0, 0), (-1, -1), 'CENTER')]))
             self.story.append(caption_table)

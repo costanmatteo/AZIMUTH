@@ -1,7 +1,7 @@
 """
-Summary Tables for Theoretical Loss Analysis.
+Summary Tables for Empirical Loss Analysis.
 
-Generates formatted tables comparing observed vs theoretical metrics.
+Generates formatted tables with empirical statistics.
 """
 
 import numpy as np
@@ -47,54 +47,40 @@ def generate_main_results_table(
     loss_scale: float = 100.0
 ) -> str:
     """
-    Generate main results table comparing observed vs theoretical.
+    Generate main results table with observed metrics.
 
     Returns formatted ASCII table string.
     """
     lines = []
     lines.append("")
-    lines.append("TABELLA PRINCIPALE - Risultati vs Limiti Teorici")
-    lines.append("=" * 85)
-    lines.append(f"{'Metrica':<20} {'Osservato':>12} {'Teorico':>12} {'Diff':>10} {'Diff %':>10} {'Status':>10}")
-    lines.append("-" * 85)
+    lines.append("TABELLA PRINCIPALE - Risultati Training")
+    lines.append("=" * 65)
+    lines.append(f"{'Metrica':<25} {'Valore':>12}")
+    lines.append("-" * 65)
 
-    # Loss finale vs L_min
+    # Loss finale
     final_loss = tracker_summary.get('final_loss', 0)
-    final_L_min = tracker_summary.get('final_L_min', 0)
-    diff = final_loss - final_L_min
-    diff_pct = compute_diff_pct(final_loss, final_L_min) if final_L_min > 0 else 0
-    status = get_status_symbol(diff_pct)
-    lines.append(f"{'Loss finale':<20} {format_value(final_loss):>12} {format_value(final_L_min):>12} {format_value(diff):>10} {format_pct(diff_pct):>10} {status:>10}")
+    lines.append(f"{'Loss finale':<25} {format_value(final_loss):>12}")
 
     # Best loss
     best_loss = tracker_summary.get('best_loss', 0)
-    diff = best_loss - final_L_min
-    diff_pct = compute_diff_pct(best_loss, final_L_min) if final_L_min > 0 else 0
-    status = get_status_symbol(diff_pct)
-    lines.append(f"{'Best loss':<20} {format_value(best_loss):>12} {format_value(final_L_min):>12} {format_value(diff):>10} {format_pct(diff_pct):>10} {status:>10}")
+    lines.append(f"{'Best loss':<25} {format_value(best_loss):>12}")
 
-    lines.append("-" * 85)
+    lines.append("-" * 65)
 
-    # E[F]
+    # Empirical E[F]
     emp_E_F = tracker_summary.get('empirical_E_F_final', 0)
-    theo_E_F = tracker_summary.get('theoretical_E_F_final', 0)
-    diff = emp_E_F - theo_E_F
-    diff_pct = compute_diff_pct(emp_E_F, theo_E_F) if theo_E_F > 0 else 0
-    status = get_status_symbol(diff_pct)
-    lines.append(f"{'E[F]':<20} {format_value(emp_E_F):>12} {format_value(theo_E_F):>12} {format_value(diff):>10} {format_pct(diff_pct):>10} {status:>10}")
+    lines.append(f"{'E[F] (empirico)':<25} {format_value(emp_E_F):>12}")
 
-    # Var[F]
+    # Empirical Var[F]
     emp_Var_F = tracker_summary.get('empirical_Var_F_final', 0)
-    theo_Var_F = tracker_summary.get('theoretical_Var_F_final', 0)
-    diff = emp_Var_F - theo_Var_F
-    diff_pct = compute_diff_pct(emp_Var_F, theo_Var_F) if theo_Var_F > 0 else 0
-    status = get_status_symbol(diff_pct)
-    lines.append(f"{'Var[F]':<20} {format_value(emp_Var_F):>12} {format_value(theo_Var_F):>12} {format_value(diff):>10} {format_pct(diff_pct):>10} {status:>10}")
+    lines.append(f"{'Var[F] (empirico)':<25} {format_value(emp_Var_F):>12}")
 
-    lines.append("=" * 85)
-    lines.append("")
-    lines.append(f"L_min = Var[F] + Bias² (minimo teorico irriducibile)")
-    lines.append(f"Status: OK = match (<5%), WARN = warning (5-20%), MISMATCH = >20%")
+    # Total epochs
+    total_epochs = tracker_summary.get('total_epochs', 0)
+    lines.append(f"{'Epochs totali':<25} {str(total_epochs):>12}")
+
+    lines.append("=" * 65)
     lines.append("")
 
     return "\n".join(lines)
@@ -134,91 +120,34 @@ def generate_process_params_table(
 def generate_decomposition_table(
     Var_F: float,
     Bias2: float,
-    gap: float,
-    L_min: float,
     total_loss: float,
 ) -> str:
     """
-    Generate table showing loss decomposition.
+    Generate table showing empirical statistics decomposition.
 
     Args:
         Var_F: Variance component
         Bias2: Bias squared component
-        gap: Reducible gap
-        L_min: Theoretical minimum (Var_F + Bias2)
         total_loss: Total observed loss
 
     Returns formatted ASCII table string.
     """
     lines = []
     lines.append("")
-    lines.append("TABELLA DECOMPOSIZIONE - Contributi alla Loss")
-    lines.append("=" * 65)
-    lines.append(f"{'Componente':<20} {'Valore':>12} {'% di L_min':>12} {'% di Loss':>12}")
-    lines.append("-" * 65)
-
-    # Calculate percentages
-    pct_L_min_var = 100 * Var_F / L_min if L_min > 0 else 0
-    pct_L_min_bias = 100 * Bias2 / L_min if L_min > 0 else 0
-    pct_loss_var = 100 * Var_F / total_loss if total_loss > 0 else 0
-    pct_loss_bias = 100 * Bias2 / total_loss if total_loss > 0 else 0
-    pct_loss_gap = 100 * gap / total_loss if total_loss > 0 else 0
-
-    lines.append(f"{'Var(F)':<20} {format_value(Var_F):>12} {format_pct(pct_L_min_var):>12} {format_pct(pct_loss_var):>12}")
-    lines.append(f"{'Bias²':<20} {format_value(Bias2):>12} {format_pct(pct_L_min_bias):>12} {format_pct(pct_loss_bias):>12}")
-    lines.append(f"{'Gap (riducibile)':<20} {format_value(gap):>12} {'-':>12} {format_pct(pct_loss_gap):>12}")
-    lines.append("-" * 65)
-    lines.append(f"{'L_min':<20} {format_value(L_min):>12} {'100.0%':>12} {format_pct(100*L_min/total_loss if total_loss > 0 else 0):>12}")
-    lines.append(f"{'TOTALE':<20} {format_value(total_loss):>12} {'-':>12} {'100.0%':>12}")
-    lines.append("=" * 65)
-    lines.append("")
-
-    return "\n".join(lines)
-
-
-def generate_efficiency_table(
-    tracker_summary: Dict[str, Any]
-) -> str:
-    """
-    Generate table of efficiency and convergence metrics.
-
-    Returns formatted ASCII table string.
-    """
-    lines = []
-    lines.append("")
-    lines.append("TABELLA EFFICIENZA - Metriche di convergenza")
+    lines.append("TABELLA DECOMPOSIZIONE - Statistiche Empiriche")
     lines.append("=" * 50)
-    lines.append(f"{'Metrica':<35} {'Valore':>12}")
+    lines.append(f"{'Componente':<20} {'Valore':>12} {'%':>12}")
     lines.append("-" * 50)
 
-    # Efficiency (L_min / Loss)
-    final_eff = tracker_summary.get('final_efficiency', 0)
-    lines.append(f"{'Efficienza (L_min/Loss)':<35} {format_pct(100*final_eff):>12}")
+    total_components = Var_F + Bias2
+    pct_var = 100 * Var_F / total_components if total_components > 0 else 0
+    pct_bias = 100 * Bias2 / total_components if total_components > 0 else 0
 
-    # Gap
-    final_loss = tracker_summary.get('final_loss', 0)
-    final_L_min = tracker_summary.get('final_L_min', 0)
-    gap = final_loss - final_L_min
-    gap_rel = 100 * gap / final_loss if final_loss > 0 else 0
-    lines.append(f"{'Gap assoluto':<35} {format_value(gap):>12}")
-    lines.append(f"{'Gap relativo':<35} {format_pct(gap_rel):>12}")
-
+    lines.append(f"{'Var(F)':<20} {format_value(Var_F):>12} {format_pct(pct_var):>12}")
+    lines.append(f"{'Bias²':<20} {format_value(Bias2):>12} {format_pct(pct_bias):>12}")
     lines.append("-" * 50)
-
-    # Best efficiency
-    best_eff = tracker_summary.get('best_efficiency', 0)
-    lines.append(f"{'Migliore efficienza raggiunta':<35} {format_pct(100*best_eff):>12}")
-
-    # Epochs to efficiency thresholds
-    epoch_90 = tracker_summary.get('epoch_90_efficiency', None)
-    epoch_95 = tracker_summary.get('epoch_95_efficiency', None)
-    lines.append(f"{'Epochs al 90% efficienza':<35} {str(epoch_90) if epoch_90 else 'N/A':>12}")
-    lines.append(f"{'Epochs al 95% efficienza':<35} {str(epoch_95) if epoch_95 else 'N/A':>12}")
-
-    # Total epochs
-    total_epochs = tracker_summary.get('total_epochs', 0)
-    lines.append(f"{'Epochs totali':<35} {str(total_epochs):>12}")
-
+    lines.append(f"{'Var[F] + Bias²':<20} {format_value(total_components):>12} {'100.0%':>12}")
+    lines.append(f"{'Loss osservata':<20} {format_value(total_loss):>12}")
     lines.append("=" * 50)
     lines.append("")
 
@@ -242,14 +171,6 @@ def generate_validation_table(
     lines.append(f"{'Check':<35} {'Risultato':>12} {'Status':>10}")
     lines.append("-" * 60)
 
-    # Loss >= L_min check
-    n_violations = tracker_summary.get('n_violations', 0)
-    total_epochs = tracker_summary.get('total_epochs', 0)
-    n_valid = total_epochs - n_violations
-    valid_ratio = f"{n_valid}/{total_epochs}"
-    status = "OK" if n_violations == 0 else ("WARN" if n_violations < total_epochs * 0.05 else "FAIL")
-    lines.append(f"{'Loss >= L_min (tutte epoch)':<35} {valid_ratio:>12} {status:>10}")
-
     # E[F] comparison
     status_ef = "OK" if abs(z_score_E_F) < 2 else ("WARN" if abs(z_score_E_F) < 3 else "FAIL")
     lines.append(f"{'E[F] emp. ~ E[F] teo.':<35} {f'z={z_score_E_F:.2f}':>12} {status_ef:>10}")
@@ -259,7 +180,7 @@ def generate_validation_table(
     lines.append(f"{'Var[F] emp. ~ Var[F] teo.':<35} {f'z={z_score_Var_F:.2f}':>12} {status_var:>10}")
 
     # Overall validation
-    all_ok = (n_violations == 0) and (abs(z_score_E_F) < 2) and (abs(z_score_Var_F) < 2)
+    all_ok = (abs(z_score_E_F) < 2) and (abs(z_score_Var_F) < 2)
     overall_status = "OK" if all_ok else "FAIL"
     lines.append("-" * 60)
     lines.append(f"{'Teoria validata':<35} {'':>12} {overall_status:>10}")
@@ -291,14 +212,13 @@ def generate_full_report(
 
     # Header
     lines.append("=" * 85)
-    lines.append("REPORT ANALISI TEORICA - Reliability Loss Function")
+    lines.append("REPORT ANALISI EMPIRICA - Reliability Loss Function")
     lines.append("=" * 85)
     lines.append("")
-    lines.append("Questo report confronta i risultati osservati durante il training")
-    lines.append("con i limiti teorici derivati dall'analisi della loss function.")
+    lines.append("Questo report riporta le statistiche empiriche raccolte durante il training:")
+    lines.append("E[F], Var[F], Bias² = (E[F] - F*)²")
     lines.append("")
     lines.append("Loss function: L = scale * (F - F*)^2")
-    lines.append("Minimo teorico: L_min = Var[F] + Bias^2")
     lines.append("")
 
     summary = tracker_data.get('summary', {})
@@ -311,16 +231,11 @@ def generate_full_report(
         lines.append(generate_process_params_table(process_params))
 
     # Decomposition table
-    if len(tracker_data.get('theoretical_Var_F', [])) > 0:
-        final_Var_F = tracker_data['theoretical_Var_F'][-1]
-        final_Bias2 = tracker_data['theoretical_Bias2'][-1]
-        final_gap = tracker_data['gap'][-1]
-        final_L_min = tracker_data['theoretical_L_min'][-1]
+    if 'empirical_Var_F' in tracker_data and len(tracker_data.get('empirical_Var_F', [])) > 0:
+        final_Var_F = tracker_data['empirical_Var_F'][-1]
+        final_Bias2 = tracker_data['empirical_Bias2'][-1]
         final_loss = tracker_data['observed_loss'][-1]
-        lines.append(generate_decomposition_table(final_Var_F, final_Bias2, final_gap, final_L_min, final_loss))
-
-    # Efficiency table
-    lines.append(generate_efficiency_table(summary))
+        lines.append(generate_decomposition_table(final_Var_F, final_Bias2, final_loss))
 
     # Validation table
     lines.append(generate_validation_table(summary, z_score_E_F, z_score_Var_F))
@@ -331,15 +246,9 @@ def generate_full_report(
     lines.append("LEGENDA:")
     lines.append("- F* = reliability della traiettoria target (FISSO)")
     lines.append("- F = reliability del controller (sampling stocastico)")
-    lines.append("- δ = μ_target - τ (distanza del target dall'ottimo del processo)")
-    lines.append("")
-    lines.append("CALCOLO L_min:")
-    lines.append("- L_min = Var[F] + Bias² = minimo teorico irriducibile")
-    lines.append("- Var[F] = varianza irriducibile (dovuta al sampling stocastico)")
+    lines.append("- E[F] = valore atteso empirico di F")
+    lines.append("- Var[F] = varianza empirica di F (dovuta al sampling stocastico)")
     lines.append("- Bias² = (E[F] - F*)² = bias sistematico")
-    lines.append("")
-    lines.append("- Gap = Loss - L_min (riducibile con training)")
-    lines.append("- Efficienza = L_min / Loss")
     lines.append("=" * 85)
     lines.append("")
 
@@ -371,28 +280,15 @@ if __name__ == '__main__':
     summary = {
         'final_loss': 0.1234,
         'best_loss': 0.1100,
-        'final_L_min': 0.0850,
-        'final_gap': 0.0384,
-        'final_efficiency': 0.689,
-        'best_efficiency': 0.773,
-        'mean_efficiency': 0.65,
         'empirical_E_F_final': 0.82,
-        'theoretical_E_F_final': 0.84,
         'empirical_Var_F_final': 0.005,
-        'theoretical_Var_F_final': 0.0048,
-        'n_violations': 0,
         'total_epochs': 100,
-        'violation_rate': 0.0,
-        'epoch_90_efficiency': 45,
-        'epoch_95_efficiency': None
     }
 
     tracker_data = {
         'summary': summary,
-        'theoretical_Var_F': [0.005],
-        'theoretical_Bias2': [0.08],
-        'gap': [0.0384],
-        'theoretical_L_min': [0.085],
+        'empirical_Var_F': [0.005],
+        'empirical_Bias2': [0.08],
         'observed_loss': [0.1234]
     }
 
