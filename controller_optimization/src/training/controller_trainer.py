@@ -148,17 +148,18 @@ class ControllerTrainer:
         self.input_stats = {}
 
         for process_name, data in self.surrogate.target_trajectory_tensors.items():
-            inputs = data['inputs']  # Shape: (n_scenarios, seq_len, input_dim)
+            inputs = data['inputs']  # Shape: (n_scenarios, input_dim)
 
             # Filter to controllable inputs only
             ctrl_idx = self.controllable_indices[process_name]
             if len(ctrl_idx) > 0:
                 inputs = inputs[..., ctrl_idx]
 
-            # Compute min and max across all scenarios and timesteps
+            # Compute min and max across scenarios (dim=0), keeping per-input stats
+            # inputs is 2D: (n_scenarios, n_controllable)
             # Add small epsilon to avoid division by zero
-            input_min = inputs.min(dim=0)[0].min(dim=0)[0]  # Shape: (n_controllable,)
-            input_max = inputs.max(dim=0)[0].max(dim=0)[0]  # Shape: (n_controllable,)
+            input_min = inputs.min(dim=0)[0]  # Shape: (n_controllable,)
+            input_max = inputs.max(dim=0)[0]  # Shape: (n_controllable,)
             input_range = input_max - input_min + 1e-8  # Avoid division by zero
 
             self.input_stats[process_name] = {
