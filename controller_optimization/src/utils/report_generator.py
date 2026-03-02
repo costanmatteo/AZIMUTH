@@ -39,8 +39,8 @@ class ControllerReportGenerator:
             self.styles.add(ParagraphStyle(
                 name='ReportTitle',
                 parent=self.styles['Heading1'],
-                fontSize=16,
-                leading=19,
+                fontSize=14,
+                leading=17,
                 alignment=TA_CENTER,
                 spaceAfter=3
             ))
@@ -50,8 +50,8 @@ class ControllerReportGenerator:
             self.styles.add(ParagraphStyle(
                 name='ReportSubtitle',
                 parent=self.styles['Normal'],
-                fontSize=10,
-                leading=12,
+                fontSize=9,
+                leading=11,
                 alignment=TA_CENTER,
                 spaceAfter=6
             ))
@@ -61,8 +61,8 @@ class ControllerReportGenerator:
             self.styles.add(ParagraphStyle(
                 name='SectionTitle',
                 parent=self.styles['Heading2'],
-                fontSize=10,
-                leading=12,
+                fontSize=9,
+                leading=11,
                 fontName='Helvetica-Bold',
                 spaceAfter=1,
                 spaceBefore=4
@@ -73,8 +73,8 @@ class ControllerReportGenerator:
             self.styles.add(ParagraphStyle(
                 name='BodyText',
                 parent=self.styles['Normal'],
-                fontSize=7,
-                leading=9,
+                fontSize=6.5,
+                leading=8,
                 leftIndent=10
             ))
 
@@ -247,13 +247,13 @@ class ControllerReportGenerator:
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
             ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, 0), 8),
+            ('FONTSIZE', (0, 0), (-1, 0), 7),
             ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
             ('TOPPADDING', (0, 0), (-1, 0), 8),
 
             # Data rows
             ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-            ('FONTSIZE', (0, 1), (-1, -1), 8),
+            ('FONTSIZE', (0, 1), (-1, -1), 7),
             ('TOPPADDING', (0, 1), (-1, -1), 6),
             ('BOTTOMPADDING', (0, 1), (-1, -1), 6),
 
@@ -511,7 +511,7 @@ class ControllerReportGenerator:
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
                 ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, -1), 8),
+                ('FONTSIZE', (0, 0), (-1, -1), 7),
                 ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
                 ('TOPPADDING', (0, 0), (-1, 0), 6),
                 ('LINEABOVE', (0, 0), (-1, 0), 1.5, colors.black),
@@ -546,7 +546,7 @@ class ControllerReportGenerator:
                     ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
                     ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
                     ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                    ('FONTSIZE', (0, 0), (-1, -1), 8),
+                    ('FONTSIZE', (0, 0), (-1, -1), 7),
                     ('LINEABOVE', (0, 0), (-1, 0), 1.5, colors.black),
                     ('LINEABOVE', (0, 1), (-1, 1), 0.5, colors.black),
                     ('LINEBELOW', (0, -1), (-1, -1), 1.5, colors.black),
