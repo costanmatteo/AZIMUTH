@@ -36,7 +36,7 @@ def plot_loss_vs_L_min(
         save_path: Path to save figure (optional)
         title: Plot title
         figsize: Figure size
-        bellman_lmin: Dict with Bellman results (keys: L_min_bellman, L_min_naive, L_min_forward)
+        bellman_lmin: Dict with Bellman results (keys: L_min_bellman, L_min_forward)
 
     Returns:
         Matplotlib Figure object

@@ -496,7 +496,6 @@ class ControllerReportGenerator:
             bellman = theoretical_data.get('bellman_lmin', None)
             if bellman is not None:
                 summary_data.append(['L_min Bellman (reactive)', f"{bellman.get('L_min_bellman', 0):.6f}"])
-                summary_data.append(['L_min Bellman (naive)', f"{bellman.get('L_min_naive', 0):.6f}"])
                 summary_data.append(['L_min Bellman (forward)', f"{bellman.get('L_min_forward', 0):.6f}"])
                 final_loss = summary.get('final_loss', 0)
                 bellman_val = bellman.get('L_min_bellman', 0)
