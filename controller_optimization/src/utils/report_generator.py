@@ -486,9 +486,9 @@ class ControllerReportGenerator:
             final_loss = summary.get('final_loss', 0)
 
             summary_data = [
-                ['Metrica', 'Valore'],
-                ['Loss Finale', f"{summary.get('final_loss', 0):.6f}"],
-                ['L_min Empirico', f"{summary.get('final_L_min', 0):.6f}"],
+                ['Metric', 'Value'],
+                ['Final Loss', f"{summary.get('final_loss', 0):.6f}"],
+                ['L_min Empirical', f"{summary.get('final_L_min', 0):.6f}"],
             ]
 
             # Add Bellman L_min rows if available
@@ -500,14 +500,14 @@ class ControllerReportGenerator:
                     bellman_gap = final_loss - bellman_val
                     bellman_eff = bellman_val / final_loss
                     summary_data.append(['Gap (obs - Bellman)', f"{bellman_gap:.6f}"])
-                    summary_data.append(['Efficienza (Bellman)', f"{bellman_eff*100:.1f}%"])
+                    summary_data.append(['Efficiency (Bellman)', f"{bellman_eff*100:.1f}%"])
                 n_viol = bellman.get('n_violations', summary.get('n_violations', 0))
-                summary_data.append([f'Violazioni (Loss < L_min Bellman)', f"{n_viol}/{summary.get('total_epochs', 0)}"])
+                summary_data.append(['Violations (Loss < L_min Bellman)', f"{n_viol}/{summary.get('total_epochs', 0)}"])
             else:
                 # Fallback: empirical efficiency when Bellman is not available
-                summary_data.append(['Gap (Riducibile)', f"{summary.get('final_gap', 0):.6f}"])
-                summary_data.append(['Efficienza (empirica)', f"{summary.get('final_efficiency', 0)*100:.1f}%"])
-                summary_data.append(['Violazioni (Loss < L_min emp.)', f"{summary.get('n_violations', 0)}/{summary.get('total_epochs', 0)}"])
+                summary_data.append(['Gap (Reducible)', f"{summary.get('final_gap', 0):.6f}"])
+                summary_data.append(['Efficiency (empirical)', f"{summary.get('final_efficiency', 0)*100:.1f}%"])
+                summary_data.append(['Violations (Loss < L_min emp.)', f"{summary.get('n_violations', 0)}/{summary.get('total_epochs', 0)}"])
 
             table = Table(summary_data, colWidths=[8*cm, 6*cm])
             table.setStyle(TableStyle([
@@ -534,14 +534,14 @@ class ControllerReportGenerator:
                 total = var_f + bias2 + gap
 
                 decomp_data = [
-                    ['Componente', 'Valore', '% di L_min', '% di Loss'],
-                    ['Var(F) (Irreducibile)', f"{var_f:.6f}",
+                    ['Component', 'Value', '% of L_min', '% of Loss'],
+                    ['Var(F) (Irreducible)', f"{var_f:.6f}",
                      f"{100*var_f/L_min:.1f}%" if L_min > 0 else "-",
                      f"{100*var_f/total:.1f}%" if total > 0 else "-"],
-                    ['Bias² (Irreducibile)', f"{bias2:.6f}",
+                    ['Bias² (Irreducible)', f"{bias2:.6f}",
                      f"{100*bias2/L_min:.1f}%" if L_min > 0 else "-",
                      f"{100*bias2/total:.1f}%" if total > 0 else "-"],
-                    ['Gap (Riducibile)', f"{gap:.6f}", "-",
+                    ['Gap (Reducible)', f"{gap:.6f}", "-",
                      f"{100*gap/total:.1f}%" if total > 0 else "-"],
                 ]
 
