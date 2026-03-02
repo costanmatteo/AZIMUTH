@@ -1352,6 +1352,16 @@ def main(config=None):
                     bellman_result.save(checkpoint_dir / 'bellman_lmin_result.json')
                     theoretical_data['bellman_lmin'] = bellman_result.to_dict()
 
+                    # Compute Bellman-based violations (loss < L_min_bellman)
+                    bellman_lmin_val = bellman_result.L_min_bellman
+                    observed_losses = theoretical_data.get('observed_loss', [])
+                    n_violations_bellman = sum(1 for obs in observed_losses if obs < bellman_lmin_val * 0.99)
+                    theoretical_data['bellman_lmin']['n_violations'] = n_violations_bellman
+
+                    # Update summary violations to use Bellman reference
+                    if 'summary' in theoretical_data:
+                        theoretical_data['summary']['n_violations'] = n_violations_bellman
+
                     # ── Comprehensive comparison ──
                     print(f"\n  {'─'*50}")
                     print(f"  L_min COMPARISON TABLE")

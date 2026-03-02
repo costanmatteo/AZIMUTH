@@ -39,8 +39,8 @@ class ControllerReportGenerator:
             self.styles.add(ParagraphStyle(
                 name='ReportTitle',
                 parent=self.styles['Heading1'],
-                fontSize=16,
-                leading=19,
+                fontSize=14,
+                leading=17,
                 alignment=TA_CENTER,
                 spaceAfter=3
             ))
@@ -50,8 +50,8 @@ class ControllerReportGenerator:
             self.styles.add(ParagraphStyle(
                 name='ReportSubtitle',
                 parent=self.styles['Normal'],
-                fontSize=10,
-                leading=12,
+                fontSize=9,
+                leading=11,
                 alignment=TA_CENTER,
                 spaceAfter=6
             ))
@@ -61,8 +61,8 @@ class ControllerReportGenerator:
             self.styles.add(ParagraphStyle(
                 name='SectionTitle',
                 parent=self.styles['Heading2'],
-                fontSize=10,
-                leading=12,
+                fontSize=9,
+                leading=11,
                 fontName='Helvetica-Bold',
                 spaceAfter=1,
                 spaceBefore=4
@@ -73,8 +73,8 @@ class ControllerReportGenerator:
             self.styles.add(ParagraphStyle(
                 name='BodyText',
                 parent=self.styles['Normal'],
-                fontSize=7,
-                leading=9,
+                fontSize=6.5,
+                leading=8,
                 leftIndent=10
             ))
 
@@ -247,13 +247,13 @@ class ControllerReportGenerator:
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
             ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, 0), 8),
+            ('FONTSIZE', (0, 0), (-1, 0), 7),
             ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
             ('TOPPADDING', (0, 0), (-1, 0), 8),
 
             # Data rows
             ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-            ('FONTSIZE', (0, 1), (-1, -1), 8),
+            ('FONTSIZE', (0, 1), (-1, -1), 7),
             ('TOPPADDING', (0, 1), (-1, -1), 6),
             ('BOTTOMPADDING', (0, 1), (-1, -1), 6),
 
@@ -482,29 +482,32 @@ class ControllerReportGenerator:
             summary = theoretical_data['summary']
 
             # Create summary metrics table
+            bellman = theoretical_data.get('bellman_lmin', None)
+            final_loss = summary.get('final_loss', 0)
+
             summary_data = [
-                ['Metrica', 'Valore'],
-                ['Loss Finale', f"{summary.get('final_loss', 0):.6f}"],
-                ['L_min Empirico', f"{summary.get('final_L_min', 0):.6f}"],
-                ['Gap (Riducibile)', f"{summary.get('final_gap', 0):.6f}"],
-                ['Efficienza', f"{summary.get('final_efficiency', 0)*100:.1f}%"],
-                ['Migliore Efficienza', f"{summary.get('best_efficiency', 0)*100:.1f}%"],
-                ['Violazioni Teoriche', f"{summary.get('n_violations', 0)}/{summary.get('total_epochs', 0)}"]
+                ['Metric', 'Value'],
+                ['Final Loss', f"{summary.get('final_loss', 0):.6f}"],
+                ['L_min Empirical', f"{summary.get('final_L_min', 0):.6f}"],
             ]
 
             # Add Bellman L_min rows if available
-            bellman = theoretical_data.get('bellman_lmin', None)
             if bellman is not None:
-                summary_data.append(['L_min Bellman (reactive)', f"{bellman.get('L_min_bellman', 0):.6f}"])
-                summary_data.append(['L_min Bellman (naive)', f"{bellman.get('L_min_naive', 0):.6f}"])
-                summary_data.append(['L_min Bellman (forward)', f"{bellman.get('L_min_forward', 0):.6f}"])
-                final_loss = summary.get('final_loss', 0)
                 bellman_val = bellman.get('L_min_bellman', 0)
+                summary_data.append(['L_min Bellman (reactive)', f"{bellman_val:.6f}"])
+                summary_data.append(['L_min Bellman (forward)', f"{bellman.get('L_min_forward', 0):.6f}"])
                 if final_loss > 0 and bellman_val > 0:
                     bellman_gap = final_loss - bellman_val
                     bellman_eff = bellman_val / final_loss
                     summary_data.append(['Gap (obs - Bellman)', f"{bellman_gap:.6f}"])
-                    summary_data.append(['Efficienza Bellman', f"{bellman_eff*100:.1f}%"])
+                    summary_data.append(['Efficiency (Bellman)', f"{bellman_eff*100:.1f}%"])
+                n_viol = bellman.get('n_violations', summary.get('n_violations', 0))
+                summary_data.append(['Violations (Loss < L_min Bellman)', f"{n_viol}/{summary.get('total_epochs', 0)}"])
+            else:
+                # Fallback: empirical efficiency when Bellman is not available
+                summary_data.append(['Gap (Reducible)', f"{summary.get('final_gap', 0):.6f}"])
+                summary_data.append(['Efficiency (empirical)', f"{summary.get('final_efficiency', 0)*100:.1f}%"])
+                summary_data.append(['Violations (Loss < L_min emp.)', f"{summary.get('n_violations', 0)}/{summary.get('total_epochs', 0)}"])
 
             table = Table(summary_data, colWidths=[8*cm, 6*cm])
             table.setStyle(TableStyle([
@@ -512,7 +515,7 @@ class ControllerReportGenerator:
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
                 ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, -1), 8),
+                ('FONTSIZE', (0, 0), (-1, -1), 7),
                 ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
                 ('TOPPADDING', (0, 0), (-1, 0), 6),
                 ('LINEABOVE', (0, 0), (-1, 0), 1.5, colors.black),
@@ -531,14 +534,14 @@ class ControllerReportGenerator:
                 total = var_f + bias2 + gap
 
                 decomp_data = [
-                    ['Componente', 'Valore', '% di L_min', '% di Loss'],
-                    ['Var(F) (Irreducibile)', f"{var_f:.6f}",
+                    ['Component', 'Value', '% of L_min', '% of Loss'],
+                    ['Var(F) (Irreducible)', f"{var_f:.6f}",
                      f"{100*var_f/L_min:.1f}%" if L_min > 0 else "-",
                      f"{100*var_f/total:.1f}%" if total > 0 else "-"],
-                    ['Bias² (Irreducibile)', f"{bias2:.6f}",
+                    ['Bias² (Irreducible)', f"{bias2:.6f}",
                      f"{100*bias2/L_min:.1f}%" if L_min > 0 else "-",
                      f"{100*bias2/total:.1f}%" if total > 0 else "-"],
-                    ['Gap (Riducibile)', f"{gap:.6f}", "-",
+                    ['Gap (Reducible)', f"{gap:.6f}", "-",
                      f"{100*gap/total:.1f}%" if total > 0 else "-"],
                 ]
 
@@ -547,7 +550,7 @@ class ControllerReportGenerator:
                     ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
                     ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
                     ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                    ('FONTSIZE', (0, 0), (-1, -1), 8),
+                    ('FONTSIZE', (0, 0), (-1, -1), 7),
                     ('LINEABOVE', (0, 0), (-1, 0), 1.5, colors.black),
                     ('LINEABOVE', (0, 1), (-1, 1), 0.5, colors.black),
                     ('LINEBELOW', (0, -1), (-1, -1), 1.5, colors.black),

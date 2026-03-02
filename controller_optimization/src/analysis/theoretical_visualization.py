@@ -36,7 +36,7 @@ def plot_loss_vs_L_min(
         save_path: Path to save figure (optional)
         title: Plot title
         figsize: Figure size
-        bellman_lmin: Dict with Bellman results (keys: L_min_bellman, L_min_naive, L_min_forward)
+        bellman_lmin: Dict with Bellman results (keys: L_min_bellman, L_min_forward)
 
     Returns:
         Matplotlib Figure object
@@ -102,19 +102,27 @@ def plot_efficiency_over_time(
     efficiency: List[float],
     save_path: Optional[str] = None,
     title: str = "Training Efficiency (L_min / Loss)",
-    figsize: Tuple[int, int] = (10, 5)
+    figsize: Tuple[int, int] = (10, 5),
+    bellman_lmin: Optional[Dict[str, Any]] = None,
+    observed_loss: Optional[List[float]] = None,
 ) -> plt.Figure:
     """
-    Plot efficiency (L_min / observed_loss) over epochs.
+    Plot efficiency over epochs.
 
-    Efficiency of 1.0 means loss equals theoretical minimum.
+    When Bellman L_min is available, efficiency is defined as
+    L_min_Bellman / Loss_observed — so efficiency=1 means loss
+    has reached the absolute theoretical minimum.
+
+    Without Bellman, falls back to L_min_empirical / Loss_observed.
 
     Args:
         epochs: List of epoch numbers
-        efficiency: List of efficiency values (0 to 1+)
+        efficiency: List of empirical efficiency values (L_min_emp / Loss)
         save_path: Path to save figure (optional)
         title: Plot title
         figsize: Figure size
+        bellman_lmin: Dict with Bellman results (keys: L_min_bellman, L_min_forward)
+        observed_loss: List of observed loss values (needed for Bellman efficiency)
 
     Returns:
         Matplotlib Figure object
@@ -122,16 +130,39 @@ def plot_efficiency_over_time(
     fig, ax = plt.subplots(figsize=figsize)
 
     epochs = np.array(epochs)
-    eff = np.array(efficiency)
+    eff_empirical = np.array(efficiency)
 
-    # Clip efficiency for visualization (handle division issues)
-    eff_clipped = np.clip(eff, 0, 1.5)
+    # Determine if we can compute Bellman-based efficiency
+    bellman_val = None
+    if bellman_lmin is not None:
+        bellman_val = bellman_lmin.get('L_min_bellman', None)
 
-    # Plot efficiency curve
-    ax.plot(epochs, eff_clipped, 'g-', linewidth=2, marker='o', markersize=3)
+    if bellman_val is not None and observed_loss is not None and len(observed_loss) == len(epochs):
+        # Primary: Bellman-based efficiency
+        obs = np.array(observed_loss)
+        eff_bellman = np.where(obs > 0, bellman_val / obs, 0.0)
+        eff_bellman_clipped = np.clip(eff_bellman, 0, 1.5)
+
+        ax.plot(epochs, eff_bellman_clipped, 'g-', linewidth=2, marker='o', markersize=3,
+                label=f'Efficiency (Bellman, L_min={bellman_val:.4f})')
+
+        # Secondary: empirical efficiency as dashed reference
+        eff_emp_clipped = np.clip(eff_empirical, 0, 1.5)
+        ax.plot(epochs, eff_emp_clipped, 'b--', linewidth=1.5, alpha=0.5,
+                label='Efficiency (empirical)')
+
+        main_eff = eff_bellman_clipped
+        limit_label = 'Theoretical Limit — Bellman (100%)'
+    else:
+        # Fallback: empirical efficiency only
+        eff_emp_clipped = np.clip(eff_empirical, 0, 1.5)
+        ax.plot(epochs, eff_emp_clipped, 'g-', linewidth=2, marker='o', markersize=3,
+                label='Efficiency (empirical)')
+        main_eff = eff_emp_clipped
+        limit_label = 'Theoretical Limit (100%)'
 
     # Add horizontal line at y=1 (theoretical limit)
-    ax.axhline(y=1.0, color='red', linestyle='--', linewidth=2, label='Theoretical Limit (100%)')
+    ax.axhline(y=1.0, color='red', linestyle='--', linewidth=2, label=limit_label)
 
     # Add horizontal lines at 90% and 95%
     ax.axhline(y=0.9, color='orange', linestyle=':', linewidth=1, alpha=0.7, label='90% Efficiency')
@@ -140,9 +171,9 @@ def plot_efficiency_over_time(
     # Fill area above current efficiency (room for improvement)
     ax.fill_between(
         epochs,
-        eff_clipped,
+        main_eff,
         1.0,
-        where=(eff_clipped < 1.0),
+        where=(main_eff < 1.0),
         alpha=0.2,
         color='red',
         label='Room for Improvement'
@@ -150,7 +181,8 @@ def plot_efficiency_over_time(
 
     # Labels and legend
     ax.set_xlabel('Epoch', fontsize=12)
-    ax.set_ylabel('Efficiency (L_min / Loss)', fontsize=12)
+    ylabel = 'Efficiency (L_min Bellman / Loss)' if bellman_val is not None else 'Efficiency (L_min / Loss)'
+    ax.set_ylabel(ylabel, fontsize=12)
     ax.set_title(title, fontsize=14)
     ax.legend(loc='lower right', fontsize=9)
     ax.grid(True, alpha=0.3)
@@ -470,18 +502,30 @@ def create_summary_figure(
 
     # 2. Efficiency (top right)
     ax2 = fig.add_subplot(2, 2, 2)
-    ax2.plot(epochs, efficiency, 'g-', linewidth=2, marker='o', markersize=2, label='Efficiency (empirical)')
+
+    bellman_val = None
+    if bellman_data is not None:
+        bellman_val = bellman_data.get('L_min_bellman', None)
+
+    if bellman_val is not None and len(observed_loss) > 0:
+        # Primary: Bellman-based efficiency per epoch
+        obs_arr = np.array(observed_loss)
+        bellman_eff_curve = np.where(obs_arr > 0, bellman_val / obs_arr, 0.0)
+        bellman_eff_clipped = np.clip(bellman_eff_curve, 0, 1.5)
+        ax2.plot(epochs, bellman_eff_clipped, 'g-', linewidth=2, marker='o', markersize=2,
+                 label=f'Efficiency (Bellman)')
+        # Empirical as dashed reference
+        ax2.plot(epochs, efficiency, 'b--', linewidth=1.5, alpha=0.5, marker='o', markersize=1,
+                 label='Efficiency (empirical)')
+        ax2.set_ylabel('Efficiency (L_min Bellman / Loss)')
+    else:
+        ax2.plot(epochs, efficiency, 'g-', linewidth=2, marker='o', markersize=2,
+                 label='Efficiency (empirical)')
+        ax2.set_ylabel('Efficiency (L_min / Loss)')
+
     ax2.axhline(y=1.0, color='red', linestyle='--', linewidth=2, label='100%')
     ax2.axhline(y=0.9, color='orange', linestyle=':', linewidth=1, alpha=0.7)
-    if bellman_data is not None and bellman_data.get('L_min_bellman') is not None:
-        # Show Bellman-based efficiency for the final loss
-        bellman_val = bellman_data['L_min_bellman']
-        if len(observed_loss) > 0 and observed_loss[-1] > 0:
-            bellman_eff = bellman_val / observed_loss[-1]
-            ax2.axhline(y=bellman_eff, color='green', linestyle='-.', linewidth=2,
-                        label=f'Bellman eff = {bellman_eff*100:.1f}%')
     ax2.set_xlabel('Epoch')
-    ax2.set_ylabel('Efficiency (L_min / Loss)')
     ax2.set_title('Training Efficiency')
     ax2.legend(loc='lower right', fontsize=7)
     ax2.set_ylim(0, 1.1)
@@ -578,7 +622,9 @@ def generate_all_theoretical_plots(
     plot_efficiency_over_time(
         epochs=tracker_data['epochs'],
         efficiency=tracker_data['efficiency'],
-        save_path=str(path)
+        save_path=str(path),
+        bellman_lmin=bellman_data,
+        observed_loss=tracker_data['observed_loss'],
     )
     plots['training_efficiency'] = path
     plt.close()
