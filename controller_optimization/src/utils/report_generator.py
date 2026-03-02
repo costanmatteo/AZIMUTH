@@ -501,12 +501,13 @@ class ControllerReportGenerator:
                     bellman_eff = bellman_val / final_loss
                     summary_data.append(['Gap (obs - Bellman)', f"{bellman_gap:.6f}"])
                     summary_data.append(['Efficienza (Bellman)', f"{bellman_eff*100:.1f}%"])
+                n_viol = bellman.get('n_violations', summary.get('n_violations', 0))
+                summary_data.append([f'Violazioni (Loss < L_min Bellman)', f"{n_viol}/{summary.get('total_epochs', 0)}"])
             else:
                 # Fallback: empirical efficiency when Bellman is not available
                 summary_data.append(['Gap (Riducibile)', f"{summary.get('final_gap', 0):.6f}"])
                 summary_data.append(['Efficienza (empirica)', f"{summary.get('final_efficiency', 0)*100:.1f}%"])
-
-            summary_data.append(['Violazioni Teoriche', f"{summary.get('n_violations', 0)}/{summary.get('total_epochs', 0)}"])
+                summary_data.append(['Violazioni (Loss < L_min emp.)', f"{summary.get('n_violations', 0)}/{summary.get('total_epochs', 0)}"])
 
             table = Table(summary_data, colWidths=[8*cm, 6*cm])
             table.setStyle(TableStyle([
