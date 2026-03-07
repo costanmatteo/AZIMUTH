@@ -33,9 +33,16 @@ from scm_ds.datasets import (
     ds_scm_microetch
 )
 
+# Cache per SCM ST già costruiti (evita di ricostruire ad ogni chiamata)
+_st_scm_cache = {}
+
 
 def get_scm_dataset(process_config):
-    """Get SCM dataset for a process configuration."""
+    """Get SCM dataset for a process configuration.
+
+    Per processi fisici ritorna l'istanza pre-built.
+    Per processi ST, costruisce (e cachea) un SCMDataset da STConfig.
+    """
     scm_type = process_config['scm_dataset_type']
 
     if scm_type == 'laser':
@@ -46,6 +53,13 @@ def get_scm_dataset(process_config):
         return ds_scm_galvanic
     elif scm_type == 'microetch':
         return ds_scm_microetch
+    elif scm_type == 'st':
+        process_name = process_config['name']
+        if process_name not in _st_scm_cache:
+            from scm_ds.datasets_st import STConfig, build_st_scm
+            st_params = process_config['st_params']
+            _st_scm_cache[process_name] = build_st_scm(STConfig(**st_params))
+        return _st_scm_cache[process_name]
     else:
         raise ValueError(f"Unknown SCM dataset type: {scm_type}")
 
@@ -94,6 +108,16 @@ def generate_target_trajectory(process_configs, n_samples=50, seed=42):
         input_labels = process_config['input_labels']
         output_labels = process_config['output_labels']
 
+        # Per processi ST, le label nel config sono suffissate (X_1_p1),
+        # ma lo SCM usa le label base (X_1). Costruiamo il mapping.
+        is_st = process_config['scm_dataset_type'] == 'st'
+        if is_st:
+            scm_input_labels = process_config['_st_base_input_labels']
+            scm_output_labels = process_config['_st_base_output_labels']
+        else:
+            scm_input_labels = input_labels
+            scm_output_labels = output_labels
+
         # Get SCM dataset
         ds_scm = get_scm_dataset(process_config)
 
@@ -129,9 +153,9 @@ def generate_target_trajectory(process_configs, n_samples=50, seed=42):
             # Generate samples with diverse structural conditions
             df = ds_scm.sample(n=n_samples, seed=seed)
 
-            # Extract inputs and outputs
-            inputs = df[input_labels].values  # Shape: (n_samples, input_dim)
-            outputs = df[output_labels].values  # Shape: (n_samples, output_dim)
+            # Extract inputs and outputs (usando le label SCM base)
+            inputs = df[scm_input_labels].values  # Shape: (n_samples, input_dim)
+            outputs = df[scm_output_labels].values  # Shape: (n_samples, output_dim)
 
             # Extract structural conditions for alignment with baseline
             structural_conditions = {}
@@ -192,6 +216,15 @@ def generate_baseline_trajectory(process_configs, target_trajectory, n_samples=5
         input_labels = process_config['input_labels']
         output_labels = process_config['output_labels']
 
+        # Per processi ST, mapping label suffissate → label base SCM
+        is_st = process_config['scm_dataset_type'] == 'st'
+        if is_st:
+            scm_input_labels = process_config['_st_base_input_labels']
+            scm_output_labels = process_config['_st_base_output_labels']
+        else:
+            scm_input_labels = input_labels
+            scm_output_labels = output_labels
+
         # Get SCM dataset
         ds_scm = get_scm_dataset(process_config)
 
@@ -207,16 +240,17 @@ def generate_baseline_trajectory(process_configs, target_trajectory, n_samples=5
 
             # CRITICAL: Fix ALL input variables to target values
             # This ensures exact same inputs between target and baseline
-            for i, input_label in enumerate(input_labels):
+            # Usa le label SCM base per settare i sampler
+            for i, scm_label in enumerate(scm_input_labels):
                 target_values = target_inputs[:, i]
                 # Create a closure to capture target_values
                 def make_input_sampler(values):
                     return lambda rng, n: values[:n]
-                modified_singles[input_label] = make_input_sampler(target_values)
+                modified_singles[scm_label] = make_input_sampler(target_values)
 
             # Also fix structural variables (if not already in inputs)
             for var_name, var_values in target_structural.items():
-                if var_name not in input_labels:  # Only if not already fixed as input
+                if var_name not in scm_input_labels:  # Only if not already fixed as input
                     # Create a closure to capture var_values
                     def make_structural_sampler(values):
                         return lambda rng, n: values[:n]
@@ -232,9 +266,9 @@ def generate_baseline_trajectory(process_configs, target_trajectory, n_samples=5
             # Restore original noise model
             ds_scm.noise_model.singles = original_singles
 
-        # Extract inputs and outputs
-        inputs = df[input_labels].values  # Shape: (n_samples, input_dim)
-        outputs = df[output_labels].values  # Shape: (n_samples, output_dim)
+        # Extract inputs and outputs (usando le label SCM base)
+        inputs = df[scm_input_labels].values  # Shape: (n_samples, input_dim)
+        outputs = df[scm_output_labels].values  # Shape: (n_samples, output_dim)
 
         trajectory[process_name] = {
             'inputs': inputs,

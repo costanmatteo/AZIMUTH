@@ -208,7 +208,7 @@ def load_csv_data(filepath, input_columns, output_columns):
     return X, y
 
 
-def generate_scm_data(n_samples=5000, seed=42, dataset_type='one_to_one_ct', save_graph_to=None):
+def generate_scm_data(n_samples=5000, seed=42, dataset_type='one_to_one_ct', save_graph_to=None, **kwargs):
     """
     Generate synthetic data using Structural Causal Model (SCM).
 
@@ -253,9 +253,18 @@ def generate_scm_data(n_samples=5000, seed=42, dataset_type='one_to_one_ct', sav
         scm_dataset = ds_scm_galvanic
     elif dataset_type == 'microetch':
         scm_dataset = ds_scm_microetch
+    elif dataset_type == 'st':
+        # ST dataset: richiede st_params passati via kwargs
+        from scm_ds.datasets_st import STConfig, build_st_scm
+        st_params = kwargs.get('st_params')
+        if st_params is None:
+            raise ValueError(
+                "dataset_type='st' requires 'st_params' dict to be passed as kwarg"
+            )
+        scm_dataset = build_st_scm(STConfig(**st_params))
     else:
         raise ValueError(f"Unknown SCM dataset type: {dataset_type}. "
-                         f"Available types: 'one_to_one_ct', 'laser', 'plasma', 'galvanic', 'microetch'")
+                         f"Available types: 'one_to_one_ct', 'laser', 'plasma', 'galvanic', 'microetch', 'st'")
 
     # Generate samples
     print(f"Generating {n_samples} synthetic samples using SCM...")

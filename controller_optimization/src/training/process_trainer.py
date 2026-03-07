@@ -139,11 +139,17 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
     if verbose:
         print(f"\n[1/9] Generating SCM dataset ({scm_dataset_type})...")
 
+    # Per processi ST, passa st_params per costruire lo SCM
+    extra_kwargs = {}
+    if scm_dataset_type == 'st' and 'st_params' in process_config:
+        extra_kwargs['st_params'] = process_config['st_params']
+
     X, y, input_cols, output_cols = generate_scm_data(
         n_samples=training_config['n_samples'],
         seed=seed,
         dataset_type=scm_dataset_type,
-        save_graph_to=checkpoint_dir  # Save SCM graph
+        save_graph_to=checkpoint_dir,  # Save SCM graph
+        **extra_kwargs
     )
 
     # 2. Preprocessing
