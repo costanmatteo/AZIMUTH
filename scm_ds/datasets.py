@@ -9,6 +9,7 @@ This module provides ready-to-use SCM datasets for various PCB manufacturing pro
 """
 
 from .scm import *
+from .datasets_st import STConfig, build_st_scm
 
 
 
@@ -655,6 +656,14 @@ ds_scm_microetch.process_noise_vars = ['Zln', 'NoiseStudentT']
 
 
 # =============================================================================
+# STYBLINSKI-TANG SCM MODELS — Synthetic configurable datasets
+# =============================================================================
+
+ds_scm_st_simple = build_st_scm(STConfig())
+ds_scm_st_deep   = build_st_scm(STConfig(n=12, m=4))
+
+
+# =============================================================================
 # EXAMPLE USAGE (commented out)
 # =============================================================================
 # Uncomment and modify as needed to generate datasets
@@ -664,3 +673,5 @@ ds_scm_microetch.process_noise_vars = ['Zln', 'NoiseStudentT']
 # ds_scm_plasma.generate_ds(mode="flat", n=5_000, save_dir="data/plasma")
 # ds_scm_galvanic.generate_ds(mode="flat", n=5_000, save_dir="data/galvanic")
 # ds_scm_microetch.generate_ds(mode="flat", n=5_000, save_dir="data/microetch")
+# ds_scm_st_simple.generate_ds(mode="flat", n=5_000, save_dir="data/st_simple")
+# ds_scm_st_deep.generate_ds(mode="flat", n=5_000, save_dir="data/st_deep")
