@@ -271,6 +271,14 @@ def _build_st_processes(st_dataset_config):
     input_dim = len(base_input_labels)
     output_dim = len(base_output_labels)
 
+    # Estrai target e scale calibrati dal nodo output dell'SCM.
+    # Per p=1, il nodo output è "Y"; per p>1 sarebbe "Y_1", "Y_2", ecc.
+    output_node = base_output_labels[0]  # es. "Y"
+    scm_proc_cfg = ref_scm.process_configs.get(output_node, {})
+    calibrated_target = scm_proc_cfg.get('base_target', 0.0)
+    calibrated_scale = scm_proc_cfg.get('scale', 1.0)
+    calibrated_weight = scm_proc_cfg.get('weight', 1.0)
+
     processes = []
     for i in range(1, n_procs + 1):
         suffix = f"_p{i}"
@@ -296,6 +304,11 @@ def _build_st_processes(st_dataset_config):
             '_st_base_input_labels': base_input_labels,
             '_st_base_output_labels': base_output_labels,
             '_st_base_structural_vars': base_structural,
+
+            # Target e scale calibrati dall'SCM (usati da ProTSurrogate)
+            'surrogate_target': calibrated_target,
+            'surrogate_scale': calibrated_scale,
+            'surrogate_weight': calibrated_weight,
 
             'uncertainty_predictor': copy.deepcopy(up_config),
 

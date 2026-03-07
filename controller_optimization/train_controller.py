@@ -424,7 +424,8 @@ def main(config=None):
     surrogate = create_surrogate(
         config=surrogate_config,
         target_trajectory=target_trajectory,
-        device=device
+        device=device,
+        process_configs=selected_processes,
     )
 
     # For CasualiTSurrogate, connect to ProcessChain for format conversion
@@ -1139,8 +1140,11 @@ def main(config=None):
             print("\n[8.6/9] Running theoretical loss analysis...")
 
             try:
-                # Get process configs from surrogate
-                process_configs_surrogate = ProTSurrogate.PROCESS_CONFIGS
+                # Get process configs from surrogate (dynamic se disponibili, altrimenti hardcoded)
+                if hasattr(surrogate, '_dynamic_configs') and surrogate._dynamic_configs is not None:
+                    process_configs_surrogate = surrogate._dynamic_configs
+                else:
+                    process_configs_surrogate = ProTSurrogate.PROCESS_CONFIGS
 
                 # ── Empirical sampling (matches training configuration) ────
                 # Collect F_samples using the SAME number of scenarios and
