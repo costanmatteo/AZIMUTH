@@ -236,15 +236,18 @@ def compute_manifold(
     return manifold
 
 
-def get_adaptive_target(process_idx: int, upstream_outputs: Optional[Dict[str, float]] = None) -> float:
+def get_adaptive_target(process_idx: int, upstream_outputs: Optional[Dict[str, float]] = None,
+                        surrogate=None) -> float:
     """
     Get the adaptive target for process i given upstream outputs.
 
-    Mirrors the logic in ProTSurrogate.compute_reliability().
+    Se il surrogate ha _dynamic_configs (processi ST), usa il target calibrato.
+    Altrimenti usa la logica hardcoded per i processi fisici (legacy).
 
     Args:
-        process_idx: 0=laser, 1=plasma, 2=galvanic, 3=microetch
+        process_idx: indice del processo nella catena
         upstream_outputs: dict {proc_name: output_value} for completed processes
+        surrogate: ProTSurrogate instance (opzionale, per accedere a _dynamic_configs)
 
     Returns:
         target value tau_i
@@ -252,6 +255,15 @@ def get_adaptive_target(process_idx: int, upstream_outputs: Optional[Dict[str, f
     if upstream_outputs is None:
         upstream_outputs = {}
 
+    # GENERIC PATH: usa target calibrati dal surrogate (processi ST)
+    if surrogate is not None and hasattr(surrogate, '_dynamic_configs') and surrogate._dynamic_configs is not None:
+        # Trova il nome del processo per questo indice
+        proc_names = list(surrogate._dynamic_configs.keys())
+        if process_idx < len(proc_names):
+            return surrogate._dynamic_configs[proc_names[process_idx]]['target']
+        return 0.0
+
+    # LEGACY PATH: logica hardcoded per processi fisici
     if process_idx == 0:  # laser
         return 0.8
     elif process_idx == 1:  # plasma
@@ -650,25 +662,27 @@ def backward_induction(
     process_names: List[str],
     cfg: BellmanConfig,
     verbose: bool = True,
+    **kwargs,
 ) -> Tuple[float, Dict[int, np.ndarray], np.ndarray, np.ndarray, Dict[int, float], Dict[int, np.ndarray], List[float]]:
     """
-    Run backward induction from i=3 (terminal) to i=0 (initial).
+    Run backward induction from terminal process to initial.
 
     Args:
         F_star: target reliability
-        Sigma: (4, 4) noise covariance
-        manifolds: list of 4 manifold arrays, each (M_i, 2)
-        w_bar: (4,) normalised weights
-        scales: (4,) scale parameters
+        Sigma: (n, n) noise covariance
+        manifolds: list of n manifold arrays, each (M_i, 2)
+        w_bar: (n,) normalised weights
+        scales: (n,) scale parameters
         target_outputs: {proc_name: target_output} for adaptive targets
-        process_names: ['laser', 'plasma', 'galvanic', 'microetch']
+        process_names: list of process names
         cfg: BellmanConfig
         verbose: print progress
+        **kwargs: optional 'surrogate' for dynamic target configs (ST processes)
 
     Returns:
         Tuple of (L_min, V_functions, grid_R, grid_eps, sigma2_cond, cond_weights, taus)
     """
-    n = 4
+    n = len(process_names)
     grid_R, grid_eps = build_grids(F_star, cfg)
 
     # Precompute conditional parameters
@@ -680,10 +694,12 @@ def backward_induction(
             print(f"  Conditional weights[{i}]: {cond_weights[i]}")
 
     # Compute adaptive targets at the operating point
+    # surrogate viene passato via kwargs per supportare target dinamici (ST)
+    surrogate = kwargs.get('surrogate', None)
     taus = []
     upstream = {}
     for i in range(n):
-        tau_i = get_adaptive_target(i, upstream)
+        tau_i = get_adaptive_target(i, upstream, surrogate=surrogate)
         taus.append(tau_i)
         upstream[process_names[i]] = target_outputs[process_names[i]]
     if verbose:
@@ -691,52 +707,45 @@ def backward_induction(
 
     rng = np.random.default_rng(42)
 
-    # ── Step i=3 (terminal, 0-indexed): closed-form ──
-    if verbose:
-        print(f"\n  [Step 3/3] Terminal step (process '{process_names[3]}') — closed-form...")
-    t0 = time.time()
-    V3 = bellman_terminal(
-        grid_R, grid_eps, manifolds[3],
-        w_bar[3], scales[3], taus[3],
-        sigma2_cond[3], cond_weights[3],
-    )
-    if verbose:
-        print(f"    Done in {time.time()-t0:.1f}s. V3 shape: {V3.shape}, range: [{V3.min():.6f}, {V3.max():.6f}]")
+    # ── Backward induction: da terminal (i=n-1) a i=0 ──
+    V_functions = {}
 
-    # ── Step i=2: MC ──
+    # Step terminale (i = n-1): closed-form
+    terminal_idx = n - 1
     if verbose:
-        print(f"\n  [Step 2/3] Process '{process_names[2]}' — Monte Carlo (K={cfg.K_mc})...")
+        print(f"\n  [Step {n-1}/{n-1}] Terminal step (process '{process_names[terminal_idx]}') — closed-form...")
     t0 = time.time()
-    V2 = bellman_non_terminal(
-        grid_R, grid_eps, V3, manifolds[2],
-        w_bar[2], scales[2], taus[2],
-        sigma2_cond[2], cond_weights[2],
-        process_idx=2, K=cfg.K_mc,
-        use_antithetic=cfg.use_antithetic, rng=rng,
+    V_prev = bellman_terminal(
+        grid_R, grid_eps, manifolds[terminal_idx],
+        w_bar[terminal_idx], scales[terminal_idx], taus[terminal_idx],
+        sigma2_cond[terminal_idx], cond_weights[terminal_idx],
     )
+    V_functions[terminal_idx] = V_prev
     if verbose:
-        print(f"    Done in {time.time()-t0:.1f}s. V2 shape: {V2.shape}, range: [{V2.min():.6f}, {V2.max():.6f}]")
+        print(f"    Done in {time.time()-t0:.1f}s. V shape: {V_prev.shape}, range: [{V_prev.min():.6f}, {V_prev.max():.6f}]")
 
-    # ── Step i=1: MC ──
-    if verbose:
-        print(f"\n  [Step 1/3] Process '{process_names[1]}' — Monte Carlo (K={cfg.K_mc})...")
-    t0 = time.time()
-    V1 = bellman_non_terminal(
-        grid_R, grid_eps, V2, manifolds[1],
-        w_bar[1], scales[1], taus[1],
-        sigma2_cond[1], cond_weights[1],
-        process_idx=1, K=cfg.K_mc,
-        use_antithetic=cfg.use_antithetic, rng=rng,
-    )
-    if verbose:
-        print(f"    Done in {time.time()-t0:.1f}s. V1 shape: {V1.shape}, range: [{V1.min():.6f}, {V1.max():.6f}]")
+    # Steps intermedi (i = n-2 ... 1): MC
+    for i in range(n - 2, 0, -1):
+        if verbose:
+            print(f"\n  [Step {i}/{n-1}] Process '{process_names[i]}' — Monte Carlo (K={cfg.K_mc})...")
+        t0 = time.time()
+        V_prev = bellman_non_terminal(
+            grid_R, grid_eps, V_prev, manifolds[i],
+            w_bar[i], scales[i], taus[i],
+            sigma2_cond[i], cond_weights[i],
+            process_idx=i, K=cfg.K_mc,
+            use_antithetic=cfg.use_antithetic, rng=rng,
+        )
+        V_functions[i] = V_prev
+        if verbose:
+            print(f"    Done in {time.time()-t0:.1f}s. V shape: {V_prev.shape}, range: [{V_prev.min():.6f}, {V_prev.max():.6f}]")
 
-    # ── Step i=0: MC (returns scalar) ──
+    # Step iniziale (i = 0): MC, ritorna scalare
     if verbose:
-        print(f"\n  [Step 0/3] Process '{process_names[0]}' — Monte Carlo (K={cfg.K_mc})...")
+        print(f"\n  [Step 0/{n-1}] Process '{process_names[0]}' — Monte Carlo (K={cfg.K_mc})...")
     t0 = time.time()
     L_min = bellman_non_terminal(
-        grid_R, grid_eps, V1, manifolds[0],
+        grid_R, grid_eps, V_prev, manifolds[0],
         w_bar[0], scales[0], taus[0],
         sigma2_cond[0], None,
         process_idx=0, K=cfg.K_mc,
@@ -745,7 +754,6 @@ def backward_induction(
     if verbose:
         print(f"    Done in {time.time()-t0:.1f}s. L_min = {L_min:.8f}")
 
-    V_functions = {1: V1, 2: V2, 3: V3}
     return float(L_min), V_functions, grid_R, grid_eps, sigma2_cond, cond_weights, taus
 
 
@@ -796,29 +804,24 @@ def forward_simulation(
     if rng is None:
         rng = np.random.default_rng(999)
 
-    n = 4
+    n = len(manifolds)
     L_chol = np.linalg.cholesky(Sigma)
     R_lo, R_hi = grid_R[0], grid_R[-1]
     eps_lo, eps_hi = grid_eps[0], grid_eps[-1]
 
     # Build interpolators for each V function (for policy lookup)
     interp_V = {}
-    interp_V[1] = RegularGridInterpolator(
-        (grid_R, grid_eps), V_functions[1],
-        method='linear', bounds_error=False, fill_value=None,
-    )
-    interp_V[2] = RegularGridInterpolator(
-        (grid_R, grid_eps, grid_eps), V_functions[2],
-        method='linear', bounds_error=False, fill_value=None,
-    )
-    interp_V[3] = RegularGridInterpolator(
-        (grid_R, grid_eps, grid_eps, grid_eps), V_functions[3],
-        method='linear', bounds_error=False, fill_value=None,
-    )
+    for vi_idx, V_arr in V_functions.items():
+        # V_i ha dimensione (N_R, N_eps, ..., N_eps) con vi_idx assi eps
+        grid_axes = [grid_R] + [grid_eps] * vi_idx
+        interp_V[vi_idx] = RegularGridInterpolator(
+            tuple(grid_axes), V_arr,
+            method='linear', bounds_error=False, fill_value=None,
+        )
 
-    # Sample all noise vectors at once: (N, 4)
+    # Sample all noise vectors at once: (N, n)
     Z = rng.standard_normal((N, n))
-    EPS = Z @ L_chol.T  # (N, 4)
+    EPS = Z @ L_chol.T  # (N, n)
 
     # State vectors — all trajectories in parallel
     R = np.full(N, F_star)                   # (N,)
@@ -842,19 +845,15 @@ def forward_simulation(
             R_c = np.clip(R_next_all, R_lo, R_hi)        # (M, N)
             eps_i_c = np.clip(eps_i, eps_lo, eps_hi)      # (N,)
 
-            MN = M_i * N
             R_flat = R_c.ravel()                          # (M*N,)
             eps_i_flat = np.tile(eps_i_c, M_i)            # (M*N,)
 
-            if i == 0:
-                points = np.column_stack([R_flat, eps_i_flat])
-            elif i == 1:
-                e0_flat = np.tile(np.clip(eps_hist[:, 0], eps_lo, eps_hi), M_i)
-                points = np.column_stack([R_flat, e0_flat, eps_i_flat])
-            elif i == 2:
-                e0_flat = np.tile(np.clip(eps_hist[:, 0], eps_lo, eps_hi), M_i)
-                e1_flat = np.tile(np.clip(eps_hist[:, 1], eps_lo, eps_hi), M_i)
-                points = np.column_stack([R_flat, e0_flat, e1_flat, eps_i_flat])
+            # Costruisci colonne interpolazione: [R, eps_0, eps_1, ..., eps_i]
+            cols = [R_flat]
+            for h in range(eps_hist.shape[1]):
+                cols.append(np.tile(np.clip(eps_hist[:, h], eps_lo, eps_hi), M_i))
+            cols.append(eps_i_flat)
+            points = np.column_stack(cols)
 
             v_next = interp_V[i + 1](points).reshape(M_i, N)  # (M, N)
         else:
@@ -901,10 +900,10 @@ def forward_simulation_greedy(
     if rng is None:
         rng = np.random.default_rng(777)
 
-    n = 4
+    n = len(manifolds)
     L_chol = np.linalg.cholesky(Sigma)
     Z = rng.standard_normal((N, n))
-    EPS = Z @ L_chol.T  # (N, 4)
+    EPS = Z @ L_chol.T  # (N, n)
 
     R = np.full(N, F_star)
 
@@ -949,10 +948,10 @@ def forward_simulation_random(
     if rng is None:
         rng = np.random.default_rng(888)
 
-    n = 4
+    n = len(manifolds)
     L_chol = np.linalg.cholesky(Sigma)
     Z = rng.standard_normal((N, n))
-    EPS = Z @ L_chol.T  # (N, 4)
+    EPS = Z @ L_chol.T  # (N, n)
 
     R = np.full(N, F_star)
 
@@ -1010,14 +1009,18 @@ def compute_bellman_lmin(
         cfg = BellmanConfig()
 
     t_start = time.time()
-    n = 4
     process_names = process_chain.process_names
+    n = len(process_names)
 
     F_star = surrogate.F_star
 
     # ── Extract weights and scales ──
-    from controller_optimization.src.models.surrogate import ProTSurrogate
-    proc_configs = ProTSurrogate.PROCESS_CONFIGS
+    # Usa _dynamic_configs dal surrogate se disponibili (ST), altrimenti PROCESS_CONFIGS
+    if hasattr(surrogate, '_dynamic_configs') and surrogate._dynamic_configs is not None:
+        proc_configs = surrogate._dynamic_configs
+    else:
+        from controller_optimization.src.models.surrogate import ProTSurrogate
+        proc_configs = ProTSurrogate.PROCESS_CONFIGS
 
     weights = np.array([proc_configs[name]['weight'] for name in process_names])
     w_bar = weights / weights.sum()
@@ -1083,6 +1086,7 @@ def compute_bellman_lmin(
      sigma2_cond, cond_wts, taus) = backward_induction(
         F_star, Sigma, manifolds, w_bar, scales,
         target_outputs, process_names, cfg, verbose,
+        surrogate=surrogate,
     )
     L_min_bellman_scaled = L_min_bellman * loss_scale
 
