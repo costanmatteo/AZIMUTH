@@ -13,9 +13,10 @@ The module provides:
 
 from __future__ import annotations
 
+import copy
 import math
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -64,6 +65,12 @@ class STConfig:
     # --- domains ---
     x_domain: Tuple[float, float] = (-5.0, 5.0)
     e_domain: Tuple[float, float] = (-1.0, 1.0)
+
+    # --- calibration ---
+    cal_n: int = 2000               # calibration sample size
+    cal_seed: int = 99              # calibration RNG seed
+    cal_percentile: float = 10.0    # percentile for base_target (lower = harder)
+    cal_width_factor: float = 1.0   # scale = (std * width_factor)^2
 
 
 # ---------------------------------------------------------------------------
@@ -446,7 +453,121 @@ def build_st_scm(cfg: STConfig) -> SCMDataset:
         all_noise_nodes.extend(name_list)
     ds.process_noise_vars = all_noise_nodes
 
+    # ── STEP 10: Calibrate process_configs ────────────────────────────
+    _calibrate(ds, cfg, all_stage_names, output_names, output_partitions)
+
     return ds
+
+
+# ---------------------------------------------------------------------------
+# Calibration
+# ---------------------------------------------------------------------------
+
+def _calibrate(
+    ds: SCMDataset,
+    cfg: STConfig,
+    all_stage_names: List[str],
+    output_names: List[str],
+    output_partitions: List[List[int]],
+) -> None:
+    """Calibrate process_configs, process_order on *ds* using a rho=0 reference sample."""
+
+    # ── Build a zero-noise clone for the reference sample ─────────
+    original_singles = ds.noise_model.singles.copy()
+    modified = {}
+    for var_name, fn in original_singles.items():
+        if var_name in ds.process_noise_vars:
+            # Zero out process noise
+            if var_name.startswith("Z_ln"):
+                # lognormal identity: return 1.0
+                modified[var_name] = lambda rng, n_: np.ones(n_)
+            else:
+                modified[var_name] = lambda rng, n_: np.zeros(n_)
+        else:
+            modified[var_name] = fn
+    ds.noise_model.singles = modified
+    try:
+        cal_df = ds.sample(n=cfg.cal_n, seed=cfg.cal_seed)
+    finally:
+        ds.noise_model.singles = original_singles
+
+    # ── Identify per-chain stage sequences ────────────────────────
+    # For p=1: stages are S_1, S_2, ..., S_m  (no suffix)
+    # For p>1: chain i has S_1_i, S_2_i, ..., S_m_i
+    chains: List[List[str]] = []  # each chain: list of stage names in order
+    for oi in range(cfg.p):
+        suffix = "" if cfg.p == 1 else f"_{oi+1}"
+        n_sub = len(output_partitions[oi])
+        m = min(cfg.m, n_sub)
+        chain = [f"S_{k+1}{suffix}" for k in range(m)]
+        chains.append(chain)
+
+    # ── Build process_configs and process_order ───────────────────
+    process_configs: Dict[str, dict] = {}
+    process_order: List[str] = []
+    pct = cfg.cal_percentile
+    wf = cfg.cal_width_factor
+
+    for oi, (chain, y_name) in enumerate(zip(chains, output_names)):
+        # Stages first
+        for ki, stage_name in enumerate(chain):
+            vals = cal_df[stage_name].values
+            tau = float(np.percentile(vals, pct))
+            std = float(np.std(vals))
+            scale = (std * wf) ** 2 if std > 0 else 1.0
+
+            entry: dict = {
+                "base_target": tau,
+                "scale": scale,
+                "weight": 1.0,
+            }
+
+            if ki > 0:
+                prev = chain[ki - 1]
+                prev_vals = cal_df[prev].values
+                prev_var = float(np.var(prev_vals))
+                if prev_var > 0:
+                    coeff = float(np.cov(vals, prev_vals)[0, 1] / prev_var)
+                    coeff = max(-5.0, min(5.0, coeff))  # clip
+                else:
+                    coeff = 0.0
+                prev_tau = float(np.percentile(prev_vals, pct))
+                entry["adaptive_coefficients"] = {prev: coeff}
+                entry["adaptive_baselines"] = {prev: prev_tau}
+
+            process_configs[stage_name] = entry
+            process_order.append(stage_name)
+
+        # Output node
+        y_vals = cal_df[y_name].values
+        y_tau = float(np.percentile(y_vals, pct))
+        y_std = float(np.std(y_vals))
+        y_scale = (y_std * wf) ** 2 if y_std > 0 else 1.0
+
+        y_entry: dict = {
+            "base_target": y_tau,
+            "scale": y_scale,
+            "weight": 1.0,
+        }
+
+        # Adaptive from last stage
+        last_stage = chain[-1]
+        ls_vals = cal_df[last_stage].values
+        ls_var = float(np.var(ls_vals))
+        if ls_var > 0:
+            coeff = float(np.cov(y_vals, ls_vals)[0, 1] / ls_var)
+            coeff = max(-5.0, min(5.0, coeff))
+        else:
+            coeff = 0.0
+        ls_tau = float(np.percentile(ls_vals, pct))
+        y_entry["adaptive_coefficients"] = {last_stage: coeff}
+        y_entry["adaptive_baselines"] = {last_stage: ls_tau}
+
+        process_configs[y_name] = y_entry
+        process_order.append(y_name)
+
+    ds.process_configs = process_configs
+    ds.process_order = process_order
 
 
 # ---------------------------------------------------------------------------
