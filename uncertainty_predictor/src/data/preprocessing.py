@@ -271,8 +271,14 @@ def generate_scm_data(n_samples=5000, seed=42, dataset_type='one_to_one_ct', sav
     df = scm_dataset.sample(n=n_samples, seed=seed)
 
     # Extract input and output columns
-    input_columns = scm_dataset.input_labels
-    output_columns = scm_dataset.target_labels
+    input_columns = list(scm_dataset.input_labels)
+    output_columns = list(scm_dataset.target_labels)
+
+    # Per ST datasets, includi anche le variabili ambientali (E_j) come input
+    # per coerenza con la configurazione processo che le include in input_labels
+    if dataset_type == 'st' and hasattr(scm_dataset, 'structural_noise_vars'):
+        structural_vars = list(scm_dataset.structural_noise_vars)
+        input_columns = input_columns + structural_vars
 
     X = df[input_columns].values
     y = df[output_columns].values
