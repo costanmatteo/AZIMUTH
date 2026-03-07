@@ -99,7 +99,7 @@ CONTROLLER_CONFIG = {
     # - None: usa tutti i processi definiti in PROCESSES
     # - ['laser', 'plasma']: usa solo laser e plasma (nell'ordine specificato)
     # - ['laser', 'plasma', 'galvanic', 'microetch']: usa tutti e 4 i processi
-    'process_names': ['laser', 'plasma', 'galvanic', 'microetch'],  # All 4 processes
+    'process_names': None,  # None = usa tutti i processi definiti in PROCESSES (st_1, st_2, st_3)
 
     # Policy generator architecture
     'policy_generator': {
