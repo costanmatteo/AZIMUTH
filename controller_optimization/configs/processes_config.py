@@ -26,7 +26,7 @@ if str(_REPO_ROOT) not in sys.path:
 # ═══════════════════════════════════════════════════════════════════════════════
 # 'physical' → usa i 4 processi fisici (laser, plasma, galvanic, microetch)
 # 'st'       → usa N processi identici basati su Styblinski-Tang
-DATASET_MODE = 'physical'
+DATASET_MODE = 'st'
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # ST DATASET CONFIGURATION (usata solo se DATASET_MODE == 'st')
