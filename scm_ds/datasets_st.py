@@ -163,8 +163,8 @@ def _assign_env_groups(n: int, me: int, overlap: float) -> List[List[int]]:
 # ---------------------------------------------------------------------------
 
 def _st_term(var: str) -> str:
-    """Single-variable ST polynomial: 0.5*(x^4 - 16*x^2 + 5*x)."""
-    return f"0.5*({var}**4 - 16*{var}**2 + 5*{var})"
+    """Single-variable ST polynomial: 0.5*(x^4 - 16*x^2 + 5*x + 40)."""
+    return f"0.5*({var}**4 - 16*{var}**2 + 5*{var} + 40)"
 
 
 def _build_stage_expr(
