@@ -19,7 +19,7 @@ from datetime import datetime
 REPO_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from controller_optimization.configs.processes_config import PROCESSES, get_process_by_name
+from controller_optimization.configs.processes_config import PROCESSES, DATASET_MODE, get_process_by_name
 from controller_optimization.src.training.process_trainer import train_single_process
 
 # Import report combining function
@@ -89,6 +89,11 @@ def main():
     all_results = {}
     summary_data = []
 
+    # Per dataset ST, tutti i processi sono identici: alleniamo solo il primo
+    # e copiamo i checkpoint per gli altri.
+    is_st_mode = DATASET_MODE == 'st'
+    st_reference_result = None  # Risultato del primo processo ST allenato
+
     # Train each process
     for i, process_config in enumerate(processes_to_train, 1):
         process_name = process_config['name']
@@ -128,6 +133,35 @@ def main():
                     })
             continue
 
+        # ST mode: se abbiamo già allenato il primo processo, copiamo i checkpoint
+        if is_st_mode and st_reference_result is not None:
+            import shutil
+            ref_dir = Path(st_reference_result['checkpoint_dir'])
+            checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+            # Copia tutti i file dal checkpoint di riferimento
+            for src_file in ref_dir.iterdir():
+                if src_file.is_file():
+                    shutil.copy2(src_file, checkpoint_dir / src_file.name)
+
+            print(f"\n✓ Copied checkpoint from '{st_reference_result['process_name']}' "
+                  f"(identical ST process)")
+
+            all_results[process_name] = {
+                'metrics': st_reference_result['metrics'],
+                'report_path': str(checkpoint_dir / 'training_report.pdf'),
+            }
+            summary_data.append({
+                'process': process_name,
+                'MSE': st_reference_result['metrics']['MSE'],
+                'RMSE': st_reference_result['metrics']['RMSE'],
+                'MAE': st_reference_result['metrics']['MAE'],
+                'R2': st_reference_result['metrics']['R2'],
+                'Calibration_Ratio': st_reference_result['metrics']['Calibration_Ratio'],
+                'report_path': str(checkpoint_dir / 'training_report.pdf'),
+            })
+            continue
+
         # Train process
         try:
             result = train_single_process(
@@ -138,6 +172,14 @@ def main():
             )
 
             all_results[process_name] = result
+
+            # Per ST mode, salva il risultato di riferimento
+            if is_st_mode and st_reference_result is None:
+                st_reference_result = {
+                    'process_name': process_name,
+                    'checkpoint_dir': process_config['checkpoint_dir'],
+                    'metrics': result['metrics'],
+                }
 
             # Add to summary
             summary_data.append({
