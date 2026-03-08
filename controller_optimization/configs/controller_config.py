@@ -208,7 +208,7 @@ CONTROLLER_CONFIG = {
 
     # Theoretical analysis
     'theoretical_analysis': {
-        'enabled': False,  # Enable/disable theoretical L_min analysis (computation + plots)
+        'enabled': True,  # Enable/disable theoretical L_min analysis (computation + plots)
         'use_correlation_for_L_min': True,  # Use estimated process correlations for L_min calculation
                                             # True = accounts for correlated process errors (more accurate)
                                             # False = assumes independence (ρᵢⱼ = 0, simpler)
