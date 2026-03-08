@@ -37,7 +37,7 @@ ST_DATASET_CONFIG = {
 
     # Parametri STConfig — ogni processo usa la stessa configurazione
     'st_params': {
-        'n': 4,                     # variabili di input per processo
+        'n': 9,                     # variabili di input per processo
         'm': 1,                     # stadi ST per processo (1 = singolo stadio)
         'p': 1,                     # output per processo
         'me': 1,                    # variabili ambientali
