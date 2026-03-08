@@ -373,9 +373,11 @@ def bellman_terminal(
     cond_weights_i: np.ndarray,
 ) -> np.ndarray:
     """
-    Closed-form Bellman for the terminal step (process index 3, last process).
+    Closed-form Bellman for the terminal step (last process).
 
-    V_4(R_4, eps_{<4}) = min_{(mu,sigma2) in M_4} E[ (R_4 - w_bar_4 * Q_4)^2 | eps_{<4} ]
+    V_T(R_T, eps_{<T}) = min_{(mu,sigma2) in M_T} E[ (R_T - w_bar_T * Q_T)^2 | eps_{<T} ]
+
+    Generic for any number of preceding processes (n_prev = len(cond_weights_i)).
 
     Uses the Gaussian integral identity:
         E[exp(-((alpha + beta*z)^2) / gamma)] = exp(-alpha^2/(gamma+2*beta^2)) / sqrt(1+2*beta^2/gamma)
@@ -388,14 +390,15 @@ def bellman_terminal(
         s_i: scale parameter
         tau_i: adaptive target (at target trajectory operating point)
         sigma2_cond_i: conditional variance of eps_i | eps_{<i}
-        cond_weights_i: (3,) conditional mean weights
+        cond_weights_i: (n_prev,) conditional mean weights
 
     Returns:
-        V: array of shape (N_R, N_eps, N_eps, N_eps)
+        V: array of shape (N_R, N_eps, ..., N_eps) with n_prev eps dimensions
     """
     N_R = len(grid_R)
     N_eps = len(grid_eps)
     M = manifold.shape[0]
+    n_prev = len(cond_weights_i)
 
     # Extract manifold columns
     mu_m = manifold[:, 0]       # (M,)
@@ -405,44 +408,38 @@ def bellman_terminal(
     # Compute delta_m = mu_m - tau_i for each action
     delta_m = mu_m - tau_i  # (M,)
 
-    # Build meshgrid for eps_{<4} = (eps_0, eps_1, eps_2)
-    # cond_weights_i has shape (3,)
-    # eps_hat_4 = cond_weights_i[0]*e0 + cond_weights_i[1]*e1 + cond_weights_i[2]*e2
-
-    # Precompute eps_hat for all grid points
-    # Shape: (N_eps, N_eps, N_eps)
-    e0, e1, e2 = np.meshgrid(grid_eps, grid_eps, grid_eps, indexing='ij')
-    eps_hat = cond_weights_i[0] * e0 + cond_weights_i[1] * e1 + cond_weights_i[2] * e2
-    # Shape: (N_eps, N_eps, N_eps)
+    # Build meshgrid for eps_{<T} with n_prev dimensions
+    # eps_hat = sum_j cond_weights_i[j] * e_j
+    grids = np.meshgrid(*([grid_eps] * n_prev), indexing='ij')  # list of n_prev arrays, each (N_eps,)*n_prev
+    eps_hat = sum(cond_weights_i[j] * grids[j] for j in range(n_prev))
+    # Shape: (N_eps,) * n_prev
 
     sqrt_cond = np.sqrt(sigma2_cond_i)
 
-    # For each action m and grid point, compute:
-    # d_4 = delta_m + sigma_m * eps_hat
-    # beta = sigma_m * sqrt_cond
-    # Then:
-    # E[Q_4] = exp(-d^2 / (s + 2*beta^2)) / sqrt(1 + 2*beta^2/s)
-    # E[Q_4^2] = exp(-2*d^2 / (s + 4*beta^2)) / sqrt(1 + 4*beta^2/s)
-    # cost = R^2 - 2*R*w*E[Q] + w^2*E[Q^2]
+    # Vectorise over (R, eps_dims..., m)
+    # n_total_dims = 1 (R) + n_prev (eps) + 1 (m) = n_prev + 2
+    # R:       (N_R, 1, 1, ..., 1)  — n_prev+1 trailing dims
+    # eps_hat: (1, N_eps, ..., N_eps, 1)  — leading 1 + n_prev eps dims + trailing 1
+    # delta_m: (1, 1, ..., 1, M)  — n_prev+1 leading dims
 
-    # We want to vectorise over (R, e0, e1, e2, m)
-    # Shape strategy: R -> (N_R,1,1,1,1), eps_hat -> (1,Ne,Ne,Ne,1), m -> (1,1,1,1,M)
+    R_shape = (N_R,) + (1,) * (n_prev + 1)
+    R = grid_R.reshape(R_shape)
 
-    R = grid_R[:, None, None, None, None]       # (N_R,1,1,1,1)
-    eps_hat_5d = eps_hat[None, :, :, :, None]    # (1,Ne,Ne,Ne,1)
-    delta_5d = delta_m[None, None, None, None, :]  # (1,1,1,1,M)
-    sigma_5d = sigma_m[None, None, None, None, :]  # (1,1,1,1,M)
+    eps_hat_shape = (1,) + eps_hat.shape + (1,)
+    eps_hat_nd = eps_hat.reshape(eps_hat_shape)
 
-    d = delta_5d + sigma_5d * eps_hat_5d    # (N_R,Ne,Ne,Ne,M) — broadcast on R trivially
-    # d actually doesn't depend on R, but keeping 5 dims for broadcasting
+    trailing_shape = (1,) * (n_prev + 1) + (M,)
+    delta_nd = delta_m.reshape(trailing_shape)
+    sigma_nd = sigma_m.reshape(trailing_shape)
 
-    beta = sigma_5d * sqrt_cond  # (1,1,1,1,M)
+    d = delta_nd + sigma_nd * eps_hat_nd  # (N_R, Ne, ..., Ne, M)
+
+    beta = sigma_nd * sqrt_cond
     beta2 = beta ** 2
 
     # E[Q]
     denom1 = s_i + 2 * beta2
     EQ = np.exp(-d ** 2 / denom1) / np.sqrt(1 + 2 * beta2 / s_i)
-    # (N_R, Ne, Ne, Ne, M) — still no true R dependence in EQ
 
     # E[Q^2]
     denom2 = s_i + 4 * beta2
@@ -450,10 +447,9 @@ def bellman_terminal(
 
     # cost(R, eps, m) = R^2 - 2*R*w*EQ + w^2*EQ2
     cost = R ** 2 - 2 * R * w_bar_i * EQ + w_bar_i ** 2 * EQ2
-    # (N_R, Ne, Ne, Ne, M)
 
-    # Minimise over actions
-    V = np.min(cost, axis=-1)  # (N_R, Ne, Ne, Ne)
+    # Minimise over actions (last axis)
+    V = np.min(cost, axis=-1)  # (N_R, N_eps, ..., N_eps)
 
     return V
 
@@ -519,36 +515,16 @@ def bellman_non_terminal(
 
     sqrt_cond = np.sqrt(sigma2_cond_i)
 
-    # Build interpolator for V_next
-    if process_idx == 2:
-        # V_next shape: (N_R, N_eps, N_eps, N_eps)
-        interp = RegularGridInterpolator(
-            (grid_R, grid_eps, grid_eps, grid_eps),
-            V_next,
-            method='linear',
-            bounds_error=False,
-            fill_value=None,  # Extrapolate
-        )
-    elif process_idx == 1:
-        # V_next shape: (N_R, N_eps, N_eps)
-        interp = RegularGridInterpolator(
-            (grid_R, grid_eps, grid_eps),
-            V_next,
-            method='linear',
-            bounds_error=False,
-            fill_value=None,
-        )
-    elif process_idx == 0:
-        # V_next shape: (N_R, N_eps)
-        interp = RegularGridInterpolator(
-            (grid_R, grid_eps),
-            V_next,
-            method='linear',
-            bounds_error=False,
-            fill_value=None,
-        )
-    else:
-        raise ValueError(f"Invalid process_idx: {process_idx}")
+    # Number of preceding eps dimensions in V_next
+    # V_next has shape (N_R, N_eps, ..., N_eps) with (process_idx + 1) eps dims
+    n_eps_dims_next = len(V_next.shape) - 1  # subtract R dimension
+
+    # Build interpolator for V_next — generic for any number of eps dims
+    interp_axes = (grid_R,) + (grid_eps,) * n_eps_dims_next
+    interp = RegularGridInterpolator(
+        interp_axes, V_next,
+        method='linear', bounds_error=False, fill_value=None,
+    )
 
     # Generate MC samples (common random numbers)
     if use_antithetic:
@@ -565,33 +541,36 @@ def bellman_non_terminal(
     eps_lo, eps_hi = grid_eps[0], grid_eps[-1]
 
     if process_idx == 0:
-        # i=0: state is (F*, empty) — single point
-        # eps_0 ~ N(0, Sigma[0,0]) => eps_0 = sqrt(Sigma[0,0]) * z
+        # i=0: state is (F*, empty) — single point, returns scalar
         eps_i_samples = sqrt_cond * z_all  # (K,)
-        F_star = grid_R[-1]  # F* is the max R value
+        F_star = grid_R[-1]
 
-        # Vectorise over all M actions: (M, K)
         d_all = delta_m[:, None] + sigma_m[:, None] * eps_i_samples[None, :]  # (M, K)
-        Q_all = np.exp(-(d_all ** 2) / s_i)  # (M, K)
-        R_next_all = F_star - w_bar_i * Q_all  # (M, K)
+        Q_all = np.exp(-(d_all ** 2) / s_i)
+        R_next_all = F_star - w_bar_i * Q_all
 
         R_next_flat = np.clip(R_next_all.ravel(), R_lo, R_hi)
         eps_flat = np.tile(np.clip(eps_i_samples, eps_lo, eps_hi), M)
 
-        points = np.column_stack([R_next_flat, eps_flat])  # (M*K, 2)
-        V_vals = interp(points).reshape(M, K_actual)  # (M, K)
-        costs = V_vals.mean(axis=1)  # (M,)
+        points = np.column_stack([R_next_flat, eps_flat])
+        V_vals = interp(points).reshape(M, K_actual)
+        costs = V_vals.mean(axis=1)
 
-        return float(costs.min())  # scalar
+        return float(costs.min())
 
-    elif process_idx == 1:
-        # i=1: state is (R_1, eps_0) -> output V shape (N_R, N_eps)
-        # Vectorized over R: loop N_eps iterations instead of N_R × N_eps
-        V_out = np.zeros((N_R, N_eps))
+    else:
+        # Generic non-terminal step for process_idx >= 1
+        # State: (R, eps_0, ..., eps_{i-1}) → output shape (N_R, N_eps, ..., N_eps) with i eps dims
+        n_prev = process_idx  # number of preceding eps dimensions
+        V_out_shape = (N_R,) + (N_eps,) * n_prev
+        V_out = np.zeros(V_out_shape)
 
-        for e0_idx in range(N_eps):
-            eps_0_val = grid_eps[e0_idx]
-            eps_hat = cond_weights_i[0] * eps_0_val
+        # Iterate over all combinations of preceding eps values
+        for multi_idx in np.ndindex(*([N_eps] * n_prev)):
+            eps_vals = np.array([grid_eps[idx] for idx in multi_idx])
+
+            # Conditional mean: eps_hat = cond_weights @ eps_vals
+            eps_hat = cond_weights_i @ eps_vals
             eps_i_samples = eps_hat + sqrt_cond * z_all  # (K,)
 
             # d, Q independent of R: (M, K)
@@ -602,48 +581,18 @@ def bellman_non_terminal(
             R_next = grid_R[:, None, None] - w_bar_i * Q_all[None, :, :]
 
             R_flat = np.clip(R_next.ravel(), R_lo, R_hi)  # (N_R*M*K,)
-            eps_0_flat = np.full(N_R * M * K_actual, np.clip(eps_0_val, eps_lo, eps_hi))
-            eps_i_flat = np.tile(np.clip(eps_i_samples, eps_lo, eps_hi), N_R * M)
+            # Build interpolation points: [R, eps_0, ..., eps_{i-1}, eps_i]
+            n_points = N_R * M * K_actual
+            cols = [R_flat]
+            for j in range(n_prev):
+                cols.append(np.full(n_points, np.clip(eps_vals[j], eps_lo, eps_hi)))
+            cols.append(np.tile(np.clip(eps_i_samples, eps_lo, eps_hi), N_R * M))
 
-            points = np.column_stack([R_flat, eps_0_flat, eps_i_flat])
+            points = np.column_stack(cols)
             V_vals = interp(points).reshape(N_R, M, K_actual)
             costs = V_vals.mean(axis=2)  # (N_R, M)
 
-            V_out[:, e0_idx] = costs.min(axis=1)  # (N_R,)
-
-        return V_out
-
-    elif process_idx == 2:
-        # i=2: state is (R_2, eps_0, eps_1) -> output V shape (N_R, N_eps, N_eps)
-        # Vectorized over R: loop N_eps² iterations instead of N_R × N_eps²
-        V_out = np.zeros((N_R, N_eps, N_eps))
-
-        for e0_idx in range(N_eps):
-            eps_0_val = grid_eps[e0_idx]
-            for e1_idx in range(N_eps):
-                eps_1_val = grid_eps[e1_idx]
-
-                eps_less = np.array([eps_0_val, eps_1_val])
-                eps_hat = cond_weights_i @ eps_less
-                eps_i_samples = eps_hat + sqrt_cond * z_all  # (K,)
-
-                # d, Q independent of R: (M, K)
-                d_all = delta_m[:, None] + sigma_m[:, None] * eps_i_samples[None, :]
-                Q_all = np.exp(-(d_all ** 2) / s_i)
-
-                # Vectorize over all R grid points: (N_R, M, K)
-                R_next = grid_R[:, None, None] - w_bar_i * Q_all[None, :, :]
-
-                R_flat = np.clip(R_next.ravel(), R_lo, R_hi)  # (N_R*M*K,)
-                eps_0_flat = np.full(N_R * M * K_actual, np.clip(eps_0_val, eps_lo, eps_hi))
-                eps_1_flat = np.full(N_R * M * K_actual, np.clip(eps_1_val, eps_lo, eps_hi))
-                eps_i_flat = np.tile(np.clip(eps_i_samples, eps_lo, eps_hi), N_R * M)
-
-                points = np.column_stack([R_flat, eps_0_flat, eps_1_flat, eps_i_flat])
-                V_vals = interp(points).reshape(N_R, M, K_actual)
-                costs = V_vals.mean(axis=2)  # (N_R, M)
-
-                V_out[:, e0_idx, e1_idx] = costs.min(axis=1)  # (N_R,)
+            V_out[(slice(None),) + multi_idx] = costs.min(axis=1)  # (N_R,)
 
         return V_out
 
