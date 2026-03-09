@@ -252,24 +252,6 @@ def _build_st_processes(st_dataset_config):
     st_params = st_dataset_config['st_params']
     up_config = st_dataset_config['uncertainty_predictor']
 
-    # Auto-detect n from existing checkpoint to avoid config/checkpoint mismatch
-    _first_ckpt = Path(f'controller_optimization/checkpoints/st_1') / 'uncertainty_predictor.pth'
-    if _first_ckpt.exists():
-        import torch
-        _sd = torch.load(_first_ckpt, map_location='cpu')
-        # First layer weight shape: [hidden, input_dim], input_dim = n + me
-        _first_weight_key = next(
-            (k for k in sorted(_sd.keys()) if k.endswith('.weight') and 'shared_network' in k),
-            None
-        )
-        if _first_weight_key is not None:
-            _ckpt_input_dim = _sd[_first_weight_key].shape[1]
-            _expected_n = _ckpt_input_dim - st_params.get('me', 1)
-            if _expected_n != st_params['n']:
-                print(f"  ⚠ ST config n={st_params['n']} but checkpoint expects "
-                      f"input_dim={_ckpt_input_dim} (n={_expected_n}). Adapting to checkpoint.")
-                st_params = {**st_params, 'n': _expected_n}
-
     # Costruisci un SCM di riferimento per ricavare labels e dimensioni
     cfg = STConfig(**st_params)
     ref_scm = build_st_scm(cfg)
