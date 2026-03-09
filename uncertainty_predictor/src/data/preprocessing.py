@@ -295,12 +295,11 @@ def generate_scm_data(n_samples=5000, seed=42, dataset_type='one_to_one_ct', sav
             save_dir = Path(save_graph_to)
             save_dir.mkdir(parents=True, exist_ok=True)
 
-            # Use matplotlib-based visualization (no external dependencies needed)
-            scm_dataset.scm.save_graph_matplotlib(join(save_dir, 'scm_graph'))
-            print(f"SCM graph saved to: {save_dir}/scm_graph.png")
+            # Clean role-aware DAG (preferred)
+            scm_dataset.save_dag_image(join(save_dir, 'dag'))
+            print(f"DAG image saved to: {save_dir}/dag.png")
         except Exception as e:
-            print(f"Warning: Could not save SCM graph visualization.")
-            print(f"  Error: {e}")
+            print(f"Warning: Could not save DAG image: {e}")
             print(f"  Continuing without graph...")
 
     return X, y, input_columns, output_columns
