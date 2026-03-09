@@ -105,6 +105,32 @@ def main():
         checkpoint_dir = Path(process_config['checkpoint_dir'])
         model_path = checkpoint_dir / 'uncertainty_predictor.pth'
 
+        # Invalidate stale checkpoints: if the process config changed,
+        # wipe the checkpoint dir so training uses the new parameters.
+        config_path = checkpoint_dir / 'process_config.json'
+        if checkpoint_dir.exists():
+            # Build a comparable snapshot of the current config
+            _cfg_snapshot = {
+                k: v for k, v in process_config.items()
+                if k not in ('uncertainty_predictor', 'checkpoint_dir')
+            }
+            _stale = False
+            if config_path.exists():
+                with open(config_path, 'r') as f:
+                    _old = json.load(f)
+                if _old != _cfg_snapshot:
+                    _stale = True
+                    print(f"\n♻  Config changed for '{process_name}' — wiping stale checkpoint.")
+            elif model_path.exists():
+                # Checkpoint exists but no config.json → unknown provenance
+                _stale = True
+                print(f"\n♻  No config.json for '{process_name}' — wiping old checkpoint.")
+
+            if _stale:
+                import shutil
+                shutil.rmtree(checkpoint_dir)
+                checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
         # Check if already trained
         if args.skip_existing and model_path.exists():
             print(f"\n⏭  Checkpoint already exists for '{process_name}'. Skipping...")
@@ -191,6 +217,14 @@ def main():
                 'Calibration_Ratio': result['metrics']['Calibration_Ratio'],
                 'report_path': result['report_path'],
             })
+
+            # Save config snapshot for future staleness detection
+            _cfg_snapshot = {
+                k: v for k, v in process_config.items()
+                if k not in ('uncertainty_predictor', 'checkpoint_dir')
+            }
+            with open(checkpoint_dir / 'process_config.json', 'w') as f:
+                json.dump(_cfg_snapshot, f, indent=2)
 
             print(f"\n✓ Training completed for '{process_name}'")
 
