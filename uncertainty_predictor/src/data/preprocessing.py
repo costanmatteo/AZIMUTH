@@ -287,19 +287,32 @@ def generate_scm_data(n_samples=5000, seed=42, dataset_type='one_to_one_ct', sav
     print(f"Input features: {X.shape[1]} - {input_columns}")
     print(f"Output features: {y.shape[1]} - {output_columns}")
 
-    # Save SCM graph visualization if requested
+    # Save SCM graph visualizations if requested
     if save_graph_to is not None:
-        try:
-            from pathlib import Path
-            from os.path import join
-            save_dir = Path(save_graph_to)
-            save_dir.mkdir(parents=True, exist_ok=True)
+        from pathlib import Path
+        from os.path import join
+        save_dir = Path(save_graph_to)
+        save_dir.mkdir(parents=True, exist_ok=True)
 
-            # Clean role-aware DAG (preferred)
+        # 1. Role-aware DAG (coloured boxes)
+        try:
             scm_dataset.save_dag_image(join(save_dir, 'dag'))
             print(f"DAG image saved to: {save_dir}/dag.png")
         except Exception as e:
             print(f"Warning: Could not save DAG image: {e}")
-            print(f"  Continuing without graph...")
+
+        # 2. Academic structured DAG (text-only, hierarchical)
+        try:
+            scm_dataset.save_dag_academic(join(save_dir, 'dag_academic'))
+            print(f"Academic DAG saved to: {save_dir}/dag_academic.png")
+        except Exception as e:
+            print(f"Warning: Could not save academic DAG: {e}")
+
+        # 3. Compact DAG (text-only, force-directed, steel-blue)
+        try:
+            scm_dataset.save_dag_compact(join(save_dir, 'dag_compact'))
+            print(f"Compact DAG saved to: {save_dir}/dag_compact.png")
+        except Exception as e:
+            print(f"Warning: Could not save compact DAG: {e}")
 
     return X, y, input_columns, output_columns
