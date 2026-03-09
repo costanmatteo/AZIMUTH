@@ -198,8 +198,16 @@ def _build_stage_expr(
 # Builder
 # ---------------------------------------------------------------------------
 
-def build_st_scm(cfg: STConfig) -> SCMDataset:
-    """Build an SCMDataset from an STConfig."""
+def build_st_scm(cfg: STConfig, dag_image_dir: Optional[str] = None) -> SCMDataset:
+    """Build an SCMDataset from an STConfig.
+
+    Parameters
+    ----------
+    cfg : STConfig
+        Configuration dataclass.
+    dag_image_dir : str or None
+        If given, save a DAG visualisation PNG inside this directory.
+    """
 
     # Validate
     if cfg.m > cfg.n:
@@ -455,6 +463,17 @@ def build_st_scm(cfg: STConfig) -> SCMDataset:
 
     # ── STEP 10: Calibrate process_configs ────────────────────────────
     _calibrate(ds, cfg, all_stage_names, output_names, output_partitions)
+
+    # ── STEP 11: Save DAG image (optional) ────────────────────────────
+    if dag_image_dir is not None:
+        import os
+        os.makedirs(dag_image_dir, exist_ok=True)
+        filepath = os.path.join(dag_image_dir, ds.meta["name"])
+        try:
+            saved = ds.save_dag_image(filepath)
+            print(f"DAG image saved: {saved}")
+        except Exception as e:
+            print(f"Warning: could not save DAG image: {e}")
 
     return ds
 

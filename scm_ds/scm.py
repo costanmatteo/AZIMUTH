@@ -791,7 +791,14 @@ class SCMDataset:
             json.dump(tf_map, file, indent=2, sort_keys=True, ensure_ascii=False)
 
         # ------------ Save SCM graph visualization --------------------
-        # Try matplotlib first (no external dependencies needed)
+        # Clean role-aware DAG (preferred)
+        try:
+            self.save_dag_image(join(save_dir, 'dag'))
+            print(f"DAG image saved: dag.png")
+        except Exception as e:
+            print(f"Warning: Could not save DAG image: {e}")
+
+        # Full SCM graph (all nodes, including eps_* and constants)
         try:
             self.scm.save_graph_matplotlib(join(save_dir, 'scm_graph'))
             print(f"SCM graph saved using matplotlib: scm_graph.png")
@@ -809,6 +816,186 @@ class SCMDataset:
             except Exception as e2:
                 print(f"  Graphviz rendering also failed: {e2}")
                 print(f"  Continuing without graph visualization...")
+
+    def save_dag_image(
+        self,
+        filepath: str,
+        *,
+        dpi: int = 150,
+        figsize: tuple = None,
+        hide_eps: bool = True,
+        hide_constants: bool = True,
+    ) -> str:
+        """
+        Save a clean DAG image showing only meaningful nodes, colored by role.
+
+        Roles and colours:
+            - Input  (``input_labels``)           → green
+            - Target (``target_labels``)           → orange
+            - Structural noise (``structural_noise_vars``) → light purple
+            - Process noise (``process_noise_vars``)       → salmon / red
+            - Intermediate (everything else)                → sky-blue
+
+        Parameters
+        ----------
+        filepath : str
+            Destination path **without** extension (a ``.png`` is appended).
+        dpi : int
+            Image resolution.
+        figsize : tuple or None
+            ``(width, height)`` in inches.  ``None`` → auto-scaled.
+        hide_eps : bool
+            If True, drop internal ``eps_*`` noise-injection symbols.
+        hide_constants : bool
+            If True, drop nodes whose sampler always returns a constant
+            (detected by UPPER_CASE name convention or ``np.full``).
+
+        Returns
+        -------
+        str   Path to the saved PNG file.
+        """
+        if plt is None or nx is None:
+            raise ImportError(
+                "matplotlib and networkx are required. "
+                "Install with: pip install matplotlib networkx"
+            )
+
+        # ── collect role sets ────────────────────────────────────────
+        inputs = set(getattr(self, "input_labels", []))
+        targets = set(getattr(self, "target_labels", []))
+        struct_noise = set(getattr(self, "structural_noise_vars", []))
+        proc_noise = set(getattr(self, "process_noise_vars", []))
+
+        # ── decide which nodes to keep ───────────────────────────────
+        keep = set()
+        for name in self.scm.order:
+            if hide_eps and name.startswith("eps_"):
+                continue
+            if hide_constants and name not in inputs and name not in targets \
+                    and name not in struct_noise and name not in proc_noise:
+                # heuristic: leaf nodes with ALL-UPPER names are physical constants
+                spec = self.scm.specs.get(name)
+                is_leaf = spec is not None and len(spec.parents) == 0
+                if is_leaf and name.replace("_", "").isupper():
+                    continue
+            keep.add(name)
+
+        # ── build networkx graph ─────────────────────────────────────
+        G = nx.DiGraph()
+        for v in self.scm.order:
+            if v in keep:
+                G.add_node(v)
+        for u, v in self.scm.edges():
+            if u in keep and v in keep:
+                G.add_edge(u, v)
+
+        if len(G) == 0:
+            raise ValueError("No nodes to draw after filtering.")
+
+        # ── hierarchical layout (left → right) ───────────────────────
+        node_levels = {}
+        for node in self.scm.order:
+            if node not in keep:
+                continue
+            parents = [p for p in G.predecessors(node)]
+            if not parents:
+                node_levels[node] = 0
+            else:
+                node_levels[node] = max(node_levels[p] for p in parents) + 1
+
+        max_level = max(node_levels.values())
+        levels = {i: [] for i in range(max_level + 1)}
+        for node, lvl in node_levels.items():
+            levels[lvl].append(node)
+
+        x_spacing = 3.0
+        y_spacing = 1.8
+        pos = {}
+        for lvl, nodes in levels.items():
+            x = lvl * x_spacing
+            n_nodes = len(nodes)
+            start_y = -(n_nodes - 1) * y_spacing / 2
+            for i, node in enumerate(nodes):
+                pos[node] = (x, start_y + i * y_spacing)
+
+        # ── auto figsize ─────────────────────────────────────────────
+        if figsize is None:
+            w = max(8, (max_level + 1) * 3)
+            h = max(5, max(len(v) for v in levels.values()) * 1.4)
+            figsize = (w, h)
+
+        # ── assign colours ───────────────────────────────────────────
+        _COLORS = {
+            "input":     ("#C8E6C9", "#2E7D32"),   # green fill, dark border
+            "target":    ("#FFE0B2", "#E65100"),   # orange
+            "struct":    ("#E1BEE7", "#6A1B9A"),   # purple
+            "proc":      ("#FFCDD2", "#B71C1C"),   # red / salmon
+            "inter":     ("#BBDEFB", "#1565C0"),   # blue
+        }
+
+        def _role(n):
+            if n in inputs:
+                return "input"
+            if n in targets:
+                return "target"
+            if n in struct_noise:
+                return "struct"
+            if n in proc_noise:
+                return "proc"
+            return "inter"
+
+        node_list = list(G.nodes())
+        roles = [_role(n) for n in node_list]
+        fill_colors = [_COLORS[r][0] for r in roles]
+        edge_colors = [_COLORS[r][1] for r in roles]
+
+        # ── draw ─────────────────────────────────────────────────────
+        fig, ax = plt.subplots(figsize=figsize, facecolor="white")
+
+        node_size = 2800
+
+        nx.draw_networkx_nodes(
+            G, pos, nodelist=node_list,
+            node_color=fill_colors, edgecolors=edge_colors,
+            node_size=node_size, linewidths=2, alpha=0.92, ax=ax,
+        )
+        nx.draw_networkx_labels(
+            G, pos, font_size=10, font_weight="bold",
+            font_family="sans-serif", ax=ax,
+        )
+        nx.draw_networkx_edges(
+            G, pos, edge_color="#616161", arrows=True,
+            arrowsize=20, arrowstyle="->",
+            connectionstyle="arc3,rad=0.08",
+            width=2.0, alpha=0.7, ax=ax, node_size=node_size,
+        )
+
+        # ── legend (only show roles actually rendered) ────────────────
+        from matplotlib.patches import Patch
+        rendered_roles = set(roles)
+        _LABELS = {
+            "input": "Input", "target": "Target",
+            "struct": "Structural noise", "proc": "Process noise",
+            "inter": "Intermediate",
+        }
+        legend_items = [
+            Patch(facecolor=_COLORS[r][0], edgecolor=_COLORS[r][1], label=_LABELS[r])
+            for r in ("input", "target", "struct", "proc", "inter")
+            if r in rendered_roles
+        ]
+
+        ax.legend(handles=legend_items, loc="upper left", fontsize=9, framealpha=0.9)
+
+        name = getattr(self.meta, "get", lambda k, d: self.meta.get(k, d))("name", "SCM")
+        ax.set_title(f"DAG  —  {name}", fontsize=13, fontweight="bold", pad=15)
+        ax.axis("off")
+        plt.tight_layout()
+
+        output_path = f"{filepath}.png"
+        plt.savefig(output_path, dpi=dpi, bbox_inches="tight",
+                    facecolor="white", pad_inches=0.3)
+        plt.close(fig)
+        return output_path
 
 
 # --------------------------- Example -------------------------------- #
