@@ -158,6 +158,8 @@ def parse_args():
                         help='ST cascaded stages per process (overrides st_params.m)')
     parser.add_argument('--st_rho', type=float, default=None,
                         help='ST noise intensity [0,1] (overrides st_params.rho)')
+    parser.add_argument('--st_n_processes', type=int, default=None,
+                        help='Number of ST processes in sequence (overrides n_processes)')
 
     # Misc
     parser.add_argument('--no_pdf', action='store_true', default=False,
@@ -1480,14 +1482,17 @@ def main(config=None):
 
     # Capture actual ST params (may be CLI-overridden)
     _actual_st_params = None
+    _actual_n_processes = None
     if DATASET_MODE == 'st' and len(selected_processes) > 0:
         _actual_st_params = selected_processes[0].get('st_params', None)
+        _actual_n_processes = len(selected_processes)
 
     final_results = {
         'timestamp': datetime.now().isoformat(),
         'config': CONTROLLER_CONFIG,
         'dataset_mode': DATASET_MODE,
         'st_params': _actual_st_params,
+        'n_processes': _actual_n_processes,
         'n_train_scenarios': int(n_scenarios),
         'n_test_scenarios': int(n_test),
 
@@ -1597,18 +1602,23 @@ if __name__ == '__main__':
         k: v for k, v in [('n', args.st_n), ('m', args.st_m), ('rho', args.st_rho)]
         if v is not None
     }
-    if _st_overrides and DATASET_MODE == 'st':
+    _has_n_processes_override = args.st_n_processes is not None
+    if (_st_overrides or _has_n_processes_override) and DATASET_MODE == 'st':
         import copy as _copy
         _st_cfg = _copy.deepcopy(ST_DATASET_CONFIG)
         _st_cfg['st_params'].update(_st_overrides)
+        if _has_n_processes_override:
+            _st_cfg['n_processes'] = args.st_n_processes
         # Rebuild processes with new ST params
         _custom_processes = _build_st_processes(_st_cfg)
         # Monkey-patch so get_filtered_processes uses the new processes
         import controller_optimization.configs.processes_config as _proc_mod
         _proc_mod.PROCESSES = _custom_processes
-        print(f"\n[ST Override] Rebuilt processes with: {_st_overrides}")
+        print(f"\n[ST Override] Rebuilt processes with: {_st_overrides}"
+              f"{f', n_processes={args.st_n_processes}' if _has_n_processes_override else ''}")
         print(f"  st_params: n={_st_cfg['st_params']['n']}, "
-              f"m={_st_cfg['st_params']['m']}, rho={_st_cfg['st_params']['rho']}")
+              f"m={_st_cfg['st_params']['m']}, rho={_st_cfg['st_params']['rho']}, "
+              f"n_processes={_st_cfg['n_processes']}")
 
     # Run main with the configured settings
     main(config)

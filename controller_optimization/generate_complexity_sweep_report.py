@@ -54,6 +54,7 @@ def load_run_results(run_dir: Path) -> dict:
             'st_n': st_params.get('n') if st_params else None,
             'st_m': st_params.get('m') if st_params else None,
             'st_rho': st_params.get('rho') if st_params else None,
+            'n_processes': data.get('n_processes'),
             # Train metrics
             'F_star_train': data.get('train', {}).get('F_star'),
             'F_baseline_train': data.get('train', {}).get('F_baseline_mean'),
@@ -100,7 +101,10 @@ def compute_win_rates(df: pd.DataFrame) -> pd.DataFrame:
     df['controller_wins'] = df['F_actual_train'] > df['F_baseline_train']
 
     # Group by complexity configuration
-    grouped = df.groupby(['st_n', 'st_m', 'st_rho']).agg(
+    group_cols = ['st_n', 'st_m', 'st_rho']
+    if 'n_processes' in df.columns and df['n_processes'].notna().any():
+        group_cols.append('n_processes')
+    grouped = df.groupby(group_cols).agg(
         n_runs=('controller_wins', 'count'),
         n_wins=('controller_wins', 'sum'),
         F_star_mean=('F_star_train', 'mean'),
@@ -230,20 +234,24 @@ def plot_3d_scatter(win_df: pd.DataFrame, save_path: Path):
 
 def plot_summary_panel(win_df: pd.DataFrame, save_path: Path):
     """Summary panel with marginal win rate distributions for each parameter."""
-    fig, axes = plt.subplots(1, 3, figsize=(16, 5))
+    has_nproc = 'n_processes' in win_df.columns and win_df['n_processes'].notna().any()
+    n_panels = 4 if has_nproc else 3
+    fig, axes = plt.subplots(1, n_panels, figsize=(5.5 * n_panels, 5))
 
     params = [
         ('st_n', 'n (input variables)', axes[0]),
         ('st_m', 'm (cascaded stages)', axes[1]),
         ('st_rho', 'rho (noise intensity)', axes[2]),
     ]
+    if has_nproc:
+        params.append(('n_processes', 'n_processes (chain length)', axes[3]))
 
     for param, label, ax in params:
         # Sort by parameter value
         df_sorted = win_df.sort_values(param)
 
         # Bar / scatter depending on parameter type
-        if param in ('st_n', 'st_m'):
+        if param in ('st_n', 'st_m', 'n_processes'):
             # Discrete: group and average
             grouped = df_sorted.groupby(param)['win_rate_pct'].agg(['mean', 'std', 'count'])
             x = grouped.index.values
@@ -330,6 +338,8 @@ class ComplexitySweepReportGenerator:
 
         overall_win_rate = 100 * (df_all['F_actual_train'] > df_all['F_baseline_train']).mean()
 
+        has_nproc = 'n_processes' in win_df.columns and win_df['n_processes'].notna().any()
+
         data = [
             ['Metric', 'Value'],
             ['Total Runs', f"{len(df_all)}"],
@@ -340,6 +350,10 @@ class ComplexitySweepReportGenerator:
             ['  n (inputs)', f"[{win_df['st_n'].min()}, {win_df['st_n'].max()}]"],
             ['  m (stages)', f"[{win_df['st_m'].min()}, {win_df['st_m'].max()}]"],
             ['  rho (noise)', f"[{win_df['st_rho'].min():.3f}, {win_df['st_rho'].max():.3f}]"],
+        ]
+        if has_nproc:
+            data.append(['  n_processes', f"[{int(win_df['n_processes'].min())}, {int(win_df['n_processes'].max())}]"])
+        data += [
             ['', ''],
             ['Win Rate Range', f"[{win_df['win_rate_pct'].min():.1f}%, {win_df['win_rate_pct'].max():.1f}%]"],
             ['Win Rate Median', f"{win_df['win_rate_pct'].median():.1f}%"],
@@ -349,8 +363,10 @@ class ComplexitySweepReportGenerator:
 
         best = win_df.loc[win_df['win_rate_pct'].idxmax()]
         worst = win_df.loc[win_df['win_rate_pct'].idxmin()]
-        data.append(['  Best', f"n={int(best['st_n'])}, m={int(best['st_m'])}, rho={best['st_rho']:.3f} -> {best['win_rate_pct']:.1f}%"])
-        data.append(['  Worst', f"n={int(worst['st_n'])}, m={int(worst['st_m'])}, rho={worst['st_rho']:.3f} -> {worst['win_rate_pct']:.1f}%"])
+        nproc_best = f", n_proc={int(best['n_processes'])}" if has_nproc else ""
+        nproc_worst = f", n_proc={int(worst['n_processes'])}" if has_nproc else ""
+        data.append(['  Best', f"n={int(best['st_n'])}, m={int(best['st_m'])}, rho={best['st_rho']:.3f}{nproc_best} -> {best['win_rate_pct']:.1f}%"])
+        data.append(['  Worst', f"n={int(worst['st_n'])}, m={int(worst['st_m'])}, rho={worst['st_rho']:.3f}{nproc_worst} -> {worst['win_rate_pct']:.1f}%"])
 
         table = Table(data, colWidths=[2.5*inch, 4*inch])
         table.setStyle(TableStyle([
@@ -366,20 +382,36 @@ class ComplexitySweepReportGenerator:
         self.add_section("All Configurations (sorted by win rate)")
         df_sorted = win_df.sort_values('win_rate_pct', ascending=False)
 
-        data = [['n', 'm', 'rho', 'Runs', 'Win Rate', 'F* (mean)', 'F\' (mean)', 'F (mean)']]
+        has_nproc = 'n_processes' in win_df.columns and win_df['n_processes'].notna().any()
+
+        header = ['n', 'm', 'rho']
+        if has_nproc:
+            header.append('nProc')
+        header += ['Runs', 'Win Rate', 'F* (mean)', 'F\' (mean)', 'F (mean)']
+        data = [header]
+
         for _, row in df_sorted.iterrows():
-            data.append([
+            row_data = [
                 int(row['st_n']),
                 int(row['st_m']),
                 f"{row['st_rho']:.3f}",
+            ]
+            if has_nproc:
+                row_data.append(int(row['n_processes']) if not np.isnan(row.get('n_processes', float('nan'))) else 'N/A')
+            row_data += [
                 int(row['n_runs']),
                 f"{row['win_rate_pct']:.1f}%",
                 f"{row['F_star_mean']:.4f}" if not np.isnan(row['F_star_mean']) else 'N/A',
                 f"{row['F_baseline_mean']:.4f}" if not np.isnan(row['F_baseline_mean']) else 'N/A',
                 f"{row['F_actual_mean']:.4f}" if not np.isnan(row['F_actual_mean']) else 'N/A',
-            ])
+            ]
+            data.append(row_data)
 
-        table = Table(data, colWidths=[0.5*inch, 0.5*inch, 0.7*inch, 0.5*inch, 0.8*inch, 0.9*inch, 0.9*inch, 0.9*inch])
+        col_widths = [0.5*inch, 0.5*inch, 0.7*inch]
+        if has_nproc:
+            col_widths.append(0.5*inch)
+        col_widths += [0.5*inch, 0.8*inch, 0.9*inch, 0.9*inch, 0.9*inch]
+        table = Table(data, colWidths=col_widths)
         table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
@@ -430,6 +462,8 @@ def generate_complexity_sweep_report(sweep_dir: Path, output_path: Path = None):
     print("  - Summary panel (marginal effects)...")
     summary_path = plot_summary_panel(win_df, plots_dir / 'summary_panel.png')
 
+    has_nproc = 'n_processes' in win_df.columns and win_df['n_processes'].notna().any()
+
     # 2. Individual parameter plots
     print("  - Win rate vs n...")
     n_path = plot_win_rate_vs_param(win_df, 'st_n', 'n (input variables)',
@@ -440,6 +474,11 @@ def generate_complexity_sweep_report(sweep_dir: Path, output_path: Path = None):
     print("  - Win rate vs rho...")
     rho_path = plot_win_rate_vs_param(win_df, 'st_rho', 'rho (noise intensity)',
                                        plots_dir / 'winrate_vs_rho.png')
+    nproc_path = None
+    if has_nproc:
+        print("  - Win rate vs n_processes...")
+        nproc_path = plot_win_rate_vs_param(win_df, 'n_processes', 'n_processes (chain length)',
+                                             plots_dir / 'winrate_vs_nproc.png')
 
     # 3. 2D heatmaps
     print("  - Heatmap: n vs rho...")
@@ -487,6 +526,9 @@ def generate_complexity_sweep_report(sweep_dir: Path, output_path: Path = None):
     report.story.append(PageBreak())
     report.add_image(m_path, width=5*inch,
                      caption="Win rate vs m (cascaded stages). More stages = deeper.")
+    if nproc_path:
+        report.add_image(nproc_path, width=5*inch,
+                         caption="Win rate vs n_processes (chain length). More processes = longer chain.")
 
     # Heatmaps
     report.add_section("2D Parameter Interactions")

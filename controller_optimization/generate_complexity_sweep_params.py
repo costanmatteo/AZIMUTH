@@ -2,15 +2,15 @@
 """
 Generate sweep_params.txt for dataset complexity sensitivity analysis.
 
-Uses Latin Hypercube Sampling (LHS) over ST complexity parameters (n, m, rho)
-combined with a reduced seed grid for each configuration.
+Uses Latin Hypercube Sampling (LHS) over ST complexity parameters
+(n, m, rho, n_processes) combined with a reduced seed grid for each configuration.
 
 Usage:
     python generate_complexity_sweep_params.py [options]
 
 Output:
     complexity_sweep_params.txt with format:
-        run_name st_n=X st_m=Y st_rho=Z seed_target=A seed_baseline=B
+        run_name st_n=X st_m=Y st_rho=Z st_n_processes=P seed_target=A seed_baseline=B
 """
 
 import argparse
@@ -68,6 +68,7 @@ def generate_complexity_sweep(
     n_range: tuple = (2, 8),
     m_range: tuple = (1, 4),
     rho_range: tuple = (0.0, 0.5),
+    nproc_range: tuple = (2, 5),
 ):
     """
     Generate complexity sweep parameter file.
@@ -76,13 +77,14 @@ def generate_complexity_sweep(
     Total runs = n_lhs * n_seeds^2.
 
     Args:
-        n_lhs: Number of LHS configurations for (n, m, rho)
+        n_lhs: Number of LHS configurations for (n, m, rho, n_processes)
         n_seeds: Number of seed values (creates n_seeds^2 seed pairs per config)
         output_file: Output file path
         seed: Random seed for LHS
         n_range: Range for ST n parameter (input variables)
         m_range: Range for ST m parameter (cascaded stages)
         rho_range: Range for ST rho parameter (noise intensity)
+        nproc_range: Range for number of processes in sequence
     """
     if output_file is None:
         output_file = Path(__file__).parent / "complexity_sweep_params.txt"
@@ -92,6 +94,7 @@ def generate_complexity_sweep(
         'n': (n_range[0], n_range[1], 'int'),
         'm': (m_range[0], m_range[1], 'int'),
         'rho': (rho_range[0], rho_range[1], 'float'),
+        'n_processes': (nproc_range[0], nproc_range[1], 'int'),
     }
     configs = latin_hypercube_sample(n_lhs, ranges, seed=seed)
 
@@ -107,26 +110,28 @@ def generate_complexity_sweep(
     print(f"  Seed pairs per config: {len(seed_values)}^2 = {len(seed_values)**2}")
     print(f"  Total runs:          {total_runs}")
     print(f"  Parameter ranges:")
-    print(f"    n (inputs):    [{n_range[0]}, {n_range[1]}]")
-    print(f"    m (stages):    [{m_range[0]}, {m_range[1]}]")
-    print(f"    rho (noise):   [{rho_range[0]}, {rho_range[1]}]")
+    print(f"    n (inputs):       [{n_range[0]}, {n_range[1]}]")
+    print(f"    m (stages):       [{m_range[0]}, {m_range[1]}]")
+    print(f"    rho (noise):      [{rho_range[0]}, {rho_range[1]}]")
+    print(f"    n_processes:      [{nproc_range[0]}, {nproc_range[1]}]")
     print(f"  Seed values:     {seed_values}")
     print()
 
     # Print sampled configurations
     print("LHS configurations:")
     for i, cfg in enumerate(configs):
-        print(f"  [{i:2d}] n={cfg['n']}, m={cfg['m']}, rho={cfg['rho']:.4f}")
+        print(f"  [{i:2d}] n={cfg['n']}, m={cfg['m']}, rho={cfg['rho']:.4f}, n_proc={cfg['n_processes']}")
 
     lines = [
         "# Complexity Sensitivity Sweep Configuration",
         "# ============================================",
         "#",
-        f"# {total_runs} total runs = {len(configs)} LHS configs × {len(seed_values)**2} seed pairs",
-        f"# Parameters: n∈[{n_range[0]},{n_range[1]}], m∈[{m_range[0]},{m_range[1]}], rho∈[{rho_range[0]},{rho_range[1]}]",
+        f"# {total_runs} total runs = {len(configs)} LHS configs x {len(seed_values)**2} seed pairs",
+        f"# Parameters: n in [{n_range[0]},{n_range[1]}], m in [{m_range[0]},{m_range[1]}], "
+        f"rho in [{rho_range[0]},{rho_range[1]}], n_processes in [{nproc_range[0]},{nproc_range[1]}]",
         f"# Seeds: {seed_values}",
         "#",
-        "# Format: run_name st_n=X st_m=Y st_rho=Z seed_target=A seed_baseline=B",
+        "# Format: run_name st_n=X st_m=Y st_rho=Z st_n_processes=P seed_target=A seed_baseline=B",
         "#",
         f"# Update complexity_sweep.sh: --array=0-{total_runs - 1}",
         "# ============================================",
@@ -136,10 +141,15 @@ def generate_complexity_sweep(
     for cfg_idx, cfg in enumerate(configs):
         for seed_t in seed_values:
             for seed_b in seed_values:
-                run_name = f"cfg{cfg_idx:02d}_n{cfg['n']}_m{cfg['m']}_r{cfg['rho']:.2f}_t{seed_t:02d}_b{seed_b:02d}"
+                run_name = (
+                    f"cfg{cfg_idx:02d}_n{cfg['n']}_m{cfg['m']}"
+                    f"_p{cfg['n_processes']}_r{cfg['rho']:.2f}"
+                    f"_t{seed_t:02d}_b{seed_b:02d}"
+                )
                 line = (
                     f"{run_name} "
                     f"st_n={cfg['n']} st_m={cfg['m']} st_rho={cfg['rho']} "
+                    f"st_n_processes={cfg['n_processes']} "
                     f"seed_target={seed_t} seed_baseline={seed_b}"
                 )
                 lines.append(line)
@@ -179,6 +189,10 @@ def main():
                         help='Min ST noise intensity (rho)')
     parser.add_argument('--rho_max', type=float, default=0.5,
                         help='Max ST noise intensity (rho)')
+    parser.add_argument('--nproc_min', type=int, default=2,
+                        help='Min number of processes in sequence')
+    parser.add_argument('--nproc_max', type=int, default=5,
+                        help='Max number of processes in sequence')
 
     args = parser.parse_args()
 
@@ -191,6 +205,7 @@ def main():
         n_range=(args.n_min, args.n_max),
         m_range=(args.m_min, args.m_max),
         rho_range=(args.rho_min, args.rho_max),
+        nproc_range=(args.nproc_min, args.nproc_max),
     )
 
 
