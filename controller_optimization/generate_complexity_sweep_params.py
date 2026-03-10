@@ -98,6 +98,11 @@ def generate_complexity_sweep(
     }
     configs = latin_hypercube_sample(n_lhs, ranges, seed=seed)
 
+    # Enforce constraint: m <= n (required by ST SCM)
+    for cfg in configs:
+        if cfg['m'] > cfg['n']:
+            cfg['m'] = cfg['n']
+
     # Generate reduced seed grid
     seed_step = max(1, 100 // n_seeds)
     seed_values = list(range(1, 100, seed_step))[:n_seeds]
