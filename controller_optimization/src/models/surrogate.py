@@ -86,6 +86,8 @@ class ProTSurrogate:
                         'target': pc['surrogate_target'],
                         'scale': pc['surrogate_scale'],
                         'weight': pc.get('surrogate_weight', 1.0),
+                        'adaptive_coefficients': pc.get('surrogate_adaptive_coefficients', {}),
+                        'adaptive_baselines': pc.get('surrogate_adaptive_baselines', {}),
                     }
             if dynamic:
                 self._dynamic_configs = dynamic
@@ -166,12 +168,21 @@ class ProTSurrogate:
         quality_scores = {}
 
         if self._dynamic_configs is not None:
-            # GENERIC PATH: usa target/scale calibrati (per processi ST o qualsiasi
-            # processo che abbia surrogate_target/surrogate_scale nel config)
+            # GENERIC PATH: usa target/scale calibrati con target adattivi.
+            # target_i = base_target_i + sum_j coeff_j * (output_j - baseline_j)
             for process_name, output_val in outputs.items():
                 cfg = self._dynamic_configs.get(process_name, {})
                 target = cfg.get('target', 0.0)
                 scale = cfg.get('scale', 1.0)
+                adaptive_coeffs = cfg.get('adaptive_coefficients', {})
+                adaptive_baselines = cfg.get('adaptive_baselines', {})
+
+                # Adjust target based on upstream process outputs
+                for upstream_name, coeff in adaptive_coeffs.items():
+                    if upstream_name in outputs:
+                        baseline = adaptive_baselines.get(upstream_name, 0.0)
+                        target = target + coeff * (outputs[upstream_name] - baseline)
+
                 quality_scores[process_name] = torch.exp(
                     -((output_val - target) ** 2) / max(scale, 1e-8)
                 )

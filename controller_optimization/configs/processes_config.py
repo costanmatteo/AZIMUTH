@@ -279,6 +279,10 @@ def _build_st_processes(st_dataset_config):
     calibrated_scale = scm_proc_cfg.get('scale', 1.0)
     calibrated_weight = scm_proc_cfg.get('weight', 1.0)
 
+    # Estrai coefficienti adattivi dall'SCM (Y dipende dall'ultimo stage)
+    calibrated_adaptive_coeff = scm_proc_cfg.get('adaptive_coefficients', {})
+    calibrated_adaptive_baselines = scm_proc_cfg.get('adaptive_baselines', {})
+
     processes = []
     for i in range(1, n_procs + 1):
         suffix = f"_p{i}"
@@ -309,6 +313,17 @@ def _build_st_processes(st_dataset_config):
             'surrogate_target': calibrated_target,
             'surrogate_scale': calibrated_scale,
             'surrogate_weight': calibrated_weight,
+
+            # Coefficienti adattivi: per i > 1, il target di st_i dipende
+            # dall'output di st_{i-1} con lo stesso coefficiente che l'SCM
+            # usa per Y rispetto all'ultimo stage.
+            # adaptive_target_i = base_target + coeff * (output_{i-1} - baseline)
+            'surrogate_adaptive_coefficients':
+                ({f'st_{i-1}': list(calibrated_adaptive_coeff.values())[0]}
+                 if i > 1 and calibrated_adaptive_coeff else {}),
+            'surrogate_adaptive_baselines':
+                ({f'st_{i-1}': list(calibrated_adaptive_baselines.values())[0]}
+                 if i > 1 and calibrated_adaptive_baselines else {}),
 
             'uncertainty_predictor': copy.deepcopy(up_config),
 
