@@ -160,6 +160,8 @@ def parse_args():
                         help='ST noise intensity [0,1] (overrides st_params.rho)')
     parser.add_argument('--st_n_processes', type=int, default=None,
                         help='Number of ST processes in sequence (overrides n_processes)')
+    parser.add_argument('--up_checkpoint_dir', type=str, default=None,
+                        help='Override UP checkpoint base dir (reads UPs from here)')
 
     # Misc
     parser.add_argument('--no_pdf', action='store_true', default=False,
@@ -1619,6 +1621,13 @@ if __name__ == '__main__':
         print(f"  st_params: n={_st_cfg['st_params']['n']}, "
               f"m={_st_cfg['st_params']['m']}, rho={_st_cfg['st_params']['rho']}, "
               f"n_processes={_st_cfg['n_processes']}")
+
+    # Override UP checkpoint dirs if --up_checkpoint_dir is provided
+    if args.up_checkpoint_dir is not None:
+        import controller_optimization.configs.processes_config as _proc_mod
+        for _p in _proc_mod.PROCESSES:
+            _p['checkpoint_dir'] = str(Path(args.up_checkpoint_dir) / _p['name'])
+        print(f"[UP Checkpoint Override] Reading UPs from: {args.up_checkpoint_dir}")
 
     # Run main with the configured settings
     main(config)

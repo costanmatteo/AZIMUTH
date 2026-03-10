@@ -19,7 +19,10 @@ from datetime import datetime
 REPO_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from controller_optimization.configs.processes_config import PROCESSES, DATASET_MODE, get_process_by_name
+from controller_optimization.configs.processes_config import (
+    PROCESSES, DATASET_MODE, get_process_by_name,
+    ST_DATASET_CONFIG, _build_st_processes,
+)
 from controller_optimization.src.training.process_trainer import train_single_process
 
 # Import report combining function
@@ -67,15 +70,58 @@ def main():
         help='Random seed for reproducibility'
     )
 
+    # ST dataset complexity overrides (for complexity sweep)
+    parser.add_argument('--st_n', type=int, default=None,
+                        help='ST input variables per process (overrides st_params.n)')
+    parser.add_argument('--st_m', type=int, default=None,
+                        help='ST cascaded stages per process (overrides st_params.m)')
+    parser.add_argument('--st_rho', type=float, default=None,
+                        help='ST noise intensity [0,1] (overrides st_params.rho)')
+    parser.add_argument('--st_n_processes', type=int, default=None,
+                        help='Number of ST processes in sequence (overrides n_processes)')
+    parser.add_argument('--checkpoint_base_dir', type=str, default=None,
+                        help='Override base checkpoint dir for all processes')
+
     args = parser.parse_args()
+
+    # If ST dataset params are overridden via CLI, rebuild processes dynamically
+    _st_overrides = {
+        k: v for k, v in [('n', args.st_n), ('m', args.st_m), ('rho', args.st_rho)]
+        if v is not None
+    }
+    _has_n_processes_override = args.st_n_processes is not None
+    if (_st_overrides or _has_n_processes_override) and DATASET_MODE == 'st':
+        import copy as _copy
+        _st_cfg = _copy.deepcopy(ST_DATASET_CONFIG)
+        _st_cfg['st_params'].update(_st_overrides)
+        if _has_n_processes_override:
+            _st_cfg['n_processes'] = args.st_n_processes
+        _custom_processes = _build_st_processes(_st_cfg)
+        # Monkey-patch so the rest of the script uses the new processes
+        import controller_optimization.configs.processes_config as _proc_mod
+        _proc_mod.PROCESSES = _custom_processes
+        print(f"\n[ST Override] Rebuilt processes with: {_st_overrides}"
+              f"{f', n_processes={args.st_n_processes}' if _has_n_processes_override else ''}")
+
+    # Override checkpoint dirs if --checkpoint_base_dir is provided
+    if args.checkpoint_base_dir is not None:
+        import controller_optimization.configs.processes_config as _proc_mod
+        for p in _proc_mod.PROCESSES:
+            p['checkpoint_dir'] = str(Path(args.checkpoint_base_dir) / p['name'])
+        print(f"[Checkpoint Override] Base dir: {args.checkpoint_base_dir}")
+
+    # Re-read PROCESSES after potential monkey-patching
+    from controller_optimization.configs.processes_config import PROCESSES as _current_processes
 
     # Determine which processes to train
     if args.processes is None:
-        processes_to_train = PROCESSES
-        process_names = [p['name'] for p in PROCESSES]
+        processes_to_train = _current_processes
+        process_names = [p['name'] for p in _current_processes]
     else:
         process_names = args.processes
-        processes_to_train = [get_process_by_name(name) for name in process_names]
+        # Use current (potentially monkey-patched) PROCESSES
+        _proc_map = {p['name']: p for p in _current_processes}
+        processes_to_train = [_proc_map[name] for name in process_names]
 
     print("="*70)
     print("CONTROLLER OPTIMIZATION - STEP 1: TRAIN UNCERTAINTY PREDICTORS")

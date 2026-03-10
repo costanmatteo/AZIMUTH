@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=complexity_sweep
 #SBATCH --account=es_mohr
-#SBATCH --time=00:15:00
+#SBATCH --time=00:20:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --mem-per-cpu=4G
@@ -14,12 +14,20 @@
 # ============================================================================
 #
 # Tests how controller win rate varies with dataset complexity parameters
-# (n, m, rho) using Latin Hypercube Sampling + reduced seed grid.
+# (n, m, rho, n_processes) using Latin Hypercube Sampling + reduced seed grid.
 #
-# Default: 30 LHS configs × 25 seed pairs (5×5) = 750 runs
+# Default: 30 LHS configs x 25 seed pairs (5x5) = 750 runs
 #
-# Resources: CPU only, 1 core, 4GB RAM, 15 min per job
-# (more RAM and time than seed sweep because larger n/m = bigger models)
+# Each job:
+#   1. Trains uncertainty predictors (UPs) for its ST config (skip if done)
+#   2. Trains controller with the given seed pair
+#
+# UPs are saved in a config-specific directory to avoid conflicts between
+# parallel jobs with different ST parameters:
+#   checkpoints/complexity_sweep/up_n{X}_m{Y}_p{P}_r{Z}/st_{i}/
+#
+# Resources: CPU only, 1 core, 4GB RAM, 20 min per job
+# (UP training ~3 min + controller training ~10 min)
 #
 # Usage:
 #   1. Generate params: python generate_complexity_sweep_params.py
@@ -62,13 +70,16 @@ fi
 RUN_NAME=$(echo "$LINE" | awk '{print $1}')
 PARAMS=$(echo "$LINE" | cut -d' ' -f2-)
 
-# Convert param=value format to --param value format
-ARGS=""
-for PARAM in $PARAMS; do
-    KEY=$(echo "$PARAM" | cut -d'=' -f1)
-    VALUE=$(echo "$PARAM" | cut -d'=' -f2)
-    ARGS="$ARGS --$KEY $VALUE"
-done
+# Extract individual parameter values for UP checkpoint dir
+ST_N=$(echo "$PARAMS" | grep -oP 'st_n=\K[^ ]+')
+ST_M=$(echo "$PARAMS" | grep -oP 'st_m=\K[^ ]+')
+ST_RHO=$(echo "$PARAMS" | grep -oP 'st_rho=\K[^ ]+')
+ST_NPROC=$(echo "$PARAMS" | grep -oP 'st_n_processes=\K[^ ]+')
+SEED_T=$(echo "$PARAMS" | grep -oP 'seed_target=\K[^ ]+')
+SEED_B=$(echo "$PARAMS" | grep -oP 'seed_baseline=\K[^ ]+')
+
+# Config-specific UP checkpoint directory (shared across seed pairs with same ST config)
+UP_DIR="controller_optimization/checkpoints/complexity_sweep/up_n${ST_N}_m${ST_M}_p${ST_NPROC}_r${ST_RHO}"
 
 OUTPUT_DIR="controller_optimization/checkpoints/complexity_sweep"
 
@@ -78,7 +89,9 @@ echo "Array Task ID:    $SLURM_ARRAY_TASK_ID"
 echo "Node:             $SLURM_NODELIST"
 echo "=============================================="
 echo "Run name:         $RUN_NAME"
-echo "Parameters:       $PARAMS"
+echo "ST params:        n=$ST_N m=$ST_M rho=$ST_RHO n_processes=$ST_NPROC"
+echo "Seeds:            target=$SEED_T baseline=$SEED_B"
+echo "UP checkpoint:    $UP_DIR"
 echo "Output directory: $OUTPUT_DIR/$RUN_NAME"
 echo "=============================================="
 echo ""
@@ -90,17 +103,41 @@ elif [ -d ".venv" ]; then
     source .venv/bin/activate
 fi
 
-# Run training with ST complexity overrides + seed parameters
-# --no_pdf to save time (report generated after sweep)
-echo "Starting training..."
-echo "Command: python controller_optimization/train_controller.py --output_dir $OUTPUT_DIR --run_name $RUN_NAME --no_pdf $ARGS"
+# ---- Step 1: Train uncertainty predictors (skip if already done) ----
+# Multiple jobs with the same ST config may race here, but --skip-existing
+# ensures only the first one actually trains; others reuse the checkpoint.
+echo "Step 1: Training uncertainty predictors..."
+echo "Command: python controller_optimization/train_processes.py --st_n $ST_N --st_m $ST_M --st_rho $ST_RHO --st_n_processes $ST_NPROC --checkpoint_base_dir $UP_DIR --skip-existing"
+echo ""
+
+python controller_optimization/train_processes.py \
+    --st_n "$ST_N" \
+    --st_m "$ST_M" \
+    --st_rho "$ST_RHO" \
+    --st_n_processes "$ST_NPROC" \
+    --checkpoint_base_dir "$UP_DIR" \
+    --skip-existing
+
+echo ""
+echo "Step 1 completed."
+echo ""
+
+# ---- Step 2: Train controller with seed pair ----
+echo "Step 2: Training controller..."
+echo "Command: python controller_optimization/train_controller.py --output_dir $OUTPUT_DIR --run_name $RUN_NAME --no_pdf --st_n $ST_N --st_m $ST_M --st_rho $ST_RHO --st_n_processes $ST_NPROC --up_checkpoint_dir $UP_DIR --seed_target $SEED_T --seed_baseline $SEED_B"
 echo ""
 
 python controller_optimization/train_controller.py \
     --output_dir "$OUTPUT_DIR" \
     --run_name "$RUN_NAME" \
     --no_pdf \
-    $ARGS
+    --st_n "$ST_N" \
+    --st_m "$ST_M" \
+    --st_rho "$ST_RHO" \
+    --st_n_processes "$ST_NPROC" \
+    --up_checkpoint_dir "$UP_DIR" \
+    --seed_target "$SEED_T" \
+    --seed_baseline "$SEED_B"
 
 if [ $? -eq 0 ]; then
     echo ""
@@ -111,7 +148,7 @@ if [ $? -eq 0 ]; then
 else
     echo ""
     echo "=============================================="
-    echo "ERROR: Training failed!"
+    echo "ERROR: Controller training failed!"
     echo "=============================================="
     exit 1
 fi
