@@ -53,8 +53,8 @@ if [ ! -f "$PARAMS_FILE" ]; then
 fi
 
 # Get the line corresponding to this array task (0-indexed)
-# Skip empty lines and comments (lines starting with #)
-LINE=$(sed -n "$((SLURM_ARRAY_TASK_ID + 1))p" "$PARAMS_FILE" | grep -v '^#' | grep -v '^$')
+# First strip comments and empty lines, then select the Nth data line
+LINE=$(grep -v '^#' "$PARAMS_FILE" | grep -v '^$' | sed -n "$((SLURM_ARRAY_TASK_ID + 1))p")
 
 if [ -z "$LINE" ]; then
     echo "ERROR: No parameters found for task ID $SLURM_ARRAY_TASK_ID"
