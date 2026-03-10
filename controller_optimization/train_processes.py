@@ -196,11 +196,11 @@ def main():
 
                     summary_data.append({
                         'process': process_name,
-                        'mse': metrics.get('mse', 0),
-                        'rmse': metrics.get('rmse', 0),
-                        'mae': metrics.get('mae', 0),
-                        'r2': metrics.get('r2', 0),
-                        'calibration_ratio': metrics.get('calibration_ratio', 0),
+                        'MSE': metrics.get('MSE', metrics.get('mse', 0)),
+                        'RMSE': metrics.get('RMSE', metrics.get('rmse', 0)),
+                        'MAE': metrics.get('MAE', metrics.get('mae', 0)),
+                        'R2': metrics.get('R2', metrics.get('r2', 0)),
+                        'Calibration_Ratio': metrics.get('Calibration_Ratio', metrics.get('calibration_ratio', 0)),
                         'report_path': report_path,
                     })
             continue
