@@ -312,8 +312,21 @@ def main():
         print(f"  {data['process']:<12}: {data['report_path']}")
 
     # Save summary to JSON
-    summary_path = Path('controller_optimization/checkpoints/processes_training_summary.json')
+    if args.checkpoint_base_dir is not None:
+        summary_path = Path(args.checkpoint_base_dir) / 'processes_training_summary.json'
+    else:
+        summary_path = Path('controller_optimization/checkpoints/processes_training_summary.json')
     summary_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Custom encoder to handle numpy float32/int types
+    class _NumpyEncoder(json.JSONEncoder):
+        def default(self, obj):
+            import numpy as _np
+            if isinstance(obj, (_np.floating,)):
+                return float(obj)
+            if isinstance(obj, (_np.integer,)):
+                return int(obj)
+            return super().default(obj)
 
     summary_output = {
         'timestamp': datetime.now().isoformat(),
@@ -323,7 +336,7 @@ def main():
     }
 
     with open(summary_path, 'w') as f:
-        json.dump(summary_output, f, indent=2)
+        json.dump(summary_output, f, indent=2, cls=_NumpyEncoder)
 
     print(f"\n✓ Summary saved to: {summary_path}")
 
