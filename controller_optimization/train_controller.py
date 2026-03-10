@@ -997,6 +997,9 @@ def main(config=None):
 
     # Initialize theoretical_data before the conditional block
     theoretical_data = None
+    # Initialize within_scenario_gap_metrics before the conditional block
+    # (computed inside generate_pdf block but referenced in JSON output)
+    within_scenario_gap_metrics = None
 
     # 8b. Generate PDF report (if enabled)
     if cfg['report']['generate_pdf']:
