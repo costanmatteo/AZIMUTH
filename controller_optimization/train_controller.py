@@ -45,7 +45,9 @@ import numpy as np
 REPO_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from controller_optimization.configs.processes_config import PROCESSES, get_filtered_processes
+from controller_optimization.configs.processes_config import (
+    PROCESSES, get_filtered_processes, ST_DATASET_CONFIG, _build_st_processes, DATASET_MODE
+)
 from controller_optimization.configs.controller_config import CONTROLLER_CONFIG
 from controller_optimization.src.utils.target_generation import (
     generate_target_trajectory,
@@ -148,6 +150,14 @@ def parse_args():
                         help='Enable curriculum learning')
     parser.add_argument('--no_curriculum', action='store_true', default=False,
                         help='Disable curriculum learning')
+
+    # ST dataset complexity parameters (override processes_config.ST_DATASET_CONFIG)
+    parser.add_argument('--st_n', type=int, default=None,
+                        help='ST input variables per process (overrides st_params.n)')
+    parser.add_argument('--st_m', type=int, default=None,
+                        help='ST cascaded stages per process (overrides st_params.m)')
+    parser.add_argument('--st_rho', type=float, default=None,
+                        help='ST noise intensity [0,1] (overrides st_params.rho)')
 
     # Misc
     parser.add_argument('--no_pdf', action='store_true', default=False,
@@ -1468,9 +1478,16 @@ def main(config=None):
     history_serializable = {k: [float(v) for v in vals] for k, vals in history.items() if isinstance(vals, list)}
     history_serializable['F_star'] = float(F_star_value)
 
+    # Capture actual ST params (may be CLI-overridden)
+    _actual_st_params = None
+    if DATASET_MODE == 'st' and len(selected_processes) > 0:
+        _actual_st_params = selected_processes[0].get('st_params', None)
+
     final_results = {
         'timestamp': datetime.now().isoformat(),
         'config': CONTROLLER_CONFIG,
+        'dataset_mode': DATASET_MODE,
+        'st_params': _actual_st_params,
         'n_train_scenarios': int(n_scenarios),
         'n_test_scenarios': int(n_test),
 
@@ -1574,6 +1591,24 @@ if __name__ == '__main__':
 
     # Apply argument overrides to config
     config = apply_args_to_config(args, CONTROLLER_CONFIG)
+
+    # If ST dataset params are overridden via CLI, rebuild processes dynamically
+    _st_overrides = {
+        k: v for k, v in [('n', args.st_n), ('m', args.st_m), ('rho', args.st_rho)]
+        if v is not None
+    }
+    if _st_overrides and DATASET_MODE == 'st':
+        import copy as _copy
+        _st_cfg = _copy.deepcopy(ST_DATASET_CONFIG)
+        _st_cfg['st_params'].update(_st_overrides)
+        # Rebuild processes with new ST params
+        _custom_processes = _build_st_processes(_st_cfg)
+        # Monkey-patch so get_filtered_processes uses the new processes
+        import controller_optimization.configs.processes_config as _proc_mod
+        _proc_mod.PROCESSES = _custom_processes
+        print(f"\n[ST Override] Rebuilt processes with: {_st_overrides}")
+        print(f"  st_params: n={_st_cfg['st_params']['n']}, "
+              f"m={_st_cfg['st_params']['m']}, rho={_st_cfg['st_params']['rho']}")
 
     # Run main with the configured settings
     main(config)
