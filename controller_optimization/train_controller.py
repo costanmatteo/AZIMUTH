@@ -1570,7 +1570,7 @@ def main(config=None):
 
     results_path = checkpoint_dir / 'final_results.json'
     with open(results_path, 'w') as f:
-        json.dump(final_results, f, indent=2)
+        json.dump(final_results, f, indent=2, default=lambda o: float(o) if hasattr(o, 'item') else str(o))
 
     print(f"  ✓ Final results saved: {results_path}")
 
