@@ -357,9 +357,9 @@ def generate_summary_stats(df: pd.DataFrame) -> dict:
         'gap_reduction_median': gap_reduction.median(),
 
         # Best and worst runs based on controller gap
-        'best_run': df.loc[gap_controller.idxmin(), 'run_name'] if len(df) > 0 else None,
+        'best_run': df.loc[gap_controller.idxmin(), 'run_name'] if len(df) > 0 and gap_controller.notna().any() else None,
         'best_gap': gap_controller.min(),
-        'worst_run': df.loc[gap_controller.idxmax(), 'run_name'] if len(df) > 0 else None,
+        'worst_run': df.loc[gap_controller.idxmax(), 'run_name'] if len(df) > 0 and gap_controller.notna().any() else None,
         'worst_gap': gap_controller.max(),
     }
 
