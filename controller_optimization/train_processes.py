@@ -153,8 +153,11 @@ def main():
 
         # Invalidate stale checkpoints: if the process config changed,
         # wipe the checkpoint dir so training uses the new parameters.
+        # Skip staleness detection when --checkpoint_base_dir is set:
+        # the config is already correct from CLI overrides, and parallel
+        # jobs sharing the same UP dir would race on rmtree.
         config_path = checkpoint_dir / 'process_config.json'
-        if checkpoint_dir.exists():
+        if checkpoint_dir.exists() and args.checkpoint_base_dir is None:
             # Build a comparable snapshot of the current config
             _cfg_snapshot = {
                 k: v for k, v in process_config.items()
