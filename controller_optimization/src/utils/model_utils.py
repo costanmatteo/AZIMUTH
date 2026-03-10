@@ -41,6 +41,54 @@ sys.modules['preprocessing'] = preprocessing  # Register for pickle
 spec_preprocessing.loader.exec_module(preprocessing)
 
 
+def _infer_architecture_from_state_dict(state_dict):
+    """
+    Infer input_dim, output_dim, and hidden_sizes from a checkpoint's state_dict.
+
+    Works for single, ensemble, and SWAG models by finding the first/last linear layers.
+
+    Returns:
+        (input_dim, output_dim, hidden_sizes) — any may be None if not inferrable
+    """
+    # Determine key prefix based on model type
+    if any(k.startswith('models.') for k in state_dict):
+        # Ensemble: use first sub-model (models.0.*)
+        prefix = 'models.0.'
+    elif any(k.startswith('base_model.') for k in state_dict):
+        # SWAG: use base_model.*
+        prefix = 'base_model.'
+    else:
+        prefix = ''
+
+    # Collect shared_network linear layer weights in order
+    layer_weights = {}
+    for key, tensor in state_dict.items():
+        if not key.startswith(prefix):
+            continue
+        suffix = key[len(prefix):]
+        if suffix.startswith('shared_network.') and suffix.endswith('.weight'):
+            # e.g. "shared_network.0.weight" → index 0
+            parts = suffix.split('.')
+            layer_idx = int(parts[1])
+            layer_weights[layer_idx] = tensor.shape
+
+    if not layer_weights:
+        return None, None, None
+
+    # input_dim from first layer's in_features
+    first_idx = min(layer_weights.keys())
+    input_dim = layer_weights[first_idx][1]
+
+    # hidden_sizes from out_features of each linear layer
+    hidden_sizes = [layer_weights[idx][0] for idx in sorted(layer_weights.keys())]
+
+    # output_dim from mean_head
+    mean_head_key = f'{prefix}mean_head.weight'
+    output_dim = state_dict[mean_head_key].shape[0] if mean_head_key in state_dict else None
+
+    return input_dim, output_dim, hidden_sizes
+
+
 def load_uncertainty_predictor(checkpoint_path, input_dim, output_dim, model_config, device='cpu'):
     """
     Carica uncertainty predictor pre-addestrato.
@@ -62,6 +110,18 @@ def load_uncertainty_predictor(checkpoint_path, input_dim, output_dim, model_con
 
     # Load weights first to detect model type
     state_dict = torch.load(checkpoint_path, map_location=device)
+
+    # Infer architecture from checkpoint to avoid config/checkpoint mismatches
+    ckpt_input_dim, ckpt_output_dim, ckpt_hidden_sizes = _infer_architecture_from_state_dict(state_dict)
+    if ckpt_input_dim is not None and ckpt_input_dim != input_dim:
+        print(f"  ⚠ Checkpoint input_dim={ckpt_input_dim} differs from config input_dim={input_dim}, using checkpoint value")
+        input_dim = ckpt_input_dim
+    if ckpt_output_dim is not None and ckpt_output_dim != output_dim:
+        print(f"  ⚠ Checkpoint output_dim={ckpt_output_dim} differs from config output_dim={output_dim}, using checkpoint value")
+        output_dim = ckpt_output_dim
+    if ckpt_hidden_sizes is not None and ckpt_hidden_sizes != model_config['hidden_sizes']:
+        print(f"  ⚠ Checkpoint hidden_sizes={ckpt_hidden_sizes} differs from config {model_config['hidden_sizes']}, using checkpoint value")
+        model_config = {**model_config, 'hidden_sizes': ckpt_hidden_sizes}
 
     # Detect model type from state_dict keys
     is_ensemble = any(key.startswith('models.') for key in state_dict.keys())

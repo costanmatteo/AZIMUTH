@@ -58,7 +58,8 @@ class ProTSurrogate:
         }
     }
 
-    def __init__(self, target_trajectory, device='cpu', use_deterministic_sampling=True):
+    def __init__(self, target_trajectory, device='cpu', use_deterministic_sampling=True,
+                 process_configs=None):
         """
         Args:
             target_trajectory (dict): Target trajectory da target_generation
@@ -67,10 +68,27 @@ class ProTSurrogate:
             use_deterministic_sampling (bool): If True, use mean values directly (deterministic).
                                                If False, use reparameterization trick (stochastic).
                                                Default: True for stable training.
+            process_configs (list, optional): Lista di configurazioni processo (da PROCESSES).
+                Se fornita e i processi hanno 'surrogate_target'/'surrogate_scale',
+                usa quelli al posto dei PROCESS_CONFIGS hardcoded.
         """
         self.device = device
         self.use_deterministic_sampling = use_deterministic_sampling
         self.n_scenarios = None  # Will be inferred from data
+
+        # Se process_configs contiene target calibrati, costruisci i config per processo
+        self._dynamic_configs = None
+        if process_configs is not None:
+            dynamic = {}
+            for pc in process_configs:
+                if 'surrogate_target' in pc:
+                    dynamic[pc['name']] = {
+                        'target': pc['surrogate_target'],
+                        'scale': pc['surrogate_scale'],
+                        'weight': pc.get('surrogate_weight', 1.0),
+                    }
+            if dynamic:
+                self._dynamic_configs = dynamic
 
         # Convert target trajectory to tensors (all scenarios)
         self.target_trajectory_tensors = {}
@@ -140,99 +158,80 @@ class ProTSurrogate:
 
             sampled_outputs[process_name] = sample
 
-        # ADAPTIVE RELIABILITY COMPUTATION WITH EXPLICIT PROCESS DEPENDENCIES
-        # Formula adapted based on which processes are present
-        # Processes influence each other through adaptive targets
-
         # Extract available process outputs (assume 1 output per process)
         outputs = {}
         for process_name, sample in sampled_outputs.items():
             outputs[process_name] = sample.squeeze()
 
-        # Compute ADAPTIVE TARGETS based on previous processes in chain
-        # Each process target adapts based on outputs of processes that came before
-
-        adaptive_targets = {}
         quality_scores = {}
 
-        # LASER: First process, fixed target
-        if 'laser' in outputs:
-            laser_power = outputs['laser']
-            adaptive_targets['laser'] = 0.8  # Fixed target
+        if self._dynamic_configs is not None:
+            # GENERIC PATH: usa target/scale calibrati (per processi ST o qualsiasi
+            # processo che abbia surrogate_target/surrogate_scale nel config)
+            for process_name, output_val in outputs.items():
+                cfg = self._dynamic_configs.get(process_name, {})
+                target = cfg.get('target', 0.0)
+                scale = cfg.get('scale', 1.0)
+                quality_scores[process_name] = torch.exp(
+                    -((output_val - target) ** 2) / max(scale, 1e-8)
+                )
+        else:
+            # LEGACY PATH: logica hardcoded per processi fisici
+            adaptive_targets = {}
 
-            laser_quality = torch.exp(-((laser_power - adaptive_targets['laser']) ** 2) / 0.1)
-            quality_scores['laser'] = laser_quality
-
-        # PLASMA: Target depends on Laser
-        if 'plasma' in outputs:
-            plasma_rate = outputs['plasma']
-
-            # Base target
-            plasma_target = 3.0
-
-            # Adapt based on Laser (if available)
-            # If laser is too strong → plasma must compensate by increasing removal rate
+            # LASER: First process, fixed target
             if 'laser' in outputs:
-                plasma_target = plasma_target + 0.2 * (outputs['laser'] - 0.8)
+                laser_power = outputs['laser']
+                adaptive_targets['laser'] = 0.8
 
-            adaptive_targets['plasma'] = plasma_target
+                laser_quality = torch.exp(-((laser_power - adaptive_targets['laser']) ** 2) / 0.1)
+                quality_scores['laser'] = laser_quality
 
-            plasma_quality = torch.exp(-((plasma_rate - plasma_target) ** 2) / 2.0)
-            quality_scores['plasma'] = plasma_quality
-
-        # GALVANIC: Target depends on Laser AND Plasma
-        if 'galvanic' in outputs:
-            galvanic_thick = outputs['galvanic']
-
-            # Base target
-            galvanic_target = 10.0
-
-            # Adapt based on previous processes
-            # If plasma removed too much → galvanic must deposit more thickness
+            # PLASMA: Target depends on Laser
             if 'plasma' in outputs:
-                galvanic_target = galvanic_target + 0.5 * (outputs['plasma'] - 5.0)
+                plasma_rate = outputs['plasma']
+                plasma_target = 3.0
+                if 'laser' in outputs:
+                    plasma_target = plasma_target + 0.2 * (outputs['laser'] - 0.8)
+                adaptive_targets['plasma'] = plasma_target
+                plasma_quality = torch.exp(-((plasma_rate - plasma_target) ** 2) / 2.0)
+                quality_scores['plasma'] = plasma_quality
 
-            # If laser was strong → galvanic must compensate further
-            if 'laser' in outputs:
-                galvanic_target = galvanic_target + 0.4 * (outputs['laser'] - 0.5)
-
-            adaptive_targets['galvanic'] = galvanic_target
-
-            galvanic_quality = torch.exp(-((galvanic_thick - galvanic_target) ** 2) / 4.0)
-            quality_scores['galvanic'] = galvanic_quality
-
-        # MICROETCH: Target depends on ALL previous processes
-        if 'microetch' in outputs:
-            microetch_depth = outputs['microetch']
-
-            # Base target
-            microetch_target = 20.0
-
-            # Adapt based on all previous processes
-            # If laser was too strong → microetch must be deeper
-            if 'laser' in outputs:
-                microetch_target = microetch_target + 1.5 * (outputs['laser'] - 0.5)
-
-            # If plasma was aggressive → microetch must compensate
-            if 'plasma' in outputs:
-                microetch_target = microetch_target + 0.3 * (outputs['plasma'] - 5.0)
-
-            # If galvanic deposited too much → microetch must remove more
+            # GALVANIC: Target depends on Laser AND Plasma
             if 'galvanic' in outputs:
-                microetch_target = microetch_target - 0.15 * (outputs['galvanic'] - 10.0)
+                galvanic_thick = outputs['galvanic']
+                galvanic_target = 10.0
+                if 'plasma' in outputs:
+                    galvanic_target = galvanic_target + 0.5 * (outputs['plasma'] - 5.0)
+                if 'laser' in outputs:
+                    galvanic_target = galvanic_target + 0.4 * (outputs['laser'] - 0.5)
+                adaptive_targets['galvanic'] = galvanic_target
+                galvanic_quality = torch.exp(-((galvanic_thick - galvanic_target) ** 2) / 4.0)
+                quality_scores['galvanic'] = galvanic_quality
 
-            adaptive_targets['microetch'] = microetch_target
-
-            microetch_quality = torch.exp(-((microetch_depth - microetch_target) ** 2) / 4.0)
-            quality_scores['microetch'] = microetch_quality
+            # MICROETCH: Target depends on ALL previous processes
+            if 'microetch' in outputs:
+                microetch_depth = outputs['microetch']
+                microetch_target = 20.0
+                if 'laser' in outputs:
+                    microetch_target = microetch_target + 1.5 * (outputs['laser'] - 0.5)
+                if 'plasma' in outputs:
+                    microetch_target = microetch_target + 0.3 * (outputs['plasma'] - 5.0)
+                if 'galvanic' in outputs:
+                    microetch_target = microetch_target - 0.15 * (outputs['galvanic'] - 10.0)
+                adaptive_targets['microetch'] = microetch_target
+                microetch_quality = torch.exp(-((microetch_depth - microetch_target) ** 2) / 4.0)
+                quality_scores['microetch'] = microetch_quality
 
         # COMBINE QUALITY SCORES WITH WEIGHTED AVERAGE
-        # Use weights from PROCESS_CONFIGS for consistency with L_min calculation
         total_weighted_quality = 0.0
         total_weight = 0.0
 
         for process_name, quality in quality_scores.items():
-            weight = self.PROCESS_CONFIGS.get(process_name, {}).get('weight', 1.0)
+            if self._dynamic_configs is not None:
+                weight = self._dynamic_configs.get(process_name, {}).get('weight', 1.0)
+            else:
+                weight = self.PROCESS_CONFIGS.get(process_name, {}).get('weight', 1.0)
             total_weighted_quality += quality * weight
             total_weight += weight
 
@@ -363,7 +362,8 @@ if __name__ == '__main__':
 
 def create_surrogate(config: Dict,
                      target_trajectory: Dict,
-                     device: str = 'cpu') -> Union['ProTSurrogate', 'CasualiTSurrogate']:
+                     device: str = 'cpu',
+                     process_configs: list = None) -> Union['ProTSurrogate', 'CasualiTSurrogate']:
     """
     Factory function to create the appropriate surrogate based on configuration.
 
@@ -374,6 +374,9 @@ def create_surrogate(config: Dict,
             - casualit: dict with checkpoint_path
         target_trajectory: Target trajectory dict for F* computation
         device: Torch device
+        process_configs: Lista configurazioni processo (da PROCESSES).
+            Se i processi hanno 'surrogate_target'/'surrogate_scale',
+            ProTSurrogate li usa al posto dei target hardcoded.
 
     Returns:
         Surrogate instance (ProTSurrogate or CasualiTSurrogate)
@@ -395,6 +398,7 @@ def create_surrogate(config: Dict,
             target_trajectory=target_trajectory,
             device=device,
             use_deterministic_sampling=use_deterministic,
+            process_configs=process_configs,
         )
 
     elif surrogate_type == 'casualit':

@@ -1102,7 +1102,7 @@ class ControllerTrainer:
         # Save training history
         history_path = save_dir / 'training_history.json'
         with open(history_path, 'w') as f:
-            json.dump(self.history, f, indent=2)
+            json.dump(self.history, f, indent=2, default=lambda o: float(o) if hasattr(o, 'item') else str(o))
 
         # Save training progression snapshots
         if len(self.training_progression) > 0:
@@ -1343,7 +1343,7 @@ class ControllerTrainer:
 
         state_path = path.parent / 'training_state.json'
         with open(state_path, 'w') as f:
-            json.dump(state, f, indent=2)
+            json.dump(state, f, indent=2, default=lambda o: float(o) if hasattr(o, 'item') else str(o))
 
     def load_checkpoint(self, checkpoint_dir):
         """

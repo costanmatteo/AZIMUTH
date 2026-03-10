@@ -208,7 +208,7 @@ def load_csv_data(filepath, input_columns, output_columns):
     return X, y
 
 
-def generate_scm_data(n_samples=5000, seed=42, dataset_type='one_to_one_ct', save_graph_to=None):
+def generate_scm_data(n_samples=5000, seed=42, dataset_type='one_to_one_ct', save_graph_to=None, **kwargs):
     """
     Generate synthetic data using Structural Causal Model (SCM).
 
@@ -253,17 +253,32 @@ def generate_scm_data(n_samples=5000, seed=42, dataset_type='one_to_one_ct', sav
         scm_dataset = ds_scm_galvanic
     elif dataset_type == 'microetch':
         scm_dataset = ds_scm_microetch
+    elif dataset_type == 'st':
+        # ST dataset: richiede st_params passati via kwargs
+        from scm_ds.datasets_st import STConfig, build_st_scm
+        st_params = kwargs.get('st_params')
+        if st_params is None:
+            raise ValueError(
+                "dataset_type='st' requires 'st_params' dict to be passed as kwarg"
+            )
+        scm_dataset = build_st_scm(STConfig(**st_params))
     else:
         raise ValueError(f"Unknown SCM dataset type: {dataset_type}. "
-                         f"Available types: 'one_to_one_ct', 'laser', 'plasma', 'galvanic', 'microetch'")
+                         f"Available types: 'one_to_one_ct', 'laser', 'plasma', 'galvanic', 'microetch', 'st'")
 
     # Generate samples
     print(f"Generating {n_samples} synthetic samples using SCM...")
     df = scm_dataset.sample(n=n_samples, seed=seed)
 
     # Extract input and output columns
-    input_columns = scm_dataset.input_labels
-    output_columns = scm_dataset.target_labels
+    input_columns = list(scm_dataset.input_labels)
+    output_columns = list(scm_dataset.target_labels)
+
+    # Per ST datasets, includi anche le variabili ambientali (E_j) come input
+    # per coerenza con la configurazione processo che le include in input_labels
+    if dataset_type == 'st' and hasattr(scm_dataset, 'structural_noise_vars'):
+        structural_vars = list(scm_dataset.structural_noise_vars)
+        input_columns = input_columns + structural_vars
 
     X = df[input_columns].values
     y = df[output_columns].values
@@ -272,20 +287,32 @@ def generate_scm_data(n_samples=5000, seed=42, dataset_type='one_to_one_ct', sav
     print(f"Input features: {X.shape[1]} - {input_columns}")
     print(f"Output features: {y.shape[1]} - {output_columns}")
 
-    # Save SCM graph visualization if requested
+    # Save SCM graph visualizations if requested
     if save_graph_to is not None:
-        try:
-            from pathlib import Path
-            from os.path import join
-            save_dir = Path(save_graph_to)
-            save_dir.mkdir(parents=True, exist_ok=True)
+        from pathlib import Path
+        from os.path import join
+        save_dir = Path(save_graph_to)
+        save_dir.mkdir(parents=True, exist_ok=True)
 
-            # Use matplotlib-based visualization (no external dependencies needed)
-            scm_dataset.scm.save_graph_matplotlib(join(save_dir, 'scm_graph'))
-            print(f"SCM graph saved to: {save_dir}/scm_graph.png")
+        # 1. Role-aware DAG (coloured boxes)
+        try:
+            scm_dataset.save_dag_image(join(save_dir, 'dag'))
+            print(f"DAG image saved to: {save_dir}/dag.png")
         except Exception as e:
-            print(f"Warning: Could not save SCM graph visualization.")
-            print(f"  Error: {e}")
-            print(f"  Continuing without graph...")
+            print(f"Warning: Could not save DAG image: {e}")
+
+        # 2. Academic structured DAG (text-only, hierarchical)
+        try:
+            scm_dataset.save_dag_academic(join(save_dir, 'dag_academic'))
+            print(f"Academic DAG saved to: {save_dir}/dag_academic.png")
+        except Exception as e:
+            print(f"Warning: Could not save academic DAG: {e}")
+
+        # 3. Compact DAG (text-only, force-directed, steel-blue)
+        try:
+            scm_dataset.save_dag_compact(join(save_dir, 'dag_compact'))
+            print(f"Compact DAG saved to: {save_dir}/dag_compact.png")
+        except Exception as e:
+            print(f"Warning: Could not save compact DAG: {e}")
 
     return X, y, input_columns, output_columns

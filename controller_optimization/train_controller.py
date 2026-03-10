@@ -45,7 +45,9 @@ import numpy as np
 REPO_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from controller_optimization.configs.processes_config import PROCESSES, get_filtered_processes
+from controller_optimization.configs.processes_config import (
+    PROCESSES, get_filtered_processes, ST_DATASET_CONFIG, _build_st_processes, DATASET_MODE
+)
 from controller_optimization.configs.controller_config import CONTROLLER_CONFIG
 from controller_optimization.src.utils.target_generation import (
     generate_target_trajectory,
@@ -148,6 +150,18 @@ def parse_args():
                         help='Enable curriculum learning')
     parser.add_argument('--no_curriculum', action='store_true', default=False,
                         help='Disable curriculum learning')
+
+    # ST dataset complexity parameters (override processes_config.ST_DATASET_CONFIG)
+    parser.add_argument('--st_n', type=int, default=None,
+                        help='ST input variables per process (overrides st_params.n)')
+    parser.add_argument('--st_m', type=int, default=None,
+                        help='ST cascaded stages per process (overrides st_params.m)')
+    parser.add_argument('--st_rho', type=float, default=None,
+                        help='ST noise intensity [0,1] (overrides st_params.rho)')
+    parser.add_argument('--st_n_processes', type=int, default=None,
+                        help='Number of ST processes in sequence (overrides n_processes)')
+    parser.add_argument('--up_checkpoint_dir', type=str, default=None,
+                        help='Override UP checkpoint base dir (reads UPs from here)')
 
     # Misc
     parser.add_argument('--no_pdf', action='store_true', default=False,
@@ -424,7 +438,8 @@ def main(config=None):
     surrogate = create_surrogate(
         config=surrogate_config,
         target_trajectory=target_trajectory,
-        device=device
+        device=device,
+        process_configs=selected_processes,
     )
 
     # For CasualiTSurrogate, connect to ProcessChain for format conversion
@@ -982,6 +997,9 @@ def main(config=None):
 
     # Initialize theoretical_data before the conditional block
     theoretical_data = None
+    # Initialize within_scenario_gap_metrics before the conditional block
+    # (computed inside generate_pdf block but referenced in JSON output)
+    within_scenario_gap_metrics = None
 
     # 8b. Generate PDF report (if enabled)
     if cfg['report']['generate_pdf']:
@@ -1139,8 +1157,11 @@ def main(config=None):
             print("\n[8.6/9] Running theoretical loss analysis...")
 
             try:
-                # Get process configs from surrogate
-                process_configs_surrogate = ProTSurrogate.PROCESS_CONFIGS
+                # Get process configs from surrogate (dynamic se disponibili, altrimenti hardcoded)
+                if hasattr(surrogate, '_dynamic_configs') and surrogate._dynamic_configs is not None:
+                    process_configs_surrogate = surrogate._dynamic_configs
+                else:
+                    process_configs_surrogate = ProTSurrogate.PROCESS_CONFIGS
 
                 # ── Empirical sampling (matches training configuration) ────
                 # Collect F_samples using the SAME number of scenarios and
@@ -1464,9 +1485,19 @@ def main(config=None):
     history_serializable = {k: [float(v) for v in vals] for k, vals in history.items() if isinstance(vals, list)}
     history_serializable['F_star'] = float(F_star_value)
 
+    # Capture actual ST params (may be CLI-overridden)
+    _actual_st_params = None
+    _actual_n_processes = None
+    if DATASET_MODE == 'st' and len(selected_processes) > 0:
+        _actual_st_params = selected_processes[0].get('st_params', None)
+        _actual_n_processes = len(selected_processes)
+
     final_results = {
         'timestamp': datetime.now().isoformat(),
         'config': CONTROLLER_CONFIG,
+        'dataset_mode': DATASET_MODE,
+        'st_params': _actual_st_params,
+        'n_processes': _actual_n_processes,
         'n_train_scenarios': int(n_scenarios),
         'n_test_scenarios': int(n_test),
 
@@ -1542,7 +1573,7 @@ def main(config=None):
 
     results_path = checkpoint_dir / 'final_results.json'
     with open(results_path, 'w') as f:
-        json.dump(final_results, f, indent=2)
+        json.dump(final_results, f, indent=2, default=lambda o: float(o) if hasattr(o, 'item') else str(o))
 
     print(f"  ✓ Final results saved: {results_path}")
 
@@ -1570,6 +1601,36 @@ if __name__ == '__main__':
 
     # Apply argument overrides to config
     config = apply_args_to_config(args, CONTROLLER_CONFIG)
+
+    # If ST dataset params are overridden via CLI, rebuild processes dynamically
+    _st_overrides = {
+        k: v for k, v in [('n', args.st_n), ('m', args.st_m), ('rho', args.st_rho)]
+        if v is not None
+    }
+    _has_n_processes_override = args.st_n_processes is not None
+    if (_st_overrides or _has_n_processes_override) and DATASET_MODE == 'st':
+        import copy as _copy
+        _st_cfg = _copy.deepcopy(ST_DATASET_CONFIG)
+        _st_cfg['st_params'].update(_st_overrides)
+        if _has_n_processes_override:
+            _st_cfg['n_processes'] = args.st_n_processes
+        # Rebuild processes with new ST params
+        _custom_processes = _build_st_processes(_st_cfg)
+        # Monkey-patch so get_filtered_processes uses the new processes
+        import controller_optimization.configs.processes_config as _proc_mod
+        _proc_mod.PROCESSES = _custom_processes
+        print(f"\n[ST Override] Rebuilt processes with: {_st_overrides}"
+              f"{f', n_processes={args.st_n_processes}' if _has_n_processes_override else ''}")
+        print(f"  st_params: n={_st_cfg['st_params']['n']}, "
+              f"m={_st_cfg['st_params']['m']}, rho={_st_cfg['st_params']['rho']}, "
+              f"n_processes={_st_cfg['n_processes']}")
+
+    # Override UP checkpoint dirs if --up_checkpoint_dir is provided
+    if args.up_checkpoint_dir is not None:
+        import controller_optimization.configs.processes_config as _proc_mod
+        for _p in _proc_mod.PROCESSES:
+            _p['checkpoint_dir'] = str(Path(args.up_checkpoint_dir) / _p['name'])
+        print(f"[UP Checkpoint Override] Reading UPs from: {args.up_checkpoint_dir}")
 
     # Run main with the configured settings
     main(config)

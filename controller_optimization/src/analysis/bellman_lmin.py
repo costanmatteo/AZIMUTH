@@ -236,15 +236,18 @@ def compute_manifold(
     return manifold
 
 
-def get_adaptive_target(process_idx: int, upstream_outputs: Optional[Dict[str, float]] = None) -> float:
+def get_adaptive_target(process_idx: int, upstream_outputs: Optional[Dict[str, float]] = None,
+                        surrogate=None) -> float:
     """
     Get the adaptive target for process i given upstream outputs.
 
-    Mirrors the logic in ProTSurrogate.compute_reliability().
+    Se il surrogate ha _dynamic_configs (processi ST), usa il target calibrato.
+    Altrimenti usa la logica hardcoded per i processi fisici (legacy).
 
     Args:
-        process_idx: 0=laser, 1=plasma, 2=galvanic, 3=microetch
+        process_idx: indice del processo nella catena
         upstream_outputs: dict {proc_name: output_value} for completed processes
+        surrogate: ProTSurrogate instance (opzionale, per accedere a _dynamic_configs)
 
     Returns:
         target value tau_i
@@ -252,6 +255,15 @@ def get_adaptive_target(process_idx: int, upstream_outputs: Optional[Dict[str, f
     if upstream_outputs is None:
         upstream_outputs = {}
 
+    # GENERIC PATH: usa target calibrati dal surrogate (processi ST)
+    if surrogate is not None and hasattr(surrogate, '_dynamic_configs') and surrogate._dynamic_configs is not None:
+        # Trova il nome del processo per questo indice
+        proc_names = list(surrogate._dynamic_configs.keys())
+        if process_idx < len(proc_names):
+            return surrogate._dynamic_configs[proc_names[process_idx]]['target']
+        return 0.0
+
+    # LEGACY PATH: logica hardcoded per processi fisici
     if process_idx == 0:  # laser
         return 0.8
     elif process_idx == 1:  # plasma
@@ -361,9 +373,11 @@ def bellman_terminal(
     cond_weights_i: np.ndarray,
 ) -> np.ndarray:
     """
-    Closed-form Bellman for the terminal step (process index 3, last process).
+    Closed-form Bellman for the terminal step (last process).
 
-    V_4(R_4, eps_{<4}) = min_{(mu,sigma2) in M_4} E[ (R_4 - w_bar_4 * Q_4)^2 | eps_{<4} ]
+    V_T(R_T, eps_{<T}) = min_{(mu,sigma2) in M_T} E[ (R_T - w_bar_T * Q_T)^2 | eps_{<T} ]
+
+    Generic for any number of preceding processes (n_prev = len(cond_weights_i)).
 
     Uses the Gaussian integral identity:
         E[exp(-((alpha + beta*z)^2) / gamma)] = exp(-alpha^2/(gamma+2*beta^2)) / sqrt(1+2*beta^2/gamma)
@@ -376,14 +390,15 @@ def bellman_terminal(
         s_i: scale parameter
         tau_i: adaptive target (at target trajectory operating point)
         sigma2_cond_i: conditional variance of eps_i | eps_{<i}
-        cond_weights_i: (3,) conditional mean weights
+        cond_weights_i: (n_prev,) conditional mean weights
 
     Returns:
-        V: array of shape (N_R, N_eps, N_eps, N_eps)
+        V: array of shape (N_R, N_eps, ..., N_eps) with n_prev eps dimensions
     """
     N_R = len(grid_R)
     N_eps = len(grid_eps)
     M = manifold.shape[0]
+    n_prev = len(cond_weights_i)
 
     # Extract manifold columns
     mu_m = manifold[:, 0]       # (M,)
@@ -393,44 +408,38 @@ def bellman_terminal(
     # Compute delta_m = mu_m - tau_i for each action
     delta_m = mu_m - tau_i  # (M,)
 
-    # Build meshgrid for eps_{<4} = (eps_0, eps_1, eps_2)
-    # cond_weights_i has shape (3,)
-    # eps_hat_4 = cond_weights_i[0]*e0 + cond_weights_i[1]*e1 + cond_weights_i[2]*e2
-
-    # Precompute eps_hat for all grid points
-    # Shape: (N_eps, N_eps, N_eps)
-    e0, e1, e2 = np.meshgrid(grid_eps, grid_eps, grid_eps, indexing='ij')
-    eps_hat = cond_weights_i[0] * e0 + cond_weights_i[1] * e1 + cond_weights_i[2] * e2
-    # Shape: (N_eps, N_eps, N_eps)
+    # Build meshgrid for eps_{<T} with n_prev dimensions
+    # eps_hat = sum_j cond_weights_i[j] * e_j
+    grids = np.meshgrid(*([grid_eps] * n_prev), indexing='ij')  # list of n_prev arrays, each (N_eps,)*n_prev
+    eps_hat = sum(cond_weights_i[j] * grids[j] for j in range(n_prev))
+    # Shape: (N_eps,) * n_prev
 
     sqrt_cond = np.sqrt(sigma2_cond_i)
 
-    # For each action m and grid point, compute:
-    # d_4 = delta_m + sigma_m * eps_hat
-    # beta = sigma_m * sqrt_cond
-    # Then:
-    # E[Q_4] = exp(-d^2 / (s + 2*beta^2)) / sqrt(1 + 2*beta^2/s)
-    # E[Q_4^2] = exp(-2*d^2 / (s + 4*beta^2)) / sqrt(1 + 4*beta^2/s)
-    # cost = R^2 - 2*R*w*E[Q] + w^2*E[Q^2]
+    # Vectorise over (R, eps_dims..., m)
+    # n_total_dims = 1 (R) + n_prev (eps) + 1 (m) = n_prev + 2
+    # R:       (N_R, 1, 1, ..., 1)  — n_prev+1 trailing dims
+    # eps_hat: (1, N_eps, ..., N_eps, 1)  — leading 1 + n_prev eps dims + trailing 1
+    # delta_m: (1, 1, ..., 1, M)  — n_prev+1 leading dims
 
-    # We want to vectorise over (R, e0, e1, e2, m)
-    # Shape strategy: R -> (N_R,1,1,1,1), eps_hat -> (1,Ne,Ne,Ne,1), m -> (1,1,1,1,M)
+    R_shape = (N_R,) + (1,) * (n_prev + 1)
+    R = grid_R.reshape(R_shape)
 
-    R = grid_R[:, None, None, None, None]       # (N_R,1,1,1,1)
-    eps_hat_5d = eps_hat[None, :, :, :, None]    # (1,Ne,Ne,Ne,1)
-    delta_5d = delta_m[None, None, None, None, :]  # (1,1,1,1,M)
-    sigma_5d = sigma_m[None, None, None, None, :]  # (1,1,1,1,M)
+    eps_hat_shape = (1,) + eps_hat.shape + (1,)
+    eps_hat_nd = eps_hat.reshape(eps_hat_shape)
 
-    d = delta_5d + sigma_5d * eps_hat_5d    # (N_R,Ne,Ne,Ne,M) — broadcast on R trivially
-    # d actually doesn't depend on R, but keeping 5 dims for broadcasting
+    trailing_shape = (1,) * (n_prev + 1) + (M,)
+    delta_nd = delta_m.reshape(trailing_shape)
+    sigma_nd = sigma_m.reshape(trailing_shape)
 
-    beta = sigma_5d * sqrt_cond  # (1,1,1,1,M)
+    d = delta_nd + sigma_nd * eps_hat_nd  # (N_R, Ne, ..., Ne, M)
+
+    beta = sigma_nd * sqrt_cond
     beta2 = beta ** 2
 
     # E[Q]
     denom1 = s_i + 2 * beta2
     EQ = np.exp(-d ** 2 / denom1) / np.sqrt(1 + 2 * beta2 / s_i)
-    # (N_R, Ne, Ne, Ne, M) — still no true R dependence in EQ
 
     # E[Q^2]
     denom2 = s_i + 4 * beta2
@@ -438,10 +447,9 @@ def bellman_terminal(
 
     # cost(R, eps, m) = R^2 - 2*R*w*EQ + w^2*EQ2
     cost = R ** 2 - 2 * R * w_bar_i * EQ + w_bar_i ** 2 * EQ2
-    # (N_R, Ne, Ne, Ne, M)
 
-    # Minimise over actions
-    V = np.min(cost, axis=-1)  # (N_R, Ne, Ne, Ne)
+    # Minimise over actions (last axis)
+    V = np.min(cost, axis=-1)  # (N_R, N_eps, ..., N_eps)
 
     return V
 
@@ -507,36 +515,16 @@ def bellman_non_terminal(
 
     sqrt_cond = np.sqrt(sigma2_cond_i)
 
-    # Build interpolator for V_next
-    if process_idx == 2:
-        # V_next shape: (N_R, N_eps, N_eps, N_eps)
-        interp = RegularGridInterpolator(
-            (grid_R, grid_eps, grid_eps, grid_eps),
-            V_next,
-            method='linear',
-            bounds_error=False,
-            fill_value=None,  # Extrapolate
-        )
-    elif process_idx == 1:
-        # V_next shape: (N_R, N_eps, N_eps)
-        interp = RegularGridInterpolator(
-            (grid_R, grid_eps, grid_eps),
-            V_next,
-            method='linear',
-            bounds_error=False,
-            fill_value=None,
-        )
-    elif process_idx == 0:
-        # V_next shape: (N_R, N_eps)
-        interp = RegularGridInterpolator(
-            (grid_R, grid_eps),
-            V_next,
-            method='linear',
-            bounds_error=False,
-            fill_value=None,
-        )
-    else:
-        raise ValueError(f"Invalid process_idx: {process_idx}")
+    # Number of preceding eps dimensions in V_next
+    # V_next has shape (N_R, N_eps, ..., N_eps) with (process_idx + 1) eps dims
+    n_eps_dims_next = len(V_next.shape) - 1  # subtract R dimension
+
+    # Build interpolator for V_next — generic for any number of eps dims
+    interp_axes = (grid_R,) + (grid_eps,) * n_eps_dims_next
+    interp = RegularGridInterpolator(
+        interp_axes, V_next,
+        method='linear', bounds_error=False, fill_value=None,
+    )
 
     # Generate MC samples (common random numbers)
     if use_antithetic:
@@ -553,33 +541,36 @@ def bellman_non_terminal(
     eps_lo, eps_hi = grid_eps[0], grid_eps[-1]
 
     if process_idx == 0:
-        # i=0: state is (F*, empty) — single point
-        # eps_0 ~ N(0, Sigma[0,0]) => eps_0 = sqrt(Sigma[0,0]) * z
+        # i=0: state is (F*, empty) — single point, returns scalar
         eps_i_samples = sqrt_cond * z_all  # (K,)
-        F_star = grid_R[-1]  # F* is the max R value
+        F_star = grid_R[-1]
 
-        # Vectorise over all M actions: (M, K)
         d_all = delta_m[:, None] + sigma_m[:, None] * eps_i_samples[None, :]  # (M, K)
-        Q_all = np.exp(-(d_all ** 2) / s_i)  # (M, K)
-        R_next_all = F_star - w_bar_i * Q_all  # (M, K)
+        Q_all = np.exp(-(d_all ** 2) / s_i)
+        R_next_all = F_star - w_bar_i * Q_all
 
         R_next_flat = np.clip(R_next_all.ravel(), R_lo, R_hi)
         eps_flat = np.tile(np.clip(eps_i_samples, eps_lo, eps_hi), M)
 
-        points = np.column_stack([R_next_flat, eps_flat])  # (M*K, 2)
-        V_vals = interp(points).reshape(M, K_actual)  # (M, K)
-        costs = V_vals.mean(axis=1)  # (M,)
+        points = np.column_stack([R_next_flat, eps_flat])
+        V_vals = interp(points).reshape(M, K_actual)
+        costs = V_vals.mean(axis=1)
 
-        return float(costs.min())  # scalar
+        return float(costs.min())
 
-    elif process_idx == 1:
-        # i=1: state is (R_1, eps_0) -> output V shape (N_R, N_eps)
-        # Vectorized over R: loop N_eps iterations instead of N_R × N_eps
-        V_out = np.zeros((N_R, N_eps))
+    else:
+        # Generic non-terminal step for process_idx >= 1
+        # State: (R, eps_0, ..., eps_{i-1}) → output shape (N_R, N_eps, ..., N_eps) with i eps dims
+        n_prev = process_idx  # number of preceding eps dimensions
+        V_out_shape = (N_R,) + (N_eps,) * n_prev
+        V_out = np.zeros(V_out_shape)
 
-        for e0_idx in range(N_eps):
-            eps_0_val = grid_eps[e0_idx]
-            eps_hat = cond_weights_i[0] * eps_0_val
+        # Iterate over all combinations of preceding eps values
+        for multi_idx in np.ndindex(*([N_eps] * n_prev)):
+            eps_vals = np.array([grid_eps[idx] for idx in multi_idx])
+
+            # Conditional mean: eps_hat = cond_weights @ eps_vals
+            eps_hat = cond_weights_i @ eps_vals
             eps_i_samples = eps_hat + sqrt_cond * z_all  # (K,)
 
             # d, Q independent of R: (M, K)
@@ -590,48 +581,18 @@ def bellman_non_terminal(
             R_next = grid_R[:, None, None] - w_bar_i * Q_all[None, :, :]
 
             R_flat = np.clip(R_next.ravel(), R_lo, R_hi)  # (N_R*M*K,)
-            eps_0_flat = np.full(N_R * M * K_actual, np.clip(eps_0_val, eps_lo, eps_hi))
-            eps_i_flat = np.tile(np.clip(eps_i_samples, eps_lo, eps_hi), N_R * M)
+            # Build interpolation points: [R, eps_0, ..., eps_{i-1}, eps_i]
+            n_points = N_R * M * K_actual
+            cols = [R_flat]
+            for j in range(n_prev):
+                cols.append(np.full(n_points, np.clip(eps_vals[j], eps_lo, eps_hi)))
+            cols.append(np.tile(np.clip(eps_i_samples, eps_lo, eps_hi), N_R * M))
 
-            points = np.column_stack([R_flat, eps_0_flat, eps_i_flat])
+            points = np.column_stack(cols)
             V_vals = interp(points).reshape(N_R, M, K_actual)
             costs = V_vals.mean(axis=2)  # (N_R, M)
 
-            V_out[:, e0_idx] = costs.min(axis=1)  # (N_R,)
-
-        return V_out
-
-    elif process_idx == 2:
-        # i=2: state is (R_2, eps_0, eps_1) -> output V shape (N_R, N_eps, N_eps)
-        # Vectorized over R: loop N_eps² iterations instead of N_R × N_eps²
-        V_out = np.zeros((N_R, N_eps, N_eps))
-
-        for e0_idx in range(N_eps):
-            eps_0_val = grid_eps[e0_idx]
-            for e1_idx in range(N_eps):
-                eps_1_val = grid_eps[e1_idx]
-
-                eps_less = np.array([eps_0_val, eps_1_val])
-                eps_hat = cond_weights_i @ eps_less
-                eps_i_samples = eps_hat + sqrt_cond * z_all  # (K,)
-
-                # d, Q independent of R: (M, K)
-                d_all = delta_m[:, None] + sigma_m[:, None] * eps_i_samples[None, :]
-                Q_all = np.exp(-(d_all ** 2) / s_i)
-
-                # Vectorize over all R grid points: (N_R, M, K)
-                R_next = grid_R[:, None, None] - w_bar_i * Q_all[None, :, :]
-
-                R_flat = np.clip(R_next.ravel(), R_lo, R_hi)  # (N_R*M*K,)
-                eps_0_flat = np.full(N_R * M * K_actual, np.clip(eps_0_val, eps_lo, eps_hi))
-                eps_1_flat = np.full(N_R * M * K_actual, np.clip(eps_1_val, eps_lo, eps_hi))
-                eps_i_flat = np.tile(np.clip(eps_i_samples, eps_lo, eps_hi), N_R * M)
-
-                points = np.column_stack([R_flat, eps_0_flat, eps_1_flat, eps_i_flat])
-                V_vals = interp(points).reshape(N_R, M, K_actual)
-                costs = V_vals.mean(axis=2)  # (N_R, M)
-
-                V_out[:, e0_idx, e1_idx] = costs.min(axis=1)  # (N_R,)
+            V_out[(slice(None),) + multi_idx] = costs.min(axis=1)  # (N_R,)
 
         return V_out
 
@@ -650,25 +611,27 @@ def backward_induction(
     process_names: List[str],
     cfg: BellmanConfig,
     verbose: bool = True,
+    **kwargs,
 ) -> Tuple[float, Dict[int, np.ndarray], np.ndarray, np.ndarray, Dict[int, float], Dict[int, np.ndarray], List[float]]:
     """
-    Run backward induction from i=3 (terminal) to i=0 (initial).
+    Run backward induction from terminal process to initial.
 
     Args:
         F_star: target reliability
-        Sigma: (4, 4) noise covariance
-        manifolds: list of 4 manifold arrays, each (M_i, 2)
-        w_bar: (4,) normalised weights
-        scales: (4,) scale parameters
+        Sigma: (n, n) noise covariance
+        manifolds: list of n manifold arrays, each (M_i, 2)
+        w_bar: (n,) normalised weights
+        scales: (n,) scale parameters
         target_outputs: {proc_name: target_output} for adaptive targets
-        process_names: ['laser', 'plasma', 'galvanic', 'microetch']
+        process_names: list of process names
         cfg: BellmanConfig
         verbose: print progress
+        **kwargs: optional 'surrogate' for dynamic target configs (ST processes)
 
     Returns:
         Tuple of (L_min, V_functions, grid_R, grid_eps, sigma2_cond, cond_weights, taus)
     """
-    n = 4
+    n = len(process_names)
     grid_R, grid_eps = build_grids(F_star, cfg)
 
     # Precompute conditional parameters
@@ -680,10 +643,12 @@ def backward_induction(
             print(f"  Conditional weights[{i}]: {cond_weights[i]}")
 
     # Compute adaptive targets at the operating point
+    # surrogate viene passato via kwargs per supportare target dinamici (ST)
+    surrogate = kwargs.get('surrogate', None)
     taus = []
     upstream = {}
     for i in range(n):
-        tau_i = get_adaptive_target(i, upstream)
+        tau_i = get_adaptive_target(i, upstream, surrogate=surrogate)
         taus.append(tau_i)
         upstream[process_names[i]] = target_outputs[process_names[i]]
     if verbose:
@@ -691,52 +656,45 @@ def backward_induction(
 
     rng = np.random.default_rng(42)
 
-    # ── Step i=3 (terminal, 0-indexed): closed-form ──
-    if verbose:
-        print(f"\n  [Step 3/3] Terminal step (process '{process_names[3]}') — closed-form...")
-    t0 = time.time()
-    V3 = bellman_terminal(
-        grid_R, grid_eps, manifolds[3],
-        w_bar[3], scales[3], taus[3],
-        sigma2_cond[3], cond_weights[3],
-    )
-    if verbose:
-        print(f"    Done in {time.time()-t0:.1f}s. V3 shape: {V3.shape}, range: [{V3.min():.6f}, {V3.max():.6f}]")
+    # ── Backward induction: da terminal (i=n-1) a i=0 ──
+    V_functions = {}
 
-    # ── Step i=2: MC ──
+    # Step terminale (i = n-1): closed-form
+    terminal_idx = n - 1
     if verbose:
-        print(f"\n  [Step 2/3] Process '{process_names[2]}' — Monte Carlo (K={cfg.K_mc})...")
+        print(f"\n  [Step {n-1}/{n-1}] Terminal step (process '{process_names[terminal_idx]}') — closed-form...")
     t0 = time.time()
-    V2 = bellman_non_terminal(
-        grid_R, grid_eps, V3, manifolds[2],
-        w_bar[2], scales[2], taus[2],
-        sigma2_cond[2], cond_weights[2],
-        process_idx=2, K=cfg.K_mc,
-        use_antithetic=cfg.use_antithetic, rng=rng,
+    V_prev = bellman_terminal(
+        grid_R, grid_eps, manifolds[terminal_idx],
+        w_bar[terminal_idx], scales[terminal_idx], taus[terminal_idx],
+        sigma2_cond[terminal_idx], cond_weights[terminal_idx],
     )
+    V_functions[terminal_idx] = V_prev
     if verbose:
-        print(f"    Done in {time.time()-t0:.1f}s. V2 shape: {V2.shape}, range: [{V2.min():.6f}, {V2.max():.6f}]")
+        print(f"    Done in {time.time()-t0:.1f}s. V shape: {V_prev.shape}, range: [{V_prev.min():.6f}, {V_prev.max():.6f}]")
 
-    # ── Step i=1: MC ──
-    if verbose:
-        print(f"\n  [Step 1/3] Process '{process_names[1]}' — Monte Carlo (K={cfg.K_mc})...")
-    t0 = time.time()
-    V1 = bellman_non_terminal(
-        grid_R, grid_eps, V2, manifolds[1],
-        w_bar[1], scales[1], taus[1],
-        sigma2_cond[1], cond_weights[1],
-        process_idx=1, K=cfg.K_mc,
-        use_antithetic=cfg.use_antithetic, rng=rng,
-    )
-    if verbose:
-        print(f"    Done in {time.time()-t0:.1f}s. V1 shape: {V1.shape}, range: [{V1.min():.6f}, {V1.max():.6f}]")
+    # Steps intermedi (i = n-2 ... 1): MC
+    for i in range(n - 2, 0, -1):
+        if verbose:
+            print(f"\n  [Step {i}/{n-1}] Process '{process_names[i]}' — Monte Carlo (K={cfg.K_mc})...")
+        t0 = time.time()
+        V_prev = bellman_non_terminal(
+            grid_R, grid_eps, V_prev, manifolds[i],
+            w_bar[i], scales[i], taus[i],
+            sigma2_cond[i], cond_weights[i],
+            process_idx=i, K=cfg.K_mc,
+            use_antithetic=cfg.use_antithetic, rng=rng,
+        )
+        V_functions[i] = V_prev
+        if verbose:
+            print(f"    Done in {time.time()-t0:.1f}s. V shape: {V_prev.shape}, range: [{V_prev.min():.6f}, {V_prev.max():.6f}]")
 
-    # ── Step i=0: MC (returns scalar) ──
+    # Step iniziale (i = 0): MC, ritorna scalare
     if verbose:
-        print(f"\n  [Step 0/3] Process '{process_names[0]}' — Monte Carlo (K={cfg.K_mc})...")
+        print(f"\n  [Step 0/{n-1}] Process '{process_names[0]}' — Monte Carlo (K={cfg.K_mc})...")
     t0 = time.time()
     L_min = bellman_non_terminal(
-        grid_R, grid_eps, V1, manifolds[0],
+        grid_R, grid_eps, V_prev, manifolds[0],
         w_bar[0], scales[0], taus[0],
         sigma2_cond[0], None,
         process_idx=0, K=cfg.K_mc,
@@ -745,7 +703,6 @@ def backward_induction(
     if verbose:
         print(f"    Done in {time.time()-t0:.1f}s. L_min = {L_min:.8f}")
 
-    V_functions = {1: V1, 2: V2, 3: V3}
     return float(L_min), V_functions, grid_R, grid_eps, sigma2_cond, cond_weights, taus
 
 
@@ -796,29 +753,24 @@ def forward_simulation(
     if rng is None:
         rng = np.random.default_rng(999)
 
-    n = 4
+    n = len(manifolds)
     L_chol = np.linalg.cholesky(Sigma)
     R_lo, R_hi = grid_R[0], grid_R[-1]
     eps_lo, eps_hi = grid_eps[0], grid_eps[-1]
 
     # Build interpolators for each V function (for policy lookup)
     interp_V = {}
-    interp_V[1] = RegularGridInterpolator(
-        (grid_R, grid_eps), V_functions[1],
-        method='linear', bounds_error=False, fill_value=None,
-    )
-    interp_V[2] = RegularGridInterpolator(
-        (grid_R, grid_eps, grid_eps), V_functions[2],
-        method='linear', bounds_error=False, fill_value=None,
-    )
-    interp_V[3] = RegularGridInterpolator(
-        (grid_R, grid_eps, grid_eps, grid_eps), V_functions[3],
-        method='linear', bounds_error=False, fill_value=None,
-    )
+    for vi_idx, V_arr in V_functions.items():
+        # V_i ha dimensione (N_R, N_eps, ..., N_eps) con vi_idx assi eps
+        grid_axes = [grid_R] + [grid_eps] * vi_idx
+        interp_V[vi_idx] = RegularGridInterpolator(
+            tuple(grid_axes), V_arr,
+            method='linear', bounds_error=False, fill_value=None,
+        )
 
-    # Sample all noise vectors at once: (N, 4)
+    # Sample all noise vectors at once: (N, n)
     Z = rng.standard_normal((N, n))
-    EPS = Z @ L_chol.T  # (N, 4)
+    EPS = Z @ L_chol.T  # (N, n)
 
     # State vectors — all trajectories in parallel
     R = np.full(N, F_star)                   # (N,)
@@ -842,19 +794,15 @@ def forward_simulation(
             R_c = np.clip(R_next_all, R_lo, R_hi)        # (M, N)
             eps_i_c = np.clip(eps_i, eps_lo, eps_hi)      # (N,)
 
-            MN = M_i * N
             R_flat = R_c.ravel()                          # (M*N,)
             eps_i_flat = np.tile(eps_i_c, M_i)            # (M*N,)
 
-            if i == 0:
-                points = np.column_stack([R_flat, eps_i_flat])
-            elif i == 1:
-                e0_flat = np.tile(np.clip(eps_hist[:, 0], eps_lo, eps_hi), M_i)
-                points = np.column_stack([R_flat, e0_flat, eps_i_flat])
-            elif i == 2:
-                e0_flat = np.tile(np.clip(eps_hist[:, 0], eps_lo, eps_hi), M_i)
-                e1_flat = np.tile(np.clip(eps_hist[:, 1], eps_lo, eps_hi), M_i)
-                points = np.column_stack([R_flat, e0_flat, e1_flat, eps_i_flat])
+            # Costruisci colonne interpolazione: [R, eps_0, eps_1, ..., eps_i]
+            cols = [R_flat]
+            for h in range(eps_hist.shape[1]):
+                cols.append(np.tile(np.clip(eps_hist[:, h], eps_lo, eps_hi), M_i))
+            cols.append(eps_i_flat)
+            points = np.column_stack(cols)
 
             v_next = interp_V[i + 1](points).reshape(M_i, N)  # (M, N)
         else:
@@ -901,10 +849,10 @@ def forward_simulation_greedy(
     if rng is None:
         rng = np.random.default_rng(777)
 
-    n = 4
+    n = len(manifolds)
     L_chol = np.linalg.cholesky(Sigma)
     Z = rng.standard_normal((N, n))
-    EPS = Z @ L_chol.T  # (N, 4)
+    EPS = Z @ L_chol.T  # (N, n)
 
     R = np.full(N, F_star)
 
@@ -949,10 +897,10 @@ def forward_simulation_random(
     if rng is None:
         rng = np.random.default_rng(888)
 
-    n = 4
+    n = len(manifolds)
     L_chol = np.linalg.cholesky(Sigma)
     Z = rng.standard_normal((N, n))
-    EPS = Z @ L_chol.T  # (N, 4)
+    EPS = Z @ L_chol.T  # (N, n)
 
     R = np.full(N, F_star)
 
@@ -1010,14 +958,18 @@ def compute_bellman_lmin(
         cfg = BellmanConfig()
 
     t_start = time.time()
-    n = 4
     process_names = process_chain.process_names
+    n = len(process_names)
 
     F_star = surrogate.F_star
 
     # ── Extract weights and scales ──
-    from controller_optimization.src.models.surrogate import ProTSurrogate
-    proc_configs = ProTSurrogate.PROCESS_CONFIGS
+    # Usa _dynamic_configs dal surrogate se disponibili (ST), altrimenti PROCESS_CONFIGS
+    if hasattr(surrogate, '_dynamic_configs') and surrogate._dynamic_configs is not None:
+        proc_configs = surrogate._dynamic_configs
+    else:
+        from controller_optimization.src.models.surrogate import ProTSurrogate
+        proc_configs = ProTSurrogate.PROCESS_CONFIGS
 
     weights = np.array([proc_configs[name]['weight'] for name in process_names])
     w_bar = weights / weights.sum()
@@ -1083,6 +1035,7 @@ def compute_bellman_lmin(
      sigma2_cond, cond_wts, taus) = backward_induction(
         F_star, Sigma, manifolds, w_bar, scales,
         target_outputs, process_names, cfg, verbose,
+        surrogate=surrogate,
     )
     L_min_bellman_scaled = L_min_bellman * loss_scale
 

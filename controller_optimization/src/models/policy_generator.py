@@ -49,6 +49,10 @@ class PolicyGenerator(nn.Module):
         else:
             self.register_buffer('output_max', None)
 
+        # Input normalization to prevent tanh saturation from scale mismatch
+        # (prev_outputs_mean, prev_outputs_var, and env inputs can differ by orders of magnitude)
+        self.input_norm = nn.LayerNorm(input_size)
+
         # Build shared hidden layers (same architecture as UncertaintyPredictor)
         layers = []
         prev_size = input_size
@@ -92,6 +96,7 @@ class PolicyGenerator(nn.Module):
         Returns:
             torch.Tensor: Bounded actions for next process, shape (batch_size, output_size)
         """
+        x = self.input_norm(x)
         features = self.network(x)
         raw_actions = self.output_head(features)
 

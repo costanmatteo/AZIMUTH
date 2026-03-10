@@ -110,7 +110,8 @@ class ControllerReportGenerator:
         left_col.append(Paragraph("<b>Configuration</b>", self.styles['SectionTitle']))
         left_col.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=4))
 
-        process_names = ', '.join(config['process_names'])
+        process_names_list = config.get('process_names') or ['(all processes)']
+        process_names = ', '.join(process_names_list)
         config_text = f"""• <b>Processes:</b> {process_names}<br/>
 • <b>Policy Architecture:</b> {config['policy_generator']['architecture']}<br/>
 • <b>Hidden Sizes:</b> {config['policy_generator'].get('hidden_sizes', 'N/A')}<br/>
