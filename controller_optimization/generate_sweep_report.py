@@ -109,8 +109,12 @@ def plot_target_baseline_actual_scatter(df: pd.DataFrame, save_path: Path):
     F_baseline = df['F_baseline_train'].values
     F_actual = df['F_actual_train'].values
 
-    # Common limits for both plots
-    all_values = np.concatenate([F_star, F_baseline, F_actual])
+    # Common limits for both plots (filter out None/NaN)
+    all_values = np.array([v for v in np.concatenate([F_star, F_baseline, F_actual]) if v is not None and not np.isnan(float(v))])
+    if len(all_values) == 0:
+        print("  WARNING: No valid data for scatter plot, skipping.")
+        plt.close()
+        return save_path
     min_val = all_values.min()
     max_val = all_values.max()
     margin = (max_val - min_val) * 0.1
@@ -543,6 +547,18 @@ def generate_sweep_report(sweep_dir: Path, output_path: Path = None):
         return None
 
     print(f"\nLoaded {len(df)} runs")
+
+    # Drop runs with missing core metrics
+    core_cols = ['F_star_train', 'F_baseline_train', 'F_actual_train']
+    valid_before = len(df)
+    df = df.dropna(subset=core_cols)
+    if len(df) < valid_before:
+        print(f"  Dropped {valid_before - len(df)} runs with missing F values ({len(df)} valid runs remaining)")
+    df = df.reset_index(drop=True)
+
+    if df.empty:
+        print("No valid runs with complete metrics. Cannot generate report.")
+        return None
 
     # Compute summary statistics
     stats = generate_summary_stats(df)
