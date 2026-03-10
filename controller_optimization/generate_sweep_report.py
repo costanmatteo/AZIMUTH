@@ -54,14 +54,14 @@ def load_run_results(run_dir: Path) -> dict:
             'seed_target': scenarios_config.get('seed_target'),
             'seed_baseline': scenarios_config.get('seed_baseline'),
             # Train metrics
-            'F_star_train': data.get('train', {}).get('F_star_mean'),
+            'F_star_train': data.get('train', {}).get('F_star'),
             'F_baseline_train': data.get('train', {}).get('F_baseline_mean'),
             'F_actual_train': data.get('train', {}).get('F_actual_mean'),
             'F_actual_std_train': data.get('train', {}).get('F_actual_std'),
             'improvement_train': data.get('train', {}).get('improvement_pct'),
             'target_gap_train': data.get('train', {}).get('target_gap_pct'),
             # Test metrics
-            'F_star_test': data.get('test', {}).get('F_star_mean'),
+            'F_star_test': data.get('test', {}).get('F_star'),
             'F_baseline_test': data.get('test', {}).get('F_baseline_mean'),
             'F_actual_test': data.get('test', {}).get('F_actual_mean'),
             'improvement_test': data.get('test', {}).get('improvement_pct'),
