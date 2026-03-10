@@ -46,6 +46,22 @@ def load_run_results(run_dir: Path) -> dict:
         scenarios_config = config.get('scenarios', {})
         st_params = data.get('st_params', {})
 
+        # Load Bellman L_min from separate file (if available)
+        bellman_lmin = None
+        bellman_file = run_dir / 'bellman_lmin_result.json'
+        if bellman_file.exists():
+            try:
+                with open(bellman_file, 'r') as f:
+                    bellman_data = json.load(f)
+                bellman_lmin = bellman_data.get('L_min_bellman')
+            except Exception:
+                pass
+
+        # Load success rate from advanced metrics
+        advanced = data.get('advanced_metrics', {})
+        success_rate_train_data = advanced.get('success_rate_train', {})
+        success_rate_pct = success_rate_train_data.get('success_rate_pct')
+
         return {
             'run_name': run_dir.name,
             'seed_target': scenarios_config.get('seed_target'),
@@ -63,6 +79,10 @@ def load_run_results(run_dir: Path) -> dict:
             'F_star_test': data.get('test', {}).get('F_star'),
             'F_baseline_test': data.get('test', {}).get('F_baseline_mean'),
             'F_actual_test': data.get('test', {}).get('F_actual_mean'),
+            # Bellman L_min
+            'bellman_lmin': bellman_lmin,
+            # Controller success rate
+            'success_rate_pct': success_rate_pct,
         }
     except Exception as e:
         print(f"  Warning: error loading {results_file}: {e}")
@@ -104,15 +124,24 @@ def compute_win_rates(df: pd.DataFrame) -> pd.DataFrame:
     group_cols = ['st_n', 'st_m', 'st_rho']
     if 'n_processes' in df.columns and df['n_processes'].notna().any():
         group_cols.append('n_processes')
-    grouped = df.groupby(group_cols).agg(
-        n_runs=('controller_wins', 'count'),
-        n_wins=('controller_wins', 'sum'),
-        F_star_mean=('F_star_train', 'mean'),
-        F_baseline_mean=('F_baseline_train', 'mean'),
-        F_actual_mean=('F_actual_train', 'mean'),
-        gap_baseline_mean=('F_baseline_train', lambda x: (df.loc[x.index, 'F_star_train'] - x).mean()),
-        gap_controller_mean=('F_actual_train', lambda x: (df.loc[x.index, 'F_star_train'] - x).mean()),
-    ).reset_index()
+    agg_dict = {
+        'n_runs': ('controller_wins', 'count'),
+        'n_wins': ('controller_wins', 'sum'),
+        'F_star_mean': ('F_star_train', 'mean'),
+        'F_baseline_mean': ('F_baseline_train', 'mean'),
+        'F_actual_mean': ('F_actual_train', 'mean'),
+        'gap_baseline_mean': ('F_baseline_train', lambda x: (df.loc[x.index, 'F_star_train'] - x).mean()),
+        'gap_controller_mean': ('F_actual_train', lambda x: (df.loc[x.index, 'F_star_train'] - x).mean()),
+    }
+    # Add Bellman L_min and success rate if available
+    if 'bellman_lmin' in df.columns and df['bellman_lmin'].notna().any():
+        agg_dict['bellman_lmin_mean'] = ('bellman_lmin', 'mean')
+        agg_dict['bellman_lmin_std'] = ('bellman_lmin', 'std')
+    if 'success_rate_pct' in df.columns and df['success_rate_pct'].notna().any():
+        agg_dict['success_rate_mean'] = ('success_rate_pct', 'mean')
+        agg_dict['success_rate_std'] = ('success_rate_pct', 'std')
+
+    grouped = df.groupby(group_cols).agg(**agg_dict).reset_index()
 
     grouped['win_rate_pct'] = 100.0 * grouped['n_wins'] / grouped['n_runs']
     grouped['mean_improvement_pct'] = (
@@ -291,6 +320,183 @@ def plot_summary_panel(win_df: pd.DataFrame, save_path: Path):
     return save_path
 
 
+def plot_bellman_vs_success_rate(df_all: pd.DataFrame, win_df: pd.DataFrame,
+                                  save_path: Path):
+    """
+    Scatter plot comparing Bellman L_min with controller success rate.
+
+    Each point is a single run (from df_all) or a configuration (from win_df).
+    Shows the relationship between the theoretical lower bound and the
+    empirical controller performance.
+    """
+    # Use per-run data for richer scatter
+    plot_df = df_all.dropna(subset=['bellman_lmin', 'success_rate_pct']).copy()
+
+    if plot_df.empty:
+        # Fallback to aggregated data
+        if 'bellman_lmin_mean' in win_df.columns and 'success_rate_mean' in win_df.columns:
+            plot_df = win_df.dropna(subset=['bellman_lmin_mean', 'success_rate_mean']).copy()
+            plot_df = plot_df.rename(columns={
+                'bellman_lmin_mean': 'bellman_lmin',
+                'success_rate_mean': 'success_rate_pct',
+            })
+        if plot_df.empty:
+            fig, ax = plt.subplots(figsize=(8, 6))
+            ax.text(0.5, 0.5, 'No Bellman L_min or success rate data available',
+                    ha='center', va='center', fontsize=12, transform=ax.transAxes)
+            plt.savefig(save_path, dpi=150, bbox_inches='tight')
+            plt.close()
+            return save_path
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+    # ── Panel 1: Scatter plot (per-run) ──
+    ax = axes[0]
+    scatter = ax.scatter(
+        plot_df['bellman_lmin'], plot_df['success_rate_pct'],
+        c=plot_df['success_rate_pct'], cmap='RdYlGn', vmin=0, vmax=100,
+        s=60, edgecolors='black', linewidths=0.5, alpha=0.7,
+    )
+    plt.colorbar(scatter, ax=ax, label='Success Rate (%)')
+
+    # Trend line
+    if len(plot_df) >= 5:
+        z = np.polyfit(plot_df['bellman_lmin'], plot_df['success_rate_pct'], deg=2)
+        p = np.poly1d(z)
+        x_smooth = np.linspace(plot_df['bellman_lmin'].min(), plot_df['bellman_lmin'].max(), 100)
+        ax.plot(x_smooth, np.clip(p(x_smooth), 0, 100), 'b--', alpha=0.6,
+                linewidth=2, label='Quadratic trend')
+        ax.legend(fontsize=9)
+
+    # Correlation annotation
+    corr = plot_df[['bellman_lmin', 'success_rate_pct']].corr().iloc[0, 1]
+    ax.annotate(f'r = {corr:.3f}', xy=(0.05, 0.95), xycoords='axes fraction',
+                fontsize=11, fontweight='bold',
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='wheat', alpha=0.8))
+
+    ax.set_xlabel('Bellman L_min (theoretical lower bound)', fontsize=11, fontweight='bold')
+    ax.set_ylabel('Controller Success Rate (%)', fontsize=11, fontweight='bold')
+    ax.set_title('Bellman L_min vs Controller Success Rate', fontsize=13, fontweight='bold')
+    ax.grid(True, alpha=0.3)
+
+    # ── Panel 2: Aggregated by configuration ──
+    ax2 = axes[1]
+    if 'bellman_lmin_mean' in win_df.columns and 'success_rate_mean' in win_df.columns:
+        agg_df = win_df.dropna(subset=['bellman_lmin_mean', 'success_rate_mean'])
+        if not agg_df.empty:
+            scatter2 = ax2.scatter(
+                agg_df['bellman_lmin_mean'], agg_df['success_rate_mean'],
+                c=agg_df['success_rate_mean'], cmap='RdYlGn', vmin=0, vmax=100,
+                s=80 + agg_df['n_runs'] * 5,
+                edgecolors='black', linewidths=0.5, alpha=0.8,
+            )
+            plt.colorbar(scatter2, ax=ax2, label='Avg Success Rate (%)')
+
+            # Error bars if std is available
+            if 'bellman_lmin_std' in agg_df.columns and 'success_rate_std' in agg_df.columns:
+                n_runs = agg_df['n_runs'].values
+                ax2.errorbar(
+                    agg_df['bellman_lmin_mean'], agg_df['success_rate_mean'],
+                    xerr=agg_df['bellman_lmin_std'] / np.sqrt(n_runs),
+                    yerr=agg_df['success_rate_std'] / np.sqrt(n_runs),
+                    fmt='none', ecolor='gray', alpha=0.4, capsize=2,
+                )
+
+            # Trend line
+            if len(agg_df) >= 5:
+                z = np.polyfit(agg_df['bellman_lmin_mean'], agg_df['success_rate_mean'], deg=2)
+                p = np.poly1d(z)
+                x_smooth = np.linspace(agg_df['bellman_lmin_mean'].min(),
+                                       agg_df['bellman_lmin_mean'].max(), 100)
+                ax2.plot(x_smooth, np.clip(p(x_smooth), 0, 100), 'b--', alpha=0.6,
+                         linewidth=2, label='Quadratic trend')
+                ax2.legend(fontsize=9)
+
+            corr_agg = agg_df[['bellman_lmin_mean', 'success_rate_mean']].corr().iloc[0, 1]
+            ax2.annotate(f'r = {corr_agg:.3f}', xy=(0.05, 0.95), xycoords='axes fraction',
+                         fontsize=11, fontweight='bold',
+                         bbox=dict(boxstyle='round,pad=0.3', facecolor='wheat', alpha=0.8))
+        else:
+            ax2.text(0.5, 0.5, 'No aggregated data', ha='center', va='center',
+                     fontsize=12, transform=ax2.transAxes)
+    else:
+        ax2.text(0.5, 0.5, 'No aggregated data', ha='center', va='center',
+                 fontsize=12, transform=ax2.transAxes)
+
+    ax2.set_xlabel('Bellman L_min (mean per config)', fontsize=11, fontweight='bold')
+    ax2.set_ylabel('Avg Controller Success Rate (%)', fontsize=11, fontweight='bold')
+    ax2.set_title('Per-Configuration: Bellman L_min vs Success Rate', fontsize=13, fontweight='bold')
+    ax2.grid(True, alpha=0.3)
+
+    fig.suptitle('Theoretical Lower Bound vs Controller Performance',
+                 fontsize=14, fontweight='bold', y=1.02)
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    return save_path
+
+
+def plot_bellman_vs_win_rate(win_df: pd.DataFrame, save_path: Path):
+    """
+    Scatter plot comparing Bellman L_min with controller win rate per configuration.
+
+    Lower Bellman L_min means the problem is theoretically "easier" — the
+    controller should achieve a higher win rate.
+    """
+    if 'bellman_lmin_mean' not in win_df.columns:
+        fig, ax = plt.subplots(figsize=(8, 6))
+        ax.text(0.5, 0.5, 'No Bellman L_min data available',
+                ha='center', va='center', fontsize=12, transform=ax.transAxes)
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        plt.close()
+        return save_path
+
+    plot_df = win_df.dropna(subset=['bellman_lmin_mean'])
+    if plot_df.empty:
+        fig, ax = plt.subplots(figsize=(8, 6))
+        ax.text(0.5, 0.5, 'No Bellman L_min data available',
+                ha='center', va='center', fontsize=12, transform=ax.transAxes)
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        plt.close()
+        return save_path
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+
+    scatter = ax.scatter(
+        plot_df['bellman_lmin_mean'], plot_df['win_rate_pct'],
+        c=plot_df['win_rate_pct'], cmap='RdYlGn', vmin=0, vmax=100,
+        s=80 + plot_df['n_runs'] * 5,
+        edgecolors='black', linewidths=0.5, alpha=0.8,
+    )
+    plt.colorbar(scatter, ax=ax, label='Win Rate (%)')
+
+    if len(plot_df) >= 5:
+        z = np.polyfit(plot_df['bellman_lmin_mean'], plot_df['win_rate_pct'], deg=2)
+        p = np.poly1d(z)
+        x_smooth = np.linspace(plot_df['bellman_lmin_mean'].min(),
+                               plot_df['bellman_lmin_mean'].max(), 100)
+        ax.plot(x_smooth, np.clip(p(x_smooth), 0, 100), 'b--', alpha=0.6,
+                linewidth=2, label='Quadratic trend')
+        ax.legend(fontsize=9)
+
+    corr = plot_df[['bellman_lmin_mean', 'win_rate_pct']].corr().iloc[0, 1]
+    ax.annotate(f'r = {corr:.3f}', xy=(0.05, 0.95), xycoords='axes fraction',
+                fontsize=11, fontweight='bold',
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='wheat', alpha=0.8))
+
+    ax.set_xlabel('Bellman L_min (mean per config)', fontsize=11, fontweight='bold')
+    ax.set_ylabel('Controller Win Rate (%)', fontsize=11, fontweight='bold')
+    ax.set_title('Bellman L_min vs Controller Win Rate', fontsize=13, fontweight='bold')
+    ax.set_ylim(-5, 105)
+    ax.axhline(50, color='gray', linestyle=':', alpha=0.5)
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    return save_path
+
+
 class ComplexitySweepReportGenerator:
     """PDF report generator for complexity sweep results."""
 
@@ -383,11 +589,17 @@ class ComplexitySweepReportGenerator:
         df_sorted = win_df.sort_values('win_rate_pct', ascending=False)
 
         has_nproc = 'n_processes' in win_df.columns and win_df['n_processes'].notna().any()
+        has_bellman = 'bellman_lmin_mean' in win_df.columns and win_df['bellman_lmin_mean'].notna().any()
+        has_success = 'success_rate_mean' in win_df.columns and win_df['success_rate_mean'].notna().any()
 
         header = ['n', 'm', 'rho']
         if has_nproc:
             header.append('nProc')
         header += ['Runs', 'Win Rate', 'F* (mean)', 'F\' (mean)', 'F (mean)']
+        if has_bellman:
+            header.append('L_min')
+        if has_success:
+            header.append('Succ %')
         data = [header]
 
         for _, row in df_sorted.iterrows():
@@ -405,12 +617,22 @@ class ComplexitySweepReportGenerator:
                 f"{row['F_baseline_mean']:.4f}" if not np.isnan(row['F_baseline_mean']) else 'N/A',
                 f"{row['F_actual_mean']:.4f}" if not np.isnan(row['F_actual_mean']) else 'N/A',
             ]
+            if has_bellman:
+                val = row.get('bellman_lmin_mean', float('nan'))
+                row_data.append(f"{val:.6f}" if not np.isnan(val) else 'N/A')
+            if has_success:
+                val = row.get('success_rate_mean', float('nan'))
+                row_data.append(f"{val:.1f}%" if not np.isnan(val) else 'N/A')
             data.append(row_data)
 
         col_widths = [0.5*inch, 0.5*inch, 0.7*inch]
         if has_nproc:
             col_widths.append(0.5*inch)
         col_widths += [0.5*inch, 0.8*inch, 0.9*inch, 0.9*inch, 0.9*inch]
+        if has_bellman:
+            col_widths.append(0.8*inch)
+        if has_success:
+            col_widths.append(0.6*inch)
         table = Table(data, colWidths=col_widths)
         table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
@@ -498,6 +720,21 @@ def generate_complexity_sweep_report(sweep_dir: Path, output_path: Path = None):
     print("  - 3D scatter...")
     scatter_3d_path = plot_3d_scatter(win_df, plots_dir / 'scatter_3d.png')
 
+    # 5. Bellman L_min vs controller success rate / win rate
+    has_bellman = 'bellman_lmin' in df.columns and df['bellman_lmin'].notna().any()
+    has_success = 'success_rate_pct' in df.columns and df['success_rate_pct'].notna().any()
+    bellman_success_path = None
+    bellman_winrate_path = None
+
+    if has_bellman:
+        if has_success:
+            print("  - Bellman L_min vs success rate...")
+            bellman_success_path = plot_bellman_vs_success_rate(
+                df, win_df, plots_dir / 'bellman_vs_success_rate.png')
+        print("  - Bellman L_min vs win rate...")
+        bellman_winrate_path = plot_bellman_vs_win_rate(
+            win_df, plots_dir / 'bellman_vs_winrate.png')
+
     # Generate PDF report
     if output_path is None:
         output_path = sweep_dir / 'complexity_sweep_report.pdf'
@@ -546,6 +783,21 @@ def generate_complexity_sweep_report(sweep_dir: Path, output_path: Path = None):
     report.add_section("3D Complexity Space")
     report.add_image(scatter_3d_path, width=5.5*inch,
                      caption="Win rate in (n, m, rho) space. Color = win rate, size = number of runs.")
+
+    # Bellman L_min comparison section
+    if bellman_success_path or bellman_winrate_path:
+        report.story.append(PageBreak())
+        report.add_section("Bellman L_min vs Controller Performance")
+
+        if bellman_success_path:
+            report.add_image(bellman_success_path, width=6.5*inch,
+                             caption="Left: per-run scatter of Bellman L_min vs controller success rate. "
+                                     "Right: per-configuration averages with standard error bars. "
+                                     "Lower L_min = theoretically easier problem.")
+        if bellman_winrate_path:
+            report.add_image(bellman_winrate_path, width=5.5*inch,
+                             caption="Bellman L_min vs controller win rate (per configuration). "
+                                     "Lower L_min should correspond to higher win rate.")
 
     report.story.append(PageBreak())
 
