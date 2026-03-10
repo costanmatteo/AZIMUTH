@@ -1494,7 +1494,7 @@ def main(config=None):
 
     final_results = {
         'timestamp': datetime.now().isoformat(),
-        'config': CONTROLLER_CONFIG,
+        'config': cfg,
         'dataset_mode': DATASET_MODE,
         'st_params': _actual_st_params,
         'n_processes': _actual_n_processes,
