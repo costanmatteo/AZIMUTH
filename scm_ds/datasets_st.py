@@ -163,14 +163,18 @@ def _assign_env_groups(n: int, me: int, overlap: float) -> List[List[int]]:
 # ---------------------------------------------------------------------------
 
 def _st_term(var: str) -> str:
-    """Single-variable ST polynomial: 0.5*(x^4 - 16*x^2 + 5*x + 40)."""
-    return f"0.5*({var}**4 - 16*{var}**2 + 5*{var} + 40)"
+    """Single-variable ST polynomial: 0.5*(x^4 - 16*x^2 + 5*x + 80).
+
+    The +80 inside the 0.5*(...) adds +40 to the standard Styblinski-Tang
+    function, ensuring the term is strictly positive on [-5, 5] (min ≈ 0.83).
+    """
+    return f"0.5*({var}**4 - 16*{var}**2 + 5*{var} + 80)"
 
 
 def _st_range(lb: float, ub: float, n_grid: int = 10000) -> Tuple[float, float]:
     """Compute (f_min, f_max) of the ST polynomial on [lb, ub]."""
     xs = np.linspace(lb, ub, n_grid)
-    ys = 0.5 * (xs**4 - 16 * xs**2 + 5 * xs + 40)
+    ys = 0.5 * (xs**4 - 16 * xs**2 + 5 * xs + 80)
     return float(ys.min()), float(ys.max())
 
 
