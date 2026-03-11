@@ -229,43 +229,6 @@ _PHYSICAL_PROCESSES = [
 ]
 
 
-def _map_upstream_coeffs(calibrated_coeffs, process_index):
-    """Map SCM stage coefficients (S_1, S_2, ...) to process names (st_1, st_2, ...).
-
-    For process i, include coefficients for all upstream processes st_1..st_{i-1}.
-    The SCM stores coefficients keyed by stage name (e.g. S_1, S_2).
-    Stage S_k in the SCM corresponds to process st_k.
-    """
-    if process_index <= 1 or not calibrated_coeffs:
-        return {}
-    result = {}
-    for scm_key, coeff in calibrated_coeffs.items():
-        # Extract stage index from SCM key (e.g. "S_1" -> 1)
-        parts = scm_key.split("_")
-        try:
-            stage_idx = int(parts[1])
-        except (IndexError, ValueError):
-            continue
-        if stage_idx < process_index:
-            result[f'st_{stage_idx}'] = coeff
-    return result
-
-
-def _map_upstream_baselines(calibrated_baselines, process_index):
-    """Map SCM stage baselines to process names, same logic as coefficients."""
-    if process_index <= 1 or not calibrated_baselines:
-        return {}
-    result = {}
-    for scm_key, baseline in calibrated_baselines.items():
-        parts = scm_key.split("_")
-        try:
-            stage_idx = int(parts[1])
-        except (IndexError, ValueError):
-            continue
-        if stage_idx < process_index:
-            result[f'st_{stage_idx}'] = baseline
-    return result
-
 
 def _build_st_processes(st_dataset_config):
     """
@@ -317,10 +280,6 @@ def _build_st_processes(st_dataset_config):
     calibrated_scale = scm_proc_cfg.get('scale', 1.0)
     calibrated_weight = scm_proc_cfg.get('weight', 1.0)
 
-    # Estrai coefficienti adattivi dall'SCM (Y dipende da tutti gli stage)
-    calibrated_adaptive_coeff = scm_proc_cfg.get('adaptive_coefficients', {})
-    calibrated_adaptive_baselines = scm_proc_cfg.get('adaptive_baselines', {})
-
     processes = []
     for i in range(1, n_procs + 1):
         suffix = f"_p{i}"
@@ -348,17 +307,13 @@ def _build_st_processes(st_dataset_config):
             '_st_base_structural_vars': base_structural,
 
             # Target e scale calibrati dall'SCM (usati da ProTSurrogate)
+            # Ogni processo ha un target fisso basato sul percentile di Y.
+            # Non ci sono coefficienti adattivi: i processi ST sono SCM
+            # indipendenti, quindi non esiste una relazione strutturale
+            # Y_p(k) <-> Y_p(k-1) calibrabile all'interno di un singolo SCM.
             'surrogate_target': calibrated_target,
             'surrogate_scale': calibrated_scale,
             'surrogate_weight': calibrated_weight,
-
-            # Coefficienti adattivi: per i > 1, il target di st_i dipende
-            # da tutti gli stage a monte st_1, ..., st_{i-1}.
-            # I coefficienti sono mappati dall'SCM (S_1->st_1, S_2->st_2, ecc.)
-            'surrogate_adaptive_coefficients':
-                _map_upstream_coeffs(calibrated_adaptive_coeff, i),
-            'surrogate_adaptive_baselines':
-                _map_upstream_baselines(calibrated_adaptive_baselines, i),
 
             'uncertainty_predictor': copy.deepcopy(up_config),
 
