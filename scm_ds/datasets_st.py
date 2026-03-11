@@ -333,9 +333,9 @@ def build_st_scm(cfg: STConfig, dag_image_dir: Optional[str] = None) -> SCMDatas
             s_min = w_k * f_min
             s_max = w_k * f_max
             if k > 0:
-                # Carry input is normalized to [lb, ub]
-                carry_lo = cfg.carry_beta * min(lb, ub)
-                carry_hi = cfg.carry_beta * max(lb, ub)
+                # Carry input is normalized to [0, ub] (non-negative)
+                carry_lo = 0.0
+                carry_hi = cfg.carry_beta * max(0.0, ub)
                 s_min += carry_lo
                 s_max += carry_hi
             stage_ranges.append((s_min, s_max))
@@ -369,11 +369,13 @@ def build_st_scm(cfg: STConfig, dag_image_dir: Optional[str] = None) -> SCMDatas
                             if ev not in parents:
                                 parents.append(ev)
 
-            # Normalization params for the carry input (prev stage → [lb, ub])
+            # Normalization params for the carry input (prev stage → [0, ub])
+            # Map to [0, ub] (not [lb, ub]) so the carry term is always
+            # non-negative, preserving positivity of stage outputs.
             norm_params: Optional[Tuple[float, float, float, float]] = None
             if prev_stage_name is not None:
                 prev_range = stage_ranges[k - 1]
-                norm_params = (prev_range[0], prev_range[1], lb, ub)
+                norm_params = (prev_range[0], prev_range[1], 0.0, ub)
 
             expr = _build_stage_expr(
                 stage_inputs[k], prev_stage_name, cfg.carry_beta, env_shifts, eps_name,
