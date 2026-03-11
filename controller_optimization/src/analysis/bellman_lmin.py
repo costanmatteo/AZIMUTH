@@ -967,7 +967,7 @@ def compute_bellman_lmin(
         proc_configs = {name: {'target': t, 'scale': s, 'weight': 1.0}
                         for name, t, s in ProTSurrogate.LEGACY_CONFIGS}
 
-    weights = np.array([proc_configs[name]['weight'] for name in process_names])
+    weights = np.array([proc_configs[name].get('weight', 1.0) for name in process_names])
     w_bar = weights / weights.sum()
     scales = np.array([proc_configs[name]['scale'] for name in process_names])
 
