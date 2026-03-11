@@ -167,14 +167,29 @@ def _st_term(var: str) -> str:
     return f"0.5*({var}**4 - 16*{var}**2 + 5*{var} + 40)"
 
 
+def _st_range(lb: float, ub: float, n_grid: int = 10000) -> Tuple[float, float]:
+    """Compute (f_min, f_max) of the ST polynomial on [lb, ub]."""
+    xs = np.linspace(lb, ub, n_grid)
+    ys = 0.5 * (xs**4 - 16 * xs**2 + 5 * xs + 40)
+    return float(ys.min()), float(ys.max())
+
+
 def _build_stage_expr(
     input_names: List[str],
     prev_stage: Optional[str],
     carry_beta: float,
     env_shifts: Optional[dict],  # {input_name: "alpha*(E1 + E2)" or None}
     eps_name: str,
+    norm_params: Optional[Tuple[float, float, float, float]] = None,
 ) -> str:
-    """Build the SymPy expression string for one stage node."""
+    """Build the SymPy expression string for one stage node.
+
+    Parameters
+    ----------
+    norm_params : tuple or None
+        If given, (s_min, s_max, lb, ub) for affine normalization of the
+        carry input.  prev_stage is mapped from [s_min, s_max] → [lb, ub].
+    """
     terms = []
     for x in input_names:
         if env_shifts and x in env_shifts:
@@ -187,7 +202,17 @@ def _build_stage_expr(
     expr = " + ".join(terms) if terms else "0"
 
     if prev_stage is not None:
-        expr = f"{expr} + {carry_beta}*{prev_stage}"
+        if norm_params is not None:
+            s_min, s_max, lb, ub = norm_params
+            span = s_max - s_min
+            if span > 0:
+                # Affine: [s_min, s_max] → [lb, ub]
+                carry = (f"({lb} + {(ub - lb) / span}*({prev_stage} - {s_min}))")
+            else:
+                carry = str((lb + ub) / 2)
+        else:
+            carry = prev_stage
+        expr = f"{expr} + {carry_beta}*{carry}"
 
     # zero-coefficient noise term (required by SCM engine)
     expr = f"{expr} + 0*{eps_name}"
@@ -295,6 +320,22 @@ def build_st_scm(cfg: STConfig, dag_image_dir: Optional[str] = None) -> SCMDatas
             stage_inputs.append(sub_input_names[idx: idx + widths[k]])
             idx += widths[k]
 
+        # ── Compute per-stage output ranges for inter-stage normalization ──
+        lb, ub = cfg.x_domain
+        f_min, f_max = _st_range(lb, ub)
+        stage_ranges: List[Tuple[float, float]] = []
+        for k in range(m):
+            w_k = widths[k]
+            s_min = w_k * f_min
+            s_max = w_k * f_max
+            if k > 0:
+                # Carry input is normalized to [lb, ub]
+                carry_lo = cfg.carry_beta * min(lb, ub)
+                carry_hi = cfg.carry_beta * max(lb, ub)
+                s_min += carry_lo
+                s_max += carry_hi
+            stage_ranges.append((s_min, s_max))
+
         # ── Stage nodes ───────────────────────────────────────────
         prev_stage_name: Optional[str] = None
         for k in range(m):
@@ -324,8 +365,15 @@ def build_st_scm(cfg: STConfig, dag_image_dir: Optional[str] = None) -> SCMDatas
                             if ev not in parents:
                                 parents.append(ev)
 
+            # Normalization params for the carry input (prev stage → [lb, ub])
+            norm_params: Optional[Tuple[float, float, float, float]] = None
+            if prev_stage_name is not None:
+                prev_range = stage_ranges[k - 1]
+                norm_params = (prev_range[0], prev_range[1], lb, ub)
+
             expr = _build_stage_expr(
-                stage_inputs[k], prev_stage_name, cfg.carry_beta, env_shifts, eps_name
+                stage_inputs[k], prev_stage_name, cfg.carry_beta, env_shifts, eps_name,
+                norm_params=norm_params,
             )
             specs.append(NodeSpec(stage_name, parents, expr))
             singles[stage_name] = lambda rng, n_: np.zeros(n_)
