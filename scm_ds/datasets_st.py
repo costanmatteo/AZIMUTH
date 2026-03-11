@@ -72,6 +72,11 @@ class STConfig:
     cal_percentile: float = 10.0    # percentile for base_target (lower = harder)
     cal_width_factor: float = 1.0   # scale = (std * width_factor)^2
 
+    # --- inter-process adaptive targets ---
+    inter_process_beta: float = 0.0  # adaptive coefficient between Y outputs
+                                     # τ_{Y_j} = base_target_j + β * (Y_i - base_target_i)
+                                     # for each upstream Y_i (i < j)
+
 
 # ---------------------------------------------------------------------------
 # Width profile helpers
@@ -576,8 +581,9 @@ def _calibrate(
     pct = cfg.cal_percentile
     wf = cfg.cal_width_factor
 
+    # First pass: compute base_target and scale for each Y output
+    base_targets: Dict[str, float] = {}
     for y_name in output_names:
-        # Output node only
         y_vals = cal_df[y_name].values
         y_tau = float(np.percentile(y_vals, pct))
         y_std = float(np.std(y_vals))
@@ -589,8 +595,23 @@ def _calibrate(
             "weight": 1.0,
         }
 
+        base_targets[y_name] = y_tau
         process_configs[y_name] = y_entry
         process_order.append(y_name)
+
+    # Second pass: add inter-process adaptive coefficients
+    beta = cfg.inter_process_beta
+    if beta != 0.0 and len(output_names) > 1:
+        for j, y_name in enumerate(output_names):
+            if j == 0:
+                continue  # first output has no upstream
+            upstream_names = output_names[:j]
+            process_configs[y_name]["adaptive_coefficients"] = {
+                up: beta for up in upstream_names
+            }
+            process_configs[y_name]["adaptive_baselines"] = {
+                up: base_targets[up] for up in upstream_names
+            }
 
     ds.process_configs = process_configs
     ds.process_order = process_order
