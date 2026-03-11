@@ -241,8 +241,7 @@ def get_adaptive_target(process_idx: int, upstream_outputs: Optional[Dict[str, f
     """
     Get the adaptive target for process i given upstream outputs.
 
-    Se il surrogate ha _dynamic_configs (processi ST), usa il target calibrato.
-    Altrimenti usa la logica hardcoded per i processi fisici (legacy).
+    τ_i = base_target_i + β × (Y_{i-1} - τ_{i-1})
 
     Args:
         process_idx: indice del processo nella catena
@@ -255,46 +254,36 @@ def get_adaptive_target(process_idx: int, upstream_outputs: Optional[Dict[str, f
     if upstream_outputs is None:
         upstream_outputs = {}
 
-    # GENERIC PATH: usa target calibrati dal surrogate (processi ST) con adattamento
+    # GENERIC PATH: usa target calibrati dal surrogate (processi ST)
     if surrogate is not None and hasattr(surrogate, '_dynamic_configs') and surrogate._dynamic_configs is not None:
-        proc_names = list(surrogate._dynamic_configs.keys())
-        if process_idx < len(proc_names):
-            cfg = surrogate._dynamic_configs[proc_names[process_idx]]
-            target = cfg['target']
-            # Adjust target based on upstream outputs
-            for upstream_name, coeff in cfg.get('adaptive_coefficients', {}).items():
-                if upstream_name in upstream_outputs:
-                    baseline = cfg.get('adaptive_baselines', {}).get(upstream_name, 0.0)
-                    target = target + coeff * (upstream_outputs[upstream_name] - baseline)
-            return target
+        proc_names = list(surrogate._dynamic_configs.keys()) if surrogate._process_order is None else surrogate._process_order
+        beta = getattr(surrogate, '_beta', 0.0)
+
+        # Compute targets sequentially up to process_idx
+        prev_target = None
+        prev_output = None
+        for idx, pname in enumerate(proc_names):
+            cfg = surrogate._dynamic_configs[pname]
+            base_target = cfg['target']
+
+            if prev_output is not None and prev_target is not None and beta != 0.0:
+                target = base_target + beta * (prev_output - prev_target)
+            else:
+                target = base_target
+
+            if idx == process_idx:
+                return target
+
+            prev_target = target
+            prev_output = upstream_outputs.get(pname, base_target)
+
         return 0.0
 
-    # LEGACY PATH: logica hardcoded per processi fisici
-    if process_idx == 0:  # laser
-        return 0.8
-    elif process_idx == 1:  # plasma
-        target = 3.0
-        if 'laser' in upstream_outputs:
-            target += 0.2 * (upstream_outputs['laser'] - 0.8)
-        return target
-    elif process_idx == 2:  # galvanic
-        target = 10.0
-        if 'plasma' in upstream_outputs:
-            target += 0.5 * (upstream_outputs['plasma'] - 5.0)
-        if 'laser' in upstream_outputs:
-            target += 0.4 * (upstream_outputs['laser'] - 0.5)
-        return target
-    elif process_idx == 3:  # microetch
-        target = 20.0
-        if 'laser' in upstream_outputs:
-            target += 1.5 * (upstream_outputs['laser'] - 0.5)
-        if 'plasma' in upstream_outputs:
-            target += 0.3 * (upstream_outputs['plasma'] - 5.0)
-        if 'galvanic' in upstream_outputs:
-            target -= 0.15 * (upstream_outputs['galvanic'] - 10.0)
-        return target
-    else:
-        raise ValueError(f"Invalid process_idx: {process_idx}")
+    # LEGACY PATH: processi fisici con target fissi (no adattamento)
+    legacy_targets = [0.8, 3.0, 10.0, 20.0]
+    if process_idx < len(legacy_targets):
+        return legacy_targets[process_idx]
+    raise ValueError(f"Invalid process_idx: {process_idx}")
 
 
 def get_target_outputs(process_chain, scenario_idx: int = 0) -> Dict[str, float]:

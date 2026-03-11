@@ -1,17 +1,13 @@
 """
 Mathematical computation of process chain reliability F.
 
-This module computes reliability F from process chain trajectories using
-adaptive targets that account for process dependencies.
-
 Formula:
     For each process i:
-        Q_i = exp(-(output_i - τ_i)² / s_i)
-
-    Where τ_i is an adaptive target that depends on upstream process outputs.
+        τ_i = base_target_i + β × (Y_{i-1} - τ_{i-1})   (τ_1 = base_target_1)
+        Q_i = exp(-(Y_i - τ_i)² / scale_i)
 
     Overall reliability:
-        F = Σ(w_i × Q_i) / Σ(w_i)
+        F = (Q_1 + Q_2 + ... + Q_n) / n
 """
 
 import torch
@@ -31,17 +27,21 @@ class ReliabilityFunction:
     def __init__(self,
                  process_configs: Dict = None,
                  process_order: list = None,
+                 beta: float = 0.0,
                  device: str = 'cpu'):
         """
         Args:
-            process_configs: Process-specific targets and weights.
+            process_configs: Process-specific targets (base_target, scale).
                             If None, uses default PROCESS_CONFIGS.
-            process_order: Order of processes for dependency resolution.
+            process_order: Order of processes for sequential target computation.
                           If None, uses default PROCESS_ORDER.
+            beta: Adaptive target coefficient.
+                  τ_i = base_target_i + β × (Y_{i-1} - τ_{i-1})
             device: Torch device for computations.
         """
         self.process_configs = process_configs or PROCESS_CONFIGS
         self.process_order = process_order or PROCESS_ORDER
+        self.beta = beta
         self.device = device
 
     def compute_reliability(self,
@@ -54,14 +54,11 @@ class ReliabilityFunction:
         Args:
             trajectory: Dict mapping process_name to:
                 {
-                    'inputs': tensor (batch, input_dim),
                     'outputs_mean': tensor (batch, output_dim),
-                    'outputs_var': tensor (batch, output_dim),  # optional
                     'outputs_sampled': tensor (batch, output_dim)  # optional
                 }
             return_quality_scores: If True, also return per-process Q_i scores.
-            use_sampled_outputs: If True, use 'outputs_sampled' if available,
-                                otherwise use 'outputs_mean'.
+            use_sampled_outputs: If True, use 'outputs_sampled' if available.
 
         Returns:
             F: Reliability score (batch,) or scalar
@@ -75,113 +72,51 @@ class ReliabilityFunction:
             else:
                 output = data['outputs_mean']
 
-            # Ensure tensor
             if isinstance(output, np.ndarray):
                 output = torch.tensor(output, dtype=torch.float32, device=self.device)
 
-            # Squeeze to get scalar per sample
             outputs[process_name] = output.squeeze(-1) if output.dim() > 1 else output
 
-        # Compute adaptive targets and quality scores
-        adaptive_targets = {}
+        # Compute Q_i for each process with adaptive targets
         quality_scores = {}
+        prev_output = None
+        prev_target = None
 
         for process_name in self.process_order:
             if process_name not in outputs:
                 continue
 
             config = self.process_configs.get(process_name, {})
+            base_target = config.get('base_target', 0.0)
+            scale = config.get('scale', 1.0)
             output = outputs[process_name]
 
-            # Compute adaptive target
-            target = self._compute_adaptive_target(process_name, outputs, config)
-            adaptive_targets[process_name] = target
-
-            # Compute quality score: Q = exp(-(output - target)² / scale)
-            scale = config.get('scale', 1.0)
-
-            # Handle target being scalar or tensor
-            if isinstance(target, (int, float)):
-                quality = torch.exp(-((output - target) ** 2) / scale)
+            # τ_i = base_target_i + β × (Y_{i-1} - τ_{i-1})
+            if prev_output is not None and prev_target is not None and self.beta != 0.0:
+                target = base_target + self.beta * (prev_output - prev_target)
             else:
-                quality = torch.exp(-((output - target) ** 2) / scale)
+                target = base_target
 
-            quality_scores[process_name] = quality
+            quality_scores[process_name] = torch.exp(
+                -((output - target) ** 2) / max(scale, 1e-8)
+            )
 
-        # Compute weighted average reliability
-        F = self._compute_weighted_average(quality_scores)
+            prev_output = output
+            prev_target = target
+
+        # F = (Q_1 + Q_2 + ... + Q_n) / n
+        if quality_scores:
+            F = sum(quality_scores.values()) / len(quality_scores)
+        else:
+            F = torch.tensor(0.0, device=self.device)
 
         if return_quality_scores:
             return F, quality_scores
         return F
 
-    def _compute_adaptive_target(self,
-                                 process_name: str,
-                                 outputs: Dict[str, torch.Tensor],
-                                 config: Dict) -> Union[float, torch.Tensor]:
-        """
-        Compute adaptive target for a process based on upstream outputs.
-
-        Args:
-            process_name: Name of current process
-            outputs: Dict of all process outputs
-            config: Process configuration
-
-        Returns:
-            Adaptive target value (scalar or tensor matching batch size)
-        """
-        base_target = config.get('base_target', 0.0)
-
-        # Check for adaptive coefficients
-        adaptive_coeffs = config.get('adaptive_coefficients', {})
-        adaptive_baselines = config.get('adaptive_baselines', {})
-
-        if not adaptive_coeffs:
-            return base_target
-
-        # Start with base target
-        target = base_target
-
-        # Add adaptive adjustments from upstream processes
-        for upstream_name, coeff in adaptive_coeffs.items():
-            if upstream_name in outputs:
-                baseline = adaptive_baselines.get(upstream_name, 0.0)
-                adjustment = coeff * (outputs[upstream_name] - baseline)
-                target = target + adjustment
-
-        return target
-
-    def _compute_weighted_average(self, quality_scores: Dict[str, torch.Tensor]) -> torch.Tensor:
-        """
-        Compute weighted average of quality scores.
-
-        Args:
-            quality_scores: Dict mapping process_name to Q_i tensor
-
-        Returns:
-            F: Weighted average reliability
-        """
-        total_weighted_quality = 0.0
-        total_weight = 0.0
-
-        for process_name, quality in quality_scores.items():
-            weight = self.process_configs.get(process_name, {}).get('weight', 1.0)
-            total_weighted_quality = total_weighted_quality + quality * weight
-            total_weight += weight
-
-        if total_weight > 0:
-            F = total_weighted_quality / total_weight
-        else:
-            # Fallback (should never happen)
-            F = torch.tensor(0.0, device=self.device)
-
-        return F
-
     def compute_target_reliability(self, target_trajectory: Dict) -> torch.Tensor:
         """
         Compute F* (target reliability) for a target trajectory.
-
-        This is the "ideal" reliability that the controller should achieve.
 
         Args:
             target_trajectory: Target trajectory with 'inputs' and 'outputs' keys
@@ -189,16 +124,15 @@ class ReliabilityFunction:
         Returns:
             F_star: Target reliability value
         """
-        # Convert target trajectory format to standard format
         trajectory = {}
         for process_name, data in target_trajectory.items():
-            outputs = data.get('outputs', data.get('outputs_mean'))
-            if isinstance(outputs, np.ndarray):
-                outputs = torch.tensor(outputs, dtype=torch.float32, device=self.device)
+            out = data.get('outputs', data.get('outputs_mean'))
+            if isinstance(out, np.ndarray):
+                out = torch.tensor(out, dtype=torch.float32, device=self.device)
 
             trajectory[process_name] = {
-                'outputs_mean': outputs,
-                'outputs_sampled': outputs,  # For target, sampled = mean
+                'outputs_mean': out,
+                'outputs_sampled': out,
             }
 
         return self.compute_reliability(trajectory)
@@ -206,6 +140,7 @@ class ReliabilityFunction:
 
 def compute_reliability(trajectory: Dict,
                        return_quality_scores: bool = False,
+                       beta: float = 0.0,
                        device: str = 'cpu') -> Union[torch.Tensor, Tuple[torch.Tensor, Dict]]:
     """
     Convenience function to compute reliability F.
@@ -213,13 +148,14 @@ def compute_reliability(trajectory: Dict,
     Args:
         trajectory: Process chain trajectory
         return_quality_scores: If True, also return per-process scores
+        beta: Adaptive target coefficient
         device: Torch device
 
     Returns:
         F: Reliability score
         quality_scores: Per-process Q_i (if return_quality_scores=True)
     """
-    rf = ReliabilityFunction(device=device)
+    rf = ReliabilityFunction(beta=beta, device=device)
     return rf.compute_reliability(trajectory, return_quality_scores=return_quality_scores)
 
 

@@ -543,16 +543,19 @@ def _calibrate(
     output_names: List[str],
     output_partitions: List[List[int]],
 ) -> None:
-    """Calibrate process_configs, process_order on *ds* using a rho=0 reference sample."""
+    """Calibrate process_configs on *ds* using a rho=0 reference sample.
+
+    Computes base_target (percentile) and scale for the Y node only.
+    Adaptive target adjustment between processes uses a single beta
+    parameter configured externally.
+    """
 
     # ── Build a zero-noise clone for the reference sample ─────────
     original_singles = ds.noise_model.singles.copy()
     modified = {}
     for var_name, fn in original_singles.items():
         if var_name in ds.process_noise_vars:
-            # Zero out process noise
             if var_name.startswith("Z_ln"):
-                # lognormal identity: return 1.0
                 modified[var_name] = lambda rng, n_: np.ones(n_)
             else:
                 modified[var_name] = lambda rng, n_: np.zeros(n_)
@@ -564,108 +567,24 @@ def _calibrate(
     finally:
         ds.noise_model.singles = original_singles
 
-    # ── Identify per-chain stage sequences ────────────────────────
-    # For p=1: stages are S_1, S_2, ..., S_m  (no suffix)
-    # For p>1: chain i has S_1_i, S_2_i, ..., S_m_i
-    chains: List[List[str]] = []  # each chain: list of stage names in order
-    for oi in range(cfg.p):
-        suffix = "" if cfg.p == 1 else f"_{oi+1}"
-        n_sub = len(output_partitions[oi])
-        m = min(cfg.m, n_sub)
-        chain = [f"S_{k+1}{suffix}" for k in range(m)]
-        chains.append(chain)
-
-    # ── Build process_configs and process_order ───────────────────
-    process_configs: Dict[str, dict] = {}
-    process_order: List[str] = []
+    # ── Compute base_target and scale for Y node(s) ──────────────
     pct = cfg.cal_percentile
     wf = cfg.cal_width_factor
 
-    for oi, (chain, y_name) in enumerate(zip(chains, output_names)):
-        # Stages first
-        for ki, stage_name in enumerate(chain):
-            vals = cal_df[stage_name].values
-            tau = float(np.percentile(vals, pct))
-            std = float(np.std(vals))
-            scale = (std * wf) ** 2 if std > 0 else 1.0
+    process_configs: Dict[str, dict] = {}
 
-            entry: dict = {
-                "base_target": tau,
-                "scale": scale,
-                "weight": 1.0,
-            }
-
-            if ki > 0:
-                upstream_names = chain[:ki]
-                upstream_matrix = np.column_stack(
-                    [cal_df[u].values for u in upstream_names]
-                )
-                upstream_baselines = [
-                    float(np.percentile(cal_df[u].values, pct))
-                    for u in upstream_names
-                ]
-                # OLS: vals = alpha + beta @ upstream + residual
-                X = np.column_stack([
-                    upstream_matrix,
-                    np.ones(len(vals)),
-                ])
-                betas, _, _, _ = np.linalg.lstsq(X, vals, rcond=None)
-                coeffs = {}
-                baselines = {}
-                for j, u_name in enumerate(upstream_names):
-                    c = float(np.clip(betas[j], -5.0, 5.0))
-                    if abs(c) > 1e-6:
-                        coeffs[u_name] = c
-                        baselines[u_name] = upstream_baselines[j]
-                if coeffs:
-                    entry["adaptive_coefficients"] = coeffs
-                    entry["adaptive_baselines"] = baselines
-
-            process_configs[stage_name] = entry
-            process_order.append(stage_name)
-
-        # Output node
+    for y_name in output_names:
         y_vals = cal_df[y_name].values
         y_tau = float(np.percentile(y_vals, pct))
         y_std = float(np.std(y_vals))
         y_scale = (y_std * wf) ** 2 if y_std > 0 else 1.0
 
-        y_entry: dict = {
+        process_configs[y_name] = {
             "base_target": y_tau,
             "scale": y_scale,
-            "weight": 1.0,
         }
 
-        # Adaptive from all stages in the chain
-        if chain:
-            upstream_matrix = np.column_stack(
-                [cal_df[s].values for s in chain]
-            )
-            upstream_baselines = [
-                float(np.percentile(cal_df[s].values, pct))
-                for s in chain
-            ]
-            X = np.column_stack([
-                upstream_matrix,
-                np.ones(len(y_vals)),
-            ])
-            betas, _, _, _ = np.linalg.lstsq(X, y_vals, rcond=None)
-            y_coeffs = {}
-            y_baselines = {}
-            for j, s_name in enumerate(chain):
-                c = float(np.clip(betas[j], -5.0, 5.0))
-                if abs(c) > 1e-6:
-                    y_coeffs[s_name] = c
-                    y_baselines[s_name] = upstream_baselines[j]
-            if y_coeffs:
-                y_entry["adaptive_coefficients"] = y_coeffs
-                y_entry["adaptive_baselines"] = y_baselines
-
-        process_configs[y_name] = y_entry
-        process_order.append(y_name)
-
     ds.process_configs = process_configs
-    ds.process_order = process_order
 
 
 # ---------------------------------------------------------------------------
