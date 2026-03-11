@@ -579,9 +579,14 @@ def _calibrate(
         y_std = float(np.std(y_vals))
         y_scale = (y_std * wf) ** 2 if y_std > 0 else 1.0
 
+        # Find the calibration sample closest to tau (for target trajectory)
+        best_idx = int(np.argmin(np.abs(y_vals - y_tau)))
+        ref_row = cal_df.iloc[best_idx].to_dict()
+
         process_configs[y_name] = {
             "base_target": y_tau,
             "scale": y_scale,
+            "reference_sample": ref_row,
         }
 
     ds.process_configs = process_configs

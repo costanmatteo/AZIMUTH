@@ -126,31 +126,36 @@ def generate_target_trajectory(process_configs, n_samples=50, seed=42):
         original_groups = ds_scm.noise_model.groups.copy() if ds_scm.noise_model.groups else []
 
         try:
-            # Create modified noise model:
-            # - Structural noise: KEEP ORIGINAL (for scenario diversity)
-            # - Process noise: SET TO EPSILON (near zero, ideal behavior)
-            # - Other variables: KEEP ORIGINAL (for safety)
+            ref = process_config.get('reference_sample') if is_st else None
 
-            modified_singles = {}
-            epsilon = 1e-6  # Very small value to avoid numerical issues
+            if ref is not None:
+                # ST with reference sample: fix ALL exogenous variables to
+                # the calibration sample closest to tau.  Every scenario will
+                # be identical with Y ≈ tau, giving F* ≈ 1.
+                modified_singles = {}
+                for var_name in original_singles:
+                    val = ref[var_name]
+                    def _const(v):
+                        return lambda rng, n: np.full(n, v)
+                    modified_singles[var_name] = _const(val)
+            else:
+                # Original logic: structural noise ACTIVE, process noise ≈ 0
+                modified_singles = {}
+                epsilon = 1e-6
 
-            for var_name, noise_fn in original_singles.items():
-                if var_name in ds_scm.structural_noise_vars:
-                    # Keep structural noise ACTIVE for scenario diversity
-                    modified_singles[var_name] = noise_fn
-                elif var_name in ds_scm.process_noise_vars:
-                    # Zero out process noise for ideal deterministic behavior
-                    modified_singles[var_name] = lambda rng, n, eps=epsilon: rng.normal(0, eps, n)
-                else:
-                    # Unknown variable - keep original for safety
-                    # (This includes inputs, constants, intermediate nodes)
-                    modified_singles[var_name] = noise_fn
+                for var_name, noise_fn in original_singles.items():
+                    if var_name in ds_scm.structural_noise_vars:
+                        modified_singles[var_name] = noise_fn
+                    elif var_name in ds_scm.process_noise_vars:
+                        modified_singles[var_name] = lambda rng, n, eps=epsilon: rng.normal(0, eps, n)
+                    else:
+                        modified_singles[var_name] = noise_fn
 
             # Apply modified noise model
             ds_scm.noise_model.singles = modified_singles
             ds_scm.noise_model.groups = []  # No grouped noise
 
-            # Generate samples with diverse structural conditions
+            # Generate samples
             df = ds_scm.sample(n=n_samples, seed=seed)
 
             # Extract inputs and outputs (usando le label SCM base)
@@ -171,6 +176,11 @@ def generate_target_trajectory(process_configs, n_samples=50, seed=42):
 
             print(f"Generated target trajectory for {process_name}:")
             print(f"  - Shape: {inputs.shape}")
+            if ref is not None:
+                print(f"  - Mode: REFERENCE SAMPLE (all scenarios identical, Y ≈ tau)")
+                print(f"  - Reference Y: {outputs[0]}")
+            else:
+                print(f"  - Mode: DIVERSE (structural noise active)")
             print(f"  - Structural vars: {list(structural_conditions.keys())}")
             if structural_conditions:
                 for var, vals in structural_conditions.items():

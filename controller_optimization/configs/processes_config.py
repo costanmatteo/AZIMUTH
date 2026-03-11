@@ -279,6 +279,7 @@ def _build_st_processes(st_dataset_config):
     scm_proc_cfg = ref_scm.process_configs.get(output_node, {})
     calibrated_target = scm_proc_cfg.get('base_target', 0.0)
     calibrated_scale = scm_proc_cfg.get('scale', 1.0)
+    reference_sample = scm_proc_cfg.get('reference_sample', None)
 
     processes = []
     for i in range(1, n_procs + 1):
@@ -309,6 +310,7 @@ def _build_st_processes(st_dataset_config):
             # Target e scale calibrati dall'SCM (usati da ProTSurrogate)
             'surrogate_target': calibrated_target,
             'surrogate_scale': calibrated_scale,
+            'reference_sample': reference_sample,
 
             # Beta: τ_i = base_target + β × (Y_{i-1} - τ_{i-1})
             'surrogate_beta': beta,
