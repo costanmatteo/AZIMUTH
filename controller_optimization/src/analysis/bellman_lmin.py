@@ -964,7 +964,8 @@ def compute_bellman_lmin(
         proc_configs = surrogate._dynamic_configs
     else:
         from controller_optimization.src.models.surrogate import ProTSurrogate
-        proc_configs = ProTSurrogate.PROCESS_CONFIGS
+        proc_configs = {name: {'target': t, 'scale': s, 'weight': 1.0}
+                        for name, t, s in ProTSurrogate.LEGACY_CONFIGS}
 
     weights = np.array([proc_configs[name]['weight'] for name in process_names])
     w_bar = weights / weights.sum()

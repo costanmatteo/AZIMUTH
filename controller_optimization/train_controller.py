@@ -531,7 +531,13 @@ def main(config=None):
         theoretical_tracker = TheoreticalLossTracker(loss_scale=cfg['training']['reliability_loss_scale'])
 
         # Get process configs from surrogate for theoretical analysis
-        for proc_name, proc_config in ProTSurrogate.PROCESS_CONFIGS.items():
+        if hasattr(surrogate, '_dynamic_configs') and surrogate._dynamic_configs is not None:
+            _th_configs = surrogate._dynamic_configs
+        else:
+            # Fallback: build from LEGACY_CONFIGS
+            _th_configs = {name: {'target': t, 'scale': s, 'weight': 1.0}
+                           for name, t, s in ProTSurrogate.LEGACY_CONFIGS}
+        for proc_name, proc_config in _th_configs.items():
             theoretical_tracker.process_configs[proc_name] = {
                 'tau': proc_config['target'],
                 's': proc_config['scale']
@@ -1161,7 +1167,8 @@ def main(config=None):
                 if hasattr(surrogate, '_dynamic_configs') and surrogate._dynamic_configs is not None:
                     process_configs_surrogate = surrogate._dynamic_configs
                 else:
-                    process_configs_surrogate = ProTSurrogate.PROCESS_CONFIGS
+                    process_configs_surrogate = {name: {'target': t, 'scale': s, 'weight': 1.0}
+                                                 for name, t, s in ProTSurrogate.LEGACY_CONFIGS}
 
                 # ── Empirical sampling (matches training configuration) ────
                 # Collect F_samples using the SAME number of scenarios and
