@@ -57,7 +57,7 @@ ST_DATASET_CONFIG = {
         'e_domain': (-1.0, 1.0),
         'cal_n': 2000,
         'cal_percentile': 10.0,
-        'cal_width_factor': 0.1,
+        'cal_width_factor': 0.5,
     },
 
     # Configurazione uncertainty predictor (uguale per tutti i processi ST)
