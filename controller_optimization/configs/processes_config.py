@@ -38,7 +38,7 @@ ST_DATASET_CONFIG = {
     # Beta: coefficiente adattivo tra processi consecutivi.
     # τ_i = base_target_i + beta * (Y_{i-1} - τ_{i-1})
     # Uguale per tutti i processi. 0.0 = nessun adattamento.
-    'beta': 0.0,
+    'beta': 1.0,
 
     # Parametri STConfig — ogni processo usa la stessa configurazione
     'st_params': {
