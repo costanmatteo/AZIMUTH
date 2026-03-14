@@ -103,7 +103,7 @@ def generate_target_trajectory(process_configs, n_samples=50, seed=42):
     """
     trajectory = {}
 
-    for process_config in process_configs:
+    for process_idx, process_config in enumerate(process_configs):
         process_name = process_config['name']
         input_labels = process_config['input_labels']
         output_labels = process_config['output_labels']
@@ -155,8 +155,8 @@ def generate_target_trajectory(process_configs, n_samples=50, seed=42):
             ds_scm.noise_model.singles = modified_singles
             ds_scm.noise_model.groups = []  # No grouped noise
 
-            # Generate samples
-            df = ds_scm.sample(n=n_samples, seed=seed)
+            # Generate samples (different seed per process to avoid identical noise)
+            df = ds_scm.sample(n=n_samples, seed=seed + process_idx)
 
             # Extract inputs and outputs (usando le label SCM base)
             inputs = df[scm_input_labels].values  # Shape: (n_samples, input_dim)
@@ -221,7 +221,7 @@ def generate_baseline_trajectory(process_configs, target_trajectory, n_samples=5
     """
     trajectory = {}
 
-    for process_config in process_configs:
+    for process_idx, process_config in enumerate(process_configs):
         process_name = process_config['name']
         input_labels = process_config['input_labels']
         output_labels = process_config['output_labels']
@@ -270,7 +270,8 @@ def generate_baseline_trajectory(process_configs, target_trajectory, n_samples=5
             ds_scm.noise_model.singles = modified_singles
 
             # Generate samples with fixed inputs and active process noise
-            df = ds_scm.sample(n=n_samples, seed=seed)
+            # Different seed per process to get independent noise realizations
+            df = ds_scm.sample(n=n_samples, seed=seed + process_idx)
 
         finally:
             # Restore original noise model
