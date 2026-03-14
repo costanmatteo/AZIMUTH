@@ -124,27 +124,28 @@ class ProTSurrogate:
                 Tuple[torch.Tensor, Dict[str, torch.Tensor]]: (F, quality_scores)
                 where quality_scores maps process_name to per-process Q_i tensor
         """
-        # Use already sampled outputs if available, otherwise sample here
+        # Determine which outputs to use for reliability computation.
+        # When use_deterministic_sampling=True, always prefer the mean prediction
+        # (outputs_mean) for a fair comparison with F* and baseline F', which are
+        # also computed from deterministic values.  The reparameterization trick
+        # in ProcessChain still provides stochastic chain propagation (next policy
+        # receives noisy inputs), but the quality score is based on the mean.
         sampled_outputs = {}
 
         for process_name, data in trajectory.items():
-            # Check if outputs are already sampled
-            if 'outputs_sampled' in data:
-                # Use pre-sampled outputs from ProcessChain
+            if self.use_deterministic_sampling and 'outputs_mean' in data:
+                # DETERMINISTIC: Use mean prediction directly
+                sample = data['outputs_mean']
+            elif 'outputs_sampled' in data:
+                # STOCHASTIC: Use pre-sampled outputs from ProcessChain
                 sample = data['outputs_sampled']
             else:
-                # Backward compatibility: sample here
+                # Backward compatibility: sample here from mean/var
                 mean = data['outputs_mean']
                 var = data['outputs_var']
-
-                if self.use_deterministic_sampling:
-                    # DETERMINISTIC: Use mean directly (no sampling)
-                    sample = mean
-                else:
-                    # STOCHASTIC: Sample using reparameterization trick
-                    std = torch.sqrt(var + 1e-8)
-                    epsilon = torch.randn_like(mean)
-                    sample = mean + epsilon * std
+                std = torch.sqrt(var + 1e-8)
+                epsilon = torch.randn_like(mean)
+                sample = mean + epsilon * std
 
             sampled_outputs[process_name] = sample
 
