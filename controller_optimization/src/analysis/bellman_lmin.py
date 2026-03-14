@@ -39,7 +39,7 @@ class BellmanConfig:
     #   N_R=50, N_eps=16, M=50 → 102.4M elements ≈ 820 MB (peak, transient)
     #   N_R=50, N_eps=20, M=50 → 200M elements ≈ 1.6 GB (approaching limit)
     N_R: int = 50           # Grid points for remaining reliability R
-    N_eps: int = 16         # Grid points per noise dimension (8 too coarse)
+    N_eps: int = 12         # Grid points per noise dimension
     eps_range: float = 3.0  # Noise range: [-eps_range, +eps_range]
     R_min: float = -0.1     # Lower bound of R grid
     # R_max is set to F* dynamically
@@ -48,7 +48,7 @@ class BellmanConfig:
     M_actions: int = 50     # Number of action candidates per process
 
     # Monte Carlo
-    K_mc: int = 500         # MC samples for non-terminal steps
+    K_mc: int = 200         # MC samples for non-terminal steps (antithetic halves variance)
     use_antithetic: bool = True  # Antithetic variates
 
     # Forward validation
