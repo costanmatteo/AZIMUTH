@@ -716,12 +716,6 @@ def main(config=None):
             process_chain.policy_generators[process_idx].state_dict()
         )
 
-    # Copy trained scenario encoder (if used)
-    if process_chain.scenario_encoder is not None and process_chain_test.scenario_encoder is not None:
-        process_chain_test.scenario_encoder.load_state_dict(
-            process_chain.scenario_encoder.state_dict()
-        )
-
     # Evaluate test scenarios
     F_baseline_test_values = []
     F_actual_test_values = []

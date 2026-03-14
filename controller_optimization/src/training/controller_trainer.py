@@ -809,12 +809,6 @@ class ControllerTrainer:
                 policy.state_dict()
             )
 
-        # Copy scenario encoder weights (if used)
-        if self.process_chain.scenario_encoder is not None and self.validation_process_chain.scenario_encoder is not None:
-            self.validation_process_chain.scenario_encoder.load_state_dict(
-                self.process_chain.scenario_encoder.state_dict()
-            )
-
         self.validation_process_chain.eval()
 
         if lambda_bc is None:
@@ -1339,11 +1333,6 @@ class ControllerTrainer:
             policy_path = path.parent / f'policy_{i}.pth'
             torch.save(policy.state_dict(), policy_path)
 
-        # Save scenario encoder (if used)
-        if self.process_chain.scenario_encoder is not None:
-            encoder_path = path.parent / 'scenario_encoder.pth'
-            torch.save(self.process_chain.scenario_encoder.state_dict(), encoder_path)
-
         # Save training state
         state = {
             'epoch': epoch,
@@ -1372,14 +1361,6 @@ class ControllerTrainer:
                 raise FileNotFoundError(f"Policy checkpoint not found: {policy_path}")
 
             policy.load_state_dict(torch.load(policy_path, map_location=self.device))
-
-        # Load scenario encoder (if used and checkpoint exists)
-        if self.process_chain.scenario_encoder is not None:
-            encoder_path = checkpoint_dir / 'scenario_encoder.pth'
-            if encoder_path.exists():
-                self.process_chain.scenario_encoder.load_state_dict(
-                    torch.load(encoder_path, map_location=self.device)
-                )
 
         print(f"  ✓ Loaded best model from {checkpoint_dir}")
 
