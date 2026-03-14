@@ -500,6 +500,8 @@ def bellman_non_terminal(
     if rng is None:
         rng = np.random.default_rng(42)
 
+    _t0 = time.time()
+
     N_R = len(grid_R)
     N_eps = len(grid_eps)
     M = manifold.shape[0]
@@ -520,6 +522,10 @@ def bellman_non_terminal(
         interp_axes, V_next,
         method='linear', bounds_error=False, fill_value=None,
     )
+
+    _t_interp_build = time.time() - _t0
+    print(f"      [timer] interp build: {_t_interp_build:.3f}s  "
+          f"(V_next shape={V_next.shape}, s_i={s_i:.6g}, tau_i={tau_i:.6g}, w_bar_i={w_bar_i:.6g})")
 
     # Generate MC samples (common random numbers)
     if use_antithetic:
@@ -551,6 +557,7 @@ def bellman_non_terminal(
         V_vals = interp(points).reshape(M, K_actual)
         costs = V_vals.mean(axis=1)
 
+        print(f"      [timer] process_idx=0 total: {time.time()-_t0:.3f}s")
         return float(costs.min())
 
     else:
@@ -560,8 +567,19 @@ def bellman_non_terminal(
         V_out_shape = (N_R,) + (N_eps,) * n_prev
         V_out = np.zeros(V_out_shape)
 
+        total_iters = N_eps ** n_prev
+        print(f"      [timer] loop: {total_iters} iters (N_eps={N_eps}^{n_prev}), "
+              f"each: N_R×M×K = {N_R}×{M}×{K_actual} = {N_R*M*K_actual:,} interp points")
+
+        _t_loop = time.time()
+        _t_q_total = 0.0
+        _t_interp_total = 0.0
+        _t_other_total = 0.0
+
         # Iterate over all combinations of preceding eps values
-        for multi_idx in np.ndindex(*([N_eps] * n_prev)):
+        for _iter_count, multi_idx in enumerate(np.ndindex(*([N_eps] * n_prev))):
+            _t_iter = time.time()
+
             eps_vals = np.array([grid_eps[idx] for idx in multi_idx])
 
             # Conditional mean: eps_hat = cond_weights @ eps_vals
@@ -571,6 +589,9 @@ def bellman_non_terminal(
             # d, Q independent of R: (M, K)
             d_all = delta_m[:, None] + sigma_m[:, None] * eps_i_samples[None, :]
             Q_all = np.exp(-(d_all ** 2) / s_i)
+
+            _t_q_done = time.time()
+            _t_q_total += _t_q_done - _t_iter
 
             # Vectorize over all R grid points: (N_R, M, K)
             R_next = grid_R[:, None, None] - w_bar_i * Q_all[None, :, :]
@@ -585,9 +606,26 @@ def bellman_non_terminal(
 
             points = np.column_stack(cols)
             V_vals = interp(points).reshape(N_R, M, K_actual)
-            costs = V_vals.mean(axis=2)  # (N_R, M)
 
+            _t_interp_done = time.time()
+            _t_interp_total += _t_interp_done - _t_q_done
+
+            costs = V_vals.mean(axis=2)  # (N_R, M)
             V_out[(slice(None),) + multi_idx] = costs.min(axis=1)  # (N_R,)
+
+            _t_other_total += time.time() - _t_interp_done
+
+            # Progress every 25%
+            if total_iters > 10 and (_iter_count + 1) % max(1, total_iters // 4) == 0:
+                elapsed = time.time() - _t_loop
+                pct = 100 * (_iter_count + 1) / total_iters
+                print(f"      [timer] {pct:.0f}% ({_iter_count+1}/{total_iters}) "
+                      f"elapsed={elapsed:.1f}s  Q={_t_q_total:.2f}s  "
+                      f"interp={_t_interp_total:.2f}s  other={_t_other_total:.2f}s")
+
+        total_elapsed = time.time() - _t0
+        print(f"      [timer] DONE process_idx={process_idx}: {total_elapsed:.3f}s "
+              f"(Q={_t_q_total:.2f}s, interp={_t_interp_total:.2f}s, other={_t_other_total:.2f}s)")
 
         return V_out
 
