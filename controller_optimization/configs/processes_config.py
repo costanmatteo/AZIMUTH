@@ -56,7 +56,7 @@ ST_DATASET_CONFIG = {
         'x_domain': (-5.0, 5.0),
         'e_domain': (-1.0, 1.0),
         'cal_n': 2000,
-        'cal_percentile': 10.0,
+        'cal_percentile': 30.0,
         'cal_width_factor': 0.5,
     },
 
