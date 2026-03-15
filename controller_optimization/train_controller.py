@@ -451,9 +451,12 @@ def main(config=None):
         print(f"  Surrogate type: reliability_function (mathematical formula)")
 
     print(f"  Sampling mode: {'DETERMINISTIC (mean)' if use_deterministic_sampling else 'STOCHASTIC (reparameterization trick)'}")
-    F_star_value = surrogate.F_star  # Single scalar from scenario 0
     print(f"  ✓ Surrogate initialized")
-    print(f"    F* = {F_star_value:.6f} (from scenario 0)")
+    print(f"    F* = {surrogate.F_star:.6f} (from scenario 0, SCM)")
+
+    # Recompute F* through NN so the controller targets a reachable F*
+    surrogate.recompute_F_star_with_nn(process_chain)
+    F_star_value = surrogate.F_star
 
     # 5. Create Trainer
     print("\n[5/9] Creating controller trainer...")
@@ -512,6 +515,8 @@ def main(config=None):
         # For CasualiTSurrogate, connect to validation ProcessChain
         if isinstance(validation_surrogate, CasualiTSurrogate):
             validation_surrogate.set_process_chain(validation_process_chain)
+        # Recompute validation F* through NN too
+        validation_surrogate.recompute_F_star_with_nn(validation_process_chain)
         trainer.set_validation_data(validation_surrogate, validation_process_chain)
     else:
         print("  Cross-scenario validation: DISABLED")

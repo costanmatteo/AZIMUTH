@@ -230,6 +230,42 @@ class ProTSurrogate:
             F_star = self.compute_reliability(scenario_traj, return_quality_scores=False)
             return F_star.item()
 
+    def recompute_F_star_with_nn(self, process_chain):
+        """
+        Ricalcola F* passando i target inputs attraverso le uncertainty predictors (NN).
+
+        Questo allinea F* al "mondo della NN": il controller non inseguirà più
+        un target calcolato dalla SCM (irraggiungibile dalla NN a causa del bias),
+        ma il miglior F ottenibile quando le NN predicono gli output.
+
+        Args:
+            process_chain (ProcessChain): Chain con le NN frozen caricate.
+        """
+        old_F_star = self.F_star
+
+        with torch.no_grad():
+            scenario_traj = {}
+            for i, process_name in enumerate(process_chain.process_names):
+                data = self.target_trajectory_tensors[process_name]
+                target_inputs = data['inputs'][0:1]  # Scenario 0, keep batch dim
+
+                # Pass target inputs through the NN (same path as training forward)
+                scaled_inputs = process_chain.scale_inputs(target_inputs, i)
+                outputs_mean_scaled, outputs_var_scaled = process_chain.uncertainty_predictors[i](scaled_inputs)
+                outputs_mean = process_chain.unscale_outputs(outputs_mean_scaled, i)
+                outputs_var = process_chain.unscale_variance(outputs_var_scaled, i)
+
+                scenario_traj[process_name] = {
+                    'inputs': target_inputs,
+                    'outputs_mean': outputs_mean,
+                    'outputs_var': outputs_var,
+                }
+
+            F_star_nn = self.compute_reliability(scenario_traj, return_quality_scores=False)
+            self.F_star = F_star_nn.item()
+
+        print(f"  F* recomputed through NN: {old_F_star:.6f} (SCM) -> {self.F_star:.6f} (NN)")
+
     def compute_target_reliability(self):
         """
         Returns F* (single scalar).
