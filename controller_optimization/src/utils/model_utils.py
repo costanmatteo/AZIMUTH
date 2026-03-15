@@ -61,12 +61,13 @@ def _infer_architecture_from_state_dict(state_dict):
         prefix = ''
 
     # Collect shared_network linear layer weights in order
+    # Only 2D tensors are Linear layers; 1D tensors are BatchNorm (skip those)
     layer_weights = {}
     for key, tensor in state_dict.items():
         if not key.startswith(prefix):
             continue
         suffix = key[len(prefix):]
-        if suffix.startswith('shared_network.') and suffix.endswith('.weight'):
+        if suffix.startswith('shared_network.') and suffix.endswith('.weight') and tensor.dim() == 2:
             # e.g. "shared_network.0.weight" → index 0
             parts = suffix.split('.')
             layer_idx = int(parts[1])
