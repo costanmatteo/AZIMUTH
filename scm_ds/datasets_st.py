@@ -163,19 +163,18 @@ def _assign_env_groups(n: int, me: int, overlap: float) -> List[List[int]]:
 # ---------------------------------------------------------------------------
 
 def _st_term(var: str) -> str:
-    """Single-variable activation: 0.5*(1 + sin(x)).
+    """Single-variable activation: 0.5*(1 + tanh(x)).
 
-    Output in [0, 1] on any domain — naturally bounded, no offset needed.
-    Multimodal with non-vanishing gradients (except at isolated zero-crossings
-    of cos(x)).
+    Output in [0, 1] on any domain — naturally bounded.
+    Monotonic with smooth gradients (no periodic zero-crossings).
     """
-    return f"0.5*(1 + sin({var}))"
+    return f"0.5*(1 + tanh({var}))"
 
 
 def _st_range(lb: float, ub: float, n_grid: int = 10000) -> Tuple[float, float]:
     """Compute (f_min, f_max) of the activation function on [lb, ub]."""
     xs = np.linspace(lb, ub, n_grid)
-    ys = 0.5 * (1 + np.sin(xs))
+    ys = 0.5 * (1 + np.tanh(xs))
     return float(ys.min()), float(ys.max())
 
 
@@ -308,7 +307,7 @@ def build_st_scm(cfg: STConfig, dag_image_dir: Optional[str] = None) -> SCMDatas
 
         # ── Compute Y_clean scale for noise rescaling ──────────────
         lb, ub = cfg.x_domain
-        f_min, f_max = _st_range(lb, ub)  # [0, 1] for sin-based
+        f_min, f_max = _st_range(lb, ub)  # [0, 1] for tanh-based
         last_stage_max = 0.0
         for k in range(m):
             w_k = widths[k]
