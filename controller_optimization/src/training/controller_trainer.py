@@ -457,6 +457,226 @@ class ControllerTrainer:
 
         self.process_chain.train()
 
+    def _debug_epoch_diagnostics(self, epoch, total_epochs, lambda_bc, reliability_weight, phase,
+                                  avg_total_loss, avg_rel_loss, avg_bc_loss, avg_F, batch_size=32):
+        """
+        Stampa diagnostiche dettagliate per capire perché il training performa male.
+        Viene chiamata ogni N epoch per monitorare l'evoluzione.
+        """
+        n_scenarios = self.surrogate.n_scenarios
+
+        print(f"\n{'#'*80}")
+        print(f"# DEBUG DIAGNOSTICS — Epoch {epoch}/{total_epochs}  [{phase}]")
+        print(f"{'#'*80}")
+
+        # ─── 1. LOSS DECOMPOSITION ─────────────────────────────────────────
+        print(f"\n┌─ LOSS DECOMPOSITION ─────────────────────────────────────")
+        print(f"│  Total loss:       {avg_total_loss:.8f}")
+        print(f"│  Reliability loss: {avg_rel_loss:.8f}  (weight: {reliability_weight:.4f}, scale: {self.reliability_loss_scale})")
+        print(f"│  BC loss:          {avg_bc_loss:.8f}  (λ_BC: {lambda_bc:.6f})")
+        # Effective contribution of each component to total loss
+        rel_contrib = reliability_weight * avg_rel_loss
+        bc_contrib = lambda_bc * avg_bc_loss
+        total_contrib = rel_contrib + bc_contrib
+        if total_contrib > 0:
+            print(f"│  Contribution →  reliability: {rel_contrib:.6f} ({100*rel_contrib/total_contrib:.1f}%)  BC: {bc_contrib:.6f} ({100*bc_contrib/total_contrib:.1f}%)")
+        print(f"│  F (actual): {avg_F:.6f}   F* (target): {self.surrogate.F_star:.6f}   gap: {abs(avg_F - self.surrogate.F_star):.6f}")
+        print(f"└──────────────────────────────────────────────────────────")
+
+        # ─── 2. PER-PROCESS Q SCORES & OUTPUTS ─────────────────────────────
+        self.process_chain.eval()
+        with torch.no_grad():
+            # Use scenario 0 as diagnostic reference
+            torch.manual_seed(42)
+            trajectory = self.process_chain.forward(batch_size=8, scenario_idx=0)
+            F_diag, quality_scores = self.surrogate.compute_reliability(trajectory, return_quality_scores=True)
+
+            print(f"\n┌─ PER-PROCESS QUALITY SCORES (scenario 0, 8 samples) ─────")
+            for proc_name in self.process_chain.process_names:
+                if proc_name in quality_scores:
+                    Q = quality_scores[proc_name]
+                    Q_mean = Q.mean().item()
+                    Q_std = Q.std().item() if Q.numel() > 1 else 0.0
+                    Q_min = Q.min().item()
+                    Q_max = Q.max().item()
+                    print(f"│  {proc_name:20s}  Q = {Q_mean:.6f} ± {Q_std:.6f}  [min={Q_min:.6f}, max={Q_max:.6f}]")
+
+                    # Show what output values produced this Q
+                    data = trajectory[proc_name]
+                    out_mean = data['outputs_mean']
+                    out_var = data['outputs_var']
+
+                    # Get surrogate target for this process
+                    if self.surrogate._dynamic_configs and proc_name in self.surrogate._dynamic_configs:
+                        cfg = self.surrogate._dynamic_configs[proc_name]
+                        surr_target = cfg['target']
+                        surr_scale = cfg['scale']
+                        print(f"│    surr_target={surr_target:.4f}, surr_scale={surr_scale:.4f}")
+                    print(f"│    output_mean: mean={out_mean.mean().item():.6f}, std={out_mean.std().item():.6f}, min={out_mean.min().item():.6f}, max={out_mean.max().item():.6f}")
+                    print(f"│    output_var:  mean={out_var.mean().item():.6f}, std={out_var.std().item():.6f}")
+            print(f"│  F (combined) = {F_diag.mean().item():.6f}")
+            print(f"└──────────────────────────────────────────────────────────")
+
+            # ─── 3. POLICY OUTPUT ANALYSIS ──────────────────────────────────
+            print(f"\n┌─ POLICY OUTPUT ANALYSIS ─────────────────────────────────")
+            for i, proc_name in enumerate(self.process_chain.process_names):
+                data = trajectory[proc_name]
+                actual_inputs = data['inputs']
+
+                # Target inputs for scenario 0
+                target_inputs = self.surrogate.target_trajectory_tensors[proc_name]['inputs'][0:1]
+
+                print(f"│  {proc_name}:")
+                input_labels = self.process_chain.processes_config[i].get('input_labels', [])
+                ctrl_info = self.process_chain.controllable_info_per_process[i]
+                ctrl_indices = ctrl_info['controllable_indices']
+                ctrl_labels = ctrl_info['controllable_labels']
+
+                for dim_idx in range(actual_inputs.shape[-1]):
+                    label = input_labels[dim_idx] if dim_idx < len(input_labels) else f"dim_{dim_idx}"
+                    is_ctrl = dim_idx in ctrl_indices
+                    actual_vals = actual_inputs[:, dim_idx]
+                    target_val = target_inputs[0, dim_idx].item()
+                    a_mean = actual_vals.mean().item()
+                    a_std = actual_vals.std().item()
+                    a_min = actual_vals.min().item()
+                    a_max = actual_vals.max().item()
+                    marker = "→CTRL" if is_ctrl else " fixed"
+                    print(f"│    {label:25s} [{marker}]  actual={a_mean:.4f}±{a_std:.4f} [{a_min:.4f}, {a_max:.4f}]  target={target_val:.4f}  Δ={abs(a_mean - target_val):.4f}")
+
+                # Tanh saturation check (only for processes with a policy, i.e. i > 0)
+                if i > 0 and i - 1 < len(self.process_chain.policy_generators):
+                    policy = self.process_chain.policy_generators[i - 1]
+                    if hasattr(policy, 'output_min') and policy.output_min is not None:
+                        out_min = policy.output_min.cpu().numpy()
+                        out_max = policy.output_max.cpu().numpy()
+                        for ci, cl in enumerate(ctrl_labels):
+                            actual_ctrl = actual_inputs[:, ctrl_indices[ci]]
+                            range_used = (actual_ctrl.max().item() - actual_ctrl.min().item()) / (out_max[ci] - out_min[ci] + 1e-8)
+                            near_min = (actual_ctrl < out_min[ci] + 0.01 * (out_max[ci] - out_min[ci])).float().mean().item()
+                            near_max = (actual_ctrl > out_max[ci] - 0.01 * (out_max[ci] - out_min[ci])).float().mean().item()
+                            print(f"│    {cl:25s}  bounds=[{out_min[ci]:.4f}, {out_max[ci]:.4f}]  range_used={100*range_used:.1f}%  near_min={100*near_min:.0f}%  near_max={100*near_max:.0f}%")
+
+            print(f"└──────────────────────────────────────────────────────────")
+
+            # ─── 4. UNCERTAINTY PREDICTOR OUTPUT RANGES ─────────────────────
+            print(f"\n┌─ UNCERTAINTY PREDICTOR DIAGNOSTICS ──────────────────────")
+            for i, proc_name in enumerate(self.process_chain.process_names):
+                data = trajectory[proc_name]
+                out_mean = data['outputs_mean']
+                out_var = data['outputs_var']
+                out_sampled = data.get('outputs_sampled', None)
+
+                output_labels = self.process_chain.processes_config[i].get('output_labels', [])
+                for dim_idx in range(out_mean.shape[-1]):
+                    label = output_labels[dim_idx] if dim_idx < len(output_labels) else f"out_{dim_idx}"
+                    m = out_mean[:, dim_idx]
+                    v = out_var[:, dim_idx]
+                    std = torch.sqrt(v + 1e-8)
+                    snr = (m.abs() / (std + 1e-8)).mean().item()
+
+                    # Target output for scenario 0
+                    target_out = self.surrogate.target_trajectory_tensors[proc_name]['outputs'][0, dim_idx].item()
+
+                    line = f"│  {proc_name}/{label:15s}  mean={m.mean().item():.4f}±{m.std().item():.4f}  var={v.mean().item():.6f}  SNR={snr:.2f}  target_out={target_out:.4f}  Δ={abs(m.mean().item() - target_out):.4f}"
+                    print(line)
+                    if out_sampled is not None:
+                        s = out_sampled[:, dim_idx]
+                        print(f"│    sampled: mean={s.mean().item():.4f}±{s.std().item():.4f}  [min={s.min().item():.4f}, max={s.max().item():.4f}]")
+
+            print(f"└──────────────────────────────────────────────────────────")
+
+        # ─── 5. GRADIENT NORMS ──────────────────────────────────────────────
+        print(f"\n┌─ GRADIENT NORMS (from last backward) ────────────────────")
+        for i, policy in enumerate(self.process_chain.policy_generators):
+            proc_name = self.process_chain.process_names[i + 1] if i + 1 < len(self.process_chain.process_names) else f"policy_{i}"
+            total_grad_norm = 0.0
+            total_param_norm = 0.0
+            n_params = 0
+            max_grad = 0.0
+            max_grad_name = ""
+            has_grad = False
+
+            for name, param in policy.named_parameters():
+                if param.requires_grad:
+                    n_params += param.numel()
+                    total_param_norm += param.norm().item() ** 2
+                    if param.grad is not None:
+                        has_grad = True
+                        gn = param.grad.norm().item()
+                        total_grad_norm += gn ** 2
+                        if gn > max_grad:
+                            max_grad = gn
+                            max_grad_name = name
+
+            total_grad_norm = total_grad_norm ** 0.5
+            total_param_norm = total_param_norm ** 0.5
+            ratio = total_grad_norm / (total_param_norm + 1e-8)
+
+            if has_grad:
+                print(f"│  Policy → {proc_name:15s}  grad_norm={total_grad_norm:.8f}  param_norm={total_param_norm:.4f}  ratio={ratio:.6f}  max_grad={max_grad:.8f} ({max_grad_name})")
+            else:
+                print(f"│  Policy → {proc_name:15s}  NO GRADIENTS!")
+
+        # Scenario encoder gradients (if present)
+        if hasattr(self.process_chain, 'scenario_encoder') and self.process_chain.scenario_encoder is not None:
+            se = self.process_chain.scenario_encoder
+            total_grad_norm = 0.0
+            has_grad = False
+            for name, param in se.named_parameters():
+                if param.requires_grad and param.grad is not None:
+                    has_grad = True
+                    total_grad_norm += param.grad.norm().item() ** 2
+            total_grad_norm = total_grad_norm ** 0.5
+            if has_grad:
+                print(f"│  ScenarioEncoder          grad_norm={total_grad_norm:.8f}")
+            else:
+                print(f"│  ScenarioEncoder          NO GRADIENTS!")
+
+        print(f"└──────────────────────────────────────────────────────────")
+
+        # ─── 6. MULTI-SCENARIO F DISTRIBUTION ──────────────────────────────
+        if n_scenarios > 1:
+            print(f"\n┌─ F ACROSS SCENARIOS ─────────────────────────────────────")
+            with torch.no_grad():
+                F_per_scenario = []
+                for s_idx in range(min(n_scenarios, 10)):  # Cap at 10 for readability
+                    torch.manual_seed(42)
+                    traj_s = self.process_chain.forward(batch_size=4, scenario_idx=s_idx)
+                    F_s = self.surrogate.compute_reliability(traj_s).mean().item()
+                    F_per_scenario.append(F_s)
+                    print(f"│  Scenario {s_idx:3d}: F = {F_s:.6f}")
+                print(f"│  Mean F = {np.mean(F_per_scenario):.6f} ± {np.std(F_per_scenario):.6f}")
+            print(f"└──────────────────────────────────────────────────────────")
+
+        # ─── 7. TRAINING DYNAMICS ───────────────────────────────────────────
+        if len(self.history['F_values']) >= 5:
+            print(f"\n┌─ TRAINING DYNAMICS (last 5 epochs) ──────────────────────")
+            recent_F = self.history['F_values'][-5:]
+            recent_loss = self.history['total_loss'][-5:]
+            recent_rel = self.history['reliability_loss'][-5:]
+            recent_bc = self.history['bc_loss'][-5:]
+            F_trend = recent_F[-1] - recent_F[0]
+            loss_trend = recent_loss[-1] - recent_loss[0]
+            print(f"│  F trend (5ep):    {recent_F[0]:.6f} → {recent_F[-1]:.6f}  (Δ={F_trend:+.6f})")
+            print(f"│  Loss trend (5ep): {recent_loss[0]:.6f} → {recent_loss[-1]:.6f}  (Δ={loss_trend:+.6f})")
+            print(f"│  Rel loss trend:   {recent_rel[0]:.6f} → {recent_rel[-1]:.6f}")
+            print(f"│  BC loss trend:    {recent_bc[0]:.6f} → {recent_bc[-1]:.6f}")
+
+            # Detect if F is stuck
+            if len(self.history['F_values']) >= 20:
+                last_20_F = self.history['F_values'][-20:]
+                F_range = max(last_20_F) - min(last_20_F)
+                if F_range < 0.001:
+                    print(f"│  ⚠ F STUCK! Range over last 20 epochs: {F_range:.8f}")
+                if abs(F_trend) < 0.0001:
+                    print(f"│  ⚠ F NOT IMPROVING (last 5ep change: {F_trend:+.8f})")
+            print(f"└──────────────────────────────────────────────────────────")
+
+        print(f"{'#'*80}\n")
+
+        self.process_chain.train()
+
     def compute_loss(self, trajectory, scenario_idx, reliability_weight=1.0, lambda_bc=None,
                      return_quality_scores=False):
         """
@@ -1019,6 +1239,18 @@ class ControllerTrainer:
                     val_within_F = self.history['val_within_F_values'][-1]
                     print(f"  Val Loss (within):{val_within_loss:.6f}")
                     print(f"  Val F (within):   {val_within_F:.6f}")
+
+            # Detailed debug diagnostics at key epochs
+            # Runs at epoch 1, at warmup boundary, and every 25 epochs (or every 10 in first 50)
+            debug_this_epoch = (epoch == 1 or epoch == warmup_epochs or epoch == warmup_epochs + 1
+                                or (epoch <= 50 and epoch % 10 == 0)
+                                or (epoch > 50 and epoch % 25 == 0)
+                                or epoch == epochs)
+            if verbose and debug_this_epoch:
+                self._debug_epoch_diagnostics(
+                    epoch, epochs, lambda_bc, reliability_weight, phase,
+                    avg_total_loss, avg_rel_loss, avg_bc_loss, avg_F, batch_size
+                )
 
             # Print warm-up completion message
             if verbose and self.curriculum_config['enabled'] and epoch == warmup_epochs:
