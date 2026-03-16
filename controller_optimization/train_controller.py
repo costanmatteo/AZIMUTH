@@ -552,9 +552,6 @@ def main(config=None):
     # 5.6. Precompute baseline reliabilities per scenario (for gap closure during training)
     print("\n[5.6/9] Precomputing baseline reliabilities per scenario...")
     F_baseline_pretrain = []
-    # Debug: show baseline trajectory structure
-    for pn, pd in baseline_trajectory.items():
-        print(f"  Baseline {pn}: inputs={pd['inputs'].shape}, outputs={pd['outputs'].shape}")
     with torch.no_grad():
         for scenario_idx in range(n_scenarios):
             baseline_scenario = {}
@@ -564,14 +561,7 @@ def main(config=None):
                     'outputs': data['outputs'][scenario_idx:scenario_idx+1]
                 }
             baseline_scenario_tensor = convert_numpy_to_tensor(baseline_scenario, device=device)
-            F_bl_tensor = surrogate.compute_reliability(baseline_scenario_tensor)
-            if F_bl_tensor.numel() == 0:
-                print(f"  WARNING: scenario {scenario_idx} returned empty tensor, using 0.0")
-                F_bl = 0.0
-            elif F_bl_tensor.dim() == 0:
-                F_bl = F_bl_tensor.item()
-            else:
-                F_bl = F_bl_tensor.mean().item()
+            F_bl = surrogate.compute_reliability(baseline_scenario_tensor).item()
             F_baseline_pretrain.append(F_bl)
     trainer.set_baseline_reliabilities(F_baseline_pretrain)
 

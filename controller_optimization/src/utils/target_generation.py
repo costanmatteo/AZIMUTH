@@ -121,29 +121,7 @@ def generate_target_trajectory(process_configs, n_samples=50, seed=42):
         # Get SCM dataset
         ds_scm = get_scm_dataset(process_config)
 
-        # ── ST processes: use calibration reference row (F* ≈ 1 by construction) ──
-        if is_st and hasattr(ds_scm, 'cal_reference_row'):
-            ref = ds_scm.cal_reference_row
-            inputs = np.array([[ref[lbl] for lbl in scm_input_labels]])    # (1, input_dim)
-            outputs = np.array([[ref[lbl] for lbl in scm_output_labels]])  # (1, output_dim)
-            structural_conditions = {}
-            for var in ds_scm.structural_noise_vars:
-                if var in ref:
-                    structural_conditions[var] = np.array([ref[var]])
-
-            trajectory[process_name] = {
-                'inputs': inputs,
-                'outputs': outputs,
-                'structural_conditions': structural_conditions
-            }
-
-            print(f"Generated target trajectory for {process_name} (from calibration reference row):")
-            print(f"  - Shape: {inputs.shape}")
-            print(f"  - Outputs: {outputs[0]}")
-            print(f"  - Structural vars: {list(structural_conditions.keys())}")
-            continue
-
-        # ── Non-ST processes: sample with zero process noise ──
+        # ── Sample with zero process noise (both ST and non-ST processes) ──
         # Backup original noise model
         original_singles = ds_scm.noise_model.singles.copy()
         original_groups = ds_scm.noise_model.groups.copy() if ds_scm.noise_model.groups else []
