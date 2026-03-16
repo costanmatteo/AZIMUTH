@@ -121,7 +121,6 @@ def generate_target_trajectory(process_configs, n_samples=50, seed=42):
         # Get SCM dataset
         ds_scm = get_scm_dataset(process_config)
 
-        # ── Sample with zero process noise (both ST and non-ST processes) ──
         # Backup original noise model
         original_singles = ds_scm.noise_model.singles.copy()
         original_groups = ds_scm.noise_model.groups.copy() if ds_scm.noise_model.groups else []
@@ -155,18 +154,52 @@ def generate_target_trajectory(process_configs, n_samples=50, seed=42):
             ds_scm.noise_model.singles = modified_singles
             ds_scm.noise_model.groups = []  # No grouped noise
 
-            # Generate samples with diverse structural conditions
-            df = ds_scm.sample(n=n_samples, seed=seed)
+            # ── ST processes: calibration row as scenario 0 + sampled scenarios ──
+            if is_st and hasattr(ds_scm, 'cal_reference_row'):
+                ref = ds_scm.cal_reference_row
 
-            # Extract inputs and outputs (usando le label SCM base)
-            inputs = df[scm_input_labels].values  # Shape: (n_samples, input_dim)
-            outputs = df[scm_output_labels].values  # Shape: (n_samples, output_dim)
+                # Row 0: calibration reference row (F* ≈ 1 by construction)
+                cal_inputs = np.array([[ref[lbl] for lbl in scm_input_labels]])
+                cal_outputs = np.array([[ref[lbl] for lbl in scm_output_labels]])
+                cal_structural = {}
+                for var in ds_scm.structural_noise_vars:
+                    if var in ref:
+                        cal_structural[var] = np.array([ref[var]])
 
-            # Extract structural conditions for alignment with baseline
-            structural_conditions = {}
-            for var in ds_scm.structural_noise_vars:
-                if var in df.columns:
-                    structural_conditions[var] = df[var].values
+                if n_samples > 1:
+                    # Rows 1..n_samples-1: sampled with diverse environmental factors
+                    df = ds_scm.sample(n=n_samples - 1, seed=seed)
+                    sampled_inputs = df[scm_input_labels].values
+                    sampled_outputs = df[scm_output_labels].values
+
+                    inputs = np.vstack([cal_inputs, sampled_inputs])
+                    outputs = np.vstack([cal_outputs, sampled_outputs])
+
+                    structural_conditions = {}
+                    for var in ds_scm.structural_noise_vars:
+                        if var in ref and var in df.columns:
+                            structural_conditions[var] = np.concatenate([
+                                cal_structural[var], df[var].values
+                            ])
+                else:
+                    inputs = cal_inputs
+                    outputs = cal_outputs
+                    structural_conditions = cal_structural
+
+                print(f"Generated target trajectory for {process_name} (ST: cal_row + {n_samples-1} sampled):")
+
+            # ── Non-ST processes: sample all rows normally ──
+            else:
+                df = ds_scm.sample(n=n_samples, seed=seed)
+                inputs = df[scm_input_labels].values
+                outputs = df[scm_output_labels].values
+
+                structural_conditions = {}
+                for var in ds_scm.structural_noise_vars:
+                    if var in df.columns:
+                        structural_conditions[var] = df[var].values
+
+                print(f"Generated target trajectory for {process_name}:")
 
             trajectory[process_name] = {
                 'inputs': inputs,
@@ -174,7 +207,6 @@ def generate_target_trajectory(process_configs, n_samples=50, seed=42):
                 'structural_conditions': structural_conditions
             }
 
-            print(f"Generated target trajectory for {process_name}:")
             print(f"  - Shape: {inputs.shape}")
             print(f"  - Structural vars: {list(structural_conditions.keys())}")
             if structural_conditions:
