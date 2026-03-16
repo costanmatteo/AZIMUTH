@@ -257,10 +257,16 @@ def get_adaptive_target(process_idx: int, upstream_outputs: Optional[Dict[str, f
 
     # GENERIC PATH: usa target calibrati dal surrogate (processi ST)
     if surrogate is not None and hasattr(surrogate, '_dynamic_configs') and surrogate._dynamic_configs is not None:
-        # Trova il nome del processo per questo indice
-        proc_names = list(surrogate._dynamic_configs.keys())
+        proc_names = surrogate._process_order if surrogate._process_order else list(surrogate._dynamic_configs.keys())
         if process_idx < len(proc_names):
-            return surrogate._dynamic_configs[proc_names[process_idx]]['target']
+            name = proc_names[process_idx]
+            cfg = surrogate._dynamic_configs[name]
+            target = cfg['base_target']
+            for upstream, coeff in cfg.get('adaptive_coefficients', {}).items():
+                if upstream in upstream_outputs:
+                    baseline = cfg['adaptive_baselines'][upstream]
+                    target += coeff * (upstream_outputs[upstream] - baseline)
+            return target
         return 0.0
 
     # LEGACY PATH: logica hardcoded per processi fisici

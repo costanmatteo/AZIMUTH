@@ -78,17 +78,27 @@ class ProTSurrogate:
 
         # Se process_configs contiene target calibrati, costruisci i config per processo
         self._dynamic_configs = None
+        self._process_order = None
         if process_configs is not None:
             dynamic = {}
+            order = []
             for pc in process_configs:
                 if 'surrogate_target' in pc:
-                    dynamic[pc['name']] = {
-                        'target': pc['surrogate_target'],
+                    name = pc['name']
+                    order.append(name)
+                    entry = {
+                        'base_target': pc['surrogate_target'],
                         'scale': pc['surrogate_scale'],
                         'weight': pc.get('surrogate_weight', 1.0),
                     }
+                    # Target adattivi inter-processo
+                    if 'surrogate_adaptive_coefficients' in pc:
+                        entry['adaptive_coefficients'] = pc['surrogate_adaptive_coefficients']
+                        entry['adaptive_baselines'] = pc['surrogate_adaptive_baselines']
+                    dynamic[name] = entry
             if dynamic:
                 self._dynamic_configs = dynamic
+                self._process_order = order
 
         # Convert target trajectory to tensors (all scenarios)
         self.target_trajectory_tensors = {}
@@ -166,11 +176,23 @@ class ProTSurrogate:
         quality_scores = {}
 
         if self._dynamic_configs is not None:
-            # GENERIC PATH: usa target/scale calibrati (per processi ST o qualsiasi
-            # processo che abbia surrogate_target/surrogate_scale nel config)
-            for process_name, output_val in outputs.items():
+            # GENERIC PATH: usa target/scale calibrati con target adattivi inter-processo.
+            # τ_i = base_target + Σ coeff_j × (Y_j - baseline_j)
+            process_names = self._process_order if self._process_order else list(outputs.keys())
+
+            for process_name in process_names:
+                if process_name not in outputs:
+                    continue
+                output_val = outputs[process_name]
                 cfg = self._dynamic_configs.get(process_name, {})
-                target = cfg.get('target', 0.0)
+
+                # Calcola target adattivo
+                target = cfg.get('base_target', 0.0)
+                for upstream_name, coeff in cfg.get('adaptive_coefficients', {}).items():
+                    if upstream_name in outputs:
+                        baseline = cfg['adaptive_baselines'][upstream_name]
+                        target = target + coeff * (outputs[upstream_name] - baseline)
+
                 scale = cfg.get('scale', 1.0)
                 quality_scores[process_name] = torch.exp(
                     -((output_val - target) ** 2) / max(scale, 1e-8)
