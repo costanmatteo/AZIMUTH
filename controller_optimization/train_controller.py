@@ -532,8 +532,9 @@ def main(config=None):
 
         # Get process configs from surrogate for theoretical analysis
         for proc_name, proc_config in ProTSurrogate.PROCESS_CONFIGS.items():
+            tau = proc_config.get('target', proc_config.get('base_target', 0.0))
             theoretical_tracker.process_configs[proc_name] = {
-                'tau': proc_config['target'],
+                'tau': tau,
                 's': proc_config['scale']
             }
             theoretical_tracker.process_weights[proc_name] = proc_config.get('weight', 1.0)
