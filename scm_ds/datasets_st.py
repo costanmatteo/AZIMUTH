@@ -52,10 +52,10 @@ class STConfig:
 
     # --- noise ---
     rho: float = 0.0                    # unified noise intensity [0,1]
-    sigma_max: float = 0.02            # max gaussian noise std
-    sigma_m_max: float = 0.02          # max lognormal shape
-    lambda_max: float = 0.02           # max Poisson jump rate
-    theta_jump: float = 0.01           # exponential jump scale
+    sigma_max: float = 0.20            # max gaussian noise std
+    sigma_m_max: float = 0.20          # max lognormal shape
+    lambda_max: float = 0.50           # max Poisson jump rate
+    theta_jump: float = 0.10           # exponential jump scale
 
     # --- multi-output ---
     p: int = 1                          # number of output nodes
