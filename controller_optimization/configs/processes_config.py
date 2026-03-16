@@ -53,7 +53,7 @@ ST_DATASET_CONFIG = {
         'rho': 0.2,                 # intensità rumore [0,1]
         'width_profile': 'uniform',
         'carry_beta': 1.0,
-        'x_domain': (-5.0, 5.0),
+        'x_domain': (-2.0, 2.0),
         'e_domain': (-1.0, 1.0),
         'cal_n': 2000,
         'cal_percentile': 10.0,
@@ -63,7 +63,7 @@ ST_DATASET_CONFIG = {
     # Configurazione uncertainty predictor (uguale per tutti i processi ST)
     'uncertainty_predictor': {
         'model': {
-            'hidden_sizes': [64, 32],
+            'hidden_sizes': [128, 64, 32],
             'dropout_rate': 0.1,
             'use_batchnorm': False,
             'min_variance': 1e-6,
