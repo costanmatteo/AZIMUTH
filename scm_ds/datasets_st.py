@@ -1,9 +1,11 @@
 """
-Styblinski-Tang SCM Dataset — Fully synthetic, configurable SCM datasets.
+Sigmoid-Cubic SCM Dataset — Fully synthetic, configurable SCM datasets.
 
-Builds SCMDataset instances whose structural equations are based on the
-Styblinski-Tang function arranged in a configurable chain-of-stages DAG.
-Complexity is controlled through a single STConfig dataclass.
+Builds SCMDataset instances whose structural equations use a sigmoid-cubic
+transfer function  f(x) = 1/(1+exp(-(x³-3x)))  bounded in (0, 1), arranged
+in a configurable chain-of-stages DAG.  Stage outputs are averaged and
+blended via convex combination so that every intermediate node stays in
+(0, 1).  Complexity is controlled through a single STConfig dataclass.
 
 The module provides:
     - STConfig: dataclass holding all configuration parameters.
@@ -163,8 +165,8 @@ def _assign_env_groups(n: int, me: int, overlap: float) -> List[List[int]]:
 # ---------------------------------------------------------------------------
 
 def _st_term(var: str) -> str:
-    """Single-variable ST polynomial: 0.5*(x^4 - 16*x^2 + 5*x + 40)."""
-    return f"0.5*({var}**4 - 16*{var}**2 + 5*{var} + 40)"
+    """Sigmoid of cubic: 1/(1+exp(-(x^3 - 3*x))).  Bounded in (0, 1)."""
+    return f"1/(1 + exp(-({var}**3 - 3*{var})))"
 
 
 def _build_stage_expr(
@@ -174,20 +176,36 @@ def _build_stage_expr(
     env_shifts: Optional[dict],  # {input_name: "alpha*(E1 + E2)" or None}
     eps_name: str,
 ) -> str:
-    """Build the SymPy expression string for one stage node."""
+    """Build the SymPy expression string for one stage node.
+
+    Each term is a sigmoid-cubic bounded in (0, 1).  The terms are
+    **averaged** (not summed) so the stage output without carry is also
+    in (0, 1).  When a previous stage is present the carry is blended
+    as a convex combination:
+
+        S_k = (1 - carry_beta) * mean(terms) + carry_beta * S_{k-1}
+
+    keeping S_k in (0, 1) provided carry_beta in [0, 1].
+    """
     terms = []
     for x in input_names:
         if env_shifts and x in env_shifts:
-            # shifted variable
             shifted = f"({x} + {env_shifts[x]})"
             terms.append(_st_term(shifted))
         else:
             terms.append(_st_term(x))
 
-    expr = " + ".join(terms) if terms else "0"
+    n_terms = len(terms)
+    if n_terms > 0:
+        mean_expr = f"({' + '.join(terms)})/{n_terms}"
+    else:
+        mean_expr = "0"
 
     if prev_stage is not None:
-        expr = f"{expr} + {carry_beta}*{prev_stage}"
+        # convex combination keeps output in (0, 1)
+        expr = f"(1 - {carry_beta})*{mean_expr} + {carry_beta}*{prev_stage}"
+    else:
+        expr = mean_expr
 
     # zero-coefficient noise term (required by SCM engine)
     expr = f"{expr} + 0*{eps_name}"
