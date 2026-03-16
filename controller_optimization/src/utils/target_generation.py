@@ -140,7 +140,12 @@ def generate_target_trajectory(process_configs, n_samples=50, seed=42):
                     modified_singles[var_name] = noise_fn
                 elif var_name in ds_scm.process_noise_vars:
                     # Zero out process noise for ideal deterministic behavior
-                    modified_singles[var_name] = lambda rng, n, eps=epsilon: rng.normal(0, eps, n)
+                    if var_name.startswith("Z_ln"):
+                        # Lognormal multiplicative identity: Z_ln = 1.0
+                        modified_singles[var_name] = lambda rng, n: np.ones(n)
+                    else:
+                        # Additive noise (Eps_add, Jump): set to 0.0
+                        modified_singles[var_name] = lambda rng, n: np.zeros(n)
                 else:
                     # Unknown variable - keep original for safety
                     # (This includes inputs, constants, intermediate nodes)
