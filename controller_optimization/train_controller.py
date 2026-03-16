@@ -1240,7 +1240,8 @@ def main(config=None):
                         'sigma2': sigma2_i,
                         's': s
                     }
-                    theoretical_tracker.process_configs[proc_name] = {'tau': proc_cfg['target'], 's': s}
+                    tau = proc_cfg.get('target', proc_cfg.get('base_target', 0.0))
+                    theoretical_tracker.process_configs[proc_name] = {'tau': tau, 's': s}
                     theoretical_tracker.process_weights[proc_name] = weight
 
                 # ── Populate tracker with training history ──────────────────
