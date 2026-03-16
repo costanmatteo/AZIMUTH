@@ -216,7 +216,7 @@ def generate_baseline_trajectory(process_configs, target_trajectory, n_samples=5
     """
     trajectory = {}
 
-    for process_config in process_configs:
+    for proc_idx, process_config in enumerate(process_configs):
         process_name = process_config['name']
         input_labels = process_config['input_labels']
         output_labels = process_config['output_labels']
@@ -264,8 +264,10 @@ def generate_baseline_trajectory(process_configs, target_trajectory, n_samples=5
             # Apply modified noise model
             ds_scm.noise_model.singles = modified_singles
 
-            # Generate samples with fixed inputs and active process noise
-            df = ds_scm.sample(n=n_samples, seed=seed)
+            # Use independent seed per process to get independent noise realizations
+            # (otherwise identical SCMs with the same seed produce identical noise)
+            process_seed = seed + proc_idx
+            df = ds_scm.sample(n=n_samples, seed=process_seed)
 
         finally:
             # Restore original noise model
