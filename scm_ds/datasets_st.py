@@ -541,19 +541,6 @@ def _calibrate(
                 "weight": 1.0,
             }
 
-            if ki > 0:
-                prev = chain[ki - 1]
-                prev_vals = cal_df[prev].values
-                prev_var = float(np.var(prev_vals))
-                if prev_var > 0:
-                    coeff = float(np.cov(vals, prev_vals)[0, 1] / prev_var)
-                    coeff = max(-5.0, min(5.0, coeff))  # clip
-                else:
-                    coeff = 0.0
-                prev_tau = float(np.percentile(prev_vals, pct))
-                entry["adaptive_coefficients"] = {prev: coeff}
-                entry["adaptive_baselines"] = {prev: prev_tau}
-
             process_configs[stage_name] = entry
             process_order.append(stage_name)
 
@@ -568,19 +555,6 @@ def _calibrate(
             "scale": y_scale,
             "weight": 1.0,
         }
-
-        # Adaptive from last stage
-        last_stage = chain[-1]
-        ls_vals = cal_df[last_stage].values
-        ls_var = float(np.var(ls_vals))
-        if ls_var > 0:
-            coeff = float(np.cov(y_vals, ls_vals)[0, 1] / ls_var)
-            coeff = max(-5.0, min(5.0, coeff))
-        else:
-            coeff = 0.0
-        ls_tau = float(np.percentile(ls_vals, pct))
-        y_entry["adaptive_coefficients"] = {last_stage: coeff}
-        y_entry["adaptive_baselines"] = {last_stage: ls_tau}
 
         process_configs[y_name] = y_entry
         process_order.append(y_name)
