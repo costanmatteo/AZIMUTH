@@ -121,6 +121,29 @@ def generate_target_trajectory(process_configs, n_samples=50, seed=42):
         # Get SCM dataset
         ds_scm = get_scm_dataset(process_config)
 
+        # ── ST processes: use calibration reference row (F* ≈ 1 by construction) ──
+        if is_st and hasattr(ds_scm, 'cal_reference_row'):
+            ref = ds_scm.cal_reference_row
+            inputs = np.array([[ref[lbl] for lbl in scm_input_labels]])    # (1, input_dim)
+            outputs = np.array([[ref[lbl] for lbl in scm_output_labels]])  # (1, output_dim)
+            structural_conditions = {}
+            for var in ds_scm.structural_noise_vars:
+                if var in ref:
+                    structural_conditions[var] = np.array([ref[var]])
+
+            trajectory[process_name] = {
+                'inputs': inputs,
+                'outputs': outputs,
+                'structural_conditions': structural_conditions
+            }
+
+            print(f"Generated target trajectory for {process_name} (from calibration reference row):")
+            print(f"  - Shape: {inputs.shape}")
+            print(f"  - Outputs: {outputs[0]}")
+            print(f"  - Structural vars: {list(structural_conditions.keys())}")
+            continue
+
+        # ── Non-ST processes: sample with zero process noise ──
         # Backup original noise model
         original_singles = ds_scm.noise_model.singles.copy()
         original_groups = ds_scm.noise_model.groups.copy() if ds_scm.noise_model.groups else []
@@ -132,7 +155,6 @@ def generate_target_trajectory(process_configs, n_samples=50, seed=42):
             # - Other variables: KEEP ORIGINAL (for safety)
 
             modified_singles = {}
-            epsilon = 1e-6  # Very small value to avoid numerical issues
 
             for var_name, noise_fn in original_singles.items():
                 if var_name in ds_scm.structural_noise_vars:
@@ -237,6 +259,9 @@ def generate_baseline_trajectory(process_configs, target_trajectory, n_samples=5
         target_inputs = target_trajectory[process_name]['inputs']
         target_structural = target_trajectory[process_name]['structural_conditions']
 
+        # Use target trajectory size (may be 1 for ST calibration reference row)
+        actual_n = target_inputs.shape[0]
+
         # Backup original noise model
         original_singles = ds_scm.noise_model.singles.copy()
 
@@ -267,7 +292,7 @@ def generate_baseline_trajectory(process_configs, target_trajectory, n_samples=5
             # Use independent seed per process to get independent noise realizations
             # (otherwise identical SCMs with the same seed produce identical noise)
             process_seed = seed + proc_idx
-            df = ds_scm.sample(n=n_samples, seed=process_seed)
+            df = ds_scm.sample(n=actual_n, seed=process_seed)
 
         finally:
             # Restore original noise model

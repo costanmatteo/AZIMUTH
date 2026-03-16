@@ -580,6 +580,20 @@ def _calibrate(
     ds.process_configs = process_configs
     ds.process_order = process_order
 
+    # ── Find calibration row closest to all base_targets ──────────
+    # This row will be used as the single target trajectory so that
+    # F* ≈ 1 by construction.
+    all_nodes = list(process_configs.keys())
+    scores = np.zeros(len(cal_df))
+    for node_name in all_nodes:
+        vals = cal_df[node_name].values
+        tau = process_configs[node_name]['base_target']
+        s = process_configs[node_name]['scale']
+        scores += (vals - tau) ** 2 / max(s, 1e-8)
+
+    best_idx = int(np.argmin(scores))
+    ds.cal_reference_row = {col: float(cal_df[col].iloc[best_idx]) for col in cal_df.columns}
+
 
 # ---------------------------------------------------------------------------
 # Pre-built instances (Section 11)
