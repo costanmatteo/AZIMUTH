@@ -70,6 +70,10 @@ def load_run_results(run_dir: Path) -> dict:
             'success_rate_test': data.get('advanced_metrics', {}).get('success_rate_test', {}).get('success_rate_pct'),
             'worst_case_gap_train': data.get('advanced_metrics', {}).get('worst_case_gap_train', {}).get('worst_case_gap'),
             'worst_case_gap_test': data.get('advanced_metrics', {}).get('worst_case_gap_test', {}).get('worst_case_gap'),
+            'gap_closure_train': data.get('advanced_metrics', {}).get('gap_closure_train', {}).get('gap_closure_mean'),
+            'gap_closure_test': data.get('advanced_metrics', {}).get('gap_closure_test', {}).get('gap_closure_mean'),
+            'gap_closure_worst_train': data.get('advanced_metrics', {}).get('gap_closure_train', {}).get('gap_closure_min'),
+            'gap_closure_worst_test': data.get('advanced_metrics', {}).get('gap_closure_test', {}).get('gap_closure_min'),
         }
     except Exception as e:
         print(f"Error loading {results_file}: {e}")

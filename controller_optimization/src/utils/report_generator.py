@@ -300,6 +300,19 @@ class ControllerReportGenerator:
             self.story.append(Paragraph(worst_text, self.styles['BodyText']))
             self.story.append(Spacer(1, 0.15*cm))
 
+        # 2b. Gap Closure - (F - F') / (F* - F')
+        if 'gap_closure_train' in advanced_metrics and 'gap_closure_test' in advanced_metrics:
+            gc_train = advanced_metrics['gap_closure_train']
+            gc_test = advanced_metrics['gap_closure_test']
+
+            gc_text = f"""
+<b>2b. Gap Closure</b> (F - F') / (F* - F')  [0 = baseline, 1 = target]<br/>
+• <b>Train:</b> {gc_train['gap_closure_mean']:.4f} ± {gc_train['gap_closure_std']:.4f} (worst: {gc_train['gap_closure_min']:.4f} at scenario {gc_train['gap_closure_min_scenario_idx']}, valid: {gc_train['n_valid']}/{gc_train['n_total']})<br/>
+• <b>Test:</b> {gc_test['gap_closure_mean']:.4f} ± {gc_test['gap_closure_std']:.4f} (worst: {gc_test['gap_closure_min']:.4f} at scenario {gc_test['gap_closure_min_scenario_idx']}, valid: {gc_test['n_valid']}/{gc_test['n_total']})
+"""
+            self.story.append(Paragraph(gc_text, self.styles['BodyText']))
+            self.story.append(Spacer(1, 0.15*cm))
+
         # 3. Generalization - Train vs Test comparison
         if 'train_test_gap' in advanced_metrics:
             tt_gap = advanced_metrics['train_test_gap']

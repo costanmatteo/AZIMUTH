@@ -216,6 +216,70 @@ def compute_worst_case_gap(F_star_per_scenario, F_actual_per_scenario):
     }
 
 
+def compute_gap_closure(F_star_per_scenario, F_baseline_per_scenario, F_actual_per_scenario):
+    """
+    Compute gap closure: (F_actual - F_baseline) / (F_star - F_baseline) per scenario.
+
+    Measures what fraction of the recoverable gap the controller closes.
+    Values: 0 = same as baseline, 1 = reached target, <0 = worse than baseline, >1 = better than target.
+
+    Scenarios where F_star ≈ F_baseline (gap < 1e-6) are excluded as the gap is not meaningful.
+
+    Args:
+        F_star_per_scenario (array-like): Target reliability for each scenario
+        F_baseline_per_scenario (array-like): Baseline reliability for each scenario
+        F_actual_per_scenario (array-like): Actual reliability for each scenario
+
+    Returns:
+        dict: {
+            'gap_closure_per_scenario': list of gap closure values (NaN for invalid scenarios),
+            'gap_closure_mean': float (mean over valid scenarios),
+            'gap_closure_std': float,
+            'gap_closure_min': float (worst-case gap closure),
+            'gap_closure_min_scenario_idx': int,
+            'gap_closure_max': float,
+            'n_valid': int (scenarios where F_star != F_baseline),
+            'n_total': int,
+        }
+    """
+    F_star_arr = np.atleast_1d(F_star_per_scenario).astype(float)
+    F_baseline_arr = np.atleast_1d(F_baseline_per_scenario).astype(float)
+    F_actual_arr = np.atleast_1d(F_actual_per_scenario).astype(float)
+
+    recoverable_gap = F_star_arr - F_baseline_arr
+    valid_mask = np.abs(recoverable_gap) > 1e-6
+
+    gap_closure = np.full_like(F_star_arr, np.nan)
+    gap_closure[valid_mask] = (F_actual_arr[valid_mask] - F_baseline_arr[valid_mask]) / recoverable_gap[valid_mask]
+
+    valid_values = gap_closure[valid_mask]
+    n_valid = int(np.sum(valid_mask))
+
+    if n_valid > 0:
+        gc_mean = float(np.mean(valid_values))
+        gc_std = float(np.std(valid_values))
+        gc_min = float(np.min(valid_values))
+        gc_min_idx = int(np.nanargmin(gap_closure))
+        gc_max = float(np.max(valid_values))
+    else:
+        gc_mean = 0.0
+        gc_std = 0.0
+        gc_min = 0.0
+        gc_min_idx = 0
+        gc_max = 0.0
+
+    return {
+        'gap_closure_per_scenario': [float(x) if not np.isnan(x) else None for x in gap_closure],
+        'gap_closure_mean': gc_mean,
+        'gap_closure_std': gc_std,
+        'gap_closure_min': gc_min,
+        'gap_closure_min_scenario_idx': gc_min_idx,
+        'gap_closure_max': gc_max,
+        'n_valid': n_valid,
+        'n_total': len(F_star_arr),
+    }
+
+
 def compute_success_rate(F_star_per_scenario, F_actual_per_scenario, threshold=0.95):
     """
     Compute success rate: percentage of scenarios where F_actual >= threshold * F_star.

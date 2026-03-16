@@ -61,6 +61,7 @@ from controller_optimization.src.utils.metrics import (
     compute_process_wise_metrics,
     convert_trajectory_to_numpy,
     compute_worst_case_gap,
+    compute_gap_closure,
     compute_success_rate,
     compute_train_test_gap,
     compute_scenario_diversity
@@ -785,6 +786,14 @@ def main(config=None):
     print(f"  Train: {worst_case_train['worst_case_gap']:.6f} (scenario {worst_case_train['worst_case_scenario_idx']})")
     print(f"  Test:  {worst_case_test['worst_case_gap']:.6f} (scenario {worst_case_test['worst_case_scenario_idx']})")
 
+    # Gap closure (train and test) - (F - F') / (F* - F') per scenario
+    gap_closure_train = compute_gap_closure(F_star_per_scenario_mean, F_baseline_per_scenario_mean, F_actual_per_scenario_mean)
+    gap_closure_test = compute_gap_closure(F_star_test_array, F_baseline_test_array, F_actual_test_array)
+
+    print(f"\nGap Closure (F-F')/(F*-F'):")
+    print(f"  Train: {gap_closure_train['gap_closure_mean']:.4f} +/- {gap_closure_train['gap_closure_std']:.4f} (worst: {gap_closure_train['gap_closure_min']:.4f} at scenario {gap_closure_train['gap_closure_min_scenario_idx']})")
+    print(f"  Test:  {gap_closure_test['gap_closure_mean']:.4f} +/- {gap_closure_test['gap_closure_std']:.4f} (worst: {gap_closure_test['gap_closure_min']:.4f} at scenario {gap_closure_test['gap_closure_min_scenario_idx']})")
+
     # Success rate (train and test) - using scenario-level aggregates
     success_rate_train = compute_success_rate(F_star_per_scenario_mean, F_actual_per_scenario_mean, threshold=success_threshold)
     success_rate_test = compute_success_rate(F_star_test_array, F_actual_test_array, threshold=success_threshold)
@@ -1064,6 +1073,8 @@ def main(config=None):
         advanced_metrics_for_report = {
             'worst_case_gap_train': worst_case_train,
             'worst_case_gap_test': worst_case_test,
+            'gap_closure_train': gap_closure_train,
+            'gap_closure_test': gap_closure_test,
             'success_rate_train': success_rate_train,
             'success_rate_test': success_rate_test,
             'train_test_gap': train_test_gap_metrics,
@@ -1550,6 +1561,10 @@ def main(config=None):
             # Worst-case gap
             'worst_case_gap_train': worst_case_train,
             'worst_case_gap_test': worst_case_test,
+
+            # Gap closure
+            'gap_closure_train': gap_closure_train,
+            'gap_closure_test': gap_closure_test,
 
             # Success rate
             'success_rate_train': success_rate_train,
