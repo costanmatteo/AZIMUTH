@@ -90,6 +90,7 @@ class ControllerTrainer:
             'val_within_reliability_loss': [],
             'val_within_bc_loss': [],
             'val_within_F_values': [],
+            'gap_closure': [],
         }
 
         # Cross-scenario validation data (set externally via set_validation_data)
@@ -103,6 +104,9 @@ class ControllerTrainer:
         # Per-process quality score history for correlation estimation
         # Dict: {process_name: [Q_values per epoch/scenario]}
         self.Q_history = {}
+
+        # Baseline reliabilities per scenario (for gap closure computation during training)
+        self.F_baseline_per_scenario = None
 
         # Embedding tracking (if scenario encoder is enabled)
         self.embedding_history = {}  # Dict: {epoch: embeddings_array}
@@ -571,6 +575,7 @@ class ControllerTrainer:
         epoch_reliability_loss = 0.0
         epoch_bc_loss = 0.0
         epoch_F_values = []
+        epoch_F_per_scenario = {}  # {scenario_idx: F_value} for gap closure
 
         # Within-scenario validation tracking
         epoch_val_total_loss = 0.0
@@ -694,6 +699,7 @@ class ControllerTrainer:
             epoch_reliability_loss += rel_loss
             epoch_bc_loss += bc_loss
             epoch_F_values.append(F)
+            epoch_F_per_scenario[int(scenario_idx)] = F
 
         # Single optimizer step after accumulating gradients from all scenarios
         self.optimizer.step()
@@ -703,6 +709,17 @@ class ControllerTrainer:
         avg_reliability_loss = epoch_reliability_loss / n_scenarios
         avg_bc_loss = epoch_bc_loss / n_scenarios
         avg_F = np.mean(epoch_F_values)
+
+        # Compute gap closure if baseline reliabilities are available
+        if self.F_baseline_per_scenario is not None:
+            gc_values = []
+            for s_idx, F_i in epoch_F_per_scenario.items():
+                denom = self.surrogate.F_star - self.F_baseline_per_scenario[s_idx]
+                if abs(denom) > 1e-6:
+                    gc_values.append((F_i - self.F_baseline_per_scenario[s_idx]) / denom)
+            self._epoch_gap_closure = float(np.mean(gc_values)) if gc_values else 0.0
+        else:
+            self._epoch_gap_closure = None
 
         # Store within-scenario validation metrics (if enabled)
         if self.within_scenario_validation_enabled and len(epoch_val_F_values) > 0:
@@ -753,6 +770,17 @@ class ControllerTrainer:
             print(f"    Split: {self.within_scenario_split*100:.0f}% validation, {(1-self.within_scenario_split)*100:.0f}% training")
         else:
             print(f"  Within-scenario validation: DISABLED")
+
+    def set_baseline_reliabilities(self, F_baseline_per_scenario):
+        """
+        Store precomputed F_baseline per scenario for gap closure computation during training.
+
+        Args:
+            F_baseline_per_scenario (array-like): F' for each scenario, shape (n_scenarios,)
+        """
+        self.F_baseline_per_scenario = np.array(F_baseline_per_scenario)
+        print(f"  Baseline reliabilities set for {len(self.F_baseline_per_scenario)} scenarios")
+        print(f"    F' range: [{self.F_baseline_per_scenario.min():.6f}, {self.F_baseline_per_scenario.max():.6f}]")
 
     def _split_trajectory(self, trajectory, train_size, val_size):
         """
@@ -959,6 +987,8 @@ class ControllerTrainer:
             self.history['F_values'].append(avg_F)
             self.history['lambda_bc'].append(lambda_bc)
             self.history['reliability_weight'].append(reliability_weight)
+            if self._epoch_gap_closure is not None:
+                self.history['gap_closure'].append(self._epoch_gap_closure)
             self.history['learning_rate'].append(current_lr)
 
             # Compute cross-scenario validation loss (on test scenarios) if validation data is set
@@ -1007,6 +1037,8 @@ class ControllerTrainer:
                 print(f"  BC Loss:          {avg_bc_loss:.6f}")
                 print(f"  F (actual):       {avg_F:.6f}")
                 print(f"  F* (target):      {self.surrogate.F_star:.6f}")
+                if self._epoch_gap_closure is not None:
+                    print(f"  Gap Closure:      {self._epoch_gap_closure:.4f}")
                 # Print cross-scenario validation metrics if available
                 if self.validation_surrogate is not None and len(self.history['val_total_loss']) > 0:
                     val_loss = self.history['val_total_loss'][-1]

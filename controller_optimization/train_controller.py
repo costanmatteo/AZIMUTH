@@ -549,6 +549,22 @@ def main(config=None):
     else:
         print("\n[5.5/9] Theoretical analysis disabled (skipping L_min calculations)")
 
+    # 5.6. Precompute baseline reliabilities per scenario (for gap closure during training)
+    print("\n[5.6/9] Precomputing baseline reliabilities per scenario...")
+    F_baseline_pretrain = []
+    with torch.no_grad():
+        for scenario_idx in range(n_scenarios):
+            baseline_scenario = {}
+            for process_name, data in baseline_trajectory.items():
+                baseline_scenario[process_name] = {
+                    'inputs': data['inputs'][scenario_idx:scenario_idx+1],
+                    'outputs': data['outputs'][scenario_idx:scenario_idx+1]
+                }
+            baseline_scenario_tensor = convert_numpy_to_tensor(baseline_scenario, device=device)
+            F_bl = surrogate.compute_reliability(baseline_scenario_tensor).item()
+            F_baseline_pretrain.append(F_bl)
+    trainer.set_baseline_reliabilities(F_baseline_pretrain)
+
     # 6. Training
     print("\n[6/9] Starting training...")
     print("-"*70)
