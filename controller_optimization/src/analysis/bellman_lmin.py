@@ -57,12 +57,6 @@ class BellmanConfig:
     # Regularisation
     sigma_shrinkage: float = 0.01  # Shrinkage for Sigma if not PD
 
-    # Windowed conditioning — caps state-space at N_eps^max_cond_dims
-    # to avoid exponential memory blowup when n_processes > 4.
-    # With max_cond_dims=3, the grid stays at most (N_R, N_eps^3, M)
-    # regardless of the number of processes.
-    max_cond_dims: int = 3
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Result dataclass
@@ -357,53 +351,6 @@ def precompute_conditional_params(Sigma: np.ndarray, n: int = 4):
     return sigma2_cond, cond_weights
 
 
-def precompute_windowed_conditional_params(
-    Sigma: np.ndarray, n: int, max_cond: int,
-):
-    """
-    Precompute conditional Gaussian parameters with windowed conditioning.
-
-    For process i, condition on the last min(i, max_cond) eps values
-    instead of all previous eps values. This caps the state-space
-    dimensionality and avoids exponential memory growth.
-
-    When max_cond >= n-1, this is equivalent to precompute_conditional_params.
-
-    Args:
-        Sigma: (n, n) covariance matrix
-        n: number of processes
-        max_cond: maximum number of conditioning dimensions
-
-    Returns:
-        sigma2_cond: dict {i: conditional variance}
-        cond_weights: dict {i: weight vector of length min(i, max_cond)}
-        n_cond_dims: dict {i: number of conditioning dims for process i}
-    """
-    sigma2_cond = {}
-    cond_weights = {}
-    n_cond_dims = {}
-
-    # i=0: unconditional
-    sigma2_cond[0] = Sigma[0, 0]
-    n_cond_dims[0] = 0
-
-    for i in range(1, n):
-        w = min(i, max_cond)
-        n_cond_dims[i] = w
-        cond_indices = list(range(i - w, i))  # last w indices before i
-
-        Sigma_S = Sigma[np.ix_(cond_indices, cond_indices)]   # (w, w)
-        Sigma_iS = Sigma[i, cond_indices]                      # (w,)
-        Sigma_ii = Sigma[i, i]
-
-        Sigma_S_inv = np.linalg.inv(Sigma_S)
-        cond_weights[i] = Sigma_iS @ Sigma_S_inv               # (w,)
-        sigma2_cond[i] = Sigma_ii - Sigma_iS @ Sigma_S_inv @ Sigma_iS
-        sigma2_cond[i] = max(sigma2_cond[i], 1e-10)
-
-    return sigma2_cond, cond_weights, n_cond_dims
-
-
 def build_grids(F_star: float, cfg: BellmanConfig):
     """
     Build discretisation grids for R and eps.
@@ -531,22 +478,19 @@ def bellman_non_terminal(
     K: int = 1000,
     use_antithetic: bool = True,
     rng: Optional[np.random.Generator] = None,
-    n_state_current: Optional[int] = None,
-    drop_oldest: bool = False,
 ) -> np.ndarray:
     """
-    Monte Carlo Bellman for non-terminal step.
+    Monte Carlo Bellman for non-terminal step (process_idx in {0,1,2}).
 
     V_i(R_i, eps_{<i}) = min_{(mu,sigma2) in M_i} E[ V_{i+1}(R_{i+1}, eps_{<=i}) | eps_{<i} ]
-
-    Supports windowed conditioning: when n_state_current is set, only the last
-    n_state_current eps values are tracked in the state grid. When drop_oldest
-    is True, the oldest eps is dropped when transitioning to V_next.
 
     Args:
         grid_R: (N_R,)
         grid_eps: (N_eps,)
         V_next: value function for step i+1
+            - If process_idx=2: shape (N_R, N_eps, N_eps, N_eps) for step 3
+            - If process_idx=1: shape (N_R, N_eps, N_eps) for step 2
+            - If process_idx=0: shape (N_R, N_eps) for step 1
         manifold: (M, 2) array [mu, sigma2]
         w_bar_i: normalised weight
         s_i: scale parameter
@@ -557,11 +501,12 @@ def bellman_non_terminal(
         K: MC samples
         use_antithetic: use antithetic variates
         rng: random generator
-        n_state_current: number of eps dims in current state (default: process_idx)
-        drop_oldest: if True, drop oldest eps when building V_next lookup points
 
     Returns:
         V: value function for step i
+            - process_idx=2: (N_R, N_eps, N_eps)
+            - process_idx=1: (N_R, N_eps)
+            - process_idx=0: scalar
     """
     if rng is None:
         rng = np.random.default_rng(42)
@@ -576,7 +521,8 @@ def bellman_non_terminal(
 
     sqrt_cond = np.sqrt(sigma2_cond_i)
 
-    # Number of preceding eps dimensions in V_next (infer from shape)
+    # Number of preceding eps dimensions in V_next
+    # V_next has shape (N_R, N_eps, ..., N_eps) with (process_idx + 1) eps dims
     n_eps_dims_next = len(V_next.shape) - 1  # subtract R dimension
 
     # Build interpolator for V_next — generic for any number of eps dims
@@ -620,7 +566,8 @@ def bellman_non_terminal(
 
     else:
         # Generic non-terminal step for process_idx >= 1
-        n_prev = n_state_current if n_state_current is not None else process_idx
+        # State: (R, eps_0, ..., eps_{i-1}) → output shape (N_R, N_eps, ..., N_eps) with i eps dims
+        n_prev = process_idx  # number of preceding eps dimensions
         V_out_shape = (N_R,) + (N_eps,) * n_prev
         V_out = np.zeros(V_out_shape)
 
@@ -640,16 +587,11 @@ def bellman_non_terminal(
             R_next = grid_R[:, None, None] - w_bar_i * Q_all[None, :, :]
 
             R_flat = np.clip(R_next.ravel(), R_lo, R_hi)  # (N_R*M*K,)
+            # Build interpolation points: [R, eps_0, ..., eps_{i-1}, eps_i]
             n_points = N_R * M * K_actual
             cols = [R_flat]
-            if drop_oldest and n_prev > 0:
-                # Windowed: drop oldest eps, keep the rest, add eps_i
-                for j in range(1, n_prev):
-                    cols.append(np.full(n_points, np.clip(eps_vals[j], eps_lo, eps_hi)))
-            else:
-                # Standard: keep all eps values
-                for j in range(n_prev):
-                    cols.append(np.full(n_points, np.clip(eps_vals[j], eps_lo, eps_hi)))
+            for j in range(n_prev):
+                cols.append(np.full(n_points, np.clip(eps_vals[j], eps_lo, eps_hi)))
             cols.append(np.tile(np.clip(eps_i_samples, eps_lo, eps_hi), N_R * M))
 
             points = np.column_stack(cols)
@@ -696,23 +638,15 @@ def backward_induction(
         Tuple of (L_min, V_functions, grid_R, grid_eps, sigma2_cond, cond_weights, taus)
     """
     n = len(process_names)
-    W = cfg.max_cond_dims  # windowed conditioning dimension cap
-    use_windowing = (n - 1) > W
     grid_R, grid_eps = build_grids(F_star, cfg)
 
-    # Precompute conditional parameters (windowed when n > W+1)
-    if use_windowing:
-        sigma2_cond, cond_weights, n_cond_dims = precompute_windowed_conditional_params(Sigma, n, W)
-        if verbose:
-            print(f"  Using windowed conditioning (max_cond_dims={W}) for {n} processes")
-    else:
-        sigma2_cond, cond_weights = precompute_conditional_params(Sigma, n)
-        n_cond_dims = {i: i for i in range(n)}
+    # Precompute conditional parameters
+    sigma2_cond, cond_weights = precompute_conditional_params(Sigma, n)
 
     if verbose:
         print(f"  Conditional variances: {[sigma2_cond[i] for i in range(n)]}")
         for i in range(1, n):
-            print(f"  Conditional weights[{i}] (len={len(cond_weights[i])}): {cond_weights[i]}")
+            print(f"  Conditional weights[{i}]: {cond_weights[i]}")
 
     # Compute adaptive targets at the operating point
     # surrogate viene passato via kwargs per supportare target dinamici (ST)
@@ -732,13 +666,9 @@ def backward_induction(
     V_functions = {}
 
     # Step terminale (i = n-1): closed-form
-    # With windowing, cond_weights[terminal_idx] has length min(n-1, W)
-    # so bellman_terminal naturally creates a grid of that many dims.
     terminal_idx = n - 1
     if verbose:
-        n_term_dims = n_cond_dims[terminal_idx]
-        print(f"\n  [Step {n-1}/{n-1}] Terminal step (process '{process_names[terminal_idx]}') "
-              f"— closed-form (eps dims: {n_term_dims})...")
+        print(f"\n  [Step {n-1}/{n-1}] Terminal step (process '{process_names[terminal_idx]}') — closed-form...")
     t0 = time.time()
     V_prev = bellman_terminal(
         grid_R, grid_eps, manifolds[terminal_idx],
@@ -751,12 +681,8 @@ def backward_induction(
 
     # Steps intermedi (i = n-2 ... 1): MC
     for i in range(n - 2, 0, -1):
-        n_state_i = min(i, W) if use_windowing else i
-        drop = use_windowing and (i >= W)
         if verbose:
-            print(f"\n  [Step {i}/{n-1}] Process '{process_names[i]}' — Monte Carlo "
-                  f"(K={cfg.K_mc}, state dims: {n_state_i}"
-                  f"{', drop_oldest' if drop else ''})...")
+            print(f"\n  [Step {i}/{n-1}] Process '{process_names[i]}' — Monte Carlo (K={cfg.K_mc})...")
         t0 = time.time()
         V_prev = bellman_non_terminal(
             grid_R, grid_eps, V_prev, manifolds[i],
@@ -764,8 +690,6 @@ def backward_induction(
             sigma2_cond[i], cond_weights[i],
             process_idx=i, K=cfg.K_mc,
             use_antithetic=cfg.use_antithetic, rng=rng,
-            n_state_current=n_state_i,
-            drop_oldest=drop,
         )
         V_functions[i] = V_prev
         if verbose:
@@ -841,13 +765,10 @@ def forward_simulation(
     eps_lo, eps_hi = grid_eps[0], grid_eps[-1]
 
     # Build interpolators for each V function (for policy lookup)
-    # With windowing, V_i may have fewer eps dims than vi_idx — infer from shape
     interp_V = {}
-    n_eps_dims_V = {}  # track actual eps dims per V function
     for vi_idx, V_arr in V_functions.items():
-        n_eps = len(V_arr.shape) - 1  # actual number of eps dims
-        n_eps_dims_V[vi_idx] = n_eps
-        grid_axes = [grid_R] + [grid_eps] * n_eps
+        # V_i ha dimensione (N_R, N_eps, ..., N_eps) con vi_idx assi eps
+        grid_axes = [grid_R] + [grid_eps] * vi_idx
         interp_V[vi_idx] = RegularGridInterpolator(
             tuple(grid_axes), V_arr,
             method='linear', bounds_error=False, fill_value=None,
@@ -882,13 +803,9 @@ def forward_simulation(
             R_flat = R_c.ravel()                          # (M*N,)
             eps_i_flat = np.tile(eps_i_c, M_i)            # (M*N,)
 
-            # Build interpolation columns: [R, eps_{recent...}, eps_i]
-            # With windowing, V_{i+1} may have fewer eps dims than i+1
-            n_eps_v = n_eps_dims_V[i + 1]  # actual eps dims in V_{i+1}
-            n_from_hist = n_eps_v - 1  # how many from history (rest is eps_i)
-            hist_start = eps_hist.shape[1] - n_from_hist
+            # Costruisci colonne interpolazione: [R, eps_0, eps_1, ..., eps_i]
             cols = [R_flat]
-            for h in range(hist_start, eps_hist.shape[1]):
+            for h in range(eps_hist.shape[1]):
                 cols.append(np.tile(np.clip(eps_hist[:, h], eps_lo, eps_hi), M_i))
             cols.append(eps_i_flat)
             points = np.column_stack(cols)

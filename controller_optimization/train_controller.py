@@ -1369,19 +1369,16 @@ def main(config=None):
 
                 # ── Bellman backward-induction L_min ──────────────────────
                 try:
-                    n_procs = len(process_chain.process_names)
                     bellman_cfg = BellmanConfig(
                         N_R=50, N_eps=8, K_mc=500, M_actions=50,
                         N_forward=5000, use_antithetic=True,
                     )
-                    # Memory estimate: terminal step uses min(n-1, max_cond_dims) eps dims
-                    _n_eps_dims = min(n_procs - 1, bellman_cfg.max_cond_dims)
-                    _mem_elements = bellman_cfg.N_R * bellman_cfg.N_eps**_n_eps_dims * bellman_cfg.M_actions
+                    # Memory estimate for terminal step: (N_R, N_eps^3, M_actions)
+                    _mem_elements = bellman_cfg.N_R * bellman_cfg.N_eps**3 * bellman_cfg.M_actions
                     _mem_mb = _mem_elements * 8 / 1e6
                     print(f"\n  ── Bellman backward-induction L_min ──")
                     print(f"  Grid config: N_R={bellman_cfg.N_R}, N_eps={bellman_cfg.N_eps}, "
-                          f"M_actions={bellman_cfg.M_actions}, K_mc={bellman_cfg.K_mc}, "
-                          f"max_cond_dims={bellman_cfg.max_cond_dims} (n_procs={n_procs})")
+                          f"M_actions={bellman_cfg.M_actions}, K_mc={bellman_cfg.K_mc}")
                     print(f"  Terminal step memory estimate: {_mem_mb:.1f} MB "
                           f"({_mem_elements:,} elements)")
                     print(f"  Forward validation: N={bellman_cfg.N_forward}, "
@@ -1448,10 +1445,8 @@ def main(config=None):
                     print(f"  Error message: {e}")
                     print(f"  {'─'*50}")
                     print(f"  Grid config was: N_R={bellman_cfg.N_R}, N_eps={bellman_cfg.N_eps}, "
-                          f"M_actions={bellman_cfg.M_actions}, K_mc={bellman_cfg.K_mc}, "
-                          f"max_cond_dims={bellman_cfg.max_cond_dims}")
-                    _n_ed = min(n_procs - 1, bellman_cfg.max_cond_dims)
-                    _mem_est = bellman_cfg.N_R * bellman_cfg.N_eps**_n_ed * bellman_cfg.M_actions * 8 / 1e6
+                          f"M_actions={bellman_cfg.M_actions}, K_mc={bellman_cfg.K_mc}")
+                    _mem_est = bellman_cfg.N_R * bellman_cfg.N_eps**3 * bellman_cfg.M_actions * 8 / 1e6
                     print(f"  Terminal step memory estimate: {_mem_est:.1f} MB")
                     if isinstance(e, MemoryError):
                         print(f"  HINT: Reduce N_eps or M_actions to lower memory usage.")
