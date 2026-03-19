@@ -65,8 +65,10 @@ def plot_training_history(train_losses, val_losses, train_mse=None, val_mse=None
 
     if n_plots == 1:
         axes = [axes]
+    else:
+        axes = list(axes)
 
-    for _ax in axes if isinstance(axes, list) else [axes]:
+    for _ax in axes:
         _ax.spines['top'].set_visible(False)
         _ax.spines['right'].set_visible(False)
 
