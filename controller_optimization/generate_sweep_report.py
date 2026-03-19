@@ -25,32 +25,37 @@ from matplotlib.backends.backend_pdf import PdfPages
 
 def apply_plot_style():
     plt.rcParams.update({
-        'font.family':        'DejaVu Sans',
-        'font.size':          9,
-        'axes.titlesize':     11,
-        'axes.titleweight':   'normal',
-        'axes.labelsize':     9,
-        'axes.labelweight':   'normal',
-        'axes.linewidth':     0.6,
-        'axes.spines.top':    False,
-        'axes.spines.right':  False,
-        'axes.grid':          True,
-        'grid.color':         '#AAAAAA',
-        'grid.linewidth':     0.4,
-        'grid.alpha':         0.4,
-        'xtick.labelsize':    8,
-        'ytick.labelsize':    8,
-        'xtick.major.width':  0.5,
-        'ytick.major.width':  0.5,
-        'legend.fontsize':    8,
-        'legend.framealpha':  0.7,
-        'legend.edgecolor':   '#CCCCCC',
-        'legend.fancybox':    False,
-        'figure.facecolor':   'white',
-        'axes.facecolor':     'white',
-        'savefig.facecolor':  'white',
-        'savefig.dpi':        150,
-        'savefig.bbox':       'tight',
+        'font.family':           'monospace',
+        'font.size':             8,
+        'axes.titlesize':        9,
+        'axes.titleweight':      'normal',
+        'axes.titlelocation':    'left',
+        'axes.labelsize':        8,
+        'axes.labelweight':      'normal',
+        'axes.linewidth':        0.5,
+        'axes.spines.top':       False,
+        'axes.spines.right':     False,
+        'axes.grid':             True,
+        'grid.color':            '#DDDDDD',
+        'grid.linewidth':        0.4,
+        'grid.alpha':            1.0,
+        'xtick.labelsize':       7.5,
+        'ytick.labelsize':       7.5,
+        'xtick.major.width':     0.4,
+        'ytick.major.width':     0.4,
+        'xtick.major.size':      3,
+        'ytick.major.size':      3,
+        'legend.fontsize':       7.5,
+        'legend.framealpha':     0.9,
+        'legend.edgecolor':      '#DDDDDD',
+        'legend.fancybox':       False,
+        'legend.borderpad':      0.4,
+        'figure.facecolor':      'white',
+        'axes.facecolor':        'white',
+        'savefig.facecolor':     'white',
+        'savefig.dpi':           150,
+        'savefig.bbox':          'tight',
+        'lines.linewidth':       1.4,
     })
 
 # ReportLab imports for PDF generation
@@ -141,6 +146,10 @@ def plot_target_baseline_actual_scatter(df: pd.DataFrame, save_path: Path):
     apply_plot_style()
     fig, axes = plt.subplots(1, 2, figsize=(16, 7))
 
+    for _ax in axes.flatten():
+        _ax.spines['top'].set_visible(False)
+        _ax.spines['right'].set_visible(False)
+
     F_star = df['F_star_train'].values
     F_baseline = df['F_baseline_train'].values
     F_actual = df['F_actual_train'].values
@@ -229,6 +238,10 @@ def plot_improvement_distribution(df: pd.DataFrame, save_path: Path):
     apply_plot_style()
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
+    for _ax in axes.flatten():
+        _ax.spines['top'].set_visible(False)
+        _ax.spines['right'].set_visible(False)
+
     # Calculate gaps (F* - F, smaller = better)
     gap_baseline_train = df['F_star_train'] - df['F_baseline_train']
     gap_actual_train = df['F_star_train'] - df['F_actual_train']
@@ -284,6 +297,8 @@ def plot_seed_heatmap(df: pd.DataFrame, save_path: Path):
     """
     apply_plot_style()
     fig, ax = plt.subplots(figsize=(10, 8))
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
 
     # Calculate gap reduction
     df = df.copy()
@@ -338,6 +353,8 @@ def plot_f_values_boxplot(df: pd.DataFrame, save_path: Path):
     """Create boxplot comparing gap distributions: F* - F' (baseline) vs F* - F (controller)."""
     apply_plot_style()
     fig, ax = plt.subplots(figsize=(10, 6))
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
 
     # Calculate gaps (smaller = better, closer to target)
     gap_baseline = df['F_star_train'] - df['F_baseline_train']

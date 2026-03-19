@@ -12,32 +12,37 @@ from pathlib import Path
 
 def apply_plot_style():
     plt.rcParams.update({
-        'font.family':        'DejaVu Sans',
-        'font.size':          9,
-        'axes.titlesize':     11,
-        'axes.titleweight':   'normal',
-        'axes.labelsize':     9,
-        'axes.labelweight':   'normal',
-        'axes.linewidth':     0.6,
-        'axes.spines.top':    False,
-        'axes.spines.right':  False,
-        'axes.grid':          True,
-        'grid.color':         '#AAAAAA',
-        'grid.linewidth':     0.4,
-        'grid.alpha':         0.4,
-        'xtick.labelsize':    8,
-        'ytick.labelsize':    8,
-        'xtick.major.width':  0.5,
-        'ytick.major.width':  0.5,
-        'legend.fontsize':    8,
-        'legend.framealpha':  0.7,
-        'legend.edgecolor':   '#CCCCCC',
-        'legend.fancybox':    False,
-        'figure.facecolor':   'white',
-        'axes.facecolor':     'white',
-        'savefig.facecolor':  'white',
-        'savefig.dpi':        150,
-        'savefig.bbox':       'tight',
+        'font.family':           'monospace',
+        'font.size':             8,
+        'axes.titlesize':        9,
+        'axes.titleweight':      'normal',
+        'axes.titlelocation':    'left',
+        'axes.labelsize':        8,
+        'axes.labelweight':      'normal',
+        'axes.linewidth':        0.5,
+        'axes.spines.top':       False,
+        'axes.spines.right':     False,
+        'axes.grid':             True,
+        'grid.color':            '#DDDDDD',
+        'grid.linewidth':        0.4,
+        'grid.alpha':            1.0,
+        'xtick.labelsize':       7.5,
+        'ytick.labelsize':       7.5,
+        'xtick.major.width':     0.4,
+        'ytick.major.width':     0.4,
+        'xtick.major.size':      3,
+        'ytick.major.size':      3,
+        'legend.fontsize':       7.5,
+        'legend.framealpha':     0.9,
+        'legend.edgecolor':      '#DDDDDD',
+        'legend.fancybox':       False,
+        'legend.borderpad':      0.4,
+        'figure.facecolor':      'white',
+        'axes.facecolor':        'white',
+        'savefig.facecolor':     'white',
+        'savefig.dpi':           150,
+        'savefig.bbox':          'tight',
+        'lines.linewidth':       1.4,
     })
 
 
@@ -60,6 +65,10 @@ def plot_training_history(train_losses, val_losses, train_mse=None, val_mse=None
 
     if n_plots == 1:
         axes = [axes]
+
+    for _ax in axes if isinstance(axes, list) else [axes]:
+        _ax.spines['top'].set_visible(False)
+        _ax.spines['right'].set_visible(False)
 
     # Plot NLL loss
     axes[0].plot(train_losses, label='Train NLL Loss', linewidth=2)
@@ -144,6 +153,10 @@ def plot_predictions_with_uncertainty(y_true, y_pred_mean, y_pred_variance,
     if n_outputs == 1:
         axes = np.array([axes])
     axes = axes.flatten()
+
+    for _ax in axes:
+        _ax.spines['top'].set_visible(False)
+        _ax.spines['right'].set_visible(False)
 
     from scipy import stats
     z_score = stats.norm.ppf((1 + confidence) / 2)
@@ -248,6 +261,10 @@ def plot_scatter_with_uncertainty(y_true, y_pred_mean, y_pred_variance,
     if n_outputs == 1:
         axes = np.array([axes])
     axes = axes.flatten()
+
+    for _ax in axes:
+        _ax.spines['top'].set_visible(False)
+        _ax.spines['right'].set_visible(False)
 
     for i, name in enumerate(output_names):
         ax = axes[i]

@@ -9,32 +9,37 @@ from pathlib import Path
 
 def apply_plot_style():
     plt.rcParams.update({
-        'font.family':        'DejaVu Sans',
-        'font.size':          9,
-        'axes.titlesize':     11,
-        'axes.titleweight':   'normal',
-        'axes.labelsize':     9,
-        'axes.labelweight':   'normal',
-        'axes.linewidth':     0.6,
-        'axes.spines.top':    False,
-        'axes.spines.right':  False,
-        'axes.grid':          True,
-        'grid.color':         '#AAAAAA',
-        'grid.linewidth':     0.4,
-        'grid.alpha':         0.4,
-        'xtick.labelsize':    8,
-        'ytick.labelsize':    8,
-        'xtick.major.width':  0.5,
-        'ytick.major.width':  0.5,
-        'legend.fontsize':    8,
-        'legend.framealpha':  0.7,
-        'legend.edgecolor':   '#CCCCCC',
-        'legend.fancybox':    False,
-        'figure.facecolor':   'white',
-        'axes.facecolor':     'white',
-        'savefig.facecolor':  'white',
-        'savefig.dpi':        150,
-        'savefig.bbox':       'tight',
+        'font.family':           'monospace',
+        'font.size':             8,
+        'axes.titlesize':        9,
+        'axes.titleweight':      'normal',
+        'axes.titlelocation':    'left',
+        'axes.labelsize':        8,
+        'axes.labelweight':      'normal',
+        'axes.linewidth':        0.5,
+        'axes.spines.top':       False,
+        'axes.spines.right':     False,
+        'axes.grid':             True,
+        'grid.color':            '#DDDDDD',
+        'grid.linewidth':        0.4,
+        'grid.alpha':            1.0,
+        'xtick.labelsize':       7.5,
+        'ytick.labelsize':       7.5,
+        'xtick.major.width':     0.4,
+        'ytick.major.width':     0.4,
+        'xtick.major.size':      3,
+        'ytick.major.size':      3,
+        'legend.fontsize':       7.5,
+        'legend.framealpha':     0.9,
+        'legend.edgecolor':      '#DDDDDD',
+        'legend.fancybox':       False,
+        'legend.borderpad':      0.4,
+        'figure.facecolor':      'white',
+        'axes.facecolor':        'white',
+        'savefig.facecolor':     'white',
+        'savefig.dpi':           150,
+        'savefig.bbox':          'tight',
+        'lines.linewidth':       1.4,
     })
 
 
@@ -56,6 +61,10 @@ def plot_training_history(history, save_path=None):
 
     # Create figure with 2 rows: combined losses/weights on top, reliability on bottom
     fig, axes = plt.subplots(2, 1, figsize=(14, 10))
+
+    for _ax in axes.flatten():
+        _ax.spines['top'].set_visible(False)
+        _ax.spines['right'].set_visible(False)
 
     # ============ TOP PLOT: Combined Losses and Weights ============
     ax_loss = axes[0]
@@ -367,6 +376,8 @@ def plot_target_vs_actual_scatter(F_star_per_scenario, F_baseline_per_scenario, 
     F_actual_arr = np.atleast_1d(F_actual_per_scenario)
 
     fig, ax = plt.subplots(figsize=(12, 8))
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
 
     # Scatter plots
     # Baseline points (red)
@@ -463,6 +474,8 @@ def plot_gap_distribution(F_star_per_scenario, F_actual_per_scenario, save_path=
     gaps = F_star_arr - F_actual_arr
 
     fig, ax = plt.subplots(figsize=(12, 7))
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
 
     # Histogram
     n_scenarios = len(gaps)
@@ -815,6 +828,10 @@ def plot_loss_chart(history, save_path=None):
     n_plots = 2  # Total loss and Reliability loss
 
     fig, axes = plt.subplots(n_plots, 1, figsize=(12, 5 * n_plots))
+
+    for _ax in (axes.flatten() if hasattr(axes, 'flatten') else [axes]):
+        _ax.spines['top'].set_visible(False)
+        _ax.spines['right'].set_visible(False)
 
     epochs = range(1, len(history['total_loss']) + 1)
 
