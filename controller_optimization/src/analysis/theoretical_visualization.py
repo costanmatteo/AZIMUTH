@@ -11,6 +11,37 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 
 
+def apply_plot_style():
+    plt.rcParams.update({
+        'font.family':        'DejaVu Sans',
+        'font.size':          9,
+        'axes.titlesize':     11,
+        'axes.titleweight':   'normal',
+        'axes.labelsize':     9,
+        'axes.labelweight':   'normal',
+        'axes.linewidth':     0.6,
+        'axes.spines.top':    False,
+        'axes.spines.right':  False,
+        'axes.grid':          True,
+        'grid.color':         '#AAAAAA',
+        'grid.linewidth':     0.4,
+        'grid.alpha':         0.4,
+        'xtick.labelsize':    8,
+        'ytick.labelsize':    8,
+        'xtick.major.width':  0.5,
+        'ytick.major.width':  0.5,
+        'legend.fontsize':    8,
+        'legend.framealpha':  0.7,
+        'legend.edgecolor':   '#CCCCCC',
+        'legend.fancybox':    False,
+        'figure.facecolor':   'white',
+        'axes.facecolor':     'white',
+        'savefig.facecolor':  'white',
+        'savefig.dpi':        150,
+        'savefig.bbox':       'tight',
+    })
+
+
 def plot_loss_vs_L_min(
     epochs: List[int],
     observed_loss: List[float],
@@ -41,6 +72,7 @@ def plot_loss_vs_L_min(
     Returns:
         Matplotlib Figure object
     """
+    apply_plot_style()
     fig, ax = plt.subplots(figsize=figsize)
 
     epochs = np.array(epochs)
@@ -127,6 +159,7 @@ def plot_efficiency_over_time(
     Returns:
         Matplotlib Figure object
     """
+    apply_plot_style()
     fig, ax = plt.subplots(figsize=figsize)
 
     epochs = np.array(epochs)
@@ -228,6 +261,7 @@ def plot_loss_decomposition(
     Returns:
         Matplotlib Figure object
     """
+    apply_plot_style()
     fig, ax = plt.subplots(figsize=figsize)
 
     # Data
@@ -247,7 +281,7 @@ def plot_loss_decomposition(
             xytext=(0, 3),
             textcoords="offset points",
             ha='center', va='bottom',
-            fontsize=11, fontweight='bold'
+            fontsize=11
         )
 
     # Compute percentages
@@ -279,7 +313,8 @@ def plot_loss_decomposition(
         f'Total Loss = {total:.4f}\n'
         f'Efficiency = {100*L_min/total:.1f}%' if total > 0 else ''
     )
-    props = dict(boxstyle='round', facecolor='wheat', alpha=0.5)
+    props = dict(boxstyle='square,pad=0.3', facecolor='white',
+                 edgecolor='#CCCCCC', linewidth=0.5, alpha=0.9)
     ax.text(0.02, 0.98, textstr, transform=ax.transAxes, fontsize=9,
             verticalalignment='top', bbox=props)
 
@@ -317,6 +352,7 @@ def plot_loss_scatter(
     Returns:
         Matplotlib Figure object
     """
+    apply_plot_style()
     fig, ax = plt.subplots(figsize=figsize)
 
     observed = np.array(observed_loss)
@@ -368,7 +404,8 @@ def plot_loss_scatter(
         fontsize=9,
         verticalalignment='bottom',
         horizontalalignment='right',
-        bbox=dict(boxstyle='round', facecolor='white', alpha=0.8)
+        bbox=dict(boxstyle='square,pad=0.3', facecolor='white',
+                  edgecolor='#CCCCCC', linewidth=0.5, alpha=0.9)
     )
 
     plt.tight_layout()
@@ -464,6 +501,7 @@ def create_summary_figure(
     Returns:
         Matplotlib Figure object
     """
+    apply_plot_style()
     fig = plt.figure(figsize=figsize)
 
     epochs = tracker_data['epochs']

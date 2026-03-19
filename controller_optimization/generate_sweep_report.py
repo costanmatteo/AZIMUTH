@@ -22,6 +22,37 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from matplotlib.backends.backend_pdf import PdfPages
 
+
+def apply_plot_style():
+    plt.rcParams.update({
+        'font.family':        'DejaVu Sans',
+        'font.size':          9,
+        'axes.titlesize':     11,
+        'axes.titleweight':   'normal',
+        'axes.labelsize':     9,
+        'axes.labelweight':   'normal',
+        'axes.linewidth':     0.6,
+        'axes.spines.top':    False,
+        'axes.spines.right':  False,
+        'axes.grid':          True,
+        'grid.color':         '#AAAAAA',
+        'grid.linewidth':     0.4,
+        'grid.alpha':         0.4,
+        'xtick.labelsize':    8,
+        'ytick.labelsize':    8,
+        'xtick.major.width':  0.5,
+        'ytick.major.width':  0.5,
+        'legend.fontsize':    8,
+        'legend.framealpha':  0.7,
+        'legend.edgecolor':   '#CCCCCC',
+        'legend.fancybox':    False,
+        'figure.facecolor':   'white',
+        'axes.facecolor':     'white',
+        'savefig.facecolor':  'white',
+        'savefig.dpi':        150,
+        'savefig.bbox':       'tight',
+    })
+
 # ReportLab imports for PDF generation
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -107,6 +138,7 @@ def plot_target_baseline_actual_scatter(df: pd.DataFrame, save_path: Path):
     - Right: F* vs F_actual (blue)
     Both have diagonal line for perfect match.
     """
+    apply_plot_style()
     fig, axes = plt.subplots(1, 2, figsize=(16, 7))
 
     F_star = df['F_star_train'].values
@@ -138,9 +170,9 @@ def plot_target_baseline_actual_scatter(df: pd.DataFrame, save_path: Path):
     ax1.plot([min_val - margin, max_val + margin],
              [min_val - margin, max_val + margin],
              'k--', linewidth=2, alpha=0.5, label='Perfect (F = F*)')
-    ax1.set_xlabel('F\' (Baseline Reliability)', fontsize=12, fontweight='bold')
-    ax1.set_ylabel('F* (Target Reliability)', fontsize=12, fontweight='bold')
-    ax1.set_title('Baseline (No Controller)', fontsize=14, fontweight='bold', color='darkred')
+    ax1.set_xlabel('F\' (Baseline Reliability)')
+    ax1.set_ylabel('F* (Target Reliability)')
+    ax1.set_title('Baseline (No Controller)', color='darkred')
     ax1.set_xlim(min_val - margin, max_val + margin)
     ax1.set_ylim(min_val - margin, max_val + margin)
     ax1.grid(True, alpha=0.3)
@@ -150,7 +182,8 @@ def plot_target_baseline_actual_scatter(df: pd.DataFrame, save_path: Path):
     # Stats for baseline
     stats1 = f'Gap range: [{gap_baseline.min():.4f}, {gap_baseline.max():.4f}]\nMedian gap: {np.median(gap_baseline):.4f}'
     ax1.text(0.02, 0.98, stats1, transform=ax1.transAxes, fontsize=10,
-             verticalalignment='top', bbox=dict(boxstyle='round', facecolor='mistyrose', alpha=0.8))
+             verticalalignment='top', bbox=dict(boxstyle='square,pad=0.3', facecolor='white',
+                                                      edgecolor='#CCCCCC', linewidth=0.5, alpha=0.9))
 
     # RIGHT PLOT: Controller
     ax2 = axes[1]
@@ -161,9 +194,9 @@ def plot_target_baseline_actual_scatter(df: pd.DataFrame, save_path: Path):
     ax2.plot([min_val - margin, max_val + margin],
              [min_val - margin, max_val + margin],
              'k--', linewidth=2, alpha=0.5, label='Perfect (F = F*)')
-    ax2.set_xlabel('F (Controller Reliability)', fontsize=12, fontweight='bold')
-    ax2.set_ylabel('F* (Target Reliability)', fontsize=12, fontweight='bold')
-    ax2.set_title('Controller', fontsize=14, fontweight='bold', color='darkblue')
+    ax2.set_xlabel('F (Controller Reliability)')
+    ax2.set_ylabel('F* (Target Reliability)')
+    ax2.set_title('Controller', color='darkblue')
     ax2.set_xlim(min_val - margin, max_val + margin)
     ax2.set_ylim(min_val - margin, max_val + margin)
     ax2.grid(True, alpha=0.3)
@@ -173,11 +206,12 @@ def plot_target_baseline_actual_scatter(df: pd.DataFrame, save_path: Path):
     # Stats for controller
     stats2 = f'Gap range: [{gap_actual.min():.4f}, {gap_actual.max():.4f}]\nMedian gap: {np.median(gap_actual):.4f}'
     ax2.text(0.02, 0.98, stats2, transform=ax2.transAxes, fontsize=10,
-             verticalalignment='top', bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
+             verticalalignment='top', bbox=dict(boxstyle='square,pad=0.3', facecolor='white',
+                                                      edgecolor='#CCCCCC', linewidth=0.5, alpha=0.9))
 
     # Overall title
     fig.suptitle(f'Target vs Reliability Comparison (n={n_runs}, Controller wins: {controller_wins}/{n_runs} = {100*controller_wins/n_runs:.1f}%)',
-                 fontsize=14, fontweight='bold', y=1.02)
+                 fontsize=11, y=1.02)
 
     plt.tight_layout()
     plt.savefig(save_path, dpi=150, bbox_inches='tight')
@@ -192,6 +226,7 @@ def plot_improvement_distribution(df: pd.DataFrame, save_path: Path):
 
     Shows how close the controller gets to the target compared to baseline.
     """
+    apply_plot_style()
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
     # Calculate gaps (F* - F, smaller = better)
@@ -247,6 +282,7 @@ def plot_seed_heatmap(df: pd.DataFrame, save_path: Path):
     Positive = controller better (green)
     Negative = baseline better (red)
     """
+    apply_plot_style()
     fig, ax = plt.subplots(figsize=(10, 8))
 
     # Calculate gap reduction
@@ -289,7 +325,7 @@ def plot_seed_heatmap(df: pd.DataFrame, save_path: Path):
 
     ax.set_xlabel('seed_target', fontsize=12)
     ax.set_ylabel('seed_baseline', fontsize=12)
-    ax.set_title('Gap Reduction by Seed Combination\n(Green = Controller Better, Red = Baseline Better)', fontsize=14)
+    ax.set_title('Gap Reduction by Seed Combination\n(Green = Controller Better, Red = Baseline Better)')
 
     plt.tight_layout()
     plt.savefig(save_path, dpi=150, bbox_inches='tight')
@@ -300,6 +336,7 @@ def plot_seed_heatmap(df: pd.DataFrame, save_path: Path):
 
 def plot_f_values_boxplot(df: pd.DataFrame, save_path: Path):
     """Create boxplot comparing gap distributions: F* - F' (baseline) vs F* - F (controller)."""
+    apply_plot_style()
     fig, ax = plt.subplots(figsize=(10, 6))
 
     # Calculate gaps (smaller = better, closer to target)

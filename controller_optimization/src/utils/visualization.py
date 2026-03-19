@@ -7,6 +7,37 @@ import numpy as np
 from pathlib import Path
 
 
+def apply_plot_style():
+    plt.rcParams.update({
+        'font.family':        'DejaVu Sans',
+        'font.size':          9,
+        'axes.titlesize':     11,
+        'axes.titleweight':   'normal',
+        'axes.labelsize':     9,
+        'axes.labelweight':   'normal',
+        'axes.linewidth':     0.6,
+        'axes.spines.top':    False,
+        'axes.spines.right':  False,
+        'axes.grid':          True,
+        'grid.color':         '#AAAAAA',
+        'grid.linewidth':     0.4,
+        'grid.alpha':         0.4,
+        'xtick.labelsize':    8,
+        'ytick.labelsize':    8,
+        'xtick.major.width':  0.5,
+        'ytick.major.width':  0.5,
+        'legend.fontsize':    8,
+        'legend.framealpha':  0.7,
+        'legend.edgecolor':   '#CCCCCC',
+        'legend.fancybox':    False,
+        'figure.facecolor':   'white',
+        'axes.facecolor':     'white',
+        'savefig.facecolor':  'white',
+        'savefig.dpi':        150,
+        'savefig.bbox':       'tight',
+    })
+
+
 def plot_training_history(history, save_path=None):
     """
     Plot training history with combined loss/weight graph and separate reliability graph.
@@ -19,6 +50,7 @@ def plot_training_history(history, save_path=None):
         history (dict): Training history
         save_path (str): Path to save figure
     """
+    apply_plot_style()
     # Check if curriculum learning weights are available
     has_curriculum_weights = 'lambda_bc' in history and 'reliability_weight' in history
 
@@ -76,7 +108,7 @@ def plot_training_history(history, save_path=None):
 
     # Combined legend
     ax_loss.legend(lines, labels, loc='upper right', fontsize=10, framealpha=0.9)
-    ax_loss.set_title('Training Losses and Weights', fontsize=14, fontweight='bold')
+    ax_loss.set_title('Training Losses and Weights')
 
     # ============ BOTTOM PLOT: Reliability Evolution ============
     ax_rel = axes[1]
@@ -98,7 +130,7 @@ def plot_training_history(history, save_path=None):
 
     ax_rel.set_xlabel('Epoch', fontsize=12)
     ax_rel.set_ylabel('Reliability F', fontsize=12)
-    ax_rel.set_title('Reliability Evolution', fontsize=14, fontweight='bold')
+    ax_rel.set_title('Reliability Evolution')
     ax_rel.legend(loc='best', fontsize=10)
     ax_rel.grid(True, alpha=0.3)
 
@@ -329,6 +361,7 @@ def plot_target_vs_actual_scatter(F_star_per_scenario, F_baseline_per_scenario, 
         F_actual_per_scenario (array-like): Actual reliability for each scenario
         save_path (str): Path to save figure
     """
+    apply_plot_style()
     F_star_arr = np.atleast_1d(F_star_per_scenario)
     F_baseline_arr = np.atleast_1d(F_baseline_per_scenario)
     F_actual_arr = np.atleast_1d(F_actual_per_scenario)
@@ -367,9 +400,9 @@ def plot_target_vs_actual_scatter(F_star_per_scenario, F_baseline_per_scenario, 
             'k--', linewidth=2, label='Perfect Match (y = x)', alpha=0.5)
 
     # Axis labels and title
-    ax.set_xlabel('F (Reliability)', fontsize=14, fontweight='bold')
-    ax.set_ylabel('F_star (Target Reliability)', fontsize=14, fontweight='bold')
-    ax.set_title('Target vs Baseline & Controller Reliability', fontsize=16, fontweight='bold')
+    ax.set_xlabel('F (Reliability)')
+    ax.set_ylabel('F_star (Target Reliability)')
+    ax.set_title('Target vs Baseline & Controller Reliability')
 
     # Grid and legend
     ax.grid(True, alpha=0.3)
@@ -394,7 +427,8 @@ def plot_target_vs_actual_scatter(F_star_per_scenario, F_baseline_per_scenario, 
             transform=ax.transAxes,
             fontsize=10,
             verticalalignment='top',
-            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.7))
+            bbox=dict(boxstyle='square,pad=0.3', facecolor='white',
+                      edgecolor='#CCCCCC', linewidth=0.5, alpha=0.9))
 
     plt.tight_layout()
 
@@ -421,6 +455,7 @@ def plot_gap_distribution(F_star_per_scenario, F_actual_per_scenario, save_path=
         F_actual_per_scenario (array-like): Actual reliability for each scenario
         save_path (str): Path to save figure
     """
+    apply_plot_style()
     F_star_arr = np.atleast_1d(F_star_per_scenario)
     F_actual_arr = np.atleast_1d(F_actual_per_scenario)
 
@@ -491,9 +526,9 @@ def plot_gap_distribution(F_star_per_scenario, F_actual_per_scenario, save_path=
                label=f'Worst: {worst_gap:.6f}')
 
     # Labels and title
-    ax.set_xlabel('Gap (F_star - F_actual)', fontsize=14, fontweight='bold')
-    ax.set_ylabel('Number of Scenarios', fontsize=14, fontweight='bold')
-    ax.set_title('Distribution of Target-Actual Gap', fontsize=16, fontweight='bold')
+    ax.set_xlabel('Gap (F_star - F_actual)')
+    ax.set_ylabel('Number of Scenarios')
+    ax.set_title('Distribution of Target-Actual Gap')
     ax.legend(loc='upper right', fontsize=11)
     ax.grid(True, axis='y', alpha=0.3)
 
@@ -510,7 +545,8 @@ def plot_gap_distribution(F_star_per_scenario, F_actual_per_scenario, save_path=
             fontsize=10,
             verticalalignment='top',
             horizontalalignment='right',
-            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.7))
+            bbox=dict(boxstyle='square,pad=0.3', facecolor='white',
+                      edgecolor='#CCCCCC', linewidth=0.5, alpha=0.9))
 
     plt.tight_layout()
 
@@ -770,6 +806,7 @@ def plot_loss_chart(history, save_path=None):
             - val_within_reliability_loss: Within-scenario validation reliability loss (optional)
         save_path (str): Path to save figure
     """
+    apply_plot_style()
     # Check which validation data is available
     has_cross_val = 'val_total_loss' in history and len(history.get('val_total_loss', [])) > 0
     has_within_val = 'val_within_total_loss' in history and len(history.get('val_within_total_loss', [])) > 0
@@ -823,7 +860,7 @@ def plot_loss_chart(history, save_path=None):
 
     ax1.set_xlabel('Epoch', fontsize=12)
     ax1.set_ylabel('Total Loss', fontsize=12)
-    ax1.set_title('Training vs Validation Loss (Overfitting Detection)', fontsize=14, fontweight='bold')
+    ax1.set_title('Training vs Validation Loss (Overfitting Detection)')
     ax1.legend(loc='upper right', fontsize=9)
     ax1.grid(True, alpha=0.3)
 
@@ -850,7 +887,8 @@ def plot_loss_chart(history, save_path=None):
         ax1.text(0.02, 0.98, '\n'.join(annotation_lines),
                 transform=ax1.transAxes, fontsize=9,
                 verticalalignment='top',
-                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.7))
+                bbox=dict(boxstyle='square,pad=0.3', facecolor='white',
+                          edgecolor='#CCCCCC', linewidth=0.5, alpha=0.9))
 
     # ============ Plot 2: Reliability Loss ============
     ax2 = axes[1]
@@ -877,7 +915,7 @@ def plot_loss_chart(history, save_path=None):
 
     ax2.set_xlabel('Epoch', fontsize=12)
     ax2.set_ylabel('Reliability Loss', fontsize=12)
-    ax2.set_title('Reliability Loss: Train vs Validation', fontsize=14, fontweight='bold')
+    ax2.set_title('Reliability Loss: Train vs Validation')
     ax2.legend(loc='upper right', fontsize=9)
     ax2.grid(True, alpha=0.3)
 

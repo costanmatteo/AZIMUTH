@@ -10,6 +10,37 @@ import seaborn as sns
 from pathlib import Path
 
 
+def apply_plot_style():
+    plt.rcParams.update({
+        'font.family':        'DejaVu Sans',
+        'font.size':          9,
+        'axes.titlesize':     11,
+        'axes.titleweight':   'normal',
+        'axes.labelsize':     9,
+        'axes.labelweight':   'normal',
+        'axes.linewidth':     0.6,
+        'axes.spines.top':    False,
+        'axes.spines.right':  False,
+        'axes.grid':          True,
+        'grid.color':         '#AAAAAA',
+        'grid.linewidth':     0.4,
+        'grid.alpha':         0.4,
+        'xtick.labelsize':    8,
+        'ytick.labelsize':    8,
+        'xtick.major.width':  0.5,
+        'ytick.major.width':  0.5,
+        'legend.fontsize':    8,
+        'legend.framealpha':  0.7,
+        'legend.edgecolor':   '#CCCCCC',
+        'legend.fancybox':    False,
+        'figure.facecolor':   'white',
+        'axes.facecolor':     'white',
+        'savefig.facecolor':  'white',
+        'savefig.dpi':        150,
+        'savefig.bbox':       'tight',
+    })
+
+
 def plot_training_history(train_losses, val_losses, train_mse=None, val_mse=None,
                           save_path=None, swa_start_epoch=None):
     """
@@ -23,6 +54,7 @@ def plot_training_history(train_losses, val_losses, train_mse=None, val_mse=None
         save_path (str or Path): Path to save the plot
         swa_start_epoch (int): Epoch when SWA collection started (optional)
     """
+    apply_plot_style()
     n_plots = 2 if train_mse is not None else 1
     fig, axes = plt.subplots(1, n_plots, figsize=(6*n_plots, 5))
 
@@ -35,13 +67,13 @@ def plot_training_history(train_losses, val_losses, train_mse=None, val_mse=None
 
     # Add SWA start marker
     if swa_start_epoch is not None and swa_start_epoch < len(train_losses):
-        axes[0].axvline(x=swa_start_epoch, color='green', linestyle='--', linewidth=2,
+        axes[0].axvline(x=swa_start_epoch, color='green', linestyle='--', linewidth=1.0,
                         label=f'SWA Start (epoch {swa_start_epoch})')
 
-    axes[0].set_xlabel('Epoch', fontsize=12)
-    axes[0].set_ylabel('Negative Log-Likelihood', fontsize=12)
-    axes[0].set_title('Training History - NLL Loss', fontsize=14, fontweight='bold')
-    axes[0].legend(fontsize=10)
+    axes[0].set_xlabel('Epoch')
+    axes[0].set_ylabel('Negative Log-Likelihood')
+    axes[0].set_title('Training History - NLL Loss')
+    axes[0].legend()
     axes[0].grid(True, alpha=0.3)
 
     # Plot MSE if provided
@@ -51,13 +83,13 @@ def plot_training_history(train_losses, val_losses, train_mse=None, val_mse=None
 
         # Add SWA start marker to MSE plot too
         if swa_start_epoch is not None and swa_start_epoch < len(train_mse):
-            axes[1].axvline(x=swa_start_epoch, color='green', linestyle='--', linewidth=2,
+            axes[1].axvline(x=swa_start_epoch, color='green', linestyle='--', linewidth=1.0,
                             label=f'SWA Start (epoch {swa_start_epoch})')
 
-        axes[1].set_xlabel('Epoch', fontsize=12)
-        axes[1].set_ylabel('Mean Squared Error', fontsize=12)
-        axes[1].set_title('Training History - MSE', fontsize=14, fontweight='bold')
-        axes[1].legend(fontsize=10)
+        axes[1].set_xlabel('Epoch')
+        axes[1].set_ylabel('Mean Squared Error')
+        axes[1].set_title('Training History - MSE')
+        axes[1].legend()
         axes[1].grid(True, alpha=0.3)
 
     plt.tight_layout()
@@ -89,6 +121,7 @@ def plot_predictions_with_uncertainty(y_true, y_pred_mean, y_pred_variance,
         y_pred_aleatoric (np.ndarray): Aleatoric variance (optional, for ensemble)
         y_pred_epistemic (np.ndarray): Epistemic variance (optional, for ensemble)
     """
+    apply_plot_style()
     if len(y_true.shape) == 1:
         y_true = y_true.reshape(-1, 1)
         y_pred_mean = y_pred_mean.reshape(-1, 1)
@@ -163,10 +196,10 @@ def plot_predictions_with_uncertainty(y_true, y_pred_mean, y_pred_variance,
         ax.plot(y_p_sorted, 'b-', linewidth=2, label='Predicted Mean', alpha=0.7)
         ax.plot(y_t_sorted, 'ro', markersize=3, label='True Values', alpha=0.6)
 
-        ax.set_xlabel('Sample (sorted by prediction)', fontsize=10)
-        ax.set_ylabel('Value', fontsize=10)
-        ax.set_title(f'{name}', fontsize=12, fontweight='bold')
-        ax.legend(fontsize=8)
+        ax.set_xlabel('Sample (sorted by prediction)')
+        ax.set_ylabel('Value')
+        ax.set_title(f'{name}')
+        ax.legend()
         ax.grid(True, alpha=0.3)
 
     # Hide extra subplots
@@ -196,6 +229,7 @@ def plot_scatter_with_uncertainty(y_true, y_pred_mean, y_pred_variance,
         output_names (list): Names of outputs
         save_path (str or Path): Path to save the plot
     """
+    apply_plot_style()
     if len(y_true.shape) == 1:
         y_true = y_true.reshape(-1, 1)
         y_pred_mean = y_pred_mean.reshape(-1, 1)
@@ -232,10 +266,10 @@ def plot_scatter_with_uncertainty(y_true, y_pred_mean, y_pred_variance,
         ax.plot([min_val, max_val], [min_val, max_val],
                'r--', linewidth=1.5, label='Perfect Prediction', alpha=0.7)
 
-        ax.set_xlabel('True Values', fontsize=9)
-        ax.set_ylabel('Predicted Mean', fontsize=9)
-        ax.set_title(f'{name}', fontsize=10, fontweight='bold')
-        ax.legend(fontsize=7, loc='lower right')
+        ax.set_xlabel('True Values')
+        ax.set_ylabel('Predicted Mean')
+        ax.set_title(f'{name}')
+        ax.legend(loc='lower right')
         ax.grid(True, alpha=0.3)
 
         # Add colorbar
@@ -247,7 +281,8 @@ def plot_scatter_with_uncertainty(y_true, y_pred_mean, y_pred_variance,
         r2 = r2_score(y_t, y_p)
         ax.text(0.05, 0.95, f'R² = {r2:.4f}',
                transform=ax.transAxes,
-               bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5),
+               bbox=dict(boxstyle='square,pad=0.3', facecolor='white',
+                         edgecolor='#CCCCCC', linewidth=0.5, alpha=0.9),
                verticalalignment='top', fontsize=8)
 
     # Hide extra subplots
