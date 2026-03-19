@@ -905,121 +905,126 @@ def main(config=None):
     # Add F_star mean to history for plotting
     history['F_star'] = F_star_value
 
-    # Plot training history
-    plot_training_history(
-        history=history,
-        save_path=str(checkpoint_dir / 'training_history.png')
-    )
-
-    # Plot loss chart (train vs validation) for overfitting analysis
-    # Generate if either cross-scenario or within-scenario validation is available
-    has_cross_val = 'val_total_loss' in history and len(history.get('val_total_loss', [])) > 0
-    has_within_val = 'val_within_total_loss' in history and len(history.get('val_within_total_loss', [])) > 0
-    if has_cross_val or has_within_val:
-        print("  Generating loss chart (train vs validation)...")
-        plot_loss_chart(
+    try:
+        # Plot training history
+        plot_training_history(
             history=history,
-            save_path=str(checkpoint_dir / 'loss_chart.png')
+            save_path=str(checkpoint_dir / 'training_history.png')
         )
 
-    # Plot training progression (inputs/outputs evolution through epochs)
-    progression_file = checkpoint_dir / 'training_progression.npz'
-    if progression_file.exists():
-        print("  Generating training progression plot...")
-        plot_training_progression(
-            progression_path=str(progression_file),
-            save_path=str(checkpoint_dir / 'training_progression.png')
+        # Plot loss chart (train vs validation) for overfitting analysis
+        # Generate if either cross-scenario or within-scenario validation is available
+        has_cross_val = 'val_total_loss' in history and len(history.get('val_total_loss', [])) > 0
+        has_within_val = 'val_within_total_loss' in history and len(history.get('val_within_total_loss', [])) > 0
+        if has_cross_val or has_within_val:
+            print("  Generating loss chart (train vs validation)...")
+            plot_loss_chart(
+                history=history,
+                save_path=str(checkpoint_dir / 'loss_chart.png')
+            )
+
+        # Plot training progression (inputs/outputs evolution through epochs)
+        progression_file = checkpoint_dir / 'training_progression.npz'
+        if progression_file.exists():
+            print("  Generating training progression plot...")
+            plot_training_progression(
+                progression_path=str(progression_file),
+                save_path=str(checkpoint_dir / 'training_progression.png')
+            )
+
+        # Plot reliability comparison (using mean values)
+        plot_reliability_comparison(
+            F_star=F_star_value,
+            F_baseline=F_baseline_mean,
+            F_actual=F_actual_mean,
+            save_path=str(checkpoint_dir / 'reliability_comparison.png')
+        )
+        # Plot trajectory comparison for representative scenario
+        print("  Generating trajectory comparison plot...")
+
+        # Select representative scenario (closest to mean F_actual)
+        # F_actual_per_scenario_mean was already computed above for advanced metrics
+        actual_trajectories = eval_results['trajectories']
+        representative_idx = np.argmin(np.abs(F_actual_per_scenario_mean - F_actual_mean))
+
+        print(f"    Using scenario {representative_idx} (F_mean={F_actual_per_scenario_mean[representative_idx]:.6f}, close to global mean {F_actual_mean:.6f})")
+
+        # Extract representative scenario from target and baseline trajectories
+        target_scenario = {}
+        baseline_scenario = {}
+        for process_name, data in target_trajectory.items():
+            target_scenario[process_name] = {
+                'inputs': data['inputs'][representative_idx:representative_idx+1],
+                'outputs': data['outputs'][representative_idx:representative_idx+1]
+            }
+
+        for process_name, data in baseline_trajectory.items():
+            baseline_scenario[process_name] = {
+                'inputs': data['inputs'][representative_idx:representative_idx+1],
+                'outputs': data['outputs'][representative_idx:representative_idx+1]
+            }
+
+        # Get actual trajectory for representative scenario (already a dict of tensors)
+        # Note: actual_trajectories contains batches of eval_batch_size samples
+        # Extract only the first sample for plotting (to match target and baseline)
+        actual_scenario_batch = actual_trajectories[representative_idx]
+        actual_scenario = {}
+        for process_name, data in actual_scenario_batch.items():
+            actual_scenario[process_name] = {
+                'inputs': data['inputs'][0:1],
+                'outputs_mean': data['outputs_mean'][0:1],
+                'outputs_var': data['outputs_var'][0:1]
+            }
+
+        # Plot comparison
+        plot_trajectory_comparison(
+            target_trajectory=target_scenario,
+            baseline_trajectory=baseline_scenario,
+            actual_trajectory=actual_scenario,
+            save_path=str(checkpoint_dir / 'trajectory_comparison.png')
         )
 
-    # Plot reliability comparison (using mean values)
-    plot_reliability_comparison(
-        F_star=F_star_value,
-        F_baseline=F_baseline_mean,
-        F_actual=F_actual_mean,
-        save_path=str(checkpoint_dir / 'reliability_comparison.png')
-    )
+        print("  ✓ Basic visualizations generated")
 
-    # Plot trajectory comparison for representative scenario
-    print("  Generating trajectory comparison plot...")
+        # 8a. Generate NEW advanced plots
+        print("\n  Generating advanced plots...")
 
-    # Select representative scenario (closest to mean F_actual)
-    # F_actual_per_scenario_mean was already computed above for advanced metrics
-    actual_trajectories = eval_results['trajectories']
-    representative_idx = np.argmin(np.abs(F_actual_per_scenario_mean - F_actual_mean))
+        # Scatter plot: Target vs Baseline & Actual (train) - ALL SAMPLES
+        plot_target_vs_actual_scatter(
+            F_star_per_scenario=F_star_array,
+            F_baseline_per_scenario=F_baseline_array,
+            F_actual_per_scenario=F_actual_per_sample,
+            save_path=str(checkpoint_dir / 'target_vs_actual_scatter_train.png')
+        )
 
-    print(f"    Using scenario {representative_idx} (F_mean={F_actual_per_scenario_mean[representative_idx]:.6f}, close to global mean {F_actual_mean:.6f})")
+        # Scatter plot: Target vs Baseline & Actual (test)
+        plot_target_vs_actual_scatter(
+            F_star_per_scenario=F_star_test_array,
+            F_baseline_per_scenario=F_baseline_test_array,
+            F_actual_per_scenario=F_actual_test_array,
+            save_path=str(checkpoint_dir / 'target_vs_actual_scatter_test.png')
+        )
 
-    # Extract representative scenario from target and baseline trajectories
-    target_scenario = {}
-    baseline_scenario = {}
-    for process_name, data in target_trajectory.items():
-        target_scenario[process_name] = {
-            'inputs': data['inputs'][representative_idx:representative_idx+1],
-            'outputs': data['outputs'][representative_idx:representative_idx+1]
-        }
+        # Gap distribution (train) - ALL SAMPLES
+        plot_gap_distribution(
+            F_star_per_scenario=F_star_array,
+            F_actual_per_scenario=F_actual_per_sample,
+            save_path=str(checkpoint_dir / 'gap_distribution_train.png')
+        )
 
-    for process_name, data in baseline_trajectory.items():
-        baseline_scenario[process_name] = {
-            'inputs': data['inputs'][representative_idx:representative_idx+1],
-            'outputs': data['outputs'][representative_idx:representative_idx+1]
-        }
+        # Gap distribution (test)
+        plot_gap_distribution(
+            F_star_per_scenario=F_star_test_array,
+            F_actual_per_scenario=F_actual_test_array,
+            save_path=str(checkpoint_dir / 'gap_distribution_test.png')
+        )
 
-    # Get actual trajectory for representative scenario (already a dict of tensors)
-    # Note: actual_trajectories contains batches of eval_batch_size samples
-    # Extract only the first sample for plotting (to match target and baseline)
-    actual_scenario_batch = actual_trajectories[representative_idx]
-    actual_scenario = {}
-    for process_name, data in actual_scenario_batch.items():
-        actual_scenario[process_name] = {
-            'inputs': data['inputs'][0:1],
-            'outputs_mean': data['outputs_mean'][0:1],
-            'outputs_var': data['outputs_var'][0:1]
-        }
-
-    # Plot comparison
-    plot_trajectory_comparison(
-        target_trajectory=target_scenario,
-        baseline_trajectory=baseline_scenario,
-        actual_trajectory=actual_scenario,
-        save_path=str(checkpoint_dir / 'trajectory_comparison.png')
-    )
-
-    print("  ✓ Basic visualizations generated")
-
-    # 8a. Generate NEW advanced plots
-    print("\n  Generating advanced plots...")
-
-    # Scatter plot: Target vs Baseline & Actual (train) - ALL SAMPLES
-    plot_target_vs_actual_scatter(
-        F_star_per_scenario=F_star_array,
-        F_baseline_per_scenario=F_baseline_array,
-        F_actual_per_scenario=F_actual_per_sample,
-        save_path=str(checkpoint_dir / 'target_vs_actual_scatter_train.png')
-    )
-
-    # Scatter plot: Target vs Baseline & Actual (test)
-    plot_target_vs_actual_scatter(
-        F_star_per_scenario=F_star_test_array,
-        F_baseline_per_scenario=F_baseline_test_array,
-        F_actual_per_scenario=F_actual_test_array,
-        save_path=str(checkpoint_dir / 'target_vs_actual_scatter_test.png')
-    )
-
-    # Gap distribution (train) - ALL SAMPLES
-    plot_gap_distribution(
-        F_star_per_scenario=F_star_array,
-        F_actual_per_scenario=F_actual_per_sample,
-        save_path=str(checkpoint_dir / 'gap_distribution_train.png')
-    )
-
-    # Gap distribution (test)
-    plot_gap_distribution(
-        F_star_per_scenario=F_star_test_array,
-        F_actual_per_scenario=F_actual_test_array,
-        save_path=str(checkpoint_dir / 'gap_distribution_test.png')
-    )
-
-    print("  ✓ Advanced visualizations generated")
+        print("  ✓ Advanced visualizations generated")
+    except Exception as e:
+        print(f"  ✗ Warning: Visualization failed: {e}")
+        import traceback
+        traceback.print_exc()
+        print(f"    Continuing to save results...")
 
     # Initialize theoretical_data before the conditional block
     theoretical_data = None
