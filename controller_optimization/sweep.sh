@@ -53,8 +53,9 @@ if [ ! -f "$PARAMS_FILE" ]; then
 fi
 
 # Get the line corresponding to this array task (0-indexed)
-# Skip empty lines and comments (lines starting with #)
-LINE=$(sed -n "$((SLURM_ARRAY_TASK_ID + 1))p" "$PARAMS_FILE" | grep -v '^#' | grep -v '^$')
+# First strip comments and empty lines, THEN select by line number
+# This ensures task ID 0 maps to the first data line, not a comment
+LINE=$(grep -v '^#' "$PARAMS_FILE" | grep -v '^$' | sed -n "$((SLURM_ARRAY_TASK_ID + 1))p")
 
 if [ -z "$LINE" ]; then
     echo "ERROR: No parameters found for task ID $SLURM_ARRAY_TASK_ID"
@@ -81,7 +82,7 @@ echo "=============================================="
 echo "SLURM Job ID:     $SLURM_JOB_ID"
 echo "Array Task ID:    $SLURM_ARRAY_TASK_ID"
 echo "Node:             $SLURM_NODELIST"
-echo "GPU:              $(nvidia-smi --query-gpu=name --format=csv,noheader)"
+echo "GPU:              $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo 'N/A (CPU only)')"
 echo "=============================================="
 echo "Run name:         $RUN_NAME"
 echo "Parameters:       $PARAMS"

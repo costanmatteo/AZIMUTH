@@ -718,7 +718,7 @@ def main(config=None):
     process_chain_test = ProcessChain(
         processes_config=selected_processes,
         target_trajectory=target_trajectory_test,
-        policy_config=CONTROLLER_CONFIG['policy_generator'],
+        policy_config=cfg['policy_generator'],
         device=device
     )
 
@@ -1488,7 +1488,7 @@ def main(config=None):
         # Generate PDF report
         try:
             report_path = generate_controller_report(
-                config=CONTROLLER_CONFIG,
+                config=cfg,
                 training_history=history,
                 final_metrics=report_final_metrics,
                 process_metrics=process_metrics,
@@ -1523,7 +1523,7 @@ def main(config=None):
 
     final_results = {
         'timestamp': datetime.now().isoformat(),
-        'config': CONTROLLER_CONFIG,
+        'config': cfg,
         'dataset_mode': DATASET_MODE,
         'st_params': _actual_st_params,
         'n_processes': _actual_n_processes,
