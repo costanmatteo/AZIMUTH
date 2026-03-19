@@ -1,9 +1,11 @@
 """
-Styblinski-Tang SCM Dataset — Fully synthetic, configurable SCM datasets.
+Sigmoid-Cubic SCM Dataset — Fully synthetic, configurable SCM datasets.
 
-Builds SCMDataset instances whose structural equations are based on the
-Styblinski-Tang function arranged in a configurable chain-of-stages DAG.
-Complexity is controlled through a single STConfig dataclass.
+Builds SCMDataset instances whose structural equations use a sigmoid-cubic
+transfer function  f(x) = 1/(1+exp(-(x³-3x)))  bounded in (0, 1), arranged
+in a configurable chain-of-stages DAG.  Stage outputs are averaged and
+blended via convex combination so that every intermediate node stays in
+(0, 1).  Complexity is controlled through a single STConfig dataclass.
 
 The module provides:
     - STConfig: dataclass holding all configuration parameters.
@@ -50,10 +52,10 @@ class STConfig:
 
     # --- noise ---
     rho: float = 0.0                    # unified noise intensity [0,1]
-    sigma_max: float = 0.5             # max gaussian noise std
-    sigma_m_max: float = 0.15          # max lognormal shape
-    lambda_max: float = 0.5            # max Poisson jump rate
-    theta_jump: float = 0.3            # exponential jump scale
+    sigma_max: float = 0.20            # max gaussian noise std
+    sigma_m_max: float = 0.20          # max lognormal shape
+    lambda_max: float = 0.50           # max Poisson jump rate
+    theta_jump: float = 0.10           # exponential jump scale
 
     # --- multi-output ---
     p: int = 1                          # number of output nodes
@@ -163,8 +165,8 @@ def _assign_env_groups(n: int, me: int, overlap: float) -> List[List[int]]:
 # ---------------------------------------------------------------------------
 
 def _st_term(var: str) -> str:
-    """Single-variable ST polynomial: 0.5*(x^4 - 16*x^2 + 5*x + 40)."""
-    return f"0.5*({var}**4 - 16*{var}**2 + 5*{var} + 40)"
+    """Sigmoid of cubic: 1/(1+exp(-(x^3 - 3*x))).  Bounded in (0, 1)."""
+    return f"1/(1 + exp(-({var}**3 - 3*{var})))"
 
 
 def _build_stage_expr(
@@ -174,20 +176,36 @@ def _build_stage_expr(
     env_shifts: Optional[dict],  # {input_name: "alpha*(E1 + E2)" or None}
     eps_name: str,
 ) -> str:
-    """Build the SymPy expression string for one stage node."""
+    """Build the SymPy expression string for one stage node.
+
+    Each term is a sigmoid-cubic bounded in (0, 1).  The terms are
+    **averaged** (not summed) so the stage output without carry is also
+    in (0, 1).  When a previous stage is present the carry is blended
+    as a convex combination:
+
+        S_k = (1 - carry_beta) * mean(terms) + carry_beta * S_{k-1}
+
+    keeping S_k in (0, 1) provided carry_beta in [0, 1].
+    """
     terms = []
     for x in input_names:
         if env_shifts and x in env_shifts:
-            # shifted variable
             shifted = f"({x} + {env_shifts[x]})"
             terms.append(_st_term(shifted))
         else:
             terms.append(_st_term(x))
 
-    expr = " + ".join(terms) if terms else "0"
+    n_terms = len(terms)
+    if n_terms > 0:
+        mean_expr = f"({' + '.join(terms)})/{n_terms}"
+    else:
+        mean_expr = "0"
 
     if prev_stage is not None:
-        expr = f"{expr} + {carry_beta}*{prev_stage}"
+        # convex combination keeps output in (0, 1)
+        expr = f"(1 - {carry_beta})*{mean_expr} + {carry_beta}*{prev_stage}"
+    else:
+        expr = mean_expr
 
     # zero-coefficient noise term (required by SCM engine)
     expr = f"{expr} + 0*{eps_name}"
@@ -541,19 +559,6 @@ def _calibrate(
                 "weight": 1.0,
             }
 
-            if ki > 0:
-                prev = chain[ki - 1]
-                prev_vals = cal_df[prev].values
-                prev_var = float(np.var(prev_vals))
-                if prev_var > 0:
-                    coeff = float(np.cov(vals, prev_vals)[0, 1] / prev_var)
-                    coeff = max(-5.0, min(5.0, coeff))  # clip
-                else:
-                    coeff = 0.0
-                prev_tau = float(np.percentile(prev_vals, pct))
-                entry["adaptive_coefficients"] = {prev: coeff}
-                entry["adaptive_baselines"] = {prev: prev_tau}
-
             process_configs[stage_name] = entry
             process_order.append(stage_name)
 
@@ -569,24 +574,25 @@ def _calibrate(
             "weight": 1.0,
         }
 
-        # Adaptive from last stage
-        last_stage = chain[-1]
-        ls_vals = cal_df[last_stage].values
-        ls_var = float(np.var(ls_vals))
-        if ls_var > 0:
-            coeff = float(np.cov(y_vals, ls_vals)[0, 1] / ls_var)
-            coeff = max(-5.0, min(5.0, coeff))
-        else:
-            coeff = 0.0
-        ls_tau = float(np.percentile(ls_vals, pct))
-        y_entry["adaptive_coefficients"] = {last_stage: coeff}
-        y_entry["adaptive_baselines"] = {last_stage: ls_tau}
-
         process_configs[y_name] = y_entry
         process_order.append(y_name)
 
     ds.process_configs = process_configs
     ds.process_order = process_order
+
+    # ── Find calibration row closest to all base_targets ──────────
+    # This row will be used as the single target trajectory so that
+    # F* ≈ 1 by construction.
+    all_nodes = list(process_configs.keys())
+    scores = np.zeros(len(cal_df))
+    for node_name in all_nodes:
+        vals = cal_df[node_name].values
+        tau = process_configs[node_name]['base_target']
+        s = process_configs[node_name]['scale']
+        scores += (vals - tau) ** 2 / max(s, 1e-8)
+
+    best_idx = int(np.argmin(scores))
+    ds.cal_reference_row = {col: float(cal_df[col].iloc[best_idx]) for col in cal_df.columns}
 
 
 # ---------------------------------------------------------------------------

@@ -61,6 +61,7 @@ from controller_optimization.src.utils.metrics import (
     compute_process_wise_metrics,
     convert_trajectory_to_numpy,
     compute_worst_case_gap,
+    compute_gap_closure,
     compute_success_rate,
     compute_train_test_gap,
     compute_scenario_diversity
@@ -532,8 +533,9 @@ def main(config=None):
 
         # Get process configs from surrogate for theoretical analysis
         for proc_name, proc_config in ProTSurrogate.PROCESS_CONFIGS.items():
+            tau = proc_config.get('target', proc_config.get('base_target', 0.0))
             theoretical_tracker.process_configs[proc_name] = {
-                'tau': proc_config['target'],
+                'tau': tau,
                 's': proc_config['scale']
             }
             theoretical_tracker.process_weights[proc_name] = proc_config.get('weight', 1.0)
@@ -546,6 +548,22 @@ def main(config=None):
                 print(f"    {p}: tau={process_cfg.get('tau', 'N/A')}, s={process_cfg.get('s', 'N/A')}, weight={w}")
     else:
         print("\n[5.5/9] Theoretical analysis disabled (skipping L_min calculations)")
+
+    # 5.6. Precompute baseline reliabilities per scenario (for gap closure during training)
+    print("\n[5.6/9] Precomputing baseline reliabilities per scenario...")
+    F_baseline_pretrain = []
+    with torch.no_grad():
+        for scenario_idx in range(n_scenarios):
+            baseline_scenario = {}
+            for process_name, data in baseline_trajectory.items():
+                baseline_scenario[process_name] = {
+                    'inputs': data['inputs'][scenario_idx:scenario_idx+1],
+                    'outputs': data['outputs'][scenario_idx:scenario_idx+1]
+                }
+            baseline_scenario_tensor = convert_numpy_to_tensor(baseline_scenario, device=device)
+            F_bl = surrogate.compute_reliability(baseline_scenario_tensor).item()
+            F_baseline_pretrain.append(F_bl)
+    trainer.set_baseline_reliabilities(F_baseline_pretrain)
 
     # 6. Training
     print("\n[6/9] Starting training...")
@@ -700,7 +718,7 @@ def main(config=None):
     process_chain_test = ProcessChain(
         processes_config=selected_processes,
         target_trajectory=target_trajectory_test,
-        policy_config=CONTROLLER_CONFIG['policy_generator'],
+        policy_config=cfg['policy_generator'],
         device=device
     )
 
@@ -783,6 +801,14 @@ def main(config=None):
     print(f"\nWorst-Case Gap:")
     print(f"  Train: {worst_case_train['worst_case_gap']:.6f} (scenario {worst_case_train['worst_case_scenario_idx']})")
     print(f"  Test:  {worst_case_test['worst_case_gap']:.6f} (scenario {worst_case_test['worst_case_scenario_idx']})")
+
+    # Gap closure (train and test) - (F - F') / (F* - F') per scenario
+    gap_closure_train = compute_gap_closure(F_star_per_scenario_mean, F_baseline_per_scenario_mean, F_actual_per_scenario_mean)
+    gap_closure_test = compute_gap_closure(F_star_test_array, F_baseline_test_array, F_actual_test_array)
+
+    print(f"\nGap Closure (F-F')/(F*-F'):")
+    print(f"  Train: {gap_closure_train['gap_closure_mean']:.4f} +/- {gap_closure_train['gap_closure_std']:.4f} (worst: {gap_closure_train['gap_closure_min']:.4f} at scenario {gap_closure_train['gap_closure_min_scenario_idx']})")
+    print(f"  Test:  {gap_closure_test['gap_closure_mean']:.4f} +/- {gap_closure_test['gap_closure_std']:.4f} (worst: {gap_closure_test['gap_closure_min']:.4f} at scenario {gap_closure_test['gap_closure_min_scenario_idx']})")
 
     # Success rate (train and test) - using scenario-level aggregates
     success_rate_train = compute_success_rate(F_star_per_scenario_mean, F_actual_per_scenario_mean, threshold=success_threshold)
@@ -879,121 +905,126 @@ def main(config=None):
     # Add F_star mean to history for plotting
     history['F_star'] = F_star_value
 
-    # Plot training history
-    plot_training_history(
-        history=history,
-        save_path=str(checkpoint_dir / 'training_history.png')
-    )
-
-    # Plot loss chart (train vs validation) for overfitting analysis
-    # Generate if either cross-scenario or within-scenario validation is available
-    has_cross_val = 'val_total_loss' in history and len(history.get('val_total_loss', [])) > 0
-    has_within_val = 'val_within_total_loss' in history and len(history.get('val_within_total_loss', [])) > 0
-    if has_cross_val or has_within_val:
-        print("  Generating loss chart (train vs validation)...")
-        plot_loss_chart(
+    try:
+        # Plot training history
+        plot_training_history(
             history=history,
-            save_path=str(checkpoint_dir / 'loss_chart.png')
+            save_path=str(checkpoint_dir / 'training_history.png')
         )
 
-    # Plot training progression (inputs/outputs evolution through epochs)
-    progression_file = checkpoint_dir / 'training_progression.npz'
-    if progression_file.exists():
-        print("  Generating training progression plot...")
-        plot_training_progression(
-            progression_path=str(progression_file),
-            save_path=str(checkpoint_dir / 'training_progression.png')
+        # Plot loss chart (train vs validation) for overfitting analysis
+        # Generate if either cross-scenario or within-scenario validation is available
+        has_cross_val = 'val_total_loss' in history and len(history.get('val_total_loss', [])) > 0
+        has_within_val = 'val_within_total_loss' in history and len(history.get('val_within_total_loss', [])) > 0
+        if has_cross_val or has_within_val:
+            print("  Generating loss chart (train vs validation)...")
+            plot_loss_chart(
+                history=history,
+                save_path=str(checkpoint_dir / 'loss_chart.png')
+            )
+
+        # Plot training progression (inputs/outputs evolution through epochs)
+        progression_file = checkpoint_dir / 'training_progression.npz'
+        if progression_file.exists():
+            print("  Generating training progression plot...")
+            plot_training_progression(
+                progression_path=str(progression_file),
+                save_path=str(checkpoint_dir / 'training_progression.png')
+            )
+
+        # Plot reliability comparison (using mean values)
+        plot_reliability_comparison(
+            F_star=F_star_value,
+            F_baseline=F_baseline_mean,
+            F_actual=F_actual_mean,
+            save_path=str(checkpoint_dir / 'reliability_comparison.png')
+        )
+        # Plot trajectory comparison for representative scenario
+        print("  Generating trajectory comparison plot...")
+
+        # Select representative scenario (closest to mean F_actual)
+        # F_actual_per_scenario_mean was already computed above for advanced metrics
+        actual_trajectories = eval_results['trajectories']
+        representative_idx = np.argmin(np.abs(F_actual_per_scenario_mean - F_actual_mean))
+
+        print(f"    Using scenario {representative_idx} (F_mean={F_actual_per_scenario_mean[representative_idx]:.6f}, close to global mean {F_actual_mean:.6f})")
+
+        # Extract representative scenario from target and baseline trajectories
+        target_scenario = {}
+        baseline_scenario = {}
+        for process_name, data in target_trajectory.items():
+            target_scenario[process_name] = {
+                'inputs': data['inputs'][representative_idx:representative_idx+1],
+                'outputs': data['outputs'][representative_idx:representative_idx+1]
+            }
+
+        for process_name, data in baseline_trajectory.items():
+            baseline_scenario[process_name] = {
+                'inputs': data['inputs'][representative_idx:representative_idx+1],
+                'outputs': data['outputs'][representative_idx:representative_idx+1]
+            }
+
+        # Get actual trajectory for representative scenario (already a dict of tensors)
+        # Note: actual_trajectories contains batches of eval_batch_size samples
+        # Extract only the first sample for plotting (to match target and baseline)
+        actual_scenario_batch = actual_trajectories[representative_idx]
+        actual_scenario = {}
+        for process_name, data in actual_scenario_batch.items():
+            actual_scenario[process_name] = {
+                'inputs': data['inputs'][0:1],
+                'outputs_mean': data['outputs_mean'][0:1],
+                'outputs_var': data['outputs_var'][0:1]
+            }
+
+        # Plot comparison
+        plot_trajectory_comparison(
+            target_trajectory=target_scenario,
+            baseline_trajectory=baseline_scenario,
+            actual_trajectory=actual_scenario,
+            save_path=str(checkpoint_dir / 'trajectory_comparison.png')
         )
 
-    # Plot reliability comparison (using mean values)
-    plot_reliability_comparison(
-        F_star=F_star_value,
-        F_baseline=F_baseline_mean,
-        F_actual=F_actual_mean,
-        save_path=str(checkpoint_dir / 'reliability_comparison.png')
-    )
+        print("  ✓ Basic visualizations generated")
 
-    # Plot trajectory comparison for representative scenario
-    print("  Generating trajectory comparison plot...")
+        # 8a. Generate NEW advanced plots
+        print("\n  Generating advanced plots...")
 
-    # Select representative scenario (closest to mean F_actual)
-    # F_actual_per_scenario_mean was already computed above for advanced metrics
-    actual_trajectories = eval_results['trajectories']
-    representative_idx = np.argmin(np.abs(F_actual_per_scenario_mean - F_actual_mean))
+        # Scatter plot: Target vs Baseline & Actual (train) - ALL SAMPLES
+        plot_target_vs_actual_scatter(
+            F_star_per_scenario=F_star_array,
+            F_baseline_per_scenario=F_baseline_array,
+            F_actual_per_scenario=F_actual_per_sample,
+            save_path=str(checkpoint_dir / 'target_vs_actual_scatter_train.png')
+        )
 
-    print(f"    Using scenario {representative_idx} (F_mean={F_actual_per_scenario_mean[representative_idx]:.6f}, close to global mean {F_actual_mean:.6f})")
+        # Scatter plot: Target vs Baseline & Actual (test)
+        plot_target_vs_actual_scatter(
+            F_star_per_scenario=F_star_test_array,
+            F_baseline_per_scenario=F_baseline_test_array,
+            F_actual_per_scenario=F_actual_test_array,
+            save_path=str(checkpoint_dir / 'target_vs_actual_scatter_test.png')
+        )
 
-    # Extract representative scenario from target and baseline trajectories
-    target_scenario = {}
-    baseline_scenario = {}
-    for process_name, data in target_trajectory.items():
-        target_scenario[process_name] = {
-            'inputs': data['inputs'][representative_idx:representative_idx+1],
-            'outputs': data['outputs'][representative_idx:representative_idx+1]
-        }
+        # Gap distribution (train) - ALL SAMPLES
+        plot_gap_distribution(
+            F_star_per_scenario=F_star_array,
+            F_actual_per_scenario=F_actual_per_sample,
+            save_path=str(checkpoint_dir / 'gap_distribution_train.png')
+        )
 
-    for process_name, data in baseline_trajectory.items():
-        baseline_scenario[process_name] = {
-            'inputs': data['inputs'][representative_idx:representative_idx+1],
-            'outputs': data['outputs'][representative_idx:representative_idx+1]
-        }
+        # Gap distribution (test)
+        plot_gap_distribution(
+            F_star_per_scenario=F_star_test_array,
+            F_actual_per_scenario=F_actual_test_array,
+            save_path=str(checkpoint_dir / 'gap_distribution_test.png')
+        )
 
-    # Get actual trajectory for representative scenario (already a dict of tensors)
-    # Note: actual_trajectories contains batches of eval_batch_size samples
-    # Extract only the first sample for plotting (to match target and baseline)
-    actual_scenario_batch = actual_trajectories[representative_idx]
-    actual_scenario = {}
-    for process_name, data in actual_scenario_batch.items():
-        actual_scenario[process_name] = {
-            'inputs': data['inputs'][0:1],
-            'outputs_mean': data['outputs_mean'][0:1],
-            'outputs_var': data['outputs_var'][0:1]
-        }
-
-    # Plot comparison
-    plot_trajectory_comparison(
-        target_trajectory=target_scenario,
-        baseline_trajectory=baseline_scenario,
-        actual_trajectory=actual_scenario,
-        save_path=str(checkpoint_dir / 'trajectory_comparison.png')
-    )
-
-    print("  ✓ Basic visualizations generated")
-
-    # 8a. Generate NEW advanced plots
-    print("\n  Generating advanced plots...")
-
-    # Scatter plot: Target vs Baseline & Actual (train) - ALL SAMPLES
-    plot_target_vs_actual_scatter(
-        F_star_per_scenario=F_star_array,
-        F_baseline_per_scenario=F_baseline_array,
-        F_actual_per_scenario=F_actual_per_sample,
-        save_path=str(checkpoint_dir / 'target_vs_actual_scatter_train.png')
-    )
-
-    # Scatter plot: Target vs Baseline & Actual (test)
-    plot_target_vs_actual_scatter(
-        F_star_per_scenario=F_star_test_array,
-        F_baseline_per_scenario=F_baseline_test_array,
-        F_actual_per_scenario=F_actual_test_array,
-        save_path=str(checkpoint_dir / 'target_vs_actual_scatter_test.png')
-    )
-
-    # Gap distribution (train) - ALL SAMPLES
-    plot_gap_distribution(
-        F_star_per_scenario=F_star_array,
-        F_actual_per_scenario=F_actual_per_sample,
-        save_path=str(checkpoint_dir / 'gap_distribution_train.png')
-    )
-
-    # Gap distribution (test)
-    plot_gap_distribution(
-        F_star_per_scenario=F_star_test_array,
-        F_actual_per_scenario=F_actual_test_array,
-        save_path=str(checkpoint_dir / 'gap_distribution_test.png')
-    )
-
-    print("  ✓ Advanced visualizations generated")
+        print("  ✓ Advanced visualizations generated")
+    except Exception as e:
+        print(f"  ✗ Warning: Visualization failed: {e}")
+        import traceback
+        traceback.print_exc()
+        print(f"    Continuing to save results...")
 
     # Initialize theoretical_data before the conditional block
     theoretical_data = None
@@ -1063,6 +1094,8 @@ def main(config=None):
         advanced_metrics_for_report = {
             'worst_case_gap_train': worst_case_train,
             'worst_case_gap_test': worst_case_test,
+            'gap_closure_train': gap_closure_train,
+            'gap_closure_test': gap_closure_test,
             'success_rate_train': success_rate_train,
             'success_rate_test': success_rate_test,
             'train_test_gap': train_test_gap_metrics,
@@ -1240,7 +1273,8 @@ def main(config=None):
                         'sigma2': sigma2_i,
                         's': s
                     }
-                    theoretical_tracker.process_configs[proc_name] = {'tau': proc_cfg['target'], 's': s}
+                    tau = proc_cfg.get('target', proc_cfg.get('base_target', 0.0))
+                    theoretical_tracker.process_configs[proc_name] = {'tau': tau, 's': s}
                     theoretical_tracker.process_weights[proc_name] = weight
 
                 # ── Populate tracker with training history ──────────────────
@@ -1459,7 +1493,7 @@ def main(config=None):
         # Generate PDF report
         try:
             report_path = generate_controller_report(
-                config=CONTROLLER_CONFIG,
+                config=cfg,
                 training_history=history,
                 final_metrics=report_final_metrics,
                 process_metrics=process_metrics,
@@ -1494,7 +1528,7 @@ def main(config=None):
 
     final_results = {
         'timestamp': datetime.now().isoformat(),
-        'config': CONTROLLER_CONFIG,
+        'config': cfg,
         'dataset_mode': DATASET_MODE,
         'st_params': _actual_st_params,
         'n_processes': _actual_n_processes,
@@ -1548,6 +1582,10 @@ def main(config=None):
             # Worst-case gap
             'worst_case_gap_train': worst_case_train,
             'worst_case_gap_test': worst_case_test,
+
+            # Gap closure
+            'gap_closure_train': gap_closure_train,
+            'gap_closure_test': gap_closure_test,
 
             # Success rate
             'success_rate_train': success_rate_train,

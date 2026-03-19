@@ -132,7 +132,6 @@ def generate_target_trajectory(process_configs, n_samples=50, seed=42):
             # - Other variables: KEEP ORIGINAL (for safety)
 
             modified_singles = {}
-            epsilon = 1e-6  # Very small value to avoid numerical issues
 
             for var_name, noise_fn in original_singles.items():
                 if var_name in ds_scm.structural_noise_vars:
@@ -140,7 +139,12 @@ def generate_target_trajectory(process_configs, n_samples=50, seed=42):
                     modified_singles[var_name] = noise_fn
                 elif var_name in ds_scm.process_noise_vars:
                     # Zero out process noise for ideal deterministic behavior
-                    modified_singles[var_name] = lambda rng, n, eps=epsilon: rng.normal(0, eps, n)
+                    if var_name.startswith("Z_ln"):
+                        # Lognormal multiplicative identity: Z_ln = 1.0
+                        modified_singles[var_name] = lambda rng, n: np.ones(n)
+                    else:
+                        # Additive noise (Eps_add, Jump): set to 0.0
+                        modified_singles[var_name] = lambda rng, n: np.zeros(n)
                 else:
                     # Unknown variable - keep original for safety
                     # (This includes inputs, constants, intermediate nodes)
@@ -150,18 +154,52 @@ def generate_target_trajectory(process_configs, n_samples=50, seed=42):
             ds_scm.noise_model.singles = modified_singles
             ds_scm.noise_model.groups = []  # No grouped noise
 
-            # Generate samples with diverse structural conditions
-            df = ds_scm.sample(n=n_samples, seed=seed)
+            # ── ST processes: calibration row as scenario 0 + sampled scenarios ──
+            if is_st and hasattr(ds_scm, 'cal_reference_row'):
+                ref = ds_scm.cal_reference_row
 
-            # Extract inputs and outputs (usando le label SCM base)
-            inputs = df[scm_input_labels].values  # Shape: (n_samples, input_dim)
-            outputs = df[scm_output_labels].values  # Shape: (n_samples, output_dim)
+                # Row 0: calibration reference row (F* ≈ 1 by construction)
+                cal_inputs = np.array([[ref[lbl] for lbl in scm_input_labels]])
+                cal_outputs = np.array([[ref[lbl] for lbl in scm_output_labels]])
+                cal_structural = {}
+                for var in ds_scm.structural_noise_vars:
+                    if var in ref:
+                        cal_structural[var] = np.array([ref[var]])
 
-            # Extract structural conditions for alignment with baseline
-            structural_conditions = {}
-            for var in ds_scm.structural_noise_vars:
-                if var in df.columns:
-                    structural_conditions[var] = df[var].values
+                if n_samples > 1:
+                    # Rows 1..n_samples-1: sampled with diverse environmental factors
+                    df = ds_scm.sample(n=n_samples - 1, seed=seed)
+                    sampled_inputs = df[scm_input_labels].values
+                    sampled_outputs = df[scm_output_labels].values
+
+                    inputs = np.vstack([cal_inputs, sampled_inputs])
+                    outputs = np.vstack([cal_outputs, sampled_outputs])
+
+                    structural_conditions = {}
+                    for var in ds_scm.structural_noise_vars:
+                        if var in ref and var in df.columns:
+                            structural_conditions[var] = np.concatenate([
+                                cal_structural[var], df[var].values
+                            ])
+                else:
+                    inputs = cal_inputs
+                    outputs = cal_outputs
+                    structural_conditions = cal_structural
+
+                print(f"Generated target trajectory for {process_name} (ST: cal_row + {n_samples-1} sampled):")
+
+            # ── Non-ST processes: sample all rows normally ──
+            else:
+                df = ds_scm.sample(n=n_samples, seed=seed)
+                inputs = df[scm_input_labels].values
+                outputs = df[scm_output_labels].values
+
+                structural_conditions = {}
+                for var in ds_scm.structural_noise_vars:
+                    if var in df.columns:
+                        structural_conditions[var] = df[var].values
+
+                print(f"Generated target trajectory for {process_name}:")
 
             trajectory[process_name] = {
                 'inputs': inputs,
@@ -169,7 +207,6 @@ def generate_target_trajectory(process_configs, n_samples=50, seed=42):
                 'structural_conditions': structural_conditions
             }
 
-            print(f"Generated target trajectory for {process_name}:")
             print(f"  - Shape: {inputs.shape}")
             print(f"  - Structural vars: {list(structural_conditions.keys())}")
             if structural_conditions:
@@ -211,7 +248,7 @@ def generate_baseline_trajectory(process_configs, target_trajectory, n_samples=5
     """
     trajectory = {}
 
-    for process_config in process_configs:
+    for proc_idx, process_config in enumerate(process_configs):
         process_name = process_config['name']
         input_labels = process_config['input_labels']
         output_labels = process_config['output_labels']
@@ -231,6 +268,9 @@ def generate_baseline_trajectory(process_configs, target_trajectory, n_samples=5
         # Get inputs and structural conditions from target
         target_inputs = target_trajectory[process_name]['inputs']
         target_structural = target_trajectory[process_name]['structural_conditions']
+
+        # Use target trajectory size (may be 1 for ST calibration reference row)
+        actual_n = target_inputs.shape[0]
 
         # Backup original noise model
         original_singles = ds_scm.noise_model.singles.copy()
@@ -259,8 +299,10 @@ def generate_baseline_trajectory(process_configs, target_trajectory, n_samples=5
             # Apply modified noise model
             ds_scm.noise_model.singles = modified_singles
 
-            # Generate samples with fixed inputs and active process noise
-            df = ds_scm.sample(n=n_samples, seed=seed)
+            # Use independent seed per process to get independent noise realizations
+            # (otherwise identical SCMs with the same seed produce identical noise)
+            process_seed = seed + proc_idx
+            df = ds_scm.sample(n=actual_n, seed=process_seed)
 
         finally:
             # Restore original noise model

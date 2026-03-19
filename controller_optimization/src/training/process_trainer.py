@@ -111,7 +111,7 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
     np.random.seed(seed)
 
     # Import global uncertainty config
-    from configs.processes_config import GLOBAL_UNCERTAINTY_CONFIG
+    from controller_optimization.configs.processes_config import GLOBAL_UNCERTAINTY_CONFIG
 
     # Extract config
     process_name = process_config['name']

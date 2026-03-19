@@ -35,6 +35,11 @@ ST_DATASET_CONFIG = {
     # Numero di processi in sequenza
     'n_processes': 3,
 
+    # Coefficiente adattivo inter-processo per il surrogate.
+    # τ_i = base_target + adaptive_coeff × (Y_{i-1} - τ_{i-1})  per i > 1
+    # Se 0.0, tutti i processi usano un target fisso (base_target).
+    'adaptive_coeff': 0.3,
+
     # Parametri STConfig — ogni processo usa la stessa configurazione
     'st_params': {
         'n': 4,                     # variabili di input per processo
@@ -48,7 +53,7 @@ ST_DATASET_CONFIG = {
         'rho': 0.2,                 # intensità rumore [0,1]
         'width_profile': 'uniform',
         'carry_beta': 1.0,
-        'x_domain': (-5.0, 5.0),
+        'x_domain': (-2.0, 2.0),
         'e_domain': (-1.0, 1.0),
         'cal_n': 2000,
         'cal_percentile': 10.0,
@@ -58,7 +63,7 @@ ST_DATASET_CONFIG = {
     # Configurazione uncertainty predictor (uguale per tutti i processi ST)
     'uncertainty_predictor': {
         'model': {
-            'hidden_sizes': [64, 32],
+            'hidden_sizes': [128, 64, 32],
             'dropout_rate': 0.1,
             'use_batchnorm': False,
             'min_variance': 1e-6,
@@ -251,6 +256,7 @@ def _build_st_processes(st_dataset_config):
     n_procs = st_dataset_config['n_processes']
     st_params = st_dataset_config['st_params']
     up_config = st_dataset_config['uncertainty_predictor']
+    adaptive_coeff = st_dataset_config.get('adaptive_coeff', 0.0)
 
     # Costruisci un SCM di riferimento per ricavare labels e dimensioni
     cfg = STConfig(**st_params)
@@ -314,6 +320,14 @@ def _build_st_processes(st_dataset_config):
 
             'checkpoint_dir': f'controller_optimization/checkpoints/st_{i}',
         }
+
+        # Target adattivo inter-processo:
+        # τ_i = base_target + coeff × (Y_{i-1} - τ_{i-1})
+        if i > 1 and adaptive_coeff != 0.0:
+            prev_name = f'st_{i - 1}'
+            process['surrogate_adaptive_coefficients'] = {prev_name: adaptive_coeff}
+            process['surrogate_adaptive_baselines'] = {prev_name: calibrated_target}
+
         processes.append(process)
 
     return processes

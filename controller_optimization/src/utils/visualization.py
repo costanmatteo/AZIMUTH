@@ -655,8 +655,11 @@ def plot_training_progression(progression_path, save_path=None):
         process_dims[process_name] = {'n_inputs': n_inputs}
         total_input_plots += n_inputs
 
-    # Create figure with subplots
-    fig, axes = plt.subplots(total_input_plots, 1, figsize=(12, 4 * total_input_plots))
+    # Create figure with subplots (cap height to avoid matplotlib pixel limit)
+    # matplotlib limit: 2^16 = 65536 pixels per dimension; at 150 dpi, max ~436 inches
+    # Use conservative cap of 200 inches (= 30000 pixels at 150 dpi)
+    fig_height = min(4 * total_input_plots, 200)
+    fig, axes = plt.subplots(total_input_plots, 1, figsize=(12, fig_height))
     if total_input_plots == 1:
         axes = [axes]
 
