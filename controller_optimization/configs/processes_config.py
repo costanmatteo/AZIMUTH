@@ -87,7 +87,7 @@ ST_DATASET_CONFIG = {
 # These settings apply to ALL processes unless overridden in process-specific config
 GLOBAL_UNCERTAINTY_CONFIG = {
     # Uncertainty quantification method: 'single', 'ensemble', or 'swag'
-    'uncertainty_method': 'single',
+    'uncertainty_method': 'swag',
 
     # Deep Ensemble configuration (used if uncertainty_method='ensemble')
     'use_ensemble': False,  # DEPRECATED: use uncertainty_method='ensemble'
