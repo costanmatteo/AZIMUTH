@@ -342,6 +342,71 @@ def img_quad(paths, captions, h):
     return outer
 
 
+def img_stack(paths, captions, w, h_each, gap=4):
+    """Stack images vertically within a given width, each capped at h_each."""
+    rows = []
+    for p, cap in zip(paths, captions):
+        img = scale_img(p, w, h_each)
+        cell = Table(
+            [[img], [Paragraph(cap, ST_CAPTION)]],
+            colWidths=[w])
+        cell.setStyle(TableStyle([
+            ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
+            ('ALIGN',         (0, 0), (0,  0),  'CENTER'),
+            ('LEFTPADDING',   (0, 0), (-1, -1), 0),
+            ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
+            ('TOPPADDING',    (0, 0), (-1, -1), 0),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 1),
+        ]))
+        rows.append([cell])
+        if gap > 0:
+            rows.append([Spacer(1, gap)])
+    t = Table(rows, colWidths=[w])
+    t.setStyle(TableStyle([
+        ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
+        ('LEFTPADDING',   (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
+        ('TOPPADDING',    (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+    ]))
+    return t
+
+
+def img_grid_2x2(paths, captions, total_w, total_h, gap=4):
+    """Four images in a 2x2 grid within total_w x total_h."""
+    cw = (total_w - gap) / 2
+    rh = (total_h - gap) / 2
+    cells = []
+    for p, cap in zip(paths, captions):
+        img = scale_img(p, cw, rh)
+        cell = Table(
+            [[img], [Paragraph(cap, ST_CAPTION)]],
+            colWidths=[cw])
+        cell.setStyle(TableStyle([
+            ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
+            ('ALIGN',         (0, 0), (0,  0),  'CENTER'),
+            ('LEFTPADDING',   (0, 0), (-1, -1), 0),
+            ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
+            ('TOPPADDING',    (0, 0), (-1, -1), 0),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 1),
+        ]))
+        cells.append(cell)
+    # Arrange as 2 rows x 2 cols
+    grid = Table(
+        [[cells[0], cells[1]],
+         [cells[2], cells[3]]],
+        colWidths=[cw, cw],
+        rowHeights=[rh + 12, rh + 12])  # +12 for caption
+    grid.setStyle(TableStyle([
+        ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
+        ('LEFTPADDING',   (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
+        ('TOPPADDING',    (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+    ]))
+    return grid
+
+
 # ════════════════════════════════════════════════════════════════════════════
 #  PAGE 1 — text metrics (landscape: use 4-column layout where possible)
 # ════════════════════════════════════════════════════════════════════════════
@@ -763,79 +828,8 @@ def _perf_rows(adv, n_scenarios):
 # ════════════════════════════════════════════════════════════════════════════
 
 def _page2(d):
-    cfg    = d['config']
-    ts     = d.get('timestamp', datetime.now())
-    ts_str = ts.strftime('%Y-%m-%d %H:%M:%S') if isinstance(ts, datetime) else str(ts)
-    chk    = Path(d.get('checkpoint_dir') or cfg.get('training', {}).get('checkpoint_dir', '.'))
-    hist   = d.get('training_history', {})
-    seed   = cfg.get('misc', {}).get('random_seed', '\u2014')
-    epochs = cfg.get('training', {}).get('epochs',
-             hist.get('epochs_trained', '\u2014'))
-    max_ep = cfg.get('training', {}).get('max_epochs',
-             cfg.get('training', {}).get('epochs', '\u2014'))
-    completed  = hist.get('completed', True)
-    status_txt = "complete"  if completed else "incomplete"
-    status_st  = ST_STATUS_G if completed else ST_STATUS_A
-    status_col = C_GREEN     if completed else C_AMBER
-
-    F = []
-
-    # mini header
-    title_p = Paragraph("Controller Optimization \u2014 Training Report", ST_TITLE)
-    meta_p  = Paragraph(
-        f"{ts_str}  \u00b7  seed {seed}  \u00b7  epochs {epochs} / {max_ep}", ST_SUB)
-    badge_w = 2.2 * cm
-    badge_p = Paragraph(status_txt, status_st)
-    hdr_tbl = Table([[title_p, badge_p]], colWidths=[TW - badge_w, badge_w])
-    hdr_tbl.setStyle(TableStyle([
-        ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
-        ('LEFTPADDING',   (0, 0), (-1, -1), 0),
-        ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
-        ('TOPPADDING',    (0, 0), (-1, -1), 0),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
-        ('BOX',           (1, 0), (1,  0),  0.5, status_col),
-        ('ALIGN',         (1, 0), (1,  0),  'CENTER'),
-    ]))
-    F.append(hdr_tbl)
-    F.append(Spacer(1, 1))
-    F.append(meta_p)
-    F.append(_rule_heavy())
-
-    # Available height for plots: page minus header, footer, section headers, spacers
-    hdr_h  = 1.5 * cm   # mini-header + rule
-    ftr_h  = 0.8 * cm   # footer
-    sec_h  = 0.5 * cm   # section_header height
-    avail  = PH - 2 * M - hdr_h - ftr_h
-
-    # This page: A (1 row) + B (1 row of 4) = 2 rows, 2 section headers
-    spc    = 4
-    ph     = int((avail - 2 * sec_h - 2 * spc) / 2)
-
-    # A — training history & overfitting (2 images, full width, no gap)
-    F += section_header("A \u2014 training history & overfitting analysis")
-    F.append(img_pair(
-        chk / 'training_history.png',    chk / 'loss_chart.png',
-        "Training losses & weights \u00b7 reliability evolution",
-        "Train vs validation loss \u2014 overfitting detection", ph))
-    F.append(Spacer(1, spc))
-
-    # B — controller performance per scenario (4 images in one row)
-    F += section_header("B \u2014 controller performance per scenario")
-    F.append(img_quad(
-        [chk / 'target_vs_actual_scatter_train.png',
-         chk / 'gap_distribution_train.png',
-         chk / 'target_vs_actual_scatter_test.png',
-         chk / 'gap_distribution_test.png'],
-        ["Target vs actual \u2014 train",
-         "Gap distribution \u2014 train",
-         "Target vs actual \u2014 test",
-         "Gap distribution \u2014 test"],
-        ph))
-
-    return F
-
-
-def _page3(d):
+    """Single charts page: left column (training + overfitting), right column
+    (scatter/gap 2x2 top + theoretical 2x2 bottom)."""
     cfg    = d['config']
     ts     = d.get('timestamp', datetime.now())
     ts_str = ts.strftime('%Y-%m-%d %H:%M:%S') if isinstance(ts, datetime) else str(ts)
@@ -875,30 +869,84 @@ def _page3(d):
     F.append(_rule_heavy())
 
     # Available height for plots
-    hdr_h  = 1.5 * cm
-    ftr_h  = 0.8 * cm
-    sec_h  = 0.5 * cm
+    hdr_h  = 1.5 * cm   # mini-header + rule
+    ftr_h  = 0.8 * cm   # footer
     avail  = PH - 2 * M - hdr_h - ftr_h
+    col_gap = 10
+    col_w  = (TW - col_gap) / 2
 
-    # This page: C (2 rows), 1 section header
-    rows_p3 = 2
-    spc     = 4
-    ph = int((avail - sec_h - rows_p3 * spc) / rows_p3)
+    # ── LEFT COLUMN: training_history + loss_chart stacked ────────────────
+    h_left = int((avail - 8) / 2)  # 2 plots, small gap between
+    left = img_stack(
+        [chk / 'training_history.png',  chk / 'loss_chart.png'],
+        ["Training losses & weights \u00b7 reliability evolution",
+         "Train vs validation \u2014 overfitting detection"],
+        col_w, h_left, gap=4)
 
-    # C — L_min Bellman
-    F += section_header("C \u2014 L_min Bellman \u2014 theoretical analysis")
-    F.append(img_pair(
-        chk / 'loss_vs_L_min.png',       chk / 'training_efficiency.png',
-        "Loss vs L_min Bellman \u2014 observed loss \u00b7 L_min empirical \u00b7 "
-        "reducible gap",
-        "Training efficiency \u2014 L_min Bellman / loss over epochs", ph))
-    F.append(Spacer(1, spc))
-    F.append(img_pair(
-        chk / 'loss_decomposition.png',  chk / 'loss_scatter.png',
-        "Loss decomposition (final) \u2014 Var(F) \u00b7 Bias\u00b2 \u00b7 "
-        "reducible gap",
-        "Loss vs L_min scatter \u2014 observed vs theoretical, colored by epoch",
-        ph))
+    # ── RIGHT COLUMN: 4 rows of paired images ────────────────────────────
+    # Row height: 4 rows in available height
+    rh = int((avail - 3 * 3) / 4)   # 4 rows, 3pt gap between
+    pair_w = col_w / 2
+
+    def _img_row(p1, p2, c1, c2, row_h):
+        i1 = scale_img(p1, pair_w, row_h)
+        i2 = scale_img(p2, pair_w, row_h)
+        t1 = Table([[i1], [Paragraph(c1, ST_CAPTION)]], colWidths=[pair_w])
+        t2 = Table([[i2], [Paragraph(c2, ST_CAPTION)]], colWidths=[pair_w])
+        for t in (t1, t2):
+            t.setStyle(TableStyle([
+                ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
+                ('ALIGN',         (0, 0), (0,  0),  'CENTER'),
+                ('LEFTPADDING',   (0, 0), (-1, -1), 0),
+                ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
+                ('TOPPADDING',    (0, 0), (-1, -1), 0),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 1),
+            ]))
+        return Table([[t1, t2]], colWidths=[pair_w, pair_w])
+
+    r1 = _img_row(
+        chk / 'target_vs_actual_scatter_train.png',
+        chk / 'gap_distribution_train.png',
+        "Target vs actual \u2014 train", "Gap distribution \u2014 train", rh)
+    r2 = _img_row(
+        chk / 'target_vs_actual_scatter_test.png',
+        chk / 'gap_distribution_test.png',
+        "Target vs actual \u2014 test", "Gap distribution \u2014 test", rh)
+    r3 = _img_row(
+        chk / 'loss_vs_L_min.png',
+        chk / 'training_efficiency.png',
+        "Loss vs L_min Bellman", "Training efficiency", rh)
+    r4 = _img_row(
+        chk / 'loss_decomposition.png',
+        chk / 'loss_scatter.png',
+        "Loss decomposition", "Loss vs L_min scatter", rh)
+
+    spc = 3
+    right = Table(
+        [[r1], [Spacer(1, spc)],
+         [r2], [Spacer(1, spc)],
+         [r3], [Spacer(1, spc)],
+         [r4]],
+        colWidths=[col_w])
+    right.setStyle(TableStyle([
+        ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
+        ('LEFTPADDING',   (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
+        ('TOPPADDING',    (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+    ]))
+
+    # ── Assemble two-column layout ───────────────────────────────────────
+    layout = Table([[left, Spacer(col_gap, 1), right]],
+                   colWidths=[col_w, col_gap, col_w])
+    layout.setStyle(TableStyle([
+        ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
+        ('LEFTPADDING',   (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
+        ('TOPPADDING',    (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+    ]))
+    F.append(layout)
 
     return F
 
@@ -940,11 +988,9 @@ def _build_pdf(d, out_path):
         pageTemplates=[pt])
 
     story = (
-        _page1(d) + _footer(d, 1, 3) +
+        _page1(d) + _footer(d, 1, 2) +
         [PageBreak()] +
-        _page2(d) + _footer(d, 2, 3) +
-        [PageBreak()] +
-        _page3(d) + _footer(d, 3, 3)
+        _page2(d) + _footer(d, 2, 2)
     )
     doc.build(story)
 
