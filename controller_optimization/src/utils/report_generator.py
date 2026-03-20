@@ -271,6 +271,7 @@ def img_pair(left_path, right_path, left_cap, right_cap, h, gap=0):
     for t in (lt, rt):
         t.setStyle(TableStyle([
             ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
+            ('ALIGN',         (0, 0), (0,  0),  'CENTER'),
             ('LEFTPADDING',   (0, 0), (-1, -1), 0),
             ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
             ('TOPPADDING',    (0, 0), (-1, -1), 0),
@@ -292,16 +293,38 @@ def img_pair(left_path, right_path, left_cap, right_cap, h, gap=0):
 
 
 def img_quad(paths, captions, h):
-    """Four images side by side, no gap."""
+    """Four images side by side, no gap, forced to same height."""
     cw = TW / 4
+    # Load all images and compute uniform height
+    imgs = []
+    for p in paths:
+        if not Path(p).exists():
+            imgs.append(None)
+        else:
+            imgs.append(Image(str(p)))
+    # Find the uniform height: scale each to fit cw width, take the minimum
+    heights = []
+    for img in imgs:
+        if img is not None:
+            w_scale = cw / img.imageWidth
+            heights.append(img.imageHeight * w_scale)
+    target_h = min(min(heights), h) if heights else h
+    # Build cells with uniform height
     cells = []
-    for p, cap in zip(paths, captions):
+    for img, p, cap in zip(imgs, paths, captions):
+        if img is None:
+            el = _placeholder(Path(p).name, cw, target_h)
+        else:
+            scale = target_h / img.imageHeight
+            img.drawWidth  = img.imageWidth * scale
+            img.drawHeight = target_h
         cell = Table(
-            [[scale_img(p, cw, h)],
+            [[img if img is not None else el],
              [Paragraph(cap, ST_CAPTION)]],
-            colWidths=[cw])
+            colWidths=[cw], rowHeights=[target_h, None])
         cell.setStyle(TableStyle([
             ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
+            ('ALIGN',         (0, 0), (0,  0),  'CENTER'),
             ('LEFTPADDING',   (0, 0), (-1, -1), 0),
             ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
             ('TOPPADDING',    (0, 0), (-1, -1), 0),
