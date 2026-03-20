@@ -720,47 +720,37 @@ def _page2(d):
     # Divide into 4 rows; each row has 2 side-by-side plots
     ph = int((PH - 2 * M - 1.5 * cm - 0.8 * cm - 4 * 7) / 4)  # ~95 pts
 
-    # A — training history
-    F += section_header("A \u2014 training history")
+    # A — training history & overfitting
+    F += section_header("A \u2014 training history & overfitting analysis")
     F.append(img_pair(
-        chk / 'training_losses.png',     chk / 'reliability_evolution.png',
-        "Training losses & weights (total \u00b7 reliability \u00b7 BC \u00b7 "
-        "reliability weight)",
-        "Reliability evolution: F (actual) vs F* (target) over epochs", ph))
+        chk / 'training_history.png',    chk / 'loss_chart.png',
+        "Training losses & weights \u00b7 reliability evolution",
+        "Train vs validation loss \u2014 overfitting detection", ph))
     F.append(Spacer(1, 6))
 
-    # B — overfitting analysis
-    F += section_header("B \u2014 overfitting analysis")
+    # B — controller performance per scenario
+    F += section_header("B \u2014 controller performance per scenario")
     F.append(img_pair(
-        chk / 'train_val_loss.png',       chk / 'reliability_train_val.png',
-        "Train vs validation loss \u2014 cross-scenario overfitting detection",
-        "Reliability loss: train vs validation \u2014 within-scenario held-out samples",
-        ph))
-    F.append(Spacer(1, 6))
-
-    # C — controller performance per scenario
-    F += section_header("C \u2014 controller performance per scenario")
-    F.append(img_pair(
-        chk / 'performance_train.png',    chk / 'gap_distribution_train.png',
+        chk / 'target_vs_actual_scatter_train.png',  chk / 'gap_distribution_train.png',
         "Target vs baseline & controller \u2014 training scenarios",
         "Gap distribution \u2014 training scenarios (F* \u2212 F_actual)", ph))
     F.append(Spacer(1, 3))
     F.append(img_pair(
-        chk / 'performance_test.png',     chk / 'gap_distribution_test.png',
+        chk / 'target_vs_actual_scatter_test.png',   chk / 'gap_distribution_test.png',
         "Target vs baseline & controller \u2014 test scenarios",
         "Gap distribution \u2014 test scenarios (F* \u2212 F_actual)", ph))
     F.append(Spacer(1, 6))
 
-    # D — L_min Bellman
-    F += section_header("D \u2014 L_min Bellman \u2014 theoretical analysis")
+    # C — L_min Bellman
+    F += section_header("C \u2014 L_min Bellman \u2014 theoretical analysis")
     F.append(img_pair(
-        chk / 'loss_vs_lmin.png',         chk / 'training_efficiency.png',
+        chk / 'loss_vs_L_min.png',       chk / 'training_efficiency.png',
         "Loss vs L_min Bellman \u2014 observed loss \u00b7 L_min empirical \u00b7 "
         "reducible gap",
         "Training efficiency \u2014 L_min Bellman / loss over epochs", ph))
     F.append(Spacer(1, 3))
     F.append(img_pair(
-        chk / 'loss_decomposition.png',   chk / 'loss_lmin_scatter.png',
+        chk / 'loss_decomposition.png',  chk / 'loss_scatter.png',
         "Loss decomposition (final) \u2014 Var(F) \u00b7 Bias\u00b2 \u00b7 "
         "reducible gap",
         "Loss vs L_min scatter \u2014 observed vs theoretical, colored by epoch",
