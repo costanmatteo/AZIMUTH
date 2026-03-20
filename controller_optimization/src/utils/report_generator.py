@@ -680,7 +680,7 @@ def _page2(d):
     cfg    = d['config']
     ts     = d.get('timestamp', datetime.now())
     ts_str = ts.strftime('%Y-%m-%d %H:%M:%S') if isinstance(ts, datetime) else str(ts)
-    chk    = Path(cfg.get('training', {}).get('checkpoint_dir', '.'))
+    chk    = Path(d.get('checkpoint_dir') or cfg.get('training', {}).get('checkpoint_dir', '.'))
     hist   = d.get('training_history', {})
     seed   = cfg.get('misc', {}).get('random_seed', '\u2014')
     epochs = cfg.get('training', {}).get('epochs',
@@ -775,7 +775,7 @@ def _page2(d):
 
 def _footer(d, page_num, total_pages):
     cfg  = d['config']
-    chk  = short_dir(cfg.get('training', {}).get('checkpoint_dir', ''))
+    chk  = short_dir(str(d.get('checkpoint_dir') or cfg.get('training', {}).get('checkpoint_dir', '')))
     left = Paragraph(f"auto-generated \u2014 {chk}", ST_FTR)
     right = Paragraph(f"page {page_num} / {total_pages}", ST_FTR_R)
     rule = HRFlowable(width=TW, thickness=1, color=C_BLACK,
@@ -850,6 +850,7 @@ def generate_controller_report(
         advanced_metrics=advanced_metrics or {},
         trajectory_values=trajectory_values,
         theoretical_data=theoretical_data or {},
+        checkpoint_dir=checkpoint_dir,
     )
     _build_pdf(d, out)
     return str(out)
@@ -881,6 +882,7 @@ class ControllerReportGenerator:
             advanced_metrics=advanced_metrics or {},
             trajectory_values=trajectory_values,
             theoretical_data=theoretical_data or {},
+            checkpoint_dir=self.output_path.parent,
         )
         _build_pdf(d, self.output_path)
         return str(self.output_path)
