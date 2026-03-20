@@ -777,6 +777,7 @@ def _page1(d):
             ('ALIGN',         (1, 0), (1,  0),  'RIGHT'),
         ]))
         F.append(foot_t)
+        F += _footer(d, 2, 3)
 
     return F
 
@@ -870,7 +871,7 @@ def _page2(d):
 
     # Available height for plots
     hdr_h  = 1.8 * cm   # mini-header + rule (generous)
-    ftr_h  = 1.2 * cm   # footer (rule + table + spacing)
+    ftr_h  = 1.5 * cm   # footer (rule + table + spacing)
     avail  = PH - 2 * M - hdr_h - ftr_h
     col_gap = 10
     col_w  = (TW - col_gap) / 2
@@ -990,9 +991,9 @@ def _build_pdf(d, out_path):
         pageTemplates=[pt])
 
     story = (
-        _page1(d) + _footer(d, 1, 2) +
+        _page1(d) + _footer(d, 1, 3) +
         [PageBreak()] +
-        _page2(d) + _footer(d, 2, 2)
+        _page2(d) + _footer(d, 3, 3)
     )
     doc.build(story)
 
