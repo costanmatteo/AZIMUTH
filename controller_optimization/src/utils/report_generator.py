@@ -704,6 +704,7 @@ def _page1(d):
 
     # ── 04 — trajectory comparison (new page) ───────────────────────────────
     if traj:
+        F += _footer(d, 1, 3)
         F.append(PageBreak())
         sc_idx  = traj.get('scenario_idx', 0)
         F += section_header(f"04 \u2014 trajectory comparison \u2014 scenario {sc_idx}")
@@ -778,6 +779,8 @@ def _page1(d):
         ]))
         F.append(foot_t)
         F += _footer(d, 2, 3)
+    else:
+        F += _footer(d, 1, 2)
 
     return F
 
@@ -990,10 +993,13 @@ def _build_pdf(d, out_path):
         leftMargin=M, rightMargin=M, topMargin=M, bottomMargin=M,
         pageTemplates=[pt])
 
+    traj = d.get('trajectory_values') or {}
+    total_pages = 3 if traj else 2
+    last_page = total_pages
     story = (
-        _page1(d) + _footer(d, 1, 3) +
+        _page1(d) +
         [PageBreak()] +
-        _page2(d) + _footer(d, 3, 3)
+        _page2(d) + _footer(d, last_page, total_pages)
     )
     doc.build(story)
 
