@@ -42,16 +42,16 @@ C_BGRAY = colors.HexColor('#F7F7F7')
 C_TGRAY = colors.HexColor('#888888')
 
 # ── font sizes ────────────────────────────────────────────────────────────────
-FS_TITLE   = 13
-FS_SUB     = 9
-FS_SECTION = 9
-FS_BODY    = 9
-FS_KPI_LBL = 8
-FS_KPI_VAL = 14
-FS_KPI_SUB = 8
-FS_BLK     = 8
-FS_STATUS  = 8
-FS_NOTE    = 8
+FS_TITLE   = 12
+FS_SUB     = 8
+FS_SECTION = 8
+FS_BODY    = 8
+FS_KPI_LBL = 7
+FS_KPI_VAL = 13
+FS_KPI_SUB = 7
+FS_BLK     = 7
+FS_STATUS  = 7
+FS_NOTE    = 7
 
 # ── style factory ────────────────────────────────────────────────────────────
 def _s(name, size, bold=False, italic=False, color=C_BLACK, align=TA_LEFT):
