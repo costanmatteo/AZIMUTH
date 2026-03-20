@@ -113,13 +113,13 @@ CONTROLLER_CONFIG = {
 
     # Training parameters
     'training': {
-        'epochs': 800,  # Each epoch cycles through all training scenarios once
+        'epochs': 100,  # Each epoch cycles through all training scenarios once
         'batch_size': 3000,  # Total samples per epoch (split equally across scenarios)
         'learning_rate': 0.0019017383571692538,
         'weight_decay': 0.001,
         'lambda_bc': 0.001,  # Behavior cloning weight
         'reliability_loss_scale': 100.0,  # Scale factor for reliability loss (F - F*)^2
-        'patience': 200,
+        'patience': 50,
         'device': 'auto',
         'checkpoint_dir': 'controller_optimization/checkpoints/controller',
 
