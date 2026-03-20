@@ -1,22 +1,23 @@
 """
-PDF Report Generator for Controller Optimization — 2 pages A4 portrait.
-Style mirrors the HTML reference exactly (Courier, same font sizes, same layout).
+PDF Report Generator for Controller Optimization — 2 pages A4 landscape.
+Style: Courier, monospace, same colors/sections as portrait version but
+landscape and more compact (less vertical whitespace).
 """
 
 import math
 from datetime import datetime
 from pathlib import Path
 
-from reportlab.lib.pagesizes import A4
+from reportlab.lib.pagesizes import landscape, A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import cm, mm
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_LEFT, TA_RIGHT, TA_CENTER
 from reportlab.platypus import (
-    BaseDocTemplate, Frame, PageTemplate, NextPageTemplate,
+    BaseDocTemplate, Frame, PageTemplate,
     Paragraph, Spacer, Image, Table, TableStyle, PageBreak,
 )
-from reportlab.platypus.flowables import HRFlowable, KeepInFrame
+from reportlab.platypus.flowables import HRFlowable
 
 try:
     from pypdf import PdfReader, PdfWriter
@@ -24,10 +25,10 @@ try:
 except ImportError:
     PYPDF_AVAILABLE = False
 
-# ── page geometry (A4 portrait) ───────────────────────────────────────────────
-PW, PH = A4            # 595.28 x 841.89 pts
-M  = 1.8 * cm          # margins (~28px at 96dpi scale)
-TW = PW - 2 * M        # text width
+# ── page geometry (A4 landscape) ─────────────────────────────────────────────
+PW, PH = landscape(A4)   # 841.89 x 595.28 pts
+M  = 1.2 * cm            # margins
+TW = PW - 2 * M          # text width  ≈ 793 pts
 
 # ── colors ────────────────────────────────────────────────────────────────────
 C_GREEN = colors.HexColor('#1D9E75')
@@ -40,28 +41,28 @@ C_MGRAY = colors.HexColor('#CCCCCC')
 C_BGRAY = colors.HexColor('#F7F7F7')
 C_TGRAY = colors.HexColor('#888888')
 
-# ── font sizes — exact match to HTML ─────────────────────────────────────────
-FS_TITLE   = 14    # .pg-title
-FS_SUB     = 10    # .pg-sub
-FS_SECTION = 10    # .sec-head
-FS_BODY    = 10    # .row, .traj td
-FS_KPI_LBL = 9     # .kpi-l
-FS_KPI_VAL = 16    # .kpi-v
-FS_KPI_SUB = 9     # .kpi-s
-FS_BLK     = 9     # .blk-title
-FS_STATUS  = 9     # .status
-FS_NOTE    = 9     # .note-ok, footer
+# ── font sizes ────────────────────────────────────────────────────────────────
+FS_TITLE   = 13
+FS_SUB     = 9
+FS_SECTION = 9
+FS_BODY    = 9
+FS_KPI_LBL = 8
+FS_KPI_VAL = 14
+FS_KPI_SUB = 8
+FS_BLK     = 8
+FS_STATUS  = 8
+FS_NOTE    = 8
 
 # ── style factory ────────────────────────────────────────────────────────────
 def _s(name, size, bold=False, italic=False, color=C_BLACK, align=TA_LEFT):
     font = 'Courier-Bold' if bold else ('Courier-Oblique' if italic else 'Courier')
     return ParagraphStyle(name, fontName=font, fontSize=size,
-                          leading=size * 1.45, textColor=color, alignment=align)
+                          leading=size * 1.35, textColor=color, alignment=align)
 
-ST_TITLE    = _s('ct_title',  FS_TITLE,   bold=False)
+ST_TITLE    = _s('ct_title',  FS_TITLE)
 ST_SUB      = _s('ct_sub',    FS_SUB,     color=C_MUTED)
-ST_SECTION  = _s('ct_sec',    FS_SECTION, bold=True,  color=C_TGRAY)
-ST_BLK      = _s('ct_blk',    FS_BLK,     bold=True,  color=C_TGRAY)
+ST_SECTION  = _s('ct_sec',    FS_SECTION, bold=True, color=C_TGRAY)
+ST_BLK      = _s('ct_blk',    FS_BLK,     bold=True, color=C_TGRAY)
 ST_KEY      = _s('ct_key',    FS_BODY,    color=C_MUTED)
 ST_VAL      = _s('ct_val',    FS_BODY,    align=TA_RIGHT)
 ST_VAL_G    = _s('ct_val_g',  FS_BODY,    color=C_GREEN,  align=TA_RIGHT)
@@ -73,12 +74,12 @@ ST_KPI_SUB  = _s('ct_ks',    FS_KPI_SUB, color=C_TGRAY)
 ST_NOTE     = _s('ct_note',   FS_NOTE,    color=C_TGRAY)
 ST_NOTE_G   = _s('ct_note_g', FS_NOTE,    color=C_GREEN)
 ST_NOTE_R   = _s('ct_note_r', FS_NOTE,    color=C_RED)
-ST_STATUS_A = _s('ct_sta',    FS_STATUS,  color=C_AMBER,  align=TA_CENTER)
-ST_STATUS_G = _s('ct_stg',    FS_STATUS,  color=C_GREEN,  align=TA_CENTER)
-ST_STATUS_R = _s('ct_str',    FS_STATUS,  color=C_RED,    align=TA_CENTER)
+ST_STATUS_A = _s('ct_sta',    FS_STATUS,  color=C_AMBER, align=TA_CENTER)
+ST_STATUS_G = _s('ct_stg',    FS_STATUS,  color=C_GREEN, align=TA_CENTER)
+ST_STATUS_R = _s('ct_str',    FS_STATUS,  color=C_RED,   align=TA_CENTER)
 ST_CAPTION  = _s('ct_cap',    FS_NOTE,    italic=True, color=C_TGRAY)
 ST_FTR      = _s('ct_ftr',    FS_NOTE,    color=C_TGRAY)
-ST_FTR_R    = _s('ct_ftrr',   FS_NOTE,    color=C_TGRAY,  align=TA_RIGHT)
+ST_FTR_R    = _s('ct_ftrr',   FS_NOTE,    color=C_TGRAY, align=TA_RIGHT)
 ST_TRAJ_H   = _s('ct_th',     FS_BLK,     bold=False, color=C_TGRAY)
 ST_TRAJ_C   = _s('ct_tc',     FS_BODY)
 ST_TRAJ_G   = _s('ct_tg',     FS_BODY,    color=C_GREEN)
@@ -87,23 +88,22 @@ ST_TRAJ_R   = _s('ct_tr',     FS_BODY,    color=C_RED)
 
 def _dyn(c, align=TA_RIGHT):
     return ParagraphStyle(f'_d{id(c)}{align}', fontName='Courier',
-                          fontSize=FS_BODY, leading=FS_BODY*1.45,
+                          fontSize=FS_BODY, leading=FS_BODY * 1.35,
                           textColor=c, alignment=align)
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 def fmt_lr(v):
     if v == 0: return "0"
     exp  = int(math.floor(math.log10(abs(v))))
-    mant = v / (10**exp)
+    mant = v / (10 ** exp)
     return f"{mant:.4f} x 10^{exp}"
 
-def short_dir(d, max_len=45):
+def short_dir(d, max_len=50):
     parts = Path(d).parts
     short = str(Path(*parts[-3:])) if len(parts) >= 3 else str(d)
-    return short if len(short) <= max_len else '...' + short[-(max_len-3):]
+    return short if len(short) <= max_len else '...' + short[-(max_len - 3):]
 
 def _fval(v):
-    """Scalar, dict, or list → (mean, std_or_None). Robust to any input type."""
     if v is None:
         return 0.0, None
     if isinstance(v, dict):
@@ -113,16 +113,13 @@ def _fval(v):
         arr = [float(x) for x in v if x is not None]
         if not arr:
             return 0.0, None
-        mean = float(_np.mean(arr))
-        std  = float(_np.std(arr)) if len(arr) > 1 else None
-        return mean, std
+        return float(_np.mean(arr)), (float(_np.std(arr)) if len(arr) > 1 else None)
     try:
         return float(v), None
     except (TypeError, ValueError):
         return 0.0, None
 
 def _last(v, default=0.0):
-    """Last element if list/array, else scalar. Safe for any training history value."""
     if v is None:
         return default
     if isinstance(v, (list, tuple)):
@@ -158,29 +155,30 @@ def _placeholder(name, w, h):
                         alignment=TA_CENTER, textColor=colors.HexColor('#AAAAAA'))
     t  = Table([[Paragraph(name, st)]], colWidths=[w], rowHeights=[h])
     t.setStyle(TableStyle([
-        ('BOX',        (0,0),(-1,-1), 0.5, C_MGRAY),
-        ('BACKGROUND', (0,0),(-1,-1), C_BGRAY),
-        ('VALIGN',     (0,0),(-1,-1), 'MIDDLE'),
+        ('BOX',        (0, 0), (-1, -1), 0.5, C_MGRAY),
+        ('BACKGROUND', (0, 0), (-1, -1), C_BGRAY),
+        ('VALIGN',     (0, 0), (-1, -1), 'MIDDLE'),
     ]))
     return t
 
 def _rule_heavy():
-    return HRFlowable(width=TW, thickness=1.5, color=C_BLACK, spaceBefore=4, spaceAfter=10)
+    return HRFlowable(width=TW, thickness=1.5, color=C_BLACK,
+                      spaceBefore=3, spaceAfter=7)
 
 def _rule_thin():
-    return HRFlowable(width=TW, thickness=0.5, color=C_MGRAY, spaceBefore=4, spaceAfter=6)
+    return HRFlowable(width=TW, thickness=0.5, color=C_MGRAY,
+                      spaceBefore=3, spaceAfter=4)
 
 def section_header(title):
     return [
         Paragraph(title.upper(), ST_SECTION),
-        HRFlowable(width=TW, thickness=0.5, color=C_MGRAY, spaceAfter=4),
+        HRFlowable(width=TW, thickness=0.5, color=C_MGRAY, spaceAfter=3),
     ]
 
 def blk_title(title):
     return Paragraph(title, ST_BLK)
 
 def kv_table(rows, col_w, key_frac=0.52):
-    """rows = list of (key_str, val_str_or_para [, style])."""
     kw = col_w * key_frac
     vw = col_w * (1 - key_frac)
     data = []
@@ -192,151 +190,165 @@ def kv_table(rows, col_w, key_frac=0.52):
         data.append([k, v])
     t = Table(data, colWidths=[kw, vw])
     t.setStyle(TableStyle([
-        ('VALIGN',        (0,0),(-1,-1), 'TOP'),
-        ('TOPPADDING',    (0,0),(-1,-1), 2),
-        ('BOTTOMPADDING', (0,0),(-1,-1), 2),
-        ('LEFTPADDING',   (0,0),(-1,-1), 0),
-        ('RIGHTPADDING',  (0,0),(-1,-1), 0),
-        ('LINEBELOW',     (0,0),(-1,-2), 0.4, C_LGRAY),
+        ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
+        ('TOPPADDING',    (0, 0), (-1, -1), 1.5),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 1.5),
+        ('LEFTPADDING',   (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
+        ('LINEBELOW',     (0, 0), (-1, -2), 0.4, C_LGRAY),
     ]))
     return t
 
-def two_col(left_items, right_items, gap=14):
-    """Side-by-side layout — each side is a list of flowables."""
+def _wrap_col(items, w):
+    rows = [[item] for item in items]
+    t = Table(rows, colWidths=[w])
+    t.setStyle(TableStyle([
+        ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
+        ('LEFTPADDING',   (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
+        ('TOPPADDING',    (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 1),
+    ]))
+    return t
+
+def two_col(left_items, right_items, gap=12):
     cw = (TW - gap) / 2
-
-    def _wrap(items, w):
-        rows = [[item] for item in items]
-        t = Table(rows, colWidths=[w])
-        t.setStyle(TableStyle([
-            ('VALIGN',(0,0),(-1,-1),'TOP'),
-            ('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0),
-            ('TOPPADDING',(0,0),(-1,-1),0),('BOTTOMPADDING',(0,0),(-1,-1),1),
-        ]))
-        return t
-
-    outer = Table([[_wrap(left_items, cw), Spacer(gap, 1), _wrap(right_items, cw)]],
-                  colWidths=[cw, gap, cw])
+    outer = Table(
+        [[_wrap_col(left_items, cw), Spacer(gap, 1), _wrap_col(right_items, cw)]],
+        colWidths=[cw, gap, cw])
     outer.setStyle(TableStyle([
-        ('VALIGN',(0,0),(-1,-1),'TOP'),
-        ('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0),
-        ('TOPPADDING',(0,0),(-1,-1),0),('BOTTOMPADDING',(0,0),(-1,-1),0),
+        ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
+        ('LEFTPADDING',   (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
+        ('TOPPADDING',    (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
     ]))
     return outer
 
 def three_col(col1, col2, col3, gap=10):
-    cw = (TW - 2*gap) / 3
-
-    def _wrap(items, w):
-        rows = [[item] for item in items]
-        t = Table(rows, colWidths=[w])
-        t.setStyle(TableStyle([
-            ('VALIGN',(0,0),(-1,-1),'TOP'),
-            ('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0),
-            ('TOPPADDING',(0,0),(-1,-1),0),('BOTTOMPADDING',(0,0),(-1,-1),1),
-        ]))
-        return t
-
-    outer = Table([[_wrap(col1,cw), Spacer(gap,1), _wrap(col2,cw), Spacer(gap,1), _wrap(col3,cw)]],
-                  colWidths=[cw, gap, cw, gap, cw])
+    cw = (TW - 2 * gap) / 3
+    outer = Table(
+        [[_wrap_col(col1, cw), Spacer(gap, 1),
+          _wrap_col(col2, cw), Spacer(gap, 1),
+          _wrap_col(col3, cw)]],
+        colWidths=[cw, gap, cw, gap, cw])
     outer.setStyle(TableStyle([
-        ('VALIGN',(0,0),(-1,-1),'TOP'),
-        ('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0),
-        ('TOPPADDING',(0,0),(-1,-1),0),('BOTTOMPADDING',(0,0),(-1,-1),0),
+        ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
+        ('LEFTPADDING',   (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
+        ('TOPPADDING',    (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+    ]))
+    return outer
+
+def four_col(c1, c2, c3, c4, gap=8):
+    cw = (TW - 3 * gap) / 4
+    outer = Table(
+        [[_wrap_col(c1, cw), Spacer(gap, 1),
+          _wrap_col(c2, cw), Spacer(gap, 1),
+          _wrap_col(c3, cw), Spacer(gap, 1),
+          _wrap_col(c4, cw)]],
+        colWidths=[cw, gap, cw, gap, cw, gap, cw])
+    outer.setStyle(TableStyle([
+        ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
+        ('LEFTPADDING',   (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
+        ('TOPPADDING',    (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
     ]))
     return outer
 
 def img_pair(left_path, right_path, left_cap, right_cap, h):
-    cw = (TW - 6*mm) / 2
+    cw = (TW - 6 * mm) / 2
     lt = Table(
-        [[scale_img(left_path,  cw, h)], [Paragraph(left_cap,  ST_CAPTION)]],
+        [[scale_img(left_path,  cw, h)],
+         [Paragraph(left_cap,  ST_CAPTION)]],
         colWidths=[cw])
     rt = Table(
-        [[scale_img(right_path, cw, h)], [Paragraph(right_cap, ST_CAPTION)]],
+        [[scale_img(right_path, cw, h)],
+         [Paragraph(right_cap, ST_CAPTION)]],
         colWidths=[cw])
     for t in (lt, rt):
         t.setStyle(TableStyle([
-            ('VALIGN',(0,0),(-1,-1),'TOP'),
-            ('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0),
-            ('TOPPADDING',(0,0),(-1,-1),0),('BOTTOMPADDING',(0,0),(-1,-1),2),
+            ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
+            ('LEFTPADDING',   (0, 0), (-1, -1), 0),
+            ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
+            ('TOPPADDING',    (0, 0), (-1, -1), 0),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
         ]))
-    outer = Table([[lt, Spacer(6*mm,1), rt]], colWidths=[cw, 6*mm, cw])
+    outer = Table([[lt, Spacer(6 * mm, 1), rt]],
+                  colWidths=[cw, 6 * mm, cw])
     outer.setStyle(TableStyle([
-        ('VALIGN',(0,0),(-1,-1),'TOP'),
-        ('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0),
-        ('TOPPADDING',(0,0),(-1,-1),0),('BOTTOMPADDING',(0,0),(-1,-1),0),
+        ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
+        ('LEFTPADDING',   (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
+        ('TOPPADDING',    (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
     ]))
     return outer
 
 
 # ════════════════════════════════════════════════════════════════════════════
-#  PAGE 1 CONTENT
+#  PAGE 1 — text metrics (landscape: use 4-column layout where possible)
 # ════════════════════════════════════════════════════════════════════════════
 
 def _page1(d):
-    cfg      = d['config']
-    hist     = d.get('training_history', {})
-    fm       = d.get('final_metrics', {})
-    adv      = d.get('advanced_metrics') or {}
-    traj     = d.get('trajectory_values') or {}
-    ts       = d.get('timestamp', datetime.now())
-    ts_str   = ts.strftime('%Y-%m-%d %H:%M:%S') if isinstance(ts, datetime) else str(ts)
+    cfg    = d['config']
+    hist   = d.get('training_history', {})
+    fm     = d.get('final_metrics', {})
+    adv    = d.get('advanced_metrics') or {}
+    traj   = d.get('trajectory_values') or {}
+    ts     = d.get('timestamp', datetime.now())
+    ts_str = ts.strftime('%Y-%m-%d %H:%M:%S') if isinstance(ts, datetime) else str(ts)
 
-    tr_cfg   = cfg.get('training', {})
-    pg_cfg   = cfg.get('policy_generator', {})
+    tr_cfg = cfg.get('training', {})
+    pg_cfg = cfg.get('policy_generator', {})
 
-    F_star   = d.get('F_star', 0.0)
-    F_bl     = d.get('F_baseline', 0.0)
-    F_act    = d.get('F_actual', 0.0)
+    F_star = d.get('F_star', 0.0)
+    F_bl   = d.get('F_baseline', 0.0)
+    F_act  = d.get('F_actual', 0.0)
 
     fstar_v, _       = _fval(F_star)
-    fbl_v, fbl_s     = _fval(F_bl)
-    fact_v, fact_s   = _fval(F_act)
+    fbl_v,   fbl_s   = _fval(F_bl)
+    fact_v,  fact_s  = _fval(F_act)
 
     epochs     = tr_cfg.get('epochs', hist.get('epochs_trained', '\u2014'))
     max_epochs = tr_cfg.get('max_epochs', tr_cfg.get('epochs', '\u2014'))
     patience   = tr_cfg.get('patience', '\u2014')
     seed       = cfg.get('misc', {}).get('random_seed', '\u2014')
 
-    # status
-    completed   = hist.get('completed', True)
-    status_txt  = "complete"   if completed else "incomplete"
-    status_st   = ST_STATUS_G  if completed else ST_STATUS_A
-    status_col  = C_GREEN      if completed else C_AMBER
+    completed  = hist.get('completed', True)
+    status_txt = "complete"  if completed else "incomplete"
+    status_st  = ST_STATUS_G if completed else ST_STATUS_A
+    status_col = C_GREEN     if completed else C_AMBER
 
-    # improvement
-    improv = _last(fm.get('improvement', 0.0))
-    if isinstance(improv, (int, float)) and fbl_v and fbl_v != 0:
-        improv_pct = (fact_v - fbl_v) / abs(fbl_v) * 100
-    else:
-        improv_pct = float(improv) * 100 if improv else 0.0
-
-    gap_pct = (1 - fact_v / fstar_v) * 100 if fstar_v else 0.0
-
+    improv_pct = (fact_v - fbl_v) / abs(fbl_v) * 100 if fbl_v else 0.0
+    gap_pct    = (1 - fact_v / fstar_v) * 100 if fstar_v else 0.0
     best_loss  = _last(hist.get('best_total_loss',  hist.get('best_loss',  0.0)))
     final_loss = _last(hist.get('final_total_loss', hist.get('total_loss', 0.0)))
     rob_std    = fact_s if fact_s is not None else _last(fm.get('robustness_std', 0.0))
 
-    F = []  # story flowables for page 1
+    F = []
 
     # ── header ────────────────────────────────────────────────────────────────
     title_p  = Paragraph("Controller Optimization \u2014 Training Report", ST_TITLE)
     meta_str = (f"{ts_str}  \u00b7  seed {seed}  \u00b7  "
                 f"epochs {epochs} / {max_epochs}  \u00b7  patience {patience}")
-    meta_p   = Paragraph(meta_str, ST_SUB)
     badge_w  = 2.2 * cm
     badge_p  = Paragraph(status_txt, status_st)
     hdr_tbl  = Table([[title_p, badge_p]], colWidths=[TW - badge_w, badge_w])
     hdr_tbl.setStyle(TableStyle([
-        ('VALIGN',(0,0),(-1,-1),'TOP'),
-        ('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0),
-        ('TOPPADDING',(0,0),(-1,-1),0),('BOTTOMPADDING',(0,0),(-1,-1),0),
-        ('BOX',(1,0),(1,0),0.5,status_col),
-        ('ALIGN',(1,0),(1,0),'CENTER'),
+        ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
+        ('LEFTPADDING',   (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
+        ('TOPPADDING',    (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+        ('BOX',           (1, 0), (1,  0),  0.5, status_col),
+        ('ALIGN',         (1, 0), (1,  0),  'CENTER'),
     ]))
     F.append(hdr_tbl)
-    F.append(Spacer(1, 2))
-    F.append(meta_p)
+    F.append(Spacer(1, 1))
+    F.append(Paragraph(meta_str, ST_SUB))
     F.append(_rule_heavy())
 
     # ── KPI bar ───────────────────────────────────────────────────────────────
@@ -349,240 +361,174 @@ def _page1(d):
         [Paragraph(f"{fact_v:.4f}",  ST_KPI_VAL),
          Paragraph(f"{fstar_v:.4f}", ST_KPI_VAL),
          Paragraph(f"{improv_pct:+.0f}%",
-                   _s('_kv_g', FS_KPI_VAL, color=C_GREEN if improv_pct >= 0 else C_RED)),
+                   _s('_kv_g', FS_KPI_VAL,
+                      color=C_GREEN if improv_pct >= 0 else C_RED)),
          Paragraph(f"{best_loss:.4f}", ST_KPI_VAL)],
         [Paragraph(f"\u00b1{rob_std:.4f} robustness", ST_KPI_SUB),
          Paragraph(f"gap {gap_pct:.1f}%",             ST_KPI_SUB),
-         Paragraph(f"F\u2019 = {fbl_v:.4f}",         ST_KPI_SUB),
-         Paragraph(f"final {final_loss:.2f}",         ST_KPI_SUB)],
+         Paragraph(f"F\u2019 = {fbl_v:.4f}",          ST_KPI_SUB),
+         Paragraph(f"final {final_loss:.2f}",          ST_KPI_SUB)],
     ]
-    kpi_tbl = Table(kpi_data, colWidths=[cw]*4)
+    kpi_tbl = Table(kpi_data, colWidths=[cw] * 4)
     kpi_tbl.setStyle(TableStyle([
-        ('BOX',           (0,0),(-1,-1), 0.5, C_MGRAY),
-        ('INNERGRID',     (0,0),(-1,-1), 0.5, C_MGRAY),
-        ('TOPPADDING',    (0,0),(-1,-1), 6),
-        ('BOTTOMPADDING', (0,0),(-1,-1), 5),
-        ('LEFTPADDING',   (0,0),(-1,-1), 8),
-        ('RIGHTPADDING',  (0,0),(-1,-1), 8),
-        ('VALIGN',        (0,0),(-1,-1), 'TOP'),
+        ('BOX',           (0, 0), (-1, -1), 0.5, C_MGRAY),
+        ('INNERGRID',     (0, 0), (-1, -1), 0.5, C_MGRAY),
+        ('TOPPADDING',    (0, 0), (-1, -1), 4),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ('LEFTPADDING',   (0, 0), (-1, -1), 7),
+        ('RIGHTPADDING',  (0, 0), (-1, -1), 7),
+        ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
     ]))
     F.append(kpi_tbl)
-    F.append(Spacer(1, 10))
+    F.append(Spacer(1, 7))
 
-    # ── 01 — configuration & training parameters ──────────────────────────────
+    # ── 01 — configuration & training (4 columns: arch | training | scores | performance) ──
     F += section_header("01 \u2014 configuration & training parameters")
 
-    n_scenarios = d.get('n_scenarios', cfg.get('training', {}).get('n_scenarios', '\u2014'))
-    seeds_t = cfg.get('seeds_target', cfg.get('misc', {}).get('seeds_target', '\u2014'))
+    n_scenarios = d.get('n_scenarios', tr_cfg.get('n_scenarios', '\u2014'))
+    seeds_t = cfg.get('seeds_target',   cfg.get('misc', {}).get('seeds_target',   '\u2014'))
     seeds_b = cfg.get('seeds_baseline', cfg.get('misc', {}).get('seeds_baseline', '\u2014'))
+    lam_bc  = tr_cfg.get('lambda_bc',   tr_cfg.get('lam_bc', '\u2014'))
+    chk     = short_dir(tr_cfg.get('checkpoint_dir', ''))
 
     arch_rows = [
-        ("Policy",                  str(pg_cfg.get('architecture', '\u2014')) +
-                                    ' ' + str(pg_cfg.get('hidden_sizes', ''))),
-        ("Activation",              str(pg_cfg.get('activation', 'N/A'))),
-        ("Dropout rate",            str(pg_cfg.get('dropout_rate', 'N/A'))),
-        ("Processes",               ', '.join(cfg.get('process_names') or ['all'])),
-        ("Training scenarios",      str(n_scenarios)),
-        ("Seeds (target / baseline)", f"{seeds_t} / {seeds_b}"),
+        ("Policy",          str(pg_cfg.get('architecture', '\u2014')) + ' ' +
+                            str(pg_cfg.get('hidden_sizes', ''))),
+        ("Activation",      str(pg_cfg.get('activation',   'N/A'))),
+        ("Dropout rate",    str(pg_cfg.get('dropout_rate', 'N/A'))),
+        ("Processes",       ', '.join(cfg.get('process_names') or ['all'])),
+        ("Train scenarios", str(n_scenarios)),
+        ("Seeds (T / B)",   f"{seeds_t} / {seeds_b}"),
     ]
-    lam_bc   = tr_cfg.get('lambda_bc', tr_cfg.get('lam_bc', '\u2014'))
-    chk      = short_dir(tr_cfg.get('checkpoint_dir', ''))
+    bs = tr_cfg.get('batch_size', '\u2014')
     train_rows = [
-        ("Epochs",         f"{epochs} / {max_epochs}"),
-        ("Batch size",     f"{tr_cfg.get('batch_size', '\u2014'):,}" if isinstance(tr_cfg.get('batch_size'), int) else str(tr_cfg.get('batch_size', '\u2014'))),
-        ("Learning rate",  fmt_lr(tr_cfg.get('learning_rate', 0))),
-        ("Weight decay",   fmt_lr(tr_cfg.get('weight_decay', 0))),
-        ("\u03bb_BC",      fmt_lr(float(lam_bc)) if isinstance(lam_bc, (int,float)) else str(lam_bc)),
-        ("Patience",       str(patience)),
-        ("Device",         str(tr_cfg.get('device', '\u2014'))),
-        ("Checkpoint dir", chk),
+        ("Epochs",          f"{epochs} / {max_epochs}"),
+        ("Batch size",      f"{bs:,}" if isinstance(bs, int) else str(bs)),
+        ("Learning rate",   fmt_lr(tr_cfg.get('learning_rate', 0))),
+        ("Weight decay",    fmt_lr(tr_cfg.get('weight_decay', 0))),
+        ("\u03bb_BC",       fmt_lr(float(lam_bc)) if isinstance(lam_bc, (int, float)) else str(lam_bc)),
+        ("Patience",        str(patience)),
+        ("Device",          str(tr_cfg.get('device', '\u2014'))),
+        ("Checkpoint dir",  chk),
     ]
-    F.append(two_col(
-        [blk_title("Architecture")] + [kv_table(arch_rows,  (TW-14)/2)],
-        [blk_title("Training")]     + [kv_table(train_rows, (TW-14)/2)],
+    cw4 = (TW - 3 * 10) / 4
+
+    F.append(four_col(
+        [blk_title("Architecture")] + [kv_table(arch_rows,  cw4)],
+        [blk_title("Training")]     + [kv_table(train_rows, cw4)],
+        # col 3: reliability scores
+        [blk_title("Reliability scores")] + [kv_table([
+            ("F* (target)",             f"{fstar_v:.6f}"),
+            ("F\u2019 (baseline)",       _fstr(F_bl)),
+            ("F (controller)",           _fstr(F_act)),
+            ("Improvement vs baseline",  f"{improv_pct:+.2f}%",
+             ST_VAL_G if improv_pct >= 0 else ST_VAL_R),
+            ("Gap from target",          f"{gap_pct:.2f}%", ST_VAL_R),
+            ("Robustness (std)",         f"{rob_std:.6f}"),
+        ], cw4)],
+        # col 4: performance
+        [blk_title("Performance")] + [kv_table(
+            _perf_rows(adv, n_scenarios), cw4)],
+        gap=10,
     ))
-    F.append(Spacer(1, 10))
+    F.append(Spacer(1, 7))
 
-    # ── 02 — reliability metrics ───────────────────────────────────────────────
-    F += section_header("02 \u2014 reliability metrics")
+    # ── 02 — loss decomposition & generalization (3 + 2 cols) ─────────────────
+    F += section_header(
+        "02 \u2014 loss decomposition & L_min Bellman  \u00b7  "
+        "03 \u2014 overfitting & generalization")
 
-    # ── parse advanced_metrics — supports both old nested format and
-    #    train_controller.py flat format ────────────────────────────────────
-    # flat keys from train_controller.py:
-    #   worst_case_gap_train / worst_case_gap_test  → dicts
-    #   success_rate_train / success_rate_test       → dicts
-    #   within_scenario_gap                          → dict
-    wct_d  = adv.get('worst_case_gap_train') or adv.get('train_results') or {}
-    wce_d  = adv.get('worst_case_gap_test')  or adv.get('test_results')  or {}
-    sr_tr  = adv.get('success_rate_train')   or {}
-    sr_te  = adv.get('success_rate_test')    or {}
-    wig    = adv.get('within_scenario_gap')  or adv.get('intra_scenario') or {}
-    ttg    = adv.get('train_test_gap')       or adv.get('overfitting')    or {}
-    div_tr = adv.get('diversity_train')      or {}
-    div_te = adv.get('diversity_test')       or {}
-
-    fbl_str  = _fstr(F_bl)
-    fact_str = _fstr(F_act)
-
-    scores_rows = [
-        ("F* (target)",            f"{fstar_v:.6f}"),
-        ("F\u2019 (baseline)",     fbl_str),
-        ("F (controller)",         fact_str),
-        ("Improvement vs baseline",f"{improv_pct:+.2f}%", ST_VAL_G if improv_pct >= 0 else ST_VAL_R),
-        ("Gap from target",        f"{gap_pct:.2f}%",     ST_VAL_R),
-        ("Robustness (std)",       f"{rob_std:.6f}"),
-    ]
-    _n_sc = int(n_scenarios) if isinstance(n_scenarios, (int,float)) else 5
-    n_sc_tr = sr_tr.get('n_scenarios', sr_tr.get('n_total', _n_sc))
-    n_sc_te = sr_te.get('n_scenarios', sr_te.get('n_total', _n_sc))
-    ok_tr   = sr_tr.get('n_success', sr_tr.get('n_above_threshold', 0)) or 0
-    ok_te   = sr_te.get('n_success', sr_te.get('n_above_threshold', 0)) or 0
-    pct_tr_r = sr_tr.get('success_rate', sr_tr.get('rate', ok_tr / n_sc_tr if n_sc_tr else 0))
-    pct_te_r = sr_te.get('success_rate', sr_te.get('rate', ok_te / n_sc_te if n_sc_te else 0))
-    pct_tr  = (float(pct_tr_r) if pct_tr_r is not None else 0.0) * 100
-    pct_te  = (float(pct_te_r) if pct_te_r is not None else 0.0) * 100
-    wc_tr   = wct_d.get('worst_case_gap',          wct_d.get('gap', None))
-    wc_te   = wce_d.get('worst_case_gap',          wce_d.get('gap', None))
-    wc_tr_s = wct_d.get('worst_case_scenario_idx', wct_d.get('worst_case_scenario', ''))
-    wc_te_s = wce_d.get('worst_case_scenario_idx', wce_d.get('worst_case_scenario', ''))
-    gc_tr   = None
-    gc_te   = None
-    gc_tr_s = None
-    gc_te_s = None
-
-    def _gc_str(mean, std):
-        if mean is None or mean == '\u2014': return '\u2014'
-        try:
-            s = f"{float(mean):.4f}"
-            if std is not None: s += f" \u00b1 {float(std):.4f}"
-            return s
-        except (TypeError, ValueError):
-            return str(mean)
-
-    thresh_pct = adv.get('success_threshold_pct', 95) or 95
-    perf_rows = [
-        (f"Success rate \u2014 train",   f"{ok_tr}/{n_sc_tr} ({pct_tr:.1f}%)",
-         ST_VAL_G if pct_tr >= 80 else ST_VAL_R),
-        (f"Success rate \u2014 test",    f"{ok_te}/{n_sc_te} ({pct_te:.1f}%)",
-         ST_VAL_G if pct_te >= 80 else ST_VAL_R),
-        (f"Worst-case gap \u2014 train", f"{float(wc_tr):.6f} at sc. {wc_tr_s}" if isinstance(wc_tr, (int,float)) else '\u2014'),
-        (f"Worst-case gap \u2014 test",  f"{float(wc_te):.6f} at sc. {wc_te_s}" if isinstance(wc_te, (int,float)) else '\u2014'),
-        (f"Gap closure \u2014 train",    _gc_str(gc_tr, gc_tr_s)),
-        (f"Gap closure \u2014 test",     _gc_str(gc_te, gc_te_s)),
-    ]
-    F.append(two_col(
-        [blk_title("Scores")]                              + [kv_table(scores_rows, (TW-14)/2)],
-        [blk_title(f"Performance (threshold: {thresh_pct}% \u00d7 F*)")] + [kv_table(perf_rows, (TW-14)/2)],
-    ))
-    F.append(Spacer(1, 10))
-
-    # ── 03 — loss decomposition & L_min ───────────────────────────────────────
-    F += section_header("03 \u2014 loss decomposition & L_min Bellman analysis")
-
-    theo = d.get('theoretical_data') or {}
+    theo         = d.get('theoretical_data') or {}
     theo_summary = theo.get('summary', {})
-    final_total = _last(hist.get('final_total_loss', hist.get('total_loss', final_loss)))
-    _rel_raw    = hist.get('final_reliability_loss', hist.get('reliability_loss', None))
-    _bc_raw     = hist.get('final_bc_loss',          hist.get('bc_loss', None))
-    final_rel   = _last(_rel_raw) if _rel_raw is not None else '\u2014'
-    final_bc    = _last(_bc_raw)  if _bc_raw  is not None else '\u2014'
+    final_total  = _last(hist.get('final_total_loss', hist.get('total_loss', final_loss)))
+    _rel_raw     = hist.get('final_reliability_loss', hist.get('reliability_loss', None))
+    _bc_raw      = hist.get('final_bc_loss',          hist.get('bc_loss',          None))
+    final_rel    = _last(_rel_raw) if _rel_raw is not None else '\u2014'
+    final_bc     = _last(_bc_raw)  if _bc_raw  is not None else '\u2014'
 
-    def _theo_scalar(key, summary_key=None, fallback='\u2014'):
-        """Extract a scalar from theoretical_data, trying summary first, then _last on lists."""
+    def _tv(v, fmt='.6f'):
+        if v is None or v == '\u2014': return '\u2014'
+        try:    return f"{float(v):{fmt}}"
+        except: return str(v)
+
+    def _theo(key, sk=None, fallback='\u2014'):
         v = theo.get(key)
         if v is not None and not isinstance(v, (list, tuple)):
-            # Also handle numpy arrays
             if hasattr(v, '__len__') and hasattr(v, 'flat'):
                 return _last(v) if len(v) > 0 else fallback
             return v
-        if summary_key and summary_key in theo_summary:
-            return theo_summary[summary_key]
+        if sk and sk in theo_summary:
+            return theo_summary[sk]
         if isinstance(v, (list, tuple)):
             return _last(v) if v else fallback
         return fallback
 
-    lmin_emp  = _theo_scalar('lmin_empirical', 'final_L_min')
-    gap_red   = _theo_scalar('gap_reducible',  'final_gap')
-    eff       = _theo_scalar('efficiency',     'final_efficiency')
-    viol      = theo.get('n_violations', theo_summary.get('n_violations', 0))
-    total_ep  = epochs if isinstance(epochs, int) else '?'
-
-    var_f    = _theo_scalar('var_f',    'theoretical_Var_F_final')
-    bias2    = _theo_scalar('bias2',    'empirical_Var_F_final')
-    gap_r    = _theo_scalar('gap_reducible', 'final_gap')
+    lmin_emp = _theo('lmin_empirical', 'final_L_min')
+    gap_red  = _theo('gap_reducible',  'final_gap')
+    eff      = _theo('efficiency',     'final_efficiency')
+    viol     = theo.get('n_violations', theo_summary.get('n_violations', 0))
+    var_f    = _theo('var_f',  'theoretical_Var_F_final')
+    bias2    = _theo('bias2',  'empirical_Var_F_final')
+    gap_r    = _theo('gap_reducible', 'final_gap')
     pct_str  = theo.get('decomp_pct', '\u2014')
+    total_ep = epochs if isinstance(epochs, int) else '?'
 
-    def _tv(v, fmt='.6f'):
-        if v is None or v == '\u2014': return '\u2014'
-        try: return f"{float(v):{fmt}}"
-        except (TypeError, ValueError): return str(v)
-
-    losses_rows = [
-        ("Total",     _tv(final_total)),
-        ("Reliability", _tv(final_rel) if final_rel != '\u2014' else '\u2014'),
-        ("BC",        _tv(final_bc)   if final_bc  != '\u2014' else '\u2014'),
-        ("Best total",_tv(best_loss),  ST_VAL_G),
-    ]
-    lmin_rows = [
-        ("L_min empirical",        _tv(lmin_emp)),
-        ("Gap (reducible)",        _tv(gap_red)),
-        ("Efficiency",             f"{float(eff)*100:.1f}%" if eff != '\u2014' else '\u2014',
-         ST_VAL_G),
-        ("Violations (loss&lt;L_min)",f"{viol} / {total_ep}",
-         ST_VAL_G if viol == 0 else ST_VAL_R),
-    ]
-    decomp_rows = [
-        ("Var(F) \u2014 irreducible",  _tv(var_f)),
-        ("Bias\u00b2 \u2014 irreducible", _tv(bias2)),
-        ("Gap \u2014 reducible",       _tv(gap_r)),
-        ("% of loss",                  str(pct_str)),
-    ]
-    F.append(three_col(
-        [blk_title("Final losses")]          + [kv_table(losses_rows, (TW-20)/3)],
-        [blk_title("L_min Bellman (backward induction)")] + [kv_table(lmin_rows, (TW-20)/3)],
-        [blk_title("Decomposition")]         + [kv_table(decomp_rows, (TW-20)/3)],
-    ))
-    F.append(Spacer(1, 10))
-
-    # ── 04 — overfitting & generalization ─────────────────────────────────────
-    F += section_header("04 \u2014 overfitting & generalization")
-
-    mg_tr  = ttg.get('mean_gap_train',  ttg.get('mean_F_train', None))
-    mg_te  = ttg.get('mean_gap_test',   ttg.get('mean_F_test',  None))
-    diff   = ttg.get('diff',            ttg.get('gap_train_minus_test', None))
-    cv_tr  = ttg.get('dataset_cv_train', ttg.get('cv_train', None))
-    cv_te  = ttg.get('dataset_cv_test',  ttg.get('cv_test',  None))
-
-    mf_tr  = wig.get('mean_f_train',    wig.get('mean_F_train_split', None))
-    mf_val = wig.get('mean_f_val',      wig.get('mean_F_val_split',   None))
-    gap_iv = wig.get('gap',             wig.get('gap_train_minus_val', None))
-    div_ep = wig.get('divergent_epochs', wig.get('n_divergent_epochs', 0)) or 0
+    # overfitting data
+    ttg  = adv.get('train_test_gap')       or adv.get('overfitting')    or {}
+    wig  = adv.get('within_scenario_gap')  or adv.get('intra_scenario') or {}
 
     def _scalar(v):
-        """Extract scalar from value that may be a list, numpy array, or scalar."""
         if v is None: return None
         if isinstance(v, (list, tuple)): return v[0] if len(v) else None
-        if hasattr(v, 'item'): return v.item()   # numpy scalar
+        if hasattr(v, 'item'): return v.item()
         return v
 
     def _ov_note(v):
         if v is None: return ''
         return ' (possible overfit)' if float(v) < -0.005 else ' \u2014 consistent'
 
-    _mg_tr = _scalar(mg_tr); _mg_te = _scalar(mg_te)
-    _diff  = _scalar(diff);  _cv_tr = _scalar(cv_tr); _cv_te = _scalar(cv_te)
+    mg_tr  = _scalar(ttg.get('mean_gap_train',  ttg.get('mean_F_train', None)))
+    mg_te  = _scalar(ttg.get('mean_gap_test',   ttg.get('mean_F_test',  None)))
+    diff   = _scalar(ttg.get('diff',            ttg.get('gap_train_minus_test', None)))
+    cv_tr  = _scalar(ttg.get('dataset_cv_train', ttg.get('cv_train', None)))
+    cv_te  = _scalar(ttg.get('dataset_cv_test',  ttg.get('cv_test',  None)))
+    mf_tr  = wig.get('mean_f_train',  wig.get('mean_F_train_split', None))
+    mf_val = wig.get('mean_f_val',    wig.get('mean_F_val_split',   None))
+    gap_iv = wig.get('gap',           wig.get('gap_train_minus_val', None))
+    div_ep = wig.get('divergent_epochs', wig.get('n_divergent_epochs', 0)) or 0
+
+    losses_rows = [
+        ("Total",       _tv(final_total)),
+        ("Reliability", _tv(final_rel)   if final_rel != '\u2014' else '\u2014'),
+        ("BC",          _tv(final_bc)    if final_bc  != '\u2014' else '\u2014'),
+        ("Best total",  _tv(best_loss),   ST_VAL_G),
+    ]
+    lmin_rows = [
+        ("L_min empirical",          _tv(lmin_emp)),
+        ("Gap (reducible)",          _tv(gap_red)),
+        ("Efficiency",               f"{float(eff)*100:.1f}%" if eff != '\u2014' else '\u2014',
+         ST_VAL_G),
+        (f"Violations (loss&lt;L_min)", f"{viol} / {total_ep}",
+         ST_VAL_G if viol == 0 else ST_VAL_R),
+    ]
+    decomp_rows = [
+        ("Var(F) \u2014 irreducible",     _tv(var_f)),
+        ("Bias\u00b2 \u2014 irreducible", _tv(bias2)),
+        ("Gap \u2014 reducible",          _tv(gap_r)),
+        ("% of loss",                     str(pct_str)),
+    ]
     cross_rows = [
-        ("Mean gap \u2014 train",        f"{float(_mg_tr):.6f}" if _mg_tr is not None else '\u2014'),
-        ("Mean gap \u2014 test",         f"{float(_mg_te):.6f}" if _mg_te is not None else '\u2014'),
-        ("Difference (train \u2212 test)",
-         f"{float(_diff):.6f}{_ov_note(_diff)}" if _diff is not None else '\u2014',
-         ST_VAL_A if _diff is not None and float(_diff) < -0.005 else ST_VAL),
-        ("Dataset CV \u2014 train scenarios", f"{float(_cv_tr):.4f}" if _cv_tr is not None else '\u2014'),
-        ("Dataset CV \u2014 test scenarios",  f"{float(_cv_te):.4f}" if _cv_te is not None else '\u2014'),
+        ("Mean gap \u2014 train",         f"{float(mg_tr):.6f}"  if mg_tr  is not None else '\u2014'),
+        ("Mean gap \u2014 test",          f"{float(mg_te):.6f}"  if mg_te  is not None else '\u2014'),
+        ("Diff (train \u2212 test)",
+         f"{float(diff):.6f}{_ov_note(diff)}" if diff is not None else '\u2014',
+         ST_VAL_A if diff is not None and float(diff) < -0.005 else ST_VAL),
+        ("Dataset CV \u2014 train",       f"{float(cv_tr):.4f}"  if cv_tr  is not None else '\u2014'),
+        ("Dataset CV \u2014 test",        f"{float(cv_te):.4f}"  if cv_te  is not None else '\u2014'),
     ]
     intra_rows = [
-        ("Mean F \u2014 train split", f"{float(mf_tr):.6f}"  if mf_tr  is not None and mf_tr  != '\u2014' else '\u2014'),
-        ("Mean F \u2014 val split",   f"{float(mf_val):.6f}" if mf_val is not None and mf_val != '\u2014' else '\u2014'),
+        ("Mean F \u2014 train split",     f"{float(mf_tr):.6f}"  if mf_tr  is not None and mf_tr  != '\u2014' else '\u2014'),
+        ("Mean F \u2014 val split",       f"{float(mf_val):.6f}" if mf_val is not None and mf_val != '\u2014' else '\u2014'),
         ("Gap (train \u2212 val)",
          f"{float(gap_iv):.6f}{_ov_note(gap_iv)}" if gap_iv is not None and gap_iv != '\u2014' else '\u2014',
          ST_VAL_G if gap_iv is not None and abs(float(gap_iv)) < 0.005 else ST_VAL),
@@ -590,16 +536,26 @@ def _page1(d):
          f"{div_ep} / {total_ep}",
          ST_VAL_G if div_ep == 0 else ST_VAL_R),
     ]
-    F.append(two_col(
-        [blk_title("Cross-scenario")]                  + [kv_table(cross_rows, (TW-14)/2)],
-        [blk_title("Intra-scenario (last 50 epochs)")] + [kv_table(intra_rows, (TW-14)/2)],
-    ))
-    F.append(Spacer(1, 10))
 
-    # ── 05 — trajectory comparison ────────────────────────────────────────────
+    F.append(four_col(
+        [blk_title("Final losses")]                        + [kv_table(losses_rows,  cw4)],
+        [blk_title("L_min Bellman (backward induction)")] + [kv_table(lmin_rows,    cw4)],
+        [blk_title("Decomposition")]                       + [kv_table(decomp_rows,  cw4)],
+        [blk_title("Cross-scenario overfitting")]          + [kv_table(cross_rows,   cw4)],
+        gap=10,
+    ))
+    F.append(Spacer(1, 5))
+
+    # intra-scenario — compact half-width table
+    F.append(blk_title("Intra-scenario (last 50 epochs)"))
+    F.append(kv_table(intra_rows, TW * 0.5, key_frac=0.42))
+    F.append(Spacer(1, 7))
+
+    # ── 04 — trajectory comparison (new page) ───────────────────────────────
     if traj:
+        F.append(PageBreak())
         sc_idx  = traj.get('scenario_idx', 0)
-        F += section_header(f"05 \u2014 trajectory comparison \u2014 scenario {sc_idx}")
+        F += section_header(f"04 \u2014 trajectory comparison \u2014 scenario {sc_idx}")
 
         p_names = traj.get('process_names', [])
         t_traj  = traj.get('target_trajectory', {})
@@ -607,13 +563,13 @@ def _page1(d):
         a_traj  = traj.get('actual_trajectory', {})
 
         traj_hdr = [Paragraph(h, ST_TRAJ_H) for h in
-                    ["Step", "Target a*", "Baseline a\u2019", "Controller a",
-                     "\u0394 baseline", "\u0394 actual", "Note"]]
-        cws_t = [r * TW for r in [0.08, 0.12, 0.13, 0.14, 0.12, 0.12, 0.29]]
+                    ["Step", "Target a*", "Baseline a\u2019",
+                     "Controller a", "\u0394 baseline", "\u0394 actual", "Note"]]
+        cws_t = [r * TW for r in [0.07, 0.11, 0.12, 0.12, 0.11, 0.11, 0.36]]
         traj_rows = [traj_hdr]
 
         def _extract(tr_dict, proc, key='inputs'):
-            v = tr_dict.get(proc, {})
+            v   = tr_dict.get(proc, {})
             arr = v.get(key, v.get('inputs', []))
             if hasattr(arr, 'detach'):
                 arr = arr.detach().cpu().numpy()
@@ -623,34 +579,34 @@ def _page1(d):
             t_inp = _extract(t_traj, proc)
             b_inp = _extract(b_traj, proc)
             a_inp = _extract(a_traj, proc)
-            t_v = float(t_inp[0]) if len(t_inp) else 0.0
-            b_v = float(b_inp[0]) if len(b_inp) else 0.0
-            a_v = float(a_inp[0]) if len(a_inp) else 0.0
+            t_v   = float(t_inp[0]) if len(t_inp) else 0.0
+            b_v   = float(b_inp[0]) if len(b_inp) else 0.0
+            a_v   = float(a_inp[0]) if len(a_inp) else 0.0
             d_base   = a_v - b_v
             d_actual = a_v - t_v
             closer   = abs(a_v - t_v) < abs(b_v - t_v)
             note     = "adjusted \u2191" if closer else "adjusted"
-            if abs(b_v - t_v) < 1e-6: note = "identical inputs"
-            row = [
-                Paragraph(proc,          ST_TRAJ_C),
-                Paragraph(f"{t_v:+.4f}", ST_TRAJ_C),
-                Paragraph(f"{b_v:+.4f}", ST_TRAJ_C),
-                Paragraph(f"{a_v:+.4f}", ST_TRAJ_C),
-                Paragraph(f"{d_base:+.4f}", ST_TRAJ_C),
+            if abs(b_v - t_v) < 1e-6:
+                note = "identical inputs"
+            traj_rows.append([
+                Paragraph(proc,           ST_TRAJ_C),
+                Paragraph(f"{t_v:+.4f}",  ST_TRAJ_C),
+                Paragraph(f"{b_v:+.4f}",  ST_TRAJ_C),
+                Paragraph(f"{a_v:+.4f}",  ST_TRAJ_C),
+                Paragraph(f"{d_base:+.4f}",  ST_TRAJ_C),
                 Paragraph(f"{d_actual:+.4f}", ST_TRAJ_G if closer else ST_TRAJ_R),
-                Paragraph(note, ST_NOTE),
-            ]
-            traj_rows.append(row)
+                Paragraph(note,           ST_NOTE),
+            ])
 
         traj_tbl = Table(traj_rows, colWidths=cws_t)
         traj_tbl.setStyle(TableStyle([
-            ('LINEBELOW',     (0,0),(-1,0),  0.5, C_BLACK),
-            ('LINEBELOW',     (0,1),(-1,-1), 0.4, C_LGRAY),
-            ('TOPPADDING',    (0,0),(-1,-1), 2),
-            ('BOTTOMPADDING', (0,0),(-1,-1), 2),
-            ('LEFTPADDING',   (0,0),(-1,-1), 3),
-            ('RIGHTPADDING',  (0,0),(-1,-1), 3),
-            ('VALIGN',        (0,0),(-1,-1), 'TOP'),
+            ('LINEBELOW',     (0, 0), (-1,  0), 0.5, C_BLACK),
+            ('LINEBELOW',     (0, 1), (-1, -1), 0.4, C_LGRAY),
+            ('TOPPADDING',    (0, 0), (-1, -1), 1.5),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 1.5),
+            ('LEFTPADDING',   (0, 0), (-1, -1), 3),
+            ('RIGHTPADDING',  (0, 0), (-1, -1), 3),
+            ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
         ]))
         F.append(traj_tbl)
 
@@ -658,22 +614,66 @@ def _page1(d):
         tf_bl = traj.get('F_baseline', fbl_v)
         tf_ac = traj.get('F_actual',   fact_v)
         foot_l = Paragraph(
-            f"F* {tf_s:.6f}  \u00b7  F\u2019 {tf_bl:.6f}  \u00b7  F {tf_ac:.6f}  \u00b7  scenario {sc_idx} only",
-            ST_NOTE)
+            f"F* {tf_s:.6f}  \u00b7  F\u2019 {tf_bl:.6f}  \u00b7  "
+            f"F {tf_ac:.6f}  \u00b7  scenario {sc_idx} only", ST_NOTE)
         foot_r = Paragraph("\u2191 = closer to target than baseline", ST_NOTE_G)
-        foot_t = Table([[foot_l, foot_r]], colWidths=[TW*0.65, TW*0.35])
+        foot_t = Table([[foot_l, foot_r]], colWidths=[TW * 0.65, TW * 0.35])
         foot_t.setStyle(TableStyle([
-            ('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0),
-            ('TOPPADDING',(0,0),(-1,-1),3),('BOTTOMPADDING',(0,0),(-1,-1),0),
-            ('ALIGN',(1,0),(1,0),'RIGHT'),
+            ('LEFTPADDING',   (0, 0), (-1, -1), 0),
+            ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
+            ('TOPPADDING',    (0, 0), (-1, -1), 3),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+            ('ALIGN',         (1, 0), (1,  0),  'RIGHT'),
         ]))
         F.append(foot_t)
 
     return F
 
 
+def _perf_rows(adv, n_scenarios):
+    """Build performance rows from advanced_metrics dict."""
+    sr_tr = adv.get('success_rate_train') or {}
+    sr_te = adv.get('success_rate_test')  or {}
+    wct_d = adv.get('worst_case_gap_train') or adv.get('train_results') or {}
+    wce_d = adv.get('worst_case_gap_test')  or adv.get('test_results')  or {}
+
+    _n_sc  = int(n_scenarios) if isinstance(n_scenarios, (int, float)) else 5
+    n_sc_tr = sr_tr.get('n_scenarios', sr_tr.get('n_total', _n_sc))
+    n_sc_te = sr_te.get('n_scenarios', sr_te.get('n_total', _n_sc))
+    ok_tr   = sr_tr.get('n_success', sr_tr.get('n_above_threshold', 0)) or 0
+    ok_te   = sr_te.get('n_success', sr_te.get('n_above_threshold', 0)) or 0
+    pct_tr_r = sr_tr.get('success_rate', sr_tr.get('rate',
+               ok_tr / n_sc_tr if n_sc_tr else 0))
+    pct_te_r = sr_te.get('success_rate', sr_te.get('rate',
+               ok_te / n_sc_te if n_sc_te else 0))
+    pct_tr  = (float(pct_tr_r) if pct_tr_r is not None else 0.0) * 100
+    pct_te  = (float(pct_te_r) if pct_te_r is not None else 0.0) * 100
+    wc_tr   = wct_d.get('worst_case_gap', wct_d.get('gap', None))
+    wc_te   = wce_d.get('worst_case_gap', wce_d.get('gap', None))
+    wc_tr_s = wct_d.get('worst_case_scenario_idx', wct_d.get('worst_case_scenario', ''))
+    wc_te_s = wce_d.get('worst_case_scenario_idx', wce_d.get('worst_case_scenario', ''))
+    thresh  = adv.get('success_threshold_pct', 95) or 95
+
+    rows = [
+        (f"Success rate \u2014 train",
+         f"{ok_tr}/{n_sc_tr} ({pct_tr:.1f}%)",
+         ST_VAL_G if pct_tr >= 80 else ST_VAL_R),
+        (f"Success rate \u2014 test",
+         f"{ok_te}/{n_sc_te} ({pct_te:.1f}%)",
+         ST_VAL_G if pct_te >= 80 else ST_VAL_R),
+        (f"Worst-case gap \u2014 train",
+         f"{float(wc_tr):.6f} at sc. {wc_tr_s}"
+         if isinstance(wc_tr, (int, float)) else '\u2014'),
+        (f"Worst-case gap \u2014 test",
+         f"{float(wc_te):.6f} at sc. {wc_te_s}"
+         if isinstance(wc_te, (int, float)) else '\u2014'),
+        (f"Threshold", f"{thresh}% \u00d7 F*"),
+    ]
+    return rows
+
+
 # ════════════════════════════════════════════════════════════════════════════
-#  PAGE 2 CONTENT
+#  PAGE 2 — charts
 # ════════════════════════════════════════════════════════════════════════════
 
 def _page2(d):
@@ -687,92 +687,106 @@ def _page2(d):
              hist.get('epochs_trained', '\u2014'))
     max_ep = cfg.get('training', {}).get('max_epochs',
              cfg.get('training', {}).get('epochs', '\u2014'))
-    completed = hist.get('completed', True)
-    status_txt = "complete" if completed else "incomplete"
+    completed  = hist.get('completed', True)
+    status_txt = "complete"  if completed else "incomplete"
     status_st  = ST_STATUS_G if completed else ST_STATUS_A
     status_col = C_GREEN     if completed else C_AMBER
 
     F = []
 
-    # ── mini header (repeated on page 2) ─────────────────────────────────────
-    title_p  = Paragraph("Controller Optimization \u2014 Training Report", ST_TITLE)
-    meta_p   = Paragraph(f"{ts_str}  \u00b7  seed {seed}  \u00b7  epochs {epochs} / {max_ep}", ST_SUB)
-    badge_w  = 2.2 * cm
-    badge_p  = Paragraph(status_txt, status_st)
-    hdr_tbl  = Table([[title_p, badge_p]], colWidths=[TW - badge_w, badge_w])
+    # mini header
+    title_p = Paragraph("Controller Optimization \u2014 Training Report", ST_TITLE)
+    meta_p  = Paragraph(
+        f"{ts_str}  \u00b7  seed {seed}  \u00b7  epochs {epochs} / {max_ep}", ST_SUB)
+    badge_w = 2.2 * cm
+    badge_p = Paragraph(status_txt, status_st)
+    hdr_tbl = Table([[title_p, badge_p]], colWidths=[TW - badge_w, badge_w])
     hdr_tbl.setStyle(TableStyle([
-        ('VALIGN',(0,0),(-1,-1),'TOP'),
-        ('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0),
-        ('TOPPADDING',(0,0),(-1,-1),0),('BOTTOMPADDING',(0,0),(-1,-1),0),
-        ('BOX',(1,0),(1,0),0.5,status_col),
-        ('ALIGN',(1,0),(1,0),'CENTER'),
+        ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
+        ('LEFTPADDING',   (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
+        ('TOPPADDING',    (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+        ('BOX',           (1, 0), (1,  0),  0.5, status_col),
+        ('ALIGN',         (1, 0), (1,  0),  'CENTER'),
     ]))
     F.append(hdr_tbl)
-    F.append(Spacer(1, 2))
+    F.append(Spacer(1, 1))
     F.append(meta_p)
     F.append(_rule_heavy())
 
-    ph = 70   # plot height pts
+    # landscape plot height — 4 sections × 2 plots = 8 plots;
+    # available height ≈ PH - 2*M - header(~1.5cm) - footer(~0.8cm) - spacers
+    # Divide into 4 rows; each row has 2 side-by-side plots
+    ph = int((PH - 2 * M - 1.5 * cm - 0.8 * cm - 4 * 7) / 4)  # ~95 pts
 
-    # ── A — training history ──────────────────────────────────────────────────
+    # A — training history
     F += section_header("A \u2014 training history")
     F.append(img_pair(
-        chk / 'training_losses.png',      chk / 'reliability_evolution.png',
-        "Training losses & weights (total \u00b7 reliability \u00b7 BC \u00b7 reliability weight)",
+        chk / 'training_losses.png',     chk / 'reliability_evolution.png',
+        "Training losses & weights (total \u00b7 reliability \u00b7 BC \u00b7 "
+        "reliability weight)",
         "Reliability evolution: F (actual) vs F* (target) over epochs", ph))
-    F.append(Spacer(1, 10))
+    F.append(Spacer(1, 6))
 
-    # ── B — overfitting analysis ──────────────────────────────────────────────
+    # B — overfitting analysis
     F += section_header("B \u2014 overfitting analysis")
     F.append(img_pair(
         chk / 'train_val_loss.png',       chk / 'reliability_train_val.png',
         "Train vs validation loss \u2014 cross-scenario overfitting detection",
-        "Reliability loss: train vs validation \u2014 within-scenario held-out samples", ph))
-    F.append(Spacer(1, 10))
+        "Reliability loss: train vs validation \u2014 within-scenario held-out samples",
+        ph))
+    F.append(Spacer(1, 6))
 
-    # ── C — controller performance per scenario ────────────────────────────────
+    # C — controller performance per scenario
     F += section_header("C \u2014 controller performance per scenario")
     F.append(img_pair(
         chk / 'performance_train.png',    chk / 'gap_distribution_train.png',
         "Target vs baseline & controller \u2014 training scenarios",
         "Gap distribution \u2014 training scenarios (F* \u2212 F_actual)", ph))
-    F.append(Spacer(1, 6))
+    F.append(Spacer(1, 3))
     F.append(img_pair(
         chk / 'performance_test.png',     chk / 'gap_distribution_test.png',
         "Target vs baseline & controller \u2014 test scenarios",
         "Gap distribution \u2014 test scenarios (F* \u2212 F_actual)", ph))
-    F.append(Spacer(1, 10))
+    F.append(Spacer(1, 6))
 
-    # ── D — L_min Bellman ─────────────────────────────────────────────────────
+    # D — L_min Bellman
     F += section_header("D \u2014 L_min Bellman \u2014 theoretical analysis")
     F.append(img_pair(
         chk / 'loss_vs_lmin.png',         chk / 'training_efficiency.png',
-        "Loss vs L_min Bellman \u2014 observed loss \u00b7 L_min empirical \u00b7 reducible gap",
+        "Loss vs L_min Bellman \u2014 observed loss \u00b7 L_min empirical \u00b7 "
+        "reducible gap",
         "Training efficiency \u2014 L_min Bellman / loss over epochs", ph))
-    F.append(Spacer(1, 6))
+    F.append(Spacer(1, 3))
     F.append(img_pair(
         chk / 'loss_decomposition.png',   chk / 'loss_lmin_scatter.png',
-        "Loss decomposition (final) \u2014 Var(F) \u00b7 Bias\u00b2 \u00b7 reducible gap",
-        "Loss vs L_min scatter \u2014 observed vs theoretical, colored by epoch", ph))
+        "Loss decomposition (final) \u2014 Var(F) \u00b7 Bias\u00b2 \u00b7 "
+        "reducible gap",
+        "Loss vs L_min scatter \u2014 observed vs theoretical, colored by epoch",
+        ph))
 
     return F
 
 
 # ════════════════════════════════════════════════════════════════════════════
-#  FOOTER helper
+#  FOOTER
 # ════════════════════════════════════════════════════════════════════════════
 
 def _footer(d, page_num, total_pages):
     cfg  = d['config']
     chk  = short_dir(cfg.get('training', {}).get('checkpoint_dir', ''))
     left = Paragraph(f"auto-generated \u2014 {chk}", ST_FTR)
-    right= Paragraph(f"page {page_num} / {total_pages}", ST_FTR_R)
-    rule = HRFlowable(width=TW, thickness=1, color=C_BLACK, spaceBefore=10, spaceAfter=4)
-    tbl  = Table([[left, right]], colWidths=[TW*0.7, TW*0.3])
+    right = Paragraph(f"page {page_num} / {total_pages}", ST_FTR_R)
+    rule = HRFlowable(width=TW, thickness=1, color=C_BLACK,
+                      spaceBefore=8, spaceAfter=3)
+    tbl = Table([[left, right]], colWidths=[TW * 0.7, TW * 0.3])
     tbl.setStyle(TableStyle([
-        ('VALIGN',(0,0),(-1,-1),'MIDDLE'),
-        ('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0),
-        ('TOPPADDING',(0,0),(-1,-1),0),('BOTTOMPADDING',(0,0),(-1,-1),0),
+        ('VALIGN',        (0, 0), (-1, -1), 'MIDDLE'),
+        ('LEFTPADDING',   (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
+        ('TOPPADDING',    (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
     ]))
     return [rule, tbl]
 
@@ -782,20 +796,19 @@ def _footer(d, page_num, total_pages):
 # ════════════════════════════════════════════════════════════════════════════
 
 def _build_pdf(d, out_path):
-    body_frame = Frame(M, M, TW, PH - 2*M, id='body',
-                       leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0)
-    pt = PageTemplate(id='main', frames=[body_frame], pagesize=A4)
-    doc = BaseDocTemplate(str(out_path), pagesize=A4,
-                          leftMargin=M, rightMargin=M,
-                          topMargin=M,  bottomMargin=M,
-                          pageTemplates=[pt])
+    body_frame = Frame(M, M, TW, PH - 2 * M, id='body',
+                       leftPadding=0, rightPadding=0,
+                       topPadding=0, bottomPadding=0)
+    pt  = PageTemplate(id='main', frames=[body_frame], pagesize=landscape(A4))
+    doc = BaseDocTemplate(
+        str(out_path), pagesize=landscape(A4),
+        leftMargin=M, rightMargin=M, topMargin=M, bottomMargin=M,
+        pageTemplates=[pt])
 
     story = (
-        _page1(d) +
-        _footer(d, 1, 2) +
+        _page1(d) + _footer(d, 1, 2) +
         [PageBreak()] +
-        _page2(d) +
-        _footer(d, 2, 2)
+        _page2(d) + _footer(d, 2, 2)
     )
     doc.build(story)
 
@@ -825,10 +838,15 @@ def generate_controller_report(
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     out = checkpoint_dir / 'controller_report.pdf'
     d = dict(
-        config=config, training_history=training_history,
-        final_metrics=final_metrics, process_metrics=process_metrics,
-        F_star=F_star, F_baseline=F_baseline, F_actual=F_actual,
-        timestamp=timestamp, n_scenarios=n_scenarios,
+        config=config,
+        training_history=training_history,
+        final_metrics=final_metrics,
+        process_metrics=process_metrics,
+        F_star=F_star,
+        F_baseline=F_baseline,
+        F_actual=F_actual,
+        timestamp=timestamp,
+        n_scenarios=n_scenarios,
         advanced_metrics=advanced_metrics or {},
         trajectory_values=trajectory_values,
         theoretical_data=theoretical_data or {},
@@ -845,15 +863,21 @@ class ControllerReportGenerator:
 
     def generate(self, config, training_history, final_metrics, process_metrics,
                  F_star, F_baseline, F_actual, timestamp, n_scenarios=None,
-                 advanced_metrics=None, trajectory_values=None, theoretical_data=None):
+                 advanced_metrics=None, trajectory_values=None,
+                 theoretical_data=None):
         if timestamp is None:
             timestamp = datetime.now()
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
         d = dict(
-            config=config, training_history=training_history,
-            final_metrics=final_metrics, process_metrics=process_metrics,
-            F_star=F_star, F_baseline=F_baseline, F_actual=F_actual,
-            timestamp=timestamp, n_scenarios=n_scenarios,
+            config=config,
+            training_history=training_history,
+            final_metrics=final_metrics,
+            process_metrics=process_metrics,
+            F_star=F_star,
+            F_baseline=F_baseline,
+            F_actual=F_actual,
+            timestamp=timestamp,
+            n_scenarios=n_scenarios,
             advanced_metrics=advanced_metrics or {},
             trajectory_values=trajectory_values,
             theoretical_data=theoretical_data or {},
