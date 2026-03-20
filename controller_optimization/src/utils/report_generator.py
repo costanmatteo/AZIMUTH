@@ -259,7 +259,8 @@ def four_col(c1, c2, c3, c4, gap=8):
     return outer
 
 def img_pair(left_path, right_path, left_cap, right_cap, h):
-    cw = (TW - 6 * mm) / 2
+    gap = 3 * mm
+    cw  = (TW - gap) / 2
     lt = Table(
         [[scale_img(left_path,  cw, h)],
          [Paragraph(left_cap,  ST_CAPTION)]],
@@ -274,10 +275,10 @@ def img_pair(left_path, right_path, left_cap, right_cap, h):
             ('LEFTPADDING',   (0, 0), (-1, -1), 0),
             ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
             ('TOPPADDING',    (0, 0), (-1, -1), 0),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 1),
         ]))
-    outer = Table([[lt, Spacer(6 * mm, 1), rt]],
-                  colWidths=[cw, 6 * mm, cw])
+    outer = Table([[lt, Spacer(gap, 1), rt]],
+                  colWidths=[cw, gap, cw])
     outer.setStyle(TableStyle([
         ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
         ('LEFTPADDING',   (0, 0), (-1, -1), 0),
@@ -715,10 +716,16 @@ def _page2(d):
     F.append(meta_p)
     F.append(_rule_heavy())
 
-    # landscape plot height — 4 sections × 2 plots = 8 plots;
-    # available height ≈ PH - 2*M - header(~1.5cm) - footer(~0.8cm) - spacers
-    # Divide into 4 rows; each row has 2 side-by-side plots
-    ph = int((PH - 2 * M - 1.5 * cm - 0.8 * cm - 4 * 7) / 4)  # ~95 pts
+    # Available height for plots: page minus header, footer, section headers, spacers
+    hdr_h  = 1.5 * cm   # mini-header + rule
+    ftr_h  = 0.8 * cm   # footer
+    sec_h  = 0.5 * cm   # section_header height
+    avail  = PH - 2 * M - hdr_h - ftr_h
+
+    # This page: A (1 row) + B (2 rows) = 3 rows, 2 section headers
+    rows_p2 = 3
+    spc     = 4          # spacer pts between rows
+    ph = int((avail - 2 * sec_h - rows_p2 * spc) / rows_p2)
 
     # A — training history & overfitting
     F += section_header("A \u2014 training history & overfitting analysis")
@@ -726,7 +733,7 @@ def _page2(d):
         chk / 'training_history.png',    chk / 'loss_chart.png',
         "Training losses & weights \u00b7 reliability evolution",
         "Train vs validation loss \u2014 overfitting detection", ph))
-    F.append(Spacer(1, 6))
+    F.append(Spacer(1, spc))
 
     # B — controller performance per scenario
     F += section_header("B \u2014 controller performance per scenario")
@@ -734,12 +741,64 @@ def _page2(d):
         chk / 'target_vs_actual_scatter_train.png',  chk / 'gap_distribution_train.png',
         "Target vs baseline & controller \u2014 training scenarios",
         "Gap distribution \u2014 training scenarios (F* \u2212 F_actual)", ph))
-    F.append(Spacer(1, 3))
+    F.append(Spacer(1, spc))
     F.append(img_pair(
         chk / 'target_vs_actual_scatter_test.png',   chk / 'gap_distribution_test.png',
         "Target vs baseline & controller \u2014 test scenarios",
         "Gap distribution \u2014 test scenarios (F* \u2212 F_actual)", ph))
-    F.append(Spacer(1, 6))
+
+    return F
+
+
+def _page3(d):
+    cfg    = d['config']
+    ts     = d.get('timestamp', datetime.now())
+    ts_str = ts.strftime('%Y-%m-%d %H:%M:%S') if isinstance(ts, datetime) else str(ts)
+    chk    = Path(d.get('checkpoint_dir') or cfg.get('training', {}).get('checkpoint_dir', '.'))
+    hist   = d.get('training_history', {})
+    seed   = cfg.get('misc', {}).get('random_seed', '\u2014')
+    epochs = cfg.get('training', {}).get('epochs',
+             hist.get('epochs_trained', '\u2014'))
+    max_ep = cfg.get('training', {}).get('max_epochs',
+             cfg.get('training', {}).get('epochs', '\u2014'))
+    completed  = hist.get('completed', True)
+    status_txt = "complete"  if completed else "incomplete"
+    status_st  = ST_STATUS_G if completed else ST_STATUS_A
+    status_col = C_GREEN     if completed else C_AMBER
+
+    F = []
+
+    # mini header
+    title_p = Paragraph("Controller Optimization \u2014 Training Report", ST_TITLE)
+    meta_p  = Paragraph(
+        f"{ts_str}  \u00b7  seed {seed}  \u00b7  epochs {epochs} / {max_ep}", ST_SUB)
+    badge_w = 2.2 * cm
+    badge_p = Paragraph(status_txt, status_st)
+    hdr_tbl = Table([[title_p, badge_p]], colWidths=[TW - badge_w, badge_w])
+    hdr_tbl.setStyle(TableStyle([
+        ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
+        ('LEFTPADDING',   (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
+        ('TOPPADDING',    (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+        ('BOX',           (1, 0), (1,  0),  0.5, status_col),
+        ('ALIGN',         (1, 0), (1,  0),  'CENTER'),
+    ]))
+    F.append(hdr_tbl)
+    F.append(Spacer(1, 1))
+    F.append(meta_p)
+    F.append(_rule_heavy())
+
+    # Available height for plots
+    hdr_h  = 1.5 * cm
+    ftr_h  = 0.8 * cm
+    sec_h  = 0.5 * cm
+    avail  = PH - 2 * M - hdr_h - ftr_h
+
+    # This page: C (2 rows), 1 section header
+    rows_p3 = 2
+    spc     = 4
+    ph = int((avail - sec_h - rows_p3 * spc) / rows_p3)
 
     # C — L_min Bellman
     F += section_header("C \u2014 L_min Bellman \u2014 theoretical analysis")
@@ -748,7 +807,7 @@ def _page2(d):
         "Loss vs L_min Bellman \u2014 observed loss \u00b7 L_min empirical \u00b7 "
         "reducible gap",
         "Training efficiency \u2014 L_min Bellman / loss over epochs", ph))
-    F.append(Spacer(1, 3))
+    F.append(Spacer(1, spc))
     F.append(img_pair(
         chk / 'loss_decomposition.png',  chk / 'loss_scatter.png',
         "Loss decomposition (final) \u2014 Var(F) \u00b7 Bias\u00b2 \u00b7 "
@@ -796,9 +855,11 @@ def _build_pdf(d, out_path):
         pageTemplates=[pt])
 
     story = (
-        _page1(d) + _footer(d, 1, 2) +
+        _page1(d) + _footer(d, 1, 3) +
         [PageBreak()] +
-        _page2(d) + _footer(d, 2, 2)
+        _page2(d) + _footer(d, 2, 3) +
+        [PageBreak()] +
+        _page3(d) + _footer(d, 3, 3)
     )
     doc.build(story)
 
