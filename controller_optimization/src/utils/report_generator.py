@@ -870,7 +870,7 @@ def _page2(d):
 
     # Available height for plots
     hdr_h  = 1.8 * cm   # mini-header + rule (generous)
-    ftr_h  = 0.8 * cm   # footer
+    ftr_h  = 1.2 * cm   # footer (rule + table + spacing)
     avail  = PH - 2 * M - hdr_h - ftr_h
     col_gap = 10
     col_w  = (TW - col_gap) / 2
