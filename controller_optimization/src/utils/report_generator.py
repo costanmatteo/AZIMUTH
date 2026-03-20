@@ -258,8 +258,7 @@ def four_col(c1, c2, c3, c4, gap=8):
     ]))
     return outer
 
-def img_pair(left_path, right_path, left_cap, right_cap, h):
-    gap = 3 * mm
+def img_pair(left_path, right_path, left_cap, right_cap, h, gap=0):
     cw  = (TW - gap) / 2
     lt = Table(
         [[scale_img(left_path,  cw, h)],
@@ -277,8 +276,39 @@ def img_pair(left_path, right_path, left_cap, right_cap, h):
             ('TOPPADDING',    (0, 0), (-1, -1), 0),
             ('BOTTOMPADDING', (0, 0), (-1, -1), 1),
         ]))
-    outer = Table([[lt, Spacer(gap, 1), rt]],
-                  colWidths=[cw, gap, cw])
+    if gap > 0:
+        outer = Table([[lt, Spacer(gap, 1), rt]],
+                      colWidths=[cw, gap, cw])
+    else:
+        outer = Table([[lt, rt]], colWidths=[cw, cw])
+    outer.setStyle(TableStyle([
+        ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
+        ('LEFTPADDING',   (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
+        ('TOPPADDING',    (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+    ]))
+    return outer
+
+
+def img_quad(paths, captions, h):
+    """Four images side by side, no gap."""
+    cw = TW / 4
+    cells = []
+    for p, cap in zip(paths, captions):
+        cell = Table(
+            [[scale_img(p, cw, h)],
+             [Paragraph(cap, ST_CAPTION)]],
+            colWidths=[cw])
+        cell.setStyle(TableStyle([
+            ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
+            ('LEFTPADDING',   (0, 0), (-1, -1), 0),
+            ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
+            ('TOPPADDING',    (0, 0), (-1, -1), 0),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 1),
+        ]))
+        cells.append(cell)
+    outer = Table([cells], colWidths=[cw] * 4)
     outer.setStyle(TableStyle([
         ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
         ('LEFTPADDING',   (0, 0), (-1, -1), 0),
@@ -722,12 +752,11 @@ def _page2(d):
     sec_h  = 0.5 * cm   # section_header height
     avail  = PH - 2 * M - hdr_h - ftr_h
 
-    # This page: A (1 row) + B (2 rows) = 3 rows, 2 section headers
-    rows_p2 = 3
-    spc     = 4          # spacer pts between rows
-    ph = int((avail - 2 * sec_h - rows_p2 * spc) / rows_p2)
+    # This page: A (1 row) + B (1 row of 4) = 2 rows, 2 section headers
+    spc    = 4
+    ph     = int((avail - 2 * sec_h - 2 * spc) / 2)
 
-    # A — training history & overfitting
+    # A — training history & overfitting (2 images, full width, no gap)
     F += section_header("A \u2014 training history & overfitting analysis")
     F.append(img_pair(
         chk / 'training_history.png',    chk / 'loss_chart.png',
@@ -735,17 +764,18 @@ def _page2(d):
         "Train vs validation loss \u2014 overfitting detection", ph))
     F.append(Spacer(1, spc))
 
-    # B — controller performance per scenario
+    # B — controller performance per scenario (4 images in one row)
     F += section_header("B \u2014 controller performance per scenario")
-    F.append(img_pair(
-        chk / 'target_vs_actual_scatter_train.png',  chk / 'gap_distribution_train.png',
-        "Target vs baseline & controller \u2014 training scenarios",
-        "Gap distribution \u2014 training scenarios (F* \u2212 F_actual)", ph))
-    F.append(Spacer(1, spc))
-    F.append(img_pair(
-        chk / 'target_vs_actual_scatter_test.png',   chk / 'gap_distribution_test.png',
-        "Target vs baseline & controller \u2014 test scenarios",
-        "Gap distribution \u2014 test scenarios (F* \u2212 F_actual)", ph))
+    F.append(img_quad(
+        [chk / 'target_vs_actual_scatter_train.png',
+         chk / 'gap_distribution_train.png',
+         chk / 'target_vs_actual_scatter_test.png',
+         chk / 'gap_distribution_test.png'],
+        ["Target vs actual \u2014 train",
+         "Gap distribution \u2014 train",
+         "Target vs actual \u2014 test",
+         "Gap distribution \u2014 test"],
+        ph))
 
     return F
 
