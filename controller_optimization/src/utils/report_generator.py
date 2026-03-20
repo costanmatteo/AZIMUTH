@@ -869,14 +869,16 @@ def _page2(d):
     F.append(_rule_heavy())
 
     # Available height for plots
-    hdr_h  = 1.5 * cm   # mini-header + rule
+    hdr_h  = 1.8 * cm   # mini-header + rule (generous)
     ftr_h  = 0.8 * cm   # footer
     avail  = PH - 2 * M - hdr_h - ftr_h
     col_gap = 10
     col_w  = (TW - col_gap) / 2
+    cap_h  = 12          # caption row height allowance
 
     # ── LEFT COLUMN: training_history + loss_chart stacked ────────────────
-    h_left = int((avail - 8) / 2)  # 2 plots, small gap between
+    # 2 images + 2 captions + 1 gap spacer
+    h_left = int((avail - 2 * cap_h - 4) / 2)
     left = img_stack(
         [chk / 'training_history.png',  chk / 'loss_chart.png'],
         ["Training losses & weights \u00b7 reliability evolution",
@@ -884,8 +886,8 @@ def _page2(d):
         col_w, h_left, gap=4)
 
     # ── RIGHT COLUMN: 4 rows of paired images ────────────────────────────
-    # Row height: 4 rows in available height
-    rh = int((avail - 3 * 3) / 4)   # 4 rows, 3pt gap between
+    # 4 image rows + 4 captions + 3 gap spacers
+    rh = int((avail - 4 * cap_h - 3 * 3) / 4)
     pair_w = col_w / 2
 
     def _img_row(p1, p2, c1, c2, row_h):
