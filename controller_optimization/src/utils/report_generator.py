@@ -1,1063 +1,793 @@
 """
-Report PDF generator per controller optimization.
-
-LaTeX-style report with two-column layout for controller optimization
+PDF Report Generator for Controller Optimization — 2 pages A4 portrait.
+Style mirrors the HTML reference exactly (Courier, same font sizes, same layout).
 """
 
+import math
 from datetime import datetime
 from pathlib import Path
-from reportlab.lib.pagesizes import A4, landscape
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import inch, cm
+
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle
+from reportlab.lib.units import cm, mm
 from reportlab.lib import colors
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle, Frame, PageTemplate, KeepTogether, PageBreak
-from reportlab.lib.enums import TA_LEFT, TA_CENTER
-from reportlab.platypus.flowables import HRFlowable
+from reportlab.lib.enums import TA_LEFT, TA_RIGHT, TA_CENTER
+from reportlab.platypus import (
+    BaseDocTemplate, Frame, PageTemplate, NextPageTemplate,
+    Paragraph, Spacer, Image, Table, TableStyle, PageBreak,
+)
+from reportlab.platypus.flowables import HRFlowable, KeepInFrame
 
-# Optional PDF manipulation for 2-up layout
 try:
-    from pypdf import PdfReader, PdfWriter, Transformation
+    from pypdf import PdfReader, PdfWriter
     PYPDF_AVAILABLE = True
-except ImportError as e:
+except ImportError:
     PYPDF_AVAILABLE = False
-    import sys
-    print(f"Warning: pypdf not available (reason: {e})", file=sys.stderr)
-    print(f"Python executable: {sys.executable}", file=sys.stderr)
-    print(f"Install with: {sys.executable} -m pip install pypdf", file=sys.stderr)
+
+# ── page geometry (A4 portrait) ───────────────────────────────────────────────
+PW, PH = A4            # 595.28 x 841.89 pts
+M  = 1.8 * cm          # margins (~28px at 96dpi scale)
+TW = PW - 2 * M        # text width
+
+# ── colors ────────────────────────────────────────────────────────────────────
+C_GREEN = colors.HexColor('#1D9E75')
+C_RED   = colors.HexColor('#D85A30')
+C_AMBER = colors.HexColor('#BA7517')
+C_BLACK = colors.black
+C_MUTED = colors.HexColor('#666666')
+C_LGRAY = colors.HexColor('#EEEEEE')
+C_MGRAY = colors.HexColor('#CCCCCC')
+C_BGRAY = colors.HexColor('#F7F7F7')
+C_TGRAY = colors.HexColor('#888888')
+
+# ── font sizes — exact match to HTML ─────────────────────────────────────────
+FS_TITLE   = 14    # .pg-title
+FS_SUB     = 10    # .pg-sub
+FS_SECTION = 10    # .sec-head
+FS_BODY    = 10    # .row, .traj td
+FS_KPI_LBL = 9     # .kpi-l
+FS_KPI_VAL = 16    # .kpi-v
+FS_KPI_SUB = 9     # .kpi-s
+FS_BLK     = 9     # .blk-title
+FS_STATUS  = 9     # .status
+FS_NOTE    = 9     # .note-ok, footer
+
+# ── style factory ────────────────────────────────────────────────────────────
+def _s(name, size, bold=False, italic=False, color=C_BLACK, align=TA_LEFT):
+    font = 'Courier-Bold' if bold else ('Courier-Oblique' if italic else 'Courier')
+    return ParagraphStyle(name, fontName=font, fontSize=size,
+                          leading=size * 1.45, textColor=color, alignment=align)
+
+ST_TITLE    = _s('ct_title',  FS_TITLE,   bold=False)
+ST_SUB      = _s('ct_sub',    FS_SUB,     color=C_MUTED)
+ST_SECTION  = _s('ct_sec',    FS_SECTION, bold=True,  color=C_TGRAY)
+ST_BLK      = _s('ct_blk',    FS_BLK,     bold=True,  color=C_TGRAY)
+ST_KEY      = _s('ct_key',    FS_BODY,    color=C_MUTED)
+ST_VAL      = _s('ct_val',    FS_BODY,    align=TA_RIGHT)
+ST_VAL_G    = _s('ct_val_g',  FS_BODY,    color=C_GREEN,  align=TA_RIGHT)
+ST_VAL_R    = _s('ct_val_r',  FS_BODY,    color=C_RED,    align=TA_RIGHT)
+ST_VAL_A    = _s('ct_val_a',  FS_BODY,    color=C_AMBER,  align=TA_RIGHT)
+ST_KPI_LBL  = _s('ct_kl',    FS_KPI_LBL, color=C_TGRAY)
+ST_KPI_VAL  = _s('ct_kv',    FS_KPI_VAL)
+ST_KPI_SUB  = _s('ct_ks',    FS_KPI_SUB, color=C_TGRAY)
+ST_NOTE     = _s('ct_note',   FS_NOTE,    color=C_TGRAY)
+ST_NOTE_G   = _s('ct_note_g', FS_NOTE,    color=C_GREEN)
+ST_NOTE_R   = _s('ct_note_r', FS_NOTE,    color=C_RED)
+ST_STATUS_A = _s('ct_sta',    FS_STATUS,  color=C_AMBER,  align=TA_CENTER)
+ST_STATUS_G = _s('ct_stg',    FS_STATUS,  color=C_GREEN,  align=TA_CENTER)
+ST_STATUS_R = _s('ct_str',    FS_STATUS,  color=C_RED,    align=TA_CENTER)
+ST_CAPTION  = _s('ct_cap',    FS_NOTE,    italic=True, color=C_TGRAY)
+ST_FTR      = _s('ct_ftr',    FS_NOTE,    color=C_TGRAY)
+ST_FTR_R    = _s('ct_ftrr',   FS_NOTE,    color=C_TGRAY,  align=TA_RIGHT)
+ST_TRAJ_H   = _s('ct_th',     FS_BLK,     bold=False, color=C_TGRAY)
+ST_TRAJ_C   = _s('ct_tc',     FS_BODY)
+ST_TRAJ_G   = _s('ct_tg',     FS_BODY,    color=C_GREEN)
+ST_TRAJ_R   = _s('ct_tr',     FS_BODY,    color=C_RED)
 
 
-class ControllerReportGenerator:
-    """LaTeX-style PDF report generator for controller optimization results"""
+def _dyn(c, align=TA_RIGHT):
+    return ParagraphStyle(f'_d{id(c)}{align}', fontName='Courier',
+                          fontSize=FS_BODY, leading=FS_BODY*1.45,
+                          textColor=c, alignment=align)
 
-    def __init__(self, output_path):
-        self.output_path = Path(output_path)
-        self.styles = getSampleStyleSheet()
-        self.story = []
+# ── helpers ───────────────────────────────────────────────────────────────────
+def fmt_lr(v):
+    if v == 0: return "0"
+    exp  = int(math.floor(math.log10(abs(v))))
+    mant = v / (10**exp)
+    return f"{mant:.4f} x 10^{exp}"
 
-        # Title style
-        if 'ReportTitle' not in self.styles:
-            self.styles.add(ParagraphStyle(
-                name='ReportTitle',
-                parent=self.styles['Heading1'],
-                fontSize=14,
-                leading=17,
-                alignment=TA_CENTER,
-                spaceAfter=3
-            ))
+def short_dir(d, max_len=45):
+    parts = Path(d).parts
+    short = str(Path(*parts[-3:])) if len(parts) >= 3 else str(d)
+    return short if len(short) <= max_len else '...' + short[-(max_len-3):]
 
-        # Subtitle style
-        if 'ReportSubtitle' not in self.styles:
-            self.styles.add(ParagraphStyle(
-                name='ReportSubtitle',
-                parent=self.styles['Normal'],
-                fontSize=9,
-                leading=11,
-                alignment=TA_CENTER,
-                spaceAfter=6
-            ))
+def _fval(v):
+    """Scalar, dict, or list → (mean, std_or_None). Robust to any input type."""
+    if v is None:
+        return 0.0, None
+    if isinstance(v, dict):
+        return float(v.get('mean', 0.0)), v.get('std', None)
+    if isinstance(v, (list, tuple)):
+        import numpy as _np
+        arr = [float(x) for x in v if x is not None]
+        if not arr:
+            return 0.0, None
+        mean = float(_np.mean(arr))
+        std  = float(_np.std(arr)) if len(arr) > 1 else None
+        return mean, std
+    try:
+        return float(v), None
+    except (TypeError, ValueError):
+        return 0.0, None
 
-        # Section title style
-        if 'SectionTitle' not in self.styles:
-            self.styles.add(ParagraphStyle(
-                name='SectionTitle',
-                parent=self.styles['Heading2'],
-                fontSize=9,
-                leading=11,
-                fontName='Helvetica-Bold',
-                spaceAfter=1,
-                spaceBefore=4
-            ))
+def _last(v, default=0.0):
+    """Last element if list/array, else scalar. Safe for any training history value."""
+    if v is None:
+        return default
+    if isinstance(v, (list, tuple)):
+        return float(v[-1]) if len(v) > 0 else default
+    try:
+        import numpy as _np
+        if isinstance(v, _np.ndarray):
+            return float(v.flat[-1]) if v.size > 0 else default
+    except ImportError:
+        pass
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return default
 
-        # Body text style
-        if 'BodyText' not in self.styles:
-            self.styles.add(ParagraphStyle(
-                name='BodyText',
-                parent=self.styles['Normal'],
-                fontSize=6.5,
-                leading=8,
-                leftIndent=10
-            ))
+def _fstr(v, fmt='.6f'):
+    mean, std = _fval(v)
+    if std is not None:
+        return f"{mean:{fmt}} \u00b1 {std:{fmt}}"
+    return f"{mean:{fmt}}"
 
-    def add_title(self, timestamp):
-        """Add centered title and date"""
-        title = Paragraph("<b>Controller Optimization Training Report</b>", self.styles['ReportTitle'])
-        date_str = timestamp.strftime('%Y-%m-%d %H:%M:%S')
-        subtitle = Paragraph(f"Date: {date_str}", self.styles['ReportSubtitle'])
+def scale_img(path, max_w, max_h):
+    if not Path(path).exists():
+        return _placeholder(Path(path).name, max_w, max_h)
+    img   = Image(str(path))
+    scale = min(max_w / img.imageWidth, max_h / img.imageHeight)
+    img.drawWidth  = img.imageWidth  * scale
+    img.drawHeight = img.imageHeight * scale
+    return img
 
-        self.story.append(title)
-        self.story.append(subtitle)
-        self.story.append(Spacer(1, 0.1*cm))
+def _placeholder(name, w, h):
+    st = ParagraphStyle('_ph', fontName='Courier', fontSize=FS_NOTE,
+                        alignment=TA_CENTER, textColor=colors.HexColor('#AAAAAA'))
+    t  = Table([[Paragraph(name, st)]], colWidths=[w], rowHeights=[h])
+    t.setStyle(TableStyle([
+        ('BOX',        (0,0),(-1,-1), 0.5, C_MGRAY),
+        ('BACKGROUND', (0,0),(-1,-1), C_BGRAY),
+        ('VALIGN',     (0,0),(-1,-1), 'MIDDLE'),
+    ]))
+    return t
 
-    def add_section_title(self, title):
-        """Add section title with horizontal line"""
-        para = Paragraph(f"<b>{title}</b>", self.styles['SectionTitle'])
-        line = HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=4)
-        self.story.append(para)
-        self.story.append(line)
+def _rule_heavy():
+    return HRFlowable(width=TW, thickness=1.5, color=C_BLACK, spaceBefore=4, spaceAfter=10)
 
-    def create_two_column_section(self, config, training_history, F_star, F_baseline, F_actual, final_metrics, n_scenarios=None):
-        """Create two-column layout for compact info
+def _rule_thin():
+    return HRFlowable(width=TW, thickness=0.5, color=C_MGRAY, spaceBefore=4, spaceAfter=6)
 
-        Args:
-            F_star, F_baseline, F_actual: Can be scalar (single scenario) or dict with 'mean', 'std', 'min', 'max'
-            n_scenarios: Number of scenarios (for multi-scenario mode)
-        """
+def section_header(title):
+    return [
+        Paragraph(title.upper(), ST_SECTION),
+        HRFlowable(width=TW, thickness=0.5, color=C_MGRAY, spaceAfter=4),
+    ]
 
-        # Left column data
-        left_col = []
+def blk_title(title):
+    return Paragraph(title, ST_BLK)
 
-        # Configuration
-        left_col.append(Paragraph("<b>Configuration</b>", self.styles['SectionTitle']))
-        left_col.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=4))
+def kv_table(rows, col_w, key_frac=0.52):
+    """rows = list of (key_str, val_str_or_para [, style])."""
+    kw = col_w * key_frac
+    vw = col_w * (1 - key_frac)
+    data = []
+    for row in rows:
+        key, val = row[0], row[1]
+        vs  = row[2] if len(row) > 2 else ST_VAL
+        k   = Paragraph(key, ST_KEY)
+        v   = Paragraph(val, vs) if isinstance(val, str) else val
+        data.append([k, v])
+    t = Table(data, colWidths=[kw, vw])
+    t.setStyle(TableStyle([
+        ('VALIGN',        (0,0),(-1,-1), 'TOP'),
+        ('TOPPADDING',    (0,0),(-1,-1), 2),
+        ('BOTTOMPADDING', (0,0),(-1,-1), 2),
+        ('LEFTPADDING',   (0,0),(-1,-1), 0),
+        ('RIGHTPADDING',  (0,0),(-1,-1), 0),
+        ('LINEBELOW',     (0,0),(-1,-2), 0.4, C_LGRAY),
+    ]))
+    return t
 
-        process_names_list = config.get('process_names') or ['(all processes)']
-        process_names = ', '.join(process_names_list)
-        config_text = f"""• <b>Processes:</b> {process_names}<br/>
-• <b>Policy Architecture:</b> {config['policy_generator']['architecture']}<br/>
-• <b>Hidden Sizes:</b> {config['policy_generator'].get('hidden_sizes', 'N/A')}<br/>
-• <b>Activation:</b> {config['policy_generator'].get('activation', 'N/A')}<br/>
-• <b>Dropout Rate:</b> {config['policy_generator'].get('dropout_rate', 'N/A')}"""
+def two_col(left_items, right_items, gap=14):
+    """Side-by-side layout — each side is a list of flowables."""
+    cw = (TW - gap) / 2
 
-        # Add multi-scenario info
-        if n_scenarios is not None and n_scenarios > 1:
-            config_text += f"<br/>• <b>Training Scenarios:</b> {n_scenarios}"
-
-        # Add seed information from scenarios config
-        scenarios_config = config.get('scenarios', {})
-        seed_target = scenarios_config.get('seed_target', 'N/A')
-        seed_baseline = scenarios_config.get('seed_baseline', 'N/A')
-        config_text += f"<br/>• <b>Seed Target:</b> {seed_target}"
-        config_text += f"<br/>• <b>Seed Baseline:</b> {seed_baseline}"
-
-        left_col.append(Paragraph(config_text, self.styles['BodyText']))
-        left_col.append(Spacer(1, 0.15*cm))
-
-        # Training Parameters
-        left_col.append(Paragraph("<b>Training Parameters</b>", self.styles['SectionTitle']))
-        left_col.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=4))
-
-        epochs_run = len(training_history.get('total_loss', []))
-        epochs_total = config['training']['epochs']
-
-        training_text = f"""• <b>Epochs:</b> {epochs_run}/{epochs_total}<br/>
-• <b>Batch Size:</b> {config['training']['batch_size']}<br/>
-• <b>Learning Rate:</b> {config['training']['learning_rate']}<br/>
-• <b>Weight Decay:</b> {config['training'].get('weight_decay', 0.0)}<br/>
-• <b>Behavior Cloning Weight (λ_BC):</b> {config['training']['lambda_bc']}<br/>
-• <b>Patience:</b> {config['training'].get('patience', 'N/A')}<br/>
-• <b>Device:</b> {config['training']['device']}<br/>
-• <b>Checkpoint Dir:</b> {config['training']['checkpoint_dir']}"""
-        left_col.append(Paragraph(training_text, self.styles['BodyText']))
-
-        # Right column data
-        right_col = []
-
-        # Training Results
-        right_col.append(Paragraph("<b>Training Results</b>", self.styles['SectionTitle']))
-        right_col.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=4))
-
-        final_total_loss = training_history['total_loss'][-1] if training_history.get('total_loss') else 0.0
-        final_reliability_loss = training_history['reliability_loss'][-1] if training_history.get('reliability_loss') else 0.0
-        final_bc_loss = training_history['bc_loss'][-1] if training_history.get('bc_loss') else 0.0
-        best_total_loss = min(training_history['total_loss']) if training_history.get('total_loss') else 0.0
-
-        results_text = f"""• <b>Final Total Loss:</b> {final_total_loss:.6f}<br/>
-• <b>Final Reliability Loss:</b> {final_reliability_loss:.6f}<br/>
-• <b>Final BC Loss:</b> {final_bc_loss:.6f}<br/>
-• <b>Best Total Loss:</b> {best_total_loss:.6f}"""
-
-        right_col.append(Paragraph(results_text, self.styles['BodyText']))
-        right_col.append(Spacer(1, 0.15*cm))
-
-        # Reliability Metrics (handle both scalar and multi-scenario format)
-        right_col.append(Paragraph("<b>Reliability Metrics</b>", self.styles['SectionTitle']))
-        right_col.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=4))
-
-        improvement = final_metrics.get('improvement', 0) * 100
-        target_gap = final_metrics.get('target_gap', 0) * 100
-
-        # Format F* (always scalar)
-        F_star_val = F_star['mean'] if isinstance(F_star, dict) else F_star
-
-        # Format F_baseline and F_actual (may be scalar or dict)
-        if isinstance(F_baseline, dict):
-            F_bl_text = f"Mean: {F_baseline['mean']:.6f} ± {F_baseline['std']:.6f}"
-            F_act_text = f"Mean: {F_actual['mean']:.6f} ± {F_actual['std']:.6f}"
-            robustness_text = f"<br/>• <b>Robustness (std):</b> {F_actual['std']:.6f}"
-        else:
-            F_bl_text = f"{F_baseline:.6f}"
-            F_act_text = f"{F_actual:.6f}"
-            robustness_text = ""
-
-        reliability_text = f"""• <b>Target Reliability (F*):</b> {F_star_val:.6f}<br/>
-• <b>Baseline Reliability (F'):</b> {F_bl_text}<br/>
-• <b>Controller Reliability (F):</b> {F_act_text}<br/>
-• <b>Improvement over Baseline:</b> {improvement:+.2f}%<br/>
-• <b>Gap from Target:</b> {target_gap:.2f}%{robustness_text}"""
-
-        right_col.append(Paragraph(reliability_text, self.styles['BodyText']))
-        right_col.append(Spacer(1, 0.15*cm))
-
-        # Miscellaneous Parameters
-        right_col.append(Paragraph("<b>Miscellaneous</b>", self.styles['SectionTitle']))
-        right_col.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=4))
-
-        misc_text = f"""• <b>Random Seed:</b> {config.get('misc', {}).get('random_seed', 'N/A')}"""
-        if 'verbose' in config.get('misc', {}):
-            misc_text += f"<br/>• <b>Verbose:</b> {config['misc']['verbose']}"
-        right_col.append(Paragraph(misc_text, self.styles['BodyText']))
-
-        # Create two-column table
-        data = [[left_col, right_col]]
-        col_table = Table(data, colWidths=[9*cm, 9*cm])
-        col_table.setStyle(TableStyle([
-            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-            ('LEFTPADDING', (0, 0), (-1, -1), 0),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+    def _wrap(items, w):
+        rows = [[item] for item in items]
+        t = Table(rows, colWidths=[w])
+        t.setStyle(TableStyle([
+            ('VALIGN',(0,0),(-1,-1),'TOP'),
+            ('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0),
+            ('TOPPADDING',(0,0),(-1,-1),0),('BOTTOMPADDING',(0,0),(-1,-1),1),
         ]))
+        return t
 
-        self.story.append(col_table)
-        self.story.append(Spacer(1, 0.2*cm))
+    outer = Table([[_wrap(left_items, cw), Spacer(gap, 1), _wrap(right_items, cw)]],
+                  colWidths=[cw, gap, cw])
+    outer.setStyle(TableStyle([
+        ('VALIGN',(0,0),(-1,-1),'TOP'),
+        ('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0),
+        ('TOPPADDING',(0,0),(-1,-1),0),('BOTTOMPADDING',(0,0),(-1,-1),0),
+    ]))
+    return outer
 
-    def add_process_metrics_table(self, process_metrics):
-        """Add process-wise metrics table in LaTeX style"""
-        self.add_section_title("Process-wise Metrics")
+def three_col(col1, col2, col3, gap=10):
+    cw = (TW - 2*gap) / 3
 
-        if 'actual' not in process_metrics:
-            return
+    def _wrap(items, w):
+        rows = [[item] for item in items]
+        t = Table(rows, colWidths=[w])
+        t.setStyle(TableStyle([
+            ('VALIGN',(0,0),(-1,-1),'TOP'),
+            ('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0),
+            ('TOPPADDING',(0,0),(-1,-1),0),('BOTTOMPADDING',(0,0),(-1,-1),1),
+        ]))
+        return t
 
-        # Build table data
-        headers = ['Process', 'Input MSE', 'Output MSE', 'Combined MSE']
-        data = [headers]
+    outer = Table([[_wrap(col1,cw), Spacer(gap,1), _wrap(col2,cw), Spacer(gap,1), _wrap(col3,cw)]],
+                  colWidths=[cw, gap, cw, gap, cw])
+    outer.setStyle(TableStyle([
+        ('VALIGN',(0,0),(-1,-1),'TOP'),
+        ('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0),
+        ('TOPPADDING',(0,0),(-1,-1),0),('BOTTOMPADDING',(0,0),(-1,-1),0),
+    ]))
+    return outer
 
-        for process_name, metrics in process_metrics['actual'].items():
+def img_pair(left_path, right_path, left_cap, right_cap, h):
+    cw = (TW - 6*mm) / 2
+    lt = Table(
+        [[scale_img(left_path,  cw, h)], [Paragraph(left_cap,  ST_CAPTION)]],
+        colWidths=[cw])
+    rt = Table(
+        [[scale_img(right_path, cw, h)], [Paragraph(right_cap, ST_CAPTION)]],
+        colWidths=[cw])
+    for t in (lt, rt):
+        t.setStyle(TableStyle([
+            ('VALIGN',(0,0),(-1,-1),'TOP'),
+            ('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0),
+            ('TOPPADDING',(0,0),(-1,-1),0),('BOTTOMPADDING',(0,0),(-1,-1),2),
+        ]))
+    outer = Table([[lt, Spacer(6*mm,1), rt]], colWidths=[cw, 6*mm, cw])
+    outer.setStyle(TableStyle([
+        ('VALIGN',(0,0),(-1,-1),'TOP'),
+        ('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0),
+        ('TOPPADDING',(0,0),(-1,-1),0),('BOTTOMPADDING',(0,0),(-1,-1),0),
+    ]))
+    return outer
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  PAGE 1 CONTENT
+# ════════════════════════════════════════════════════════════════════════════
+
+def _page1(d):
+    cfg      = d['config']
+    hist     = d.get('training_history', {})
+    fm       = d.get('final_metrics', {})
+    adv      = d.get('advanced_metrics') or {}
+    traj     = d.get('trajectory_values') or {}
+    ts       = d.get('timestamp', datetime.now())
+    ts_str   = ts.strftime('%Y-%m-%d %H:%M:%S') if isinstance(ts, datetime) else str(ts)
+
+    tr_cfg   = cfg.get('training', {})
+    pg_cfg   = cfg.get('policy_generator', {})
+
+    F_star   = d.get('F_star', 0.0)
+    F_bl     = d.get('F_baseline', 0.0)
+    F_act    = d.get('F_actual', 0.0)
+
+    fstar_v, _       = _fval(F_star)
+    fbl_v, fbl_s     = _fval(F_bl)
+    fact_v, fact_s   = _fval(F_act)
+
+    epochs     = tr_cfg.get('epochs', hist.get('epochs_trained', '\u2014'))
+    max_epochs = tr_cfg.get('max_epochs', tr_cfg.get('epochs', '\u2014'))
+    patience   = tr_cfg.get('patience', '\u2014')
+    seed       = cfg.get('misc', {}).get('random_seed', '\u2014')
+
+    # status
+    completed   = hist.get('completed', True)
+    status_txt  = "complete"   if completed else "incomplete"
+    status_st   = ST_STATUS_G  if completed else ST_STATUS_A
+    status_col  = C_GREEN      if completed else C_AMBER
+
+    # improvement
+    improv = _last(fm.get('improvement', 0.0))
+    if isinstance(improv, (int, float)) and fbl_v and fbl_v != 0:
+        improv_pct = (fact_v - fbl_v) / abs(fbl_v) * 100
+    else:
+        improv_pct = float(improv) * 100 if improv else 0.0
+
+    gap_pct = (1 - fact_v / fstar_v) * 100 if fstar_v else 0.0
+
+    best_loss  = _last(hist.get('best_total_loss',  hist.get('best_loss',  0.0)))
+    final_loss = _last(hist.get('final_total_loss', hist.get('total_loss', 0.0)))
+    rob_std    = fact_s if fact_s is not None else _last(fm.get('robustness_std', 0.0))
+
+    F = []  # story flowables for page 1
+
+    # ── header ────────────────────────────────────────────────────────────────
+    title_p  = Paragraph("Controller Optimization \u2014 Training Report", ST_TITLE)
+    meta_str = (f"{ts_str}  \u00b7  seed {seed}  \u00b7  "
+                f"epochs {epochs} / {max_epochs}  \u00b7  patience {patience}")
+    meta_p   = Paragraph(meta_str, ST_SUB)
+    badge_w  = 2.2 * cm
+    badge_p  = Paragraph(status_txt, status_st)
+    hdr_tbl  = Table([[title_p, badge_p]], colWidths=[TW - badge_w, badge_w])
+    hdr_tbl.setStyle(TableStyle([
+        ('VALIGN',(0,0),(-1,-1),'TOP'),
+        ('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0),
+        ('TOPPADDING',(0,0),(-1,-1),0),('BOTTOMPADDING',(0,0),(-1,-1),0),
+        ('BOX',(1,0),(1,0),0.5,status_col),
+        ('ALIGN',(1,0),(1,0),'CENTER'),
+    ]))
+    F.append(hdr_tbl)
+    F.append(Spacer(1, 2))
+    F.append(meta_p)
+    F.append(_rule_heavy())
+
+    # ── KPI bar ───────────────────────────────────────────────────────────────
+    cw = TW / 4
+    kpi_data = [
+        [Paragraph("Controller F",  ST_KPI_LBL),
+         Paragraph("Target F*",     ST_KPI_LBL),
+         Paragraph("vs baseline",   ST_KPI_LBL),
+         Paragraph("Best loss",     ST_KPI_LBL)],
+        [Paragraph(f"{fact_v:.4f}",  ST_KPI_VAL),
+         Paragraph(f"{fstar_v:.4f}", ST_KPI_VAL),
+         Paragraph(f"{improv_pct:+.0f}%",
+                   _s('_kv_g', FS_KPI_VAL, color=C_GREEN if improv_pct >= 0 else C_RED)),
+         Paragraph(f"{best_loss:.4f}", ST_KPI_VAL)],
+        [Paragraph(f"\u00b1{rob_std:.4f} robustness", ST_KPI_SUB),
+         Paragraph(f"gap {gap_pct:.1f}%",             ST_KPI_SUB),
+         Paragraph(f"F\u2019 = {fbl_v:.4f}",         ST_KPI_SUB),
+         Paragraph(f"final {final_loss:.2f}",         ST_KPI_SUB)],
+    ]
+    kpi_tbl = Table(kpi_data, colWidths=[cw]*4)
+    kpi_tbl.setStyle(TableStyle([
+        ('BOX',           (0,0),(-1,-1), 0.5, C_MGRAY),
+        ('INNERGRID',     (0,0),(-1,-1), 0.5, C_MGRAY),
+        ('TOPPADDING',    (0,0),(-1,-1), 6),
+        ('BOTTOMPADDING', (0,0),(-1,-1), 5),
+        ('LEFTPADDING',   (0,0),(-1,-1), 8),
+        ('RIGHTPADDING',  (0,0),(-1,-1), 8),
+        ('VALIGN',        (0,0),(-1,-1), 'TOP'),
+    ]))
+    F.append(kpi_tbl)
+    F.append(Spacer(1, 10))
+
+    # ── 01 — configuration & training parameters ──────────────────────────────
+    F += section_header("01 \u2014 configuration & training parameters")
+
+    n_scenarios = d.get('n_scenarios', cfg.get('training', {}).get('n_scenarios', '\u2014'))
+    seeds_t = cfg.get('seeds_target', cfg.get('misc', {}).get('seeds_target', '\u2014'))
+    seeds_b = cfg.get('seeds_baseline', cfg.get('misc', {}).get('seeds_baseline', '\u2014'))
+
+    arch_rows = [
+        ("Policy",                  str(pg_cfg.get('architecture', '\u2014')) +
+                                    ' ' + str(pg_cfg.get('hidden_sizes', ''))),
+        ("Activation",              str(pg_cfg.get('activation', 'N/A'))),
+        ("Dropout rate",            str(pg_cfg.get('dropout_rate', 'N/A'))),
+        ("Processes",               ', '.join(cfg.get('process_names') or ['all'])),
+        ("Training scenarios",      str(n_scenarios)),
+        ("Seeds (target / baseline)", f"{seeds_t} / {seeds_b}"),
+    ]
+    lam_bc   = tr_cfg.get('lambda_bc', tr_cfg.get('lam_bc', '\u2014'))
+    chk      = short_dir(tr_cfg.get('checkpoint_dir', ''))
+    train_rows = [
+        ("Epochs",         f"{epochs} / {max_epochs}"),
+        ("Batch size",     f"{tr_cfg.get('batch_size', '\u2014'):,}" if isinstance(tr_cfg.get('batch_size'), int) else str(tr_cfg.get('batch_size', '\u2014'))),
+        ("Learning rate",  fmt_lr(tr_cfg.get('learning_rate', 0))),
+        ("Weight decay",   fmt_lr(tr_cfg.get('weight_decay', 0))),
+        ("\u03bb_BC",      fmt_lr(float(lam_bc)) if isinstance(lam_bc, (int,float)) else str(lam_bc)),
+        ("Patience",       str(patience)),
+        ("Device",         str(tr_cfg.get('device', '\u2014'))),
+        ("Checkpoint dir", chk),
+    ]
+    F.append(two_col(
+        [blk_title("Architecture")] + [kv_table(arch_rows,  (TW-14)/2)],
+        [blk_title("Training")]     + [kv_table(train_rows, (TW-14)/2)],
+    ))
+    F.append(Spacer(1, 10))
+
+    # ── 02 — reliability metrics ───────────────────────────────────────────────
+    F += section_header("02 \u2014 reliability metrics")
+
+    # ── parse advanced_metrics — supports both old nested format and
+    #    train_controller.py flat format ────────────────────────────────────
+    # flat keys from train_controller.py:
+    #   worst_case_gap_train / worst_case_gap_test  → dicts
+    #   success_rate_train / success_rate_test       → dicts
+    #   within_scenario_gap                          → dict
+    wct_d  = adv.get('worst_case_gap_train') or adv.get('train_results') or {}
+    wce_d  = adv.get('worst_case_gap_test')  or adv.get('test_results')  or {}
+    sr_tr  = adv.get('success_rate_train')   or {}
+    sr_te  = adv.get('success_rate_test')    or {}
+    wig    = adv.get('within_scenario_gap')  or adv.get('intra_scenario') or {}
+    ttg    = adv.get('train_test_gap')       or adv.get('overfitting')    or {}
+    div_tr = adv.get('diversity_train')      or {}
+    div_te = adv.get('diversity_test')       or {}
+
+    fbl_str  = _fstr(F_bl)
+    fact_str = _fstr(F_act)
+
+    scores_rows = [
+        ("F* (target)",            f"{fstar_v:.6f}"),
+        ("F\u2019 (baseline)",     fbl_str),
+        ("F (controller)",         fact_str),
+        ("Improvement vs baseline",f"{improv_pct:+.2f}%", ST_VAL_G if improv_pct >= 0 else ST_VAL_R),
+        ("Gap from target",        f"{gap_pct:.2f}%",     ST_VAL_R),
+        ("Robustness (std)",       f"{rob_std:.6f}"),
+    ]
+    _n_sc = int(n_scenarios) if isinstance(n_scenarios, (int,float)) else 5
+    n_sc_tr = sr_tr.get('n_scenarios', sr_tr.get('n_total', _n_sc))
+    n_sc_te = sr_te.get('n_scenarios', sr_te.get('n_total', _n_sc))
+    ok_tr   = sr_tr.get('n_success', sr_tr.get('n_above_threshold', 0)) or 0
+    ok_te   = sr_te.get('n_success', sr_te.get('n_above_threshold', 0)) or 0
+    pct_tr_r = sr_tr.get('success_rate', sr_tr.get('rate', ok_tr / n_sc_tr if n_sc_tr else 0))
+    pct_te_r = sr_te.get('success_rate', sr_te.get('rate', ok_te / n_sc_te if n_sc_te else 0))
+    pct_tr  = (float(pct_tr_r) if pct_tr_r is not None else 0.0) * 100
+    pct_te  = (float(pct_te_r) if pct_te_r is not None else 0.0) * 100
+    wc_tr   = wct_d.get('worst_case_gap',          wct_d.get('gap', None))
+    wc_te   = wce_d.get('worst_case_gap',          wce_d.get('gap', None))
+    wc_tr_s = wct_d.get('worst_case_scenario_idx', wct_d.get('worst_case_scenario', ''))
+    wc_te_s = wce_d.get('worst_case_scenario_idx', wce_d.get('worst_case_scenario', ''))
+    gc_tr   = None
+    gc_te   = None
+    gc_tr_s = None
+    gc_te_s = None
+
+    def _gc_str(mean, std):
+        if mean is None or mean == '\u2014': return '\u2014'
+        try:
+            s = f"{float(mean):.4f}"
+            if std is not None: s += f" \u00b1 {float(std):.4f}"
+            return s
+        except (TypeError, ValueError):
+            return str(mean)
+
+    thresh_pct = adv.get('success_threshold_pct', 95) or 95
+    perf_rows = [
+        (f"Success rate \u2014 train",   f"{ok_tr}/{n_sc_tr} ({pct_tr:.1f}%)",
+         ST_VAL_G if pct_tr >= 80 else ST_VAL_R),
+        (f"Success rate \u2014 test",    f"{ok_te}/{n_sc_te} ({pct_te:.1f}%)",
+         ST_VAL_G if pct_te >= 80 else ST_VAL_R),
+        (f"Worst-case gap \u2014 train", f"{float(wc_tr):.6f} at sc. {wc_tr_s}" if isinstance(wc_tr, (int,float)) else '\u2014'),
+        (f"Worst-case gap \u2014 test",  f"{float(wc_te):.6f} at sc. {wc_te_s}" if isinstance(wc_te, (int,float)) else '\u2014'),
+        (f"Gap closure \u2014 train",    _gc_str(gc_tr, gc_tr_s)),
+        (f"Gap closure \u2014 test",     _gc_str(gc_te, gc_te_s)),
+    ]
+    F.append(two_col(
+        [blk_title("Scores")]                              + [kv_table(scores_rows, (TW-14)/2)],
+        [blk_title(f"Performance (threshold: {thresh_pct}% \u00d7 F*)")] + [kv_table(perf_rows, (TW-14)/2)],
+    ))
+    F.append(Spacer(1, 10))
+
+    # ── 03 — loss decomposition & L_min ───────────────────────────────────────
+    F += section_header("03 \u2014 loss decomposition & L_min Bellman analysis")
+
+    theo = d.get('theoretical_data') or {}
+    final_total = _last(hist.get('final_total_loss', hist.get('total_loss', final_loss)))
+    _rel_raw    = hist.get('final_reliability_loss', hist.get('reliability_loss', None))
+    _bc_raw     = hist.get('final_bc_loss',          hist.get('bc_loss', None))
+    final_rel   = _last(_rel_raw) if _rel_raw is not None else '\u2014'
+    final_bc    = _last(_bc_raw)  if _bc_raw  is not None else '\u2014'
+
+    lmin_emp  = theo.get('lmin_empirical', '\u2014')
+    gap_red   = theo.get('gap_reducible', '\u2014')
+    eff       = theo.get('efficiency', '\u2014')
+    viol      = theo.get('violations', 0)
+    total_ep  = epochs if isinstance(epochs, int) else '?'
+
+    var_f    = theo.get('var_f', '\u2014')
+    bias2    = theo.get('bias2', '\u2014')
+    gap_r    = theo.get('gap_reducible', '\u2014')
+    pct_str  = theo.get('decomp_pct', '\u2014')
+
+    def _tv(v, fmt='.6f'):
+        if v is None or v == '\u2014': return '\u2014'
+        try: return f"{float(v):{fmt}}"
+        except (TypeError, ValueError): return str(v)
+
+    losses_rows = [
+        ("Total",     _tv(final_total)),
+        ("Reliability", _tv(final_rel) if final_rel != '\u2014' else '\u2014'),
+        ("BC",        _tv(final_bc)   if final_bc  != '\u2014' else '\u2014'),
+        ("Best total",_tv(best_loss),  ST_VAL_G),
+    ]
+    lmin_rows = [
+        ("L_min empirical",        _tv(lmin_emp)),
+        ("Gap (reducible)",        _tv(gap_red)),
+        ("Efficiency",             f"{float(eff)*100:.1f}%" if eff != '\u2014' else '\u2014',
+         ST_VAL_G),
+        ("Violations (loss&lt;L_min)",f"{viol} / {total_ep}",
+         ST_VAL_G if viol == 0 else ST_VAL_R),
+    ]
+    decomp_rows = [
+        ("Var(F) \u2014 irreducible",  _tv(var_f)),
+        ("Bias\u00b2 \u2014 irreducible", _tv(bias2)),
+        ("Gap \u2014 reducible",       _tv(gap_r)),
+        ("% of loss",                  str(pct_str)),
+    ]
+    F.append(three_col(
+        [blk_title("Final losses")]          + [kv_table(losses_rows, (TW-20)/3)],
+        [blk_title("L_min Bellman (backward induction)")] + [kv_table(lmin_rows, (TW-20)/3)],
+        [blk_title("Decomposition")]         + [kv_table(decomp_rows, (TW-20)/3)],
+    ))
+    F.append(Spacer(1, 10))
+
+    # ── 04 — overfitting & generalization ─────────────────────────────────────
+    F += section_header("04 \u2014 overfitting & generalization")
+
+    mg_tr  = ttg.get('mean_gap_train',  ttg.get('mean_F_train', None))
+    mg_te  = ttg.get('mean_gap_test',   ttg.get('mean_F_test',  None))
+    diff   = ttg.get('diff',            ttg.get('gap_train_minus_test', None))
+    cv_tr  = ttg.get('dataset_cv_train', ttg.get('cv_train', None))
+    cv_te  = ttg.get('dataset_cv_test',  ttg.get('cv_test',  None))
+
+    mf_tr  = wig.get('mean_f_train',    wig.get('mean_F_train_split', None))
+    mf_val = wig.get('mean_f_val',      wig.get('mean_F_val_split',   None))
+    gap_iv = wig.get('gap',             wig.get('gap_train_minus_val', None))
+    div_ep = wig.get('divergent_epochs', wig.get('n_divergent_epochs', 0)) or 0
+
+    def _scalar(v):
+        """Extract scalar from value that may be a list, numpy array, or scalar."""
+        if v is None: return None
+        if isinstance(v, (list, tuple)): return v[0] if len(v) else None
+        if hasattr(v, 'item'): return v.item()   # numpy scalar
+        return v
+
+    def _ov_note(v):
+        if v is None: return ''
+        return ' (possible overfit)' if float(v) < -0.005 else ' \u2014 consistent'
+
+    _mg_tr = _scalar(mg_tr); _mg_te = _scalar(mg_te)
+    _diff  = _scalar(diff);  _cv_tr = _scalar(cv_tr); _cv_te = _scalar(cv_te)
+    cross_rows = [
+        ("Mean gap \u2014 train",        f"{float(_mg_tr):.6f}" if _mg_tr is not None else '\u2014'),
+        ("Mean gap \u2014 test",         f"{float(_mg_te):.6f}" if _mg_te is not None else '\u2014'),
+        ("Difference (train \u2212 test)",
+         f"{float(_diff):.6f}{_ov_note(_diff)}" if _diff is not None else '\u2014',
+         ST_VAL_A if _diff is not None and float(_diff) < -0.005 else ST_VAL),
+        ("Dataset CV \u2014 train scenarios", f"{float(_cv_tr):.4f}" if _cv_tr is not None else '\u2014'),
+        ("Dataset CV \u2014 test scenarios",  f"{float(_cv_te):.4f}" if _cv_te is not None else '\u2014'),
+    ]
+    intra_rows = [
+        ("Mean F \u2014 train split", f"{float(mf_tr):.6f}"  if mf_tr  is not None and mf_tr  != '\u2014' else '\u2014'),
+        ("Mean F \u2014 val split",   f"{float(mf_val):.6f}" if mf_val is not None and mf_val != '\u2014' else '\u2014'),
+        ("Gap (train \u2212 val)",
+         f"{float(gap_iv):.6f}{_ov_note(gap_iv)}" if gap_iv is not None and gap_iv != '\u2014' else '\u2014',
+         ST_VAL_G if gap_iv is not None and abs(float(gap_iv)) < 0.005 else ST_VAL),
+        (f"Divergent epochs (>0.01)",
+         f"{div_ep} / {total_ep}",
+         ST_VAL_G if div_ep == 0 else ST_VAL_R),
+    ]
+    F.append(two_col(
+        [blk_title("Cross-scenario")]                  + [kv_table(cross_rows, (TW-14)/2)],
+        [blk_title("Intra-scenario (last 50 epochs)")] + [kv_table(intra_rows, (TW-14)/2)],
+    ))
+    F.append(Spacer(1, 10))
+
+    # ── 05 — trajectory comparison ────────────────────────────────────────────
+    if traj:
+        sc_idx  = traj.get('scenario_idx', 0)
+        F += section_header(f"05 \u2014 trajectory comparison \u2014 scenario {sc_idx}")
+
+        p_names = traj.get('process_names', [])
+        t_traj  = traj.get('target_trajectory', {})
+        b_traj  = traj.get('baseline_trajectory', {})
+        a_traj  = traj.get('actual_trajectory', {})
+
+        traj_hdr = [Paragraph(h, ST_TRAJ_H) for h in
+                    ["Step", "Target a*", "Baseline a\u2019", "Controller a",
+                     "\u0394 baseline", "\u0394 actual", "Note"]]
+        cws_t = [r * TW for r in [0.08, 0.12, 0.13, 0.14, 0.12, 0.12, 0.29]]
+        traj_rows = [traj_hdr]
+
+        def _extract(tr_dict, proc, key='inputs'):
+            v = tr_dict.get(proc, {})
+            arr = v.get(key, v.get('inputs', []))
+            if hasattr(arr, 'detach'):
+                arr = arr.detach().cpu().numpy()
+            return arr[0] if len(arr) else [0.0]
+
+        for proc in p_names:
+            t_inp = _extract(t_traj, proc)
+            b_inp = _extract(b_traj, proc)
+            a_inp = _extract(a_traj, proc)
+            t_v = float(t_inp[0]) if len(t_inp) else 0.0
+            b_v = float(b_inp[0]) if len(b_inp) else 0.0
+            a_v = float(a_inp[0]) if len(a_inp) else 0.0
+            d_base   = a_v - b_v
+            d_actual = a_v - t_v
+            closer   = abs(a_v - t_v) < abs(b_v - t_v)
+            note     = "adjusted \u2191" if closer else "adjusted"
+            if abs(b_v - t_v) < 1e-6: note = "identical inputs"
             row = [
-                process_name.capitalize(),
-                f"{metrics['input_mse']:.6f}",
-                f"{metrics['output_mse']:.6f}",
-                f"{metrics['combined_mse']:.6f}"
+                Paragraph(proc,          ST_TRAJ_C),
+                Paragraph(f"{t_v:+.4f}", ST_TRAJ_C),
+                Paragraph(f"{b_v:+.4f}", ST_TRAJ_C),
+                Paragraph(f"{a_v:+.4f}", ST_TRAJ_C),
+                Paragraph(f"{d_base:+.4f}", ST_TRAJ_C),
+                Paragraph(f"{d_actual:+.4f}", ST_TRAJ_G if closer else ST_TRAJ_R),
+                Paragraph(note, ST_NOTE),
             ]
-            data.append(row)
+            traj_rows.append(row)
 
-        # Create table with adjusted column widths
-        col_widths = [4.5*cm, 4.5*cm, 4.5*cm, 4.5*cm]
-        table = Table(data, colWidths=col_widths)
-        table.setStyle(TableStyle([
-            # Header row
-            ('BACKGROUND', (0, 0), (-1, 0), colors.white),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, 0), 7),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
-            ('TOPPADDING', (0, 0), (-1, 0), 8),
-
-            # Data rows
-            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-            ('FONTSIZE', (0, 1), (-1, -1), 7),
-            ('TOPPADDING', (0, 1), (-1, -1), 6),
-            ('BOTTOMPADDING', (0, 1), (-1, -1), 6),
-
-            # Top and bottom lines
-            ('LINEABOVE', (0, 0), (-1, 0), 1.5, colors.black),
-            ('LINEABOVE', (0, 1), (-1, 1), 0.5, colors.black),
-            ('LINEBELOW', (0, -1), (-1, -1), 1.5, colors.black),
+        traj_tbl = Table(traj_rows, colWidths=cws_t)
+        traj_tbl.setStyle(TableStyle([
+            ('LINEBELOW',     (0,0),(-1,0),  0.5, C_BLACK),
+            ('LINEBELOW',     (0,1),(-1,-1), 0.4, C_LGRAY),
+            ('TOPPADDING',    (0,0),(-1,-1), 2),
+            ('BOTTOMPADDING', (0,0),(-1,-1), 2),
+            ('LEFTPADDING',   (0,0),(-1,-1), 3),
+            ('RIGHTPADDING',  (0,0),(-1,-1), 3),
+            ('VALIGN',        (0,0),(-1,-1), 'TOP'),
         ]))
-
-        self.story.append(table)
-        self.story.append(Spacer(1, 0.1*cm))
-
-    def add_advanced_metrics_section(self, advanced_metrics):
-        """Add advanced metrics section with train/test comparison"""
-        if not advanced_metrics:
-            return
-
-        self.add_section_title("Performance Analysis")
-
-        # 1. Success Rate - Overall performance metric
-        if 'success_rate_train' in advanced_metrics and 'success_rate_test' in advanced_metrics:
-            success_train = advanced_metrics['success_rate_train']
-            success_test = advanced_metrics['success_rate_test']
-
-            success_text = f"""
-<b>1. Success Rate</b> (threshold: {success_train['threshold']*100:.0f}% of F_star)<br/>
-• <b>Train:</b> {success_train['success_rate_pct']:.1f}% ({success_train['n_successful']}/{success_train['n_total']} scenarios)<br/>
-• <b>Test:</b> {success_test['success_rate_pct']:.1f}% ({success_test['n_successful']}/{success_test['n_total']} scenarios)
-"""
-            self.story.append(Paragraph(success_text, self.styles['BodyText']))
-            self.story.append(Spacer(1, 0.15*cm))
-
-        # 2. Worst-Case Performance - Critical scenarios
-        if 'worst_case_gap_train' in advanced_metrics and 'worst_case_gap_test' in advanced_metrics:
-            worst_train = advanced_metrics['worst_case_gap_train']
-            worst_test = advanced_metrics['worst_case_gap_test']
-
-            worst_text = f"""
-<b>2. Worst-Case Gap</b> (F_star - F_actual)<br/>
-• <b>Train:</b> {worst_train['worst_case_gap']:.6f} at scenario {worst_train['worst_case_scenario_idx']} (F*={worst_train['worst_case_F_star']:.6f}, F={worst_train['worst_case_F_actual']:.6f})<br/>
-• <b>Test:</b> {worst_test['worst_case_gap']:.6f} at scenario {worst_test['worst_case_scenario_idx']} (F*={worst_test['worst_case_F_star']:.6f}, F={worst_test['worst_case_F_actual']:.6f})
-"""
-            self.story.append(Paragraph(worst_text, self.styles['BodyText']))
-            self.story.append(Spacer(1, 0.15*cm))
-
-        # 2b. Gap Closure - (F - F') / (F* - F')
-        if 'gap_closure_train' in advanced_metrics and 'gap_closure_test' in advanced_metrics:
-            gc_train = advanced_metrics['gap_closure_train']
-            gc_test = advanced_metrics['gap_closure_test']
-
-            gc_text = f"""
-<b>2b. Gap Closure</b> (F - F') / (F* - F')  [0 = baseline, 1 = target]<br/>
-• <b>Train:</b> {gc_train['gap_closure_mean']:.4f} ± {gc_train['gap_closure_std']:.4f} (worst: {gc_train['gap_closure_min']:.4f} at scenario {gc_train['gap_closure_min_scenario_idx']}, valid: {gc_train['n_valid']}/{gc_train['n_total']})<br/>
-• <b>Test:</b> {gc_test['gap_closure_mean']:.4f} ± {gc_test['gap_closure_std']:.4f} (worst: {gc_test['gap_closure_min']:.4f} at scenario {gc_test['gap_closure_min_scenario_idx']}, valid: {gc_test['n_valid']}/{gc_test['n_total']})
-"""
-            self.story.append(Paragraph(gc_text, self.styles['BodyText']))
-            self.story.append(Spacer(1, 0.15*cm))
-
-        # 3. Generalization - Train vs Test comparison
-        if 'train_test_gap' in advanced_metrics:
-            tt_gap = advanced_metrics['train_test_gap']
-            interpretation = "better (good generalization)" if tt_gap['train_test_gap'] > 0 else "worse (possible overfitting)"
-
-            tt_text = f"""
-<b>3. Generalization Analysis</b> (Train-Test Gap)<br/>
-• <b>Mean gap (train):</b> {tt_gap['mean_gap_train']:.6f}<br/>
-• <b>Mean gap (test):</b> {tt_gap['mean_gap_test']:.6f}<br/>
-• <b>Difference:</b> {tt_gap['train_test_gap']:.6f} → Controller performs {interpretation}
-"""
-            self.story.append(Paragraph(tt_text, self.styles['BodyText']))
-            self.story.append(Spacer(1, 0.15*cm))
-
-        # 3b. Within-Scenario Overfitting Check (intra-scenario)
-        ws_gap = advanced_metrics.get('within_scenario_gap')
-        if ws_gap is not None:
-            if abs(ws_gap['gap_train_minus_val']) < 0.005:
-                ws_interpretation = "consistent (no intra-scenario overfitting)"
-            elif ws_gap['gap_train_minus_val'] > 0:
-                ws_interpretation = "train F &gt; val F (possible intra-scenario overfitting)"
-            else:
-                ws_interpretation = "val F &gt; train F (no concern)"
-
-            divergent_str = f"{ws_gap['n_divergent_epochs']}/{ws_gap['total_epochs_compared']}"
-            if ws_gap['first_divergent_epoch'] is not None:
-                divergent_str += f" (first at epoch {ws_gap['first_divergent_epoch']})"
-
-            ws_text = f"""
-<b>3b. Within-Scenario Overfitting Check</b> (intra-scenario, last {ws_gap['n_tail_epochs']} epochs)<br/>
-• <b>Mean F (train split):</b> {ws_gap['mean_F_train_split']:.6f}<br/>
-• <b>Mean F (val split):</b> {ws_gap['mean_F_val_split']:.6f}<br/>
-• <b>Gap (train - val):</b> {ws_gap['gap_train_minus_val']:.6f} → {ws_interpretation}<br/>
-• <b>Divergent epochs (gap &gt; 0.01):</b> {divergent_str}
-"""
-            self.story.append(Paragraph(ws_text, self.styles['BodyText']))
-            self.story.append(Spacer(1, 0.15*cm))
-
-        # 4. Dataset Characteristics - Scenario diversity
-        if 'diversity_train' in advanced_metrics and 'diversity_test' in advanced_metrics:
-            div_train = advanced_metrics['diversity_train']
-            div_test = advanced_metrics['diversity_test']
-
-            div_text = f"""
-<b>4. Dataset Diversity</b> (Coefficient of Variation across structural conditions)<br/>
-• <b>Train scenarios:</b> {div_train['diversity_score']:.4f}<br/>
-• <b>Test scenarios:</b> {div_test['diversity_score']:.4f}
-"""
-            self.story.append(Paragraph(div_text, self.styles['BodyText']))
-            self.story.append(Spacer(1, 0.15*cm))
-
-    def add_trajectory_values_section(self, target_trajectory, baseline_trajectory, actual_trajectory,
-                                     scenario_idx, process_names, F_star_repr, F_baseline_repr, F_actual_repr):
-        """Add trajectory values comparison section to PDF
-
-        Args:
-            target_trajectory (dict): Target trajectory (numpy arrays)
-            baseline_trajectory (dict): Baseline trajectory (numpy arrays)
-            actual_trajectory (dict): Actual trajectory (torch tensors)
-            scenario_idx (int): Scenario index
-            process_names (list): List of process names
-            F_star_repr (float): Target reliability for this scenario
-            F_baseline_repr (float): Baseline reliability for this scenario
-            F_actual_repr (float): Actual reliability for this scenario
-        """
-        import torch
-        import numpy as np
-
-        self.add_section_title(f"Trajectory Values Comparison (Scenario {scenario_idx})")
-
-        for process_name in process_names:
-            # Get values
-            target_inputs = target_trajectory[process_name]['inputs'][scenario_idx]
-            target_outputs = target_trajectory[process_name]['outputs'][scenario_idx]
-
-            baseline_inputs = baseline_trajectory[process_name]['inputs'][scenario_idx]
-            baseline_outputs = baseline_trajectory[process_name]['outputs'][scenario_idx]
-
-            # Convert actual from torch to numpy
-            if torch.is_tensor(actual_trajectory[process_name]['inputs']):
-                actual_inputs = actual_trajectory[process_name]['inputs'][0].detach().cpu().numpy()
-                actual_outputs = actual_trajectory[process_name]['outputs_sampled'][0].detach().cpu().numpy()
-            else:
-                actual_inputs = actual_trajectory[process_name]['inputs'][0]
-                actual_outputs = actual_trajectory[process_name]['outputs_sampled'][0]
-
-            # Create table for this process
-            # Header
-            data = [[Paragraph(f"<b>{process_name.upper()}</b>", self.styles['Normal'])]]
-
-            # Input labels and values
-            input_labels_text = "Target (a*) | Baseline (a') | Actual (a)"
-            data.append([Paragraph(f"<b>INPUTS</b> ({input_labels_text})", self.styles['BodyText'])])
-
-            # Format input values
-            target_inputs_str = ', '.join([f"{v:.4f}" for v in target_inputs])
-            baseline_inputs_str = ', '.join([f"{v:.4f}" for v in baseline_inputs])
-            actual_inputs_str = ', '.join([f"{v:.4f}" for v in actual_inputs])
-
-            data.append([Paragraph(f"[{target_inputs_str}] | [{baseline_inputs_str}] | [{actual_inputs_str}]",
-                                  self.styles['BodyText'])])
-
-            # Check if inputs are same
-            inputs_same = np.allclose(target_inputs, baseline_inputs, atol=1e-6) and \
-                         np.allclose(target_inputs, actual_inputs, atol=1e-6)
-            if inputs_same:
-                status_text = "→ All inputs IDENTICAL ✓"
-            elif np.allclose(target_inputs, baseline_inputs, atol=1e-6):
-                status_text = "→ Target = Baseline (✓), Actual DIFFERENT (controller adjusted)"
-            else:
-                status_text = "→ Inputs DIFFER"
-
-            data.append([Paragraph(f"<i>{status_text}</i>", self.styles['BodyText'])])
-
-            # Output values
-            data.append([Paragraph(f"<b>OUTPUTS</b> ({input_labels_text})", self.styles['BodyText'])])
-
-            target_outputs_str = ', '.join([f"{v:.4f}" for v in target_outputs])
-            baseline_outputs_str = ', '.join([f"{v:.4f}" for v in baseline_outputs])
-            actual_outputs_str = ', '.join([f"{v:.4f}" for v in actual_outputs])
-
-            data.append([Paragraph(f"[{target_outputs_str}] | [{baseline_outputs_str}] | [{actual_outputs_str}]",
-                                  self.styles['BodyText'])])
-
-            # Differences
-            baseline_diff = baseline_outputs - target_outputs
-            actual_diff = actual_outputs - target_outputs
-
-            baseline_diff_str = ', '.join([f"{v:+.4f}" for v in baseline_diff])
-            actual_diff_str = ', '.join([f"{v:+.4f}" for v in actual_diff])
-
-            data.append([Paragraph(f"Δ Baseline: [{baseline_diff_str}]  |  Δ Actual: [{actual_diff_str}]",
-                                  self.styles['BodyText'])])
-
-            # Create table for this process
-            table = Table(data, colWidths=[17*cm])
-            table.setStyle(TableStyle([
-                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-                ('LEFTPADDING', (0, 0), (-1, -1), 5),
-                ('RIGHTPADDING', (0, 0), (-1, -1), 5),
-                ('TOPPADDING', (0, 0), (-1, -1), 2),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
-                ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ]))
-
-            self.story.append(table)
-            self.story.append(Spacer(1, 0.1*cm))
-
-        # Add reliability scores at the end
-        reliability_text = f"""<b>Reliability Scores for Scenario {scenario_idx}:</b><br/>
-• F* (target): {F_star_repr:.6f}<br/>
-• F' (baseline): {F_baseline_repr:.6f}<br/>
-• F (actual): {F_actual_repr:.6f}"""
-
-        self.story.append(Paragraph(reliability_text, self.styles['BodyText']))
-        self.story.append(Spacer(1, 0.2*cm))
-
-    def add_theoretical_tables_section(self, theoretical_data=None):
-        """Add theoretical loss analysis tables to PDF report (for first page).
-
-        Args:
-            theoretical_data: Dictionary from TheoreticalLossTracker.to_dict() (optional)
-        """
-        if not theoretical_data:
-            return
-
-        self.add_section_title("Theoretical Loss Analysis")
-
-        # Add description
-        description = Paragraph(
-            "Analysis comparing observed loss with theoretical minimum (L_min). "
-            "L_min = Var[F] + Bias², where F is the reliability computed with sampling uncertainty.",
-            self.styles['Normal']
-        )
-        self.story.append(description)
-        self.story.append(Spacer(1, 0.2*cm))
-
-        # Add summary table if theoretical data is provided
-        if 'summary' in theoretical_data:
-            summary = theoretical_data['summary']
-
-            # Create summary metrics table
-            bellman = theoretical_data.get('bellman_lmin', None)
-            final_loss = summary.get('final_loss', 0)
-
-            summary_data = [
-                ['Metric', 'Value'],
-                ['Final Loss', f"{summary.get('final_loss', 0):.6f}"],
-                ['L_min Empirical', f"{summary.get('final_L_min', 0):.6f}"],
-            ]
-
-            # Add Bellman L_min rows if available
-            if bellman is not None:
-                bellman_val = bellman.get('L_min_bellman', 0)
-                summary_data.append(['L_min Bellman (reactive)', f"{bellman_val:.6f}"])
-                summary_data.append(['L_min Bellman (forward)', f"{bellman.get('L_min_forward', 0):.6f}"])
-                if final_loss > 0 and bellman_val > 0:
-                    bellman_gap = final_loss - bellman_val
-                    bellman_eff = bellman_val / final_loss
-                    summary_data.append(['Gap (obs - Bellman)', f"{bellman_gap:.6f}"])
-                    summary_data.append(['Efficiency (Bellman)', f"{bellman_eff*100:.1f}%"])
-                n_viol = bellman.get('n_violations', summary.get('n_violations', 0))
-                summary_data.append(['Violations (Loss < L_min Bellman)', f"{n_viol}/{summary.get('total_epochs', 0)}"])
-            else:
-                # Fallback: empirical efficiency when Bellman is not available
-                summary_data.append(['Gap (Reducible)', f"{summary.get('final_gap', 0):.6f}"])
-                summary_data.append(['Efficiency (empirical)', f"{summary.get('final_efficiency', 0)*100:.1f}%"])
-                summary_data.append(['Violations (Loss < L_min emp.)', f"{summary.get('n_violations', 0)}/{summary.get('total_epochs', 0)}"])
-
-            table = Table(summary_data, colWidths=[8*cm, 6*cm])
-            table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, -1), 7),
-                ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
-                ('TOPPADDING', (0, 0), (-1, 0), 6),
-                ('LINEABOVE', (0, 0), (-1, 0), 1.5, colors.black),
-                ('LINEABOVE', (0, 1), (-1, 1), 0.5, colors.black),
-                ('LINEBELOW', (0, -1), (-1, -1), 1.5, colors.black),
-            ]))
-            self.story.append(table)
-            self.story.append(Spacer(1, 0.2*cm))
-
-            # Add decomposition table
-            if 'theoretical_Var_F' in theoretical_data and len(theoretical_data['theoretical_Var_F']) > 0:
-                var_f = theoretical_data['theoretical_Var_F'][-1]
-                bias2 = theoretical_data['theoretical_Bias2'][-1]
-                gap = theoretical_data['gap'][-1]
-                L_min = var_f + bias2
-                total = var_f + bias2 + gap
-
-                decomp_data = [
-                    ['Component', 'Value', '% of L_min', '% of Loss'],
-                    ['Var(F) (Irreducible)', f"{var_f:.6f}",
-                     f"{100*var_f/L_min:.1f}%" if L_min > 0 else "-",
-                     f"{100*var_f/total:.1f}%" if total > 0 else "-"],
-                    ['Bias² (Irreducible)', f"{bias2:.6f}",
-                     f"{100*bias2/L_min:.1f}%" if L_min > 0 else "-",
-                     f"{100*bias2/total:.1f}%" if total > 0 else "-"],
-                    ['Gap (Reducible)', f"{gap:.6f}", "-",
-                     f"{100*gap/total:.1f}%" if total > 0 else "-"],
-                ]
-
-                table2 = Table(decomp_data, colWidths=[5*cm, 4*cm, 4*cm, 4*cm])
-                table2.setStyle(TableStyle([
-                    ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
-                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                    ('FONTSIZE', (0, 0), (-1, -1), 7),
-                    ('LINEABOVE', (0, 0), (-1, 0), 1.5, colors.black),
-                    ('LINEABOVE', (0, 1), (-1, 1), 0.5, colors.black),
-                    ('LINEBELOW', (0, -1), (-1, -1), 1.5, colors.black),
-                ]))
-                self.story.append(Paragraph("<b>Loss Decomposition</b>", self.styles['SectionTitle']))
-                self.story.append(table2)
-                self.story.append(Spacer(1, 0.2*cm))
-
-    def add_theoretical_analysis_plots(self, checkpoint_dir):
-        """Add theoretical loss analysis plots to PDF report.
-
-        Args:
-            checkpoint_dir: Path to checkpoint directory (contains plots)
-        """
-        checkpoint_dir = Path(checkpoint_dir)
-
-        # Check if theoretical analysis plots exist
-        theoretical_plots = [
-            'loss_vs_L_min.png',
-            'training_efficiency.png',
-            'loss_decomposition.png',
-            'loss_scatter.png',
-            'theoretical_analysis_summary.png'
-        ]
-
-        available_plots = [p for p in theoretical_plots if (checkpoint_dir / p).exists()]
-
-        if len(available_plots) == 0:
-            return  # No theoretical analysis plots to add
-
-        # Add theoretical analysis summary plot (2x2 grid)
-        summary_plot = checkpoint_dir / 'theoretical_analysis_summary.png'
-        if summary_plot.exists():
-            img = Image(str(summary_plot))
-            img_width, img_height = img.imageWidth, img.imageHeight
-            aspect_ratio = img_height / img_width
-
-            new_width = 17*cm
-            new_height = new_width * aspect_ratio
-            if new_height > 14*cm:
-                new_height = 14*cm
-                new_width = new_height / aspect_ratio
-
-            img.drawWidth = new_width
-            img.drawHeight = new_height
-
-            img_table = Table([[img]], colWidths=[18*cm])
-            img_table.setStyle(TableStyle([
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ]))
-            self.story.append(img_table)
-
-            caption = Paragraph("<i>Theoretical Analysis: Loss vs L_min, Efficiency, Decomposition, Scatter</i>",
-                               self.styles['Normal'])
-            caption_table = Table([[caption]], colWidths=[18*cm])
-            caption_table.setStyle(TableStyle([
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ]))
-            self.story.append(caption_table)
-            self.story.append(Spacer(1, 0.3*cm))
-
-        # Add individual plots if summary not available
-        elif 'loss_vs_L_min.png' in available_plots:
-            # Loss vs L_min plot
-            loss_plot = checkpoint_dir / 'loss_vs_L_min.png'
-            img = Image(str(loss_plot))
-            img_width, img_height = img.imageWidth, img.imageHeight
-            aspect_ratio = img_height / img_width
-
-            new_width = 15*cm
-            new_height = new_width * aspect_ratio
-            if new_height > 10*cm:
-                new_height = 10*cm
-                new_width = new_height / aspect_ratio
-
-            img.drawWidth = new_width
-            img.drawHeight = new_height
-
-            img_table = Table([[img]], colWidths=[18*cm])
-            img_table.setStyle(TableStyle([
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ]))
-            self.story.append(img_table)
-
-            caption = Paragraph("<i>Loss vs Theoretical Minimum (L_min)</i>", self.styles['Normal'])
-            caption_table = Table([[caption]], colWidths=[18*cm])
-            caption_table.setStyle(TableStyle([('ALIGN', (0, 0), (-1, -1), 'CENTER')]))
-            self.story.append(caption_table)
-            self.story.append(Spacer(1, 0.2*cm))
-
-    def add_embedding_plots(self, checkpoint_dir):
-        """Add scenario embedding visualization plots - split across two logical pages for 2-up layout"""
-        checkpoint_dir = Path(checkpoint_dir)
-
-        # Check if any embedding plots exist
-        embedding_plots = [
-            'embedding_tsne.png',
-            'embedding_pca.png',
-            'embedding_distances.png',
-            'embedding_correlations.png',
-            'embedding_evolution.png'
-        ]
-
-        available_plots = [p for p in embedding_plots if (checkpoint_dir / p).exists()]
-
-        if len(available_plots) == 0:
-            return  # No embedding plots to add
-
-        # Split plots across two logical pages (will be side-by-side in 2-up PDF):
-        # Page 1 (left in 2-up): t-SNE, PCA, Distances
-        # Page 2 (right in 2-up): Correlations, Evolution
-
-        page1_plots = ['embedding_tsne.png', 'embedding_pca.png', 'embedding_distances.png']
-        page2_plots = ['embedding_correlations.png', 'embedding_evolution.png']
-
-        # Filter to only available plots
-        page1_available = [p for p in page1_plots if p in available_plots]
-        page2_available = [p for p in page2_plots if p in available_plots]
-
-        # Dimensions for full-page layout - use full page width
-        plot_width = 18*cm
-        # Height per plot: 3 plots on page 1, 2 plots on page 2
-        page1_plot_height = 8.5*cm
-        page2_plot_height = 12*cm
-
-        def create_plot_with_caption(plot_name, width, height):
-            """Create image with caption below, centered"""
-            plot_path = checkpoint_dir / plot_name
-            img = Image(str(plot_path))
-            img_width, img_height = img.imageWidth, img.imageHeight
-            aspect_ratio = img_height / img_width
-
-            # Calculate dimensions maintaining aspect ratio
-            new_width = width
-            new_height = new_width * aspect_ratio
-
-            if new_height > height:
-                new_height = height
-                new_width = new_height / aspect_ratio
-
-            img.drawWidth = new_width
-            img.drawHeight = new_height
-
-            # Caption
-            caption_text = plot_name.replace('embedding_', '').replace('.png', '').replace('_', ' ').title()
-            caption = Paragraph(f"<i>{caption_text}</i>", self.styles['Normal'])
-
-            # Center image in table - full page width
-            img_table = Table([[img]], colWidths=[18*cm])
-            img_table.setStyle(TableStyle([
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ]))
-
-            caption_table = Table([[caption]], colWidths=[18*cm])
-            caption_table.setStyle(TableStyle([
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ]))
-
-            return img_table, caption_table
-
-        # === PAGE 1: t-SNE, PCA, Distances ===
-        self.story.append(PageBreak())
-        self.add_section_title("Scenario Encoder Analysis")
-
-        for plot_name in page1_available:
-            img_table, caption_table = create_plot_with_caption(plot_name, plot_width, page1_plot_height)
-            self.story.append(img_table)
-            self.story.append(caption_table)
-            self.story.append(Spacer(1, 0.3*cm))
-
-        # === PAGE 2: Correlations, Evolution ===
-        if page2_available:
-            self.story.append(PageBreak())
-            self.add_section_title("Scenario Encoder Analysis (cont.)")
-
-            for plot_name in page2_available:
-                # Evolution plot slightly smaller
-                if plot_name == 'embedding_evolution.png':
-                    height = 10*cm
-                else:
-                    height = page2_plot_height
-                img_table, caption_table = create_plot_with_caption(plot_name, plot_width, height)
-                self.story.append(img_table)
-                self.story.append(caption_table)
-                self.story.append(Spacer(1, 0.4*cm))
-
-    def add_plots_stacked(self, checkpoint_dir):
-        """Add controller optimization plots stacked vertically"""
-        self.add_section_title("Training Visualization")
-
-        checkpoint_dir = Path(checkpoint_dir)
-
-        # Training history plot
-        history_plot = checkpoint_dir / 'training_history.png'
-        if history_plot.exists():
-            img = Image(str(history_plot))
-            img_width, img_height = img.imageWidth, img.imageHeight
-            aspect_ratio = img_height / img_width
-
-            # Larger width for stacked layout
-            new_width = 16*cm
-            new_height = new_width * aspect_ratio
-
-            # Max height constraint
-            if new_height > 10*cm:
-                new_height = 10*cm
-                new_width = new_height / aspect_ratio
-
-            img.drawWidth = new_width
-            img.drawHeight = new_height
-
-            # Center the image
-            img_table = Table([[img]], colWidths=[18*cm])
-            img_table.setStyle(TableStyle([
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ]))
-            self.story.append(img_table)
-
-            caption = Paragraph("<i>Training History - Total Loss and Components</i>", self.styles['Normal'])
-            caption_table = Table([[caption]], colWidths=[18*cm])
-            caption_table.setStyle(TableStyle([
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ]))
-            self.story.append(caption_table)
-            self.story.append(Spacer(1, 0.3*cm))
-
-        # Loss chart (train vs validation) - helps identify overfitting
-        loss_chart = checkpoint_dir / 'loss_chart.png'
-        if loss_chart.exists():
-            self.add_section_title("Overfitting Analysis")
-
-            img = Image(str(loss_chart))
-            img_width, img_height = img.imageWidth, img.imageHeight
-            aspect_ratio = img_height / img_width
-
-            new_width = 16*cm
-            new_height = new_width * aspect_ratio
-
-            if new_height > 12*cm:
-                new_height = 12*cm
-                new_width = new_height / aspect_ratio
-
-            img.drawWidth = new_width
-            img.drawHeight = new_height
-
-            img_table = Table([[img]], colWidths=[18*cm])
-            img_table.setStyle(TableStyle([
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ]))
-            self.story.append(img_table)
-
-            caption = Paragraph("<i>Train vs Validation Loss - Cross-scenario (different conditions) and Within-scenario (held-out samples)</i>", self.styles['Normal'])
-            caption_table = Table([[caption]], colWidths=[18*cm])
-            caption_table.setStyle(TableStyle([
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ]))
-            self.story.append(caption_table)
-            self.story.append(Spacer(1, 0.3*cm))
-
-        # Advanced Analysis - 2x2 grid (placed right after Training Visualization)
-        self.add_section_title("Advanced Analysis")
-
-        # Load all 4 plots
-        scatter_train_plot = checkpoint_dir / 'target_vs_actual_scatter_train.png'
-        scatter_test_plot = checkpoint_dir / 'target_vs_actual_scatter_test.png'
-        gap_train_plot = checkpoint_dir / 'gap_distribution_train.png'
-        gap_test_plot = checkpoint_dir / 'gap_distribution_test.png'
-
-        # Check if all plots exist
-        if all(p.exists() for p in [scatter_train_plot, scatter_test_plot, gap_train_plot, gap_test_plot]):
-            # Create 2x2 grid with slightly reduced dimensions
-            # Target size for each cell (reduced from 8x6 to 7.5x5.5)
-            cell_width = 7.5*cm
-            cell_height = 5.5*cm
-
-            # Row 1: Train scenarios
-            # Scatter train
-            img_scatter_train = Image(str(scatter_train_plot))
-            img_scatter_train.drawWidth = cell_width
-            img_scatter_train.drawHeight = cell_height
-
-            caption_scatter_train = Paragraph("<i>Target vs Baseline & Controller<br/>Training Scenarios</i>",
-                                             self.styles['Normal'])
-
-            # Gap train
-            img_gap_train = Image(str(gap_train_plot))
-            img_gap_train.drawWidth = cell_width
-            img_gap_train.drawHeight = cell_height
-
-            caption_gap_train = Paragraph("<i>Gap Distribution<br/>Training Scenarios</i>",
-                                         self.styles['Normal'])
-
-            # Row 2: Test scenarios
-            # Scatter test
-            img_scatter_test = Image(str(scatter_test_plot))
-            img_scatter_test.drawWidth = cell_width
-            img_scatter_test.drawHeight = cell_height
-
-            caption_scatter_test = Paragraph("<i>Target vs Baseline & Controller<br/>Test Scenarios</i>",
-                                            self.styles['Normal'])
-
-            # Gap test
-            img_gap_test = Image(str(gap_test_plot))
-            img_gap_test.drawWidth = cell_width
-            img_gap_test.drawHeight = cell_height
-
-            caption_gap_test = Paragraph("<i>Gap Distribution<br/>Test Scenarios</i>",
-                                        self.styles['Normal'])
-
-            # Create grid structure
-            # Each cell contains: [[image], [caption]]
-            data = [
-                # Row 1: Training scenarios
-                [
-                    [[img_scatter_train], [caption_scatter_train]],  # Left: scatter train
-                    [[img_gap_train], [caption_gap_train]]          # Right: gap train
-                ],
-                # Row 2: Test scenarios
-                [
-                    [[img_scatter_test], [caption_scatter_test]],   # Left: scatter test
-                    [[img_gap_test], [caption_gap_test]]            # Right: gap test
-                ]
-            ]
-
-            # Create nested tables for each cell
-            cell_tables = []
-            for row in data:
-                cell_row = []
-                for cell_content in row:
-                    cell_table = Table(cell_content, colWidths=[cell_width])
-                    cell_table.setStyle(TableStyle([
-                        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                    ]))
-                    cell_row.append(cell_table)
-                cell_tables.append(cell_row)
-
-            # Create main grid table
-            grid_table = Table(cell_tables, colWidths=[cell_width, cell_width],
-                             rowHeights=[cell_height + 1*cm, cell_height + 1*cm])
-            grid_table.setStyle(TableStyle([
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-                ('LEFTPADDING', (0, 0), (-1, -1), 5),
-                ('RIGHTPADDING', (0, 0), (-1, -1), 5),
-                ('TOPPADDING', (0, 0), (-1, -1), 5),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
-            ]))
-
-            self.story.append(grid_table)
-            self.story.append(Spacer(1, 0.15*cm))
-
-    def generate(self, config, training_history, final_metrics, process_metrics,
-                 F_star, F_baseline, F_actual, timestamp, n_scenarios=None, advanced_metrics=None,
-                 trajectory_values=None, theoretical_data=None):
-        """Generate the complete PDF
-
-        Args:
-            n_scenarios: Number of scenarios (for multi-scenario training)
-            advanced_metrics: Advanced metrics dictionary (optional)
-            trajectory_values: Dictionary with trajectory comparison data (optional)
-                {
-                    'target_trajectory': dict,
-                    'baseline_trajectory': dict,
-                    'actual_trajectory': dict,
-                    'scenario_idx': int,
-                    'process_names': list,
-                    'F_star': float,
-                    'F_baseline': float,
-                    'F_actual': float
-                }
-            theoretical_data: Dictionary from TheoreticalLossTracker.to_dict() (optional)
-        """
-
-        # Add all sections in logical order
-        self.add_title(timestamp)
-
-        # Configuration and basic metrics
-        self.create_two_column_section(config, training_history, F_star, F_baseline, F_actual,
-                                      final_metrics, n_scenarios=n_scenarios)
-
-        # Trajectory values comparison (if available)
-        if trajectory_values:
-            self.add_trajectory_values_section(
-                target_trajectory=trajectory_values['target_trajectory'],
-                baseline_trajectory=trajectory_values['baseline_trajectory'],
-                actual_trajectory=trajectory_values['actual_trajectory'],
-                scenario_idx=trajectory_values['scenario_idx'],
-                process_names=trajectory_values['process_names'],
-                F_star_repr=trajectory_values['F_star'],
-                F_baseline_repr=trajectory_values['F_baseline'],
-                F_actual_repr=trajectory_values['F_actual']
-            )
-
-        # Advanced metrics (if available)
-        if advanced_metrics:
-            self.add_advanced_metrics_section(advanced_metrics)
-
-        # Theoretical loss analysis tables (on first page)
-        if theoretical_data:
-            self.add_theoretical_tables_section(theoretical_data)
-
-        # Start new page for visualizations
-        self.story.append(PageBreak())
-
-        # Visualizations
-        self.add_plots_stacked(Path(config['training']['checkpoint_dir']))
-
-        # Theoretical analysis plots (if available)
-        self.add_theoretical_analysis_plots(Path(config['training']['checkpoint_dir']))
-
-        # Embedding visualizations (if scenario encoder is enabled)
-        self.add_embedding_plots(Path(config['training']['checkpoint_dir']))
-
-        # Build PDF
-        doc = SimpleDocTemplate(
-            str(self.output_path),
-            pagesize=A4,
-            rightMargin=1.5*cm,
-            leftMargin=1.5*cm,
-            topMargin=1.5*cm,
-            bottomMargin=1.5*cm,
-        )
-
-        doc.build(self.story)
-        print(f"PDF report generated: {self.output_path}")
-
-
-def create_2up_pdf(input_pdf_path, output_pdf_path):
-    """
-    Convert a PDF to 2-up format: 2 pages side-by-side on A4 landscape
-
-    Args:
-        input_pdf_path: Path to the input PDF
-        output_pdf_path: Path to save the 2-up PDF
-
-    Raises:
-        ImportError: If pypdf is not available
-    """
-    if not PYPDF_AVAILABLE:
-        raise ImportError("pypdf library is required for 2-up layout. Install with: pip install pypdf")
-
-    reader = PdfReader(input_pdf_path)
-    writer = PdfWriter()
-
-    # A4 landscape dimensions in points (1 point = 1/72 inch)
-    a4_width, a4_height = landscape(A4)  # 842 x 595 points
-
-    # Process pages in pairs
-    num_pages = len(reader.pages)
-    for i in range(0, num_pages, 2):
-        # Create new blank page (A4 landscape)
-        blank_page = writer.add_blank_page(width=a4_width, height=a4_height)
-
-        # Calculate scaling to fit A5 size (half of A4 landscape width)
-        target_width = a4_width / 2
-        target_height = a4_height
-
-        # Get first page (left side)
-        page1 = reader.pages[i]
-        orig_width = float(page1.mediabox.width)
-        orig_height = float(page1.mediabox.height)
-        scale = min(target_width / orig_width, target_height / orig_height)
-
-        # Calculate centering offsets
-        scaled_width = orig_width * scale
-        scaled_height = orig_height * scale
-        offset_x_left = (target_width - scaled_width) / 2
-        offset_y = (target_height - scaled_height) / 2
-
-        # Create transformation for first page (left side)
-        transformation_left = Transformation().scale(sx=scale, sy=scale).translate(tx=offset_x_left, ty=offset_y)
-        blank_page.merge_transformed_page(page1, transformation_left, expand=False)
-
-        # Get second page (right side) if it exists
-        if i + 1 < num_pages:
-            page2 = reader.pages[i + 1]
-
-            # Calculate offset for right page
-            offset_x_right = target_width + (target_width - scaled_width) / 2
-
-            # Create transformation for second page (right side)
-            transformation_right = Transformation().scale(sx=scale, sy=scale).translate(tx=offset_x_right, ty=offset_y)
-            blank_page.merge_transformed_page(page2, transformation_right, expand=False)
-
-    # Write output
-    with open(output_pdf_path, 'wb') as output_file:
-        writer.write(output_file)
-
+        F.append(traj_tbl)
+
+        tf_s  = traj.get('F_star',     fstar_v)
+        tf_bl = traj.get('F_baseline', fbl_v)
+        tf_ac = traj.get('F_actual',   fact_v)
+        foot_l = Paragraph(
+            f"F* {tf_s:.6f}  \u00b7  F\u2019 {tf_bl:.6f}  \u00b7  F {tf_ac:.6f}  \u00b7  scenario {sc_idx} only",
+            ST_NOTE)
+        foot_r = Paragraph("\u2191 = closer to target than baseline", ST_NOTE_G)
+        foot_t = Table([[foot_l, foot_r]], colWidths=[TW*0.65, TW*0.35])
+        foot_t.setStyle(TableStyle([
+            ('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0),
+            ('TOPPADDING',(0,0),(-1,-1),3),('BOTTOMPADDING',(0,0),(-1,-1),0),
+            ('ALIGN',(1,0),(1,0),'RIGHT'),
+        ]))
+        F.append(foot_t)
+
+    return F
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  PAGE 2 CONTENT
+# ════════════════════════════════════════════════════════════════════════════
+
+def _page2(d):
+    cfg    = d['config']
+    ts     = d.get('timestamp', datetime.now())
+    ts_str = ts.strftime('%Y-%m-%d %H:%M:%S') if isinstance(ts, datetime) else str(ts)
+    chk    = Path(cfg.get('training', {}).get('checkpoint_dir', '.'))
+    hist   = d.get('training_history', {})
+    seed   = cfg.get('misc', {}).get('random_seed', '\u2014')
+    epochs = cfg.get('training', {}).get('epochs',
+             hist.get('epochs_trained', '\u2014'))
+    max_ep = cfg.get('training', {}).get('max_epochs',
+             cfg.get('training', {}).get('epochs', '\u2014'))
+    completed = hist.get('completed', True)
+    status_txt = "complete" if completed else "incomplete"
+    status_st  = ST_STATUS_G if completed else ST_STATUS_A
+    status_col = C_GREEN     if completed else C_AMBER
+
+    F = []
+
+    # ── mini header (repeated on page 2) ─────────────────────────────────────
+    title_p  = Paragraph("Controller Optimization \u2014 Training Report", ST_TITLE)
+    meta_p   = Paragraph(f"{ts_str}  \u00b7  seed {seed}  \u00b7  epochs {epochs} / {max_ep}", ST_SUB)
+    badge_w  = 2.2 * cm
+    badge_p  = Paragraph(status_txt, status_st)
+    hdr_tbl  = Table([[title_p, badge_p]], colWidths=[TW - badge_w, badge_w])
+    hdr_tbl.setStyle(TableStyle([
+        ('VALIGN',(0,0),(-1,-1),'TOP'),
+        ('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0),
+        ('TOPPADDING',(0,0),(-1,-1),0),('BOTTOMPADDING',(0,0),(-1,-1),0),
+        ('BOX',(1,0),(1,0),0.5,status_col),
+        ('ALIGN',(1,0),(1,0),'CENTER'),
+    ]))
+    F.append(hdr_tbl)
+    F.append(Spacer(1, 2))
+    F.append(meta_p)
+    F.append(_rule_heavy())
+
+    ph = 70   # plot height pts
+
+    # ── A — training history ──────────────────────────────────────────────────
+    F += section_header("A \u2014 training history")
+    F.append(img_pair(
+        chk / 'training_losses.png',      chk / 'reliability_evolution.png',
+        "Training losses & weights (total \u00b7 reliability \u00b7 BC \u00b7 reliability weight)",
+        "Reliability evolution: F (actual) vs F* (target) over epochs", ph))
+    F.append(Spacer(1, 10))
+
+    # ── B — overfitting analysis ──────────────────────────────────────────────
+    F += section_header("B \u2014 overfitting analysis")
+    F.append(img_pair(
+        chk / 'train_val_loss.png',       chk / 'reliability_train_val.png',
+        "Train vs validation loss \u2014 cross-scenario overfitting detection",
+        "Reliability loss: train vs validation \u2014 within-scenario held-out samples", ph))
+    F.append(Spacer(1, 10))
+
+    # ── C — controller performance per scenario ────────────────────────────────
+    F += section_header("C \u2014 controller performance per scenario")
+    F.append(img_pair(
+        chk / 'performance_train.png',    chk / 'gap_distribution_train.png',
+        "Target vs baseline & controller \u2014 training scenarios",
+        "Gap distribution \u2014 training scenarios (F* \u2212 F_actual)", ph))
+    F.append(Spacer(1, 6))
+    F.append(img_pair(
+        chk / 'performance_test.png',     chk / 'gap_distribution_test.png',
+        "Target vs baseline & controller \u2014 test scenarios",
+        "Gap distribution \u2014 test scenarios (F* \u2212 F_actual)", ph))
+    F.append(Spacer(1, 10))
+
+    # ── D — L_min Bellman ─────────────────────────────────────────────────────
+    F += section_header("D \u2014 L_min Bellman \u2014 theoretical analysis")
+    F.append(img_pair(
+        chk / 'loss_vs_lmin.png',         chk / 'training_efficiency.png',
+        "Loss vs L_min Bellman \u2014 observed loss \u00b7 L_min empirical \u00b7 reducible gap",
+        "Training efficiency \u2014 L_min Bellman / loss over epochs", ph))
+    F.append(Spacer(1, 6))
+    F.append(img_pair(
+        chk / 'loss_decomposition.png',   chk / 'loss_lmin_scatter.png',
+        "Loss decomposition (final) \u2014 Var(F) \u00b7 Bias\u00b2 \u00b7 reducible gap",
+        "Loss vs L_min scatter \u2014 observed vs theoretical, colored by epoch", ph))
+
+    return F
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  FOOTER helper
+# ════════════════════════════════════════════════════════════════════════════
+
+def _footer(d, page_num, total_pages):
+    cfg  = d['config']
+    chk  = short_dir(cfg.get('training', {}).get('checkpoint_dir', ''))
+    left = Paragraph(f"auto-generated \u2014 {chk}", ST_FTR)
+    right= Paragraph(f"page {page_num} / {total_pages}", ST_FTR_R)
+    rule = HRFlowable(width=TW, thickness=1, color=C_BLACK, spaceBefore=10, spaceAfter=4)
+    tbl  = Table([[left, right]], colWidths=[TW*0.7, TW*0.3])
+    tbl.setStyle(TableStyle([
+        ('VALIGN',(0,0),(-1,-1),'MIDDLE'),
+        ('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0),
+        ('TOPPADDING',(0,0),(-1,-1),0),('BOTTOMPADDING',(0,0),(-1,-1),0),
+    ]))
+    return [rule, tbl]
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  BUILD PDF
+# ════════════════════════════════════════════════════════════════════════════
+
+def _build_pdf(d, out_path):
+    body_frame = Frame(M, M, TW, PH - 2*M, id='body',
+                       leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0)
+    pt = PageTemplate(id='main', frames=[body_frame], pagesize=A4)
+    doc = BaseDocTemplate(str(out_path), pagesize=A4,
+                          leftMargin=M, rightMargin=M,
+                          topMargin=M,  bottomMargin=M,
+                          pageTemplates=[pt])
+
+    story = (
+        _page1(d) +
+        _footer(d, 1, 2) +
+        [PageBreak()] +
+        _page2(d) +
+        _footer(d, 2, 2)
+    )
+    doc.build(story)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  PUBLIC API  — keep existing signatures intact
+# ════════════════════════════════════════════════════════════════════════════
 
 def generate_controller_report(
     config,
@@ -1072,132 +802,53 @@ def generate_controller_report(
     n_scenarios=None,
     advanced_metrics=None,
     trajectory_values=None,
-    theoretical_data=None
+    theoretical_data=None,
 ):
-    """
-    Generate a LaTeX-style controller optimization training report
-
-    Args:
-        config: Configuration dictionary
-        training_history: Training history dictionary
-        final_metrics: Final metrics dictionary
-        process_metrics: Process-wise metrics dictionary
-        F_star: Target reliability (scalar or dict with mean/std/min/max)
-        F_baseline: Baseline reliability (scalar or dict with mean/std/min/max)
-        F_actual: Actual controller reliability (scalar or dict with mean/std/min/max)
-        checkpoint_dir: Directory to save the report
-        timestamp: Training timestamp (optional)
-        n_scenarios: Number of scenarios (for multi-scenario training)
-        advanced_metrics: Advanced metrics dictionary (optional)
-        trajectory_values: Dictionary with trajectory comparison data (optional)
-        theoretical_data: Dictionary from TheoreticalLossTracker.to_dict() (optional)
-
-    Returns:
-        Path to the generated PDF report
-    """
     if timestamp is None:
         timestamp = datetime.now()
-
     checkpoint_dir = Path(checkpoint_dir)
-    final_report_path = checkpoint_dir / 'controller_report.pdf'
-
-    # Try to generate 2-up layout if pypdf is available
-    if PYPDF_AVAILABLE:
-        temp_report_path = checkpoint_dir / 'controller_report_temp.pdf'
-
-        # Generate the original PDF
-        generator = ControllerReportGenerator(temp_report_path)
-        generator.generate(config, training_history, final_metrics, process_metrics,
-                          F_star, F_baseline, F_actual, timestamp, n_scenarios=n_scenarios,
-                          advanced_metrics=advanced_metrics, trajectory_values=trajectory_values,
-                          theoretical_data=theoretical_data)
-
-        # Convert to 2-up format
-        try:
-            create_2up_pdf(temp_report_path, final_report_path)
-            temp_report_path.unlink()
-            print(f"2-up PDF report generated: {final_report_path}")
-        except Exception as e:
-            print(f"Warning: Failed to create 2-up layout: {e}")
-            print(f"Falling back to standard layout")
-            # If 2-up fails, rename temp to final
-            temp_report_path.rename(final_report_path)
-            print(f"PDF report generated: {final_report_path}")
-    else:
-        # Generate standard PDF without 2-up layout
-        print("Note: pypdf not available, generating standard layout (install pypdf for 2-up layout)")
-        generator = ControllerReportGenerator(final_report_path)
-        generator.generate(config, training_history, final_metrics, process_metrics,
-                          F_star, F_baseline, F_actual, timestamp, n_scenarios=n_scenarios,
-                          advanced_metrics=advanced_metrics, trajectory_values=trajectory_values,
-                          theoretical_data=theoretical_data)
-
-    return final_report_path
-
-
-if __name__ == '__main__':
-    # Test report generation
-    print("Testing controller report generation...")
-
-    # Dummy data
-    config = {
-        'process_names': ['laser', 'plasma', 'galvanic'],
-        'policy_generator': {
-            'architecture': 'medium',
-            'hidden_sizes': [128, 64],
-            'activation': 'relu',
-            'dropout_rate': 0.1
-        },
-        'training': {
-            'epochs': 100,
-            'batch_size': 32,
-            'learning_rate': 0.001,
-            'weight_decay': 0.0001,
-            'lambda_bc': 0.1,
-            'patience': 10,
-            'device': 'cpu',
-            'checkpoint_dir': 'test_report'
-        },
-        'misc': {
-            'random_seed': 42,
-            'verbose': True
-        }
-    }
-
-    training_history = {
-        'total_loss': [1.0, 0.8, 0.6, 0.5, 0.4],
-        'reliability_loss': [0.5, 0.4, 0.3, 0.25, 0.2],
-        'bc_loss': [0.5, 0.4, 0.3, 0.25, 0.2],
-        'F_values': [0.7, 0.75, 0.8, 0.85, 0.9]
-    }
-
-    final_metrics = {
-        'improvement': 0.15,
-        'target_gap': 0.05
-    }
-
-    process_metrics = {
-        'actual': {
-            'laser': {'input_mse': 0.001, 'output_mse': 0.002, 'combined_mse': 0.0015},
-            'plasma': {'input_mse': 0.003, 'output_mse': 0.004, 'combined_mse': 0.0035},
-            'galvanic': {'input_mse': 0.002, 'output_mse': 0.003, 'combined_mse': 0.0025}
-        }
-    }
-
-    from pathlib import Path
-    checkpoint_dir = Path('test_report')
-    checkpoint_dir.mkdir(exist_ok=True)
-
-    report_path = generate_controller_report(
-        config=config,
-        training_history=training_history,
-        final_metrics=final_metrics,
-        process_metrics=process_metrics,
-        F_star=0.95,
-        F_baseline=0.82,
-        F_actual=0.93,
-        checkpoint_dir=checkpoint_dir,
-        timestamp=datetime.now()
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    out = checkpoint_dir / 'controller_report.pdf'
+    d = dict(
+        config=config, training_history=training_history,
+        final_metrics=final_metrics, process_metrics=process_metrics,
+        F_star=F_star, F_baseline=F_baseline, F_actual=F_actual,
+        timestamp=timestamp, n_scenarios=n_scenarios,
+        advanced_metrics=advanced_metrics or {},
+        trajectory_values=trajectory_values,
+        theoretical_data=theoretical_data or {},
     )
+    _build_pdf(d, out)
+    return str(out)
 
-    print(f"✓ Report generated: {report_path}")
+
+class ControllerReportGenerator:
+    """Class-based interface — kept for backward compatibility."""
+
+    def __init__(self, output_path):
+        self.output_path = Path(output_path)
+
+    def generate(self, config, training_history, final_metrics, process_metrics,
+                 F_star, F_baseline, F_actual, timestamp, n_scenarios=None,
+                 advanced_metrics=None, trajectory_values=None, theoretical_data=None):
+        if timestamp is None:
+            timestamp = datetime.now()
+        self.output_path.parent.mkdir(parents=True, exist_ok=True)
+        d = dict(
+            config=config, training_history=training_history,
+            final_metrics=final_metrics, process_metrics=process_metrics,
+            F_star=F_star, F_baseline=F_baseline, F_actual=F_actual,
+            timestamp=timestamp, n_scenarios=n_scenarios,
+            advanced_metrics=advanced_metrics or {},
+            trajectory_values=trajectory_values,
+            theoretical_data=theoretical_data or {},
+        )
+        _build_pdf(d, self.output_path)
+        return str(self.output_path)
+
+
+def create_2up_pdf(input_pdf, output_pdf, page_size=None):
+    """Stub — kept for backward compatibility."""
+    import shutil
+    shutil.copy(str(input_pdf), str(output_pdf))
+    return str(output_pdf)
