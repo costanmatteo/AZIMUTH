@@ -480,21 +480,36 @@ def _page1(d):
     F += section_header("03 \u2014 loss decomposition & L_min Bellman analysis")
 
     theo = d.get('theoretical_data') or {}
+    theo_summary = theo.get('summary', {})
     final_total = _last(hist.get('final_total_loss', hist.get('total_loss', final_loss)))
     _rel_raw    = hist.get('final_reliability_loss', hist.get('reliability_loss', None))
     _bc_raw     = hist.get('final_bc_loss',          hist.get('bc_loss', None))
     final_rel   = _last(_rel_raw) if _rel_raw is not None else '\u2014'
     final_bc    = _last(_bc_raw)  if _bc_raw  is not None else '\u2014'
 
-    lmin_emp  = theo.get('lmin_empirical', '\u2014')
-    gap_red   = theo.get('gap_reducible', '\u2014')
-    eff       = theo.get('efficiency', '\u2014')
-    viol      = theo.get('violations', 0)
+    def _theo_scalar(key, summary_key=None, fallback='\u2014'):
+        """Extract a scalar from theoretical_data, trying summary first, then _last on lists."""
+        v = theo.get(key)
+        if v is not None and not isinstance(v, (list, tuple)):
+            # Also handle numpy arrays
+            if hasattr(v, '__len__') and hasattr(v, 'flat'):
+                return _last(v) if len(v) > 0 else fallback
+            return v
+        if summary_key and summary_key in theo_summary:
+            return theo_summary[summary_key]
+        if isinstance(v, (list, tuple)):
+            return _last(v) if v else fallback
+        return fallback
+
+    lmin_emp  = _theo_scalar('lmin_empirical', 'final_L_min')
+    gap_red   = _theo_scalar('gap_reducible',  'final_gap')
+    eff       = _theo_scalar('efficiency',     'final_efficiency')
+    viol      = theo.get('n_violations', theo_summary.get('n_violations', 0))
     total_ep  = epochs if isinstance(epochs, int) else '?'
 
-    var_f    = theo.get('var_f', '\u2014')
-    bias2    = theo.get('bias2', '\u2014')
-    gap_r    = theo.get('gap_reducible', '\u2014')
+    var_f    = _theo_scalar('var_f',    'theoretical_Var_F_final')
+    bias2    = _theo_scalar('bias2',    'empirical_Var_F_final')
+    gap_r    = _theo_scalar('gap_reducible', 'final_gap')
     pct_str  = theo.get('decomp_pct', '\u2014')
 
     def _tv(v, fmt='.6f'):
