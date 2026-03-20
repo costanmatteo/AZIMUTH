@@ -527,6 +527,13 @@ def _page1(d):
     pct_str  = theo.get('decomp_pct', '\u2014')
     total_ep = epochs if isinstance(epochs, int) else '?'
 
+    # Bellman backward-induction data
+    bellman  = theo.get('bellman_lmin', {})
+    lmin_bel = bellman.get('L_min_bellman')
+    lmin_fwd = bellman.get('L_min_forward')
+    lmin_fse = bellman.get('L_min_forward_se')
+    viol_bel = bellman.get('n_violations', viol)
+
     # overfitting data
     ttg  = adv.get('train_test_gap')       or adv.get('overfitting')    or {}
     wig  = adv.get('within_scenario_gap')  or adv.get('intra_scenario') or {}
@@ -557,19 +564,35 @@ def _page1(d):
         ("BC",          _tv(final_bc)    if final_bc  != '\u2014' else '\u2014'),
         ("Best total",  _tv(best_loss),   ST_VAL_G),
     ]
+    # Compute Bellman-based gap and efficiency
+    if lmin_bel is not None and final_total != '\u2014':
+        try:
+            _ft = float(final_total)
+            gap_bel  = _ft - float(lmin_bel)
+            eff_bel  = float(lmin_bel) / _ft * 100 if _ft > 0 else 0.0
+        except (TypeError, ValueError):
+            gap_bel, eff_bel = None, None
+    else:
+        gap_bel, eff_bel = None, None
+
     lmin_rows = [
-        ("L_min empirical",          _tv(lmin_emp)),
-        ("Gap (reducible)",          _tv(gap_red)),
-        ("Efficiency",               f"{float(eff)*100:.1f}%" if eff != '\u2014' else '\u2014',
+        ("L_min Bellman",             _tv(lmin_bel)),
+        ("L_min forward val.",
+         f"{float(lmin_fwd):.6f} \u00b1 {float(lmin_fse):.6f}"
+         if lmin_fwd is not None else '\u2014'),
+        ("Gap (obs \u2212 Bellman)",  _tv(gap_bel) if gap_bel is not None else '\u2014'),
+        ("Efficiency",
+         f"{eff_bel:.1f}%" if eff_bel is not None else '\u2014',
          ST_VAL_G),
-        (f"Violations (loss&lt;L_min)", f"{viol} / {total_ep}",
-         ST_VAL_G if viol == 0 else ST_VAL_R),
+        (f"Violations (loss&lt;L_min)", f"{viol_bel} / {total_ep}",
+         ST_VAL_G if viol_bel == 0 else ST_VAL_R),
     ]
     decomp_rows = [
-        ("Var(F) \u2014 irreducible",     _tv(var_f)),
-        ("Bias\u00b2 \u2014 irreducible", _tv(bias2)),
-        ("Gap \u2014 reducible",          _tv(gap_r)),
-        ("% of loss",                     str(pct_str)),
+        ("L_min empirical (Var+Bias\u00b2)", _tv(lmin_emp)),
+        ("Var(F) \u2014 irreducible",        _tv(var_f)),
+        ("Bias\u00b2 \u2014 irreducible",    _tv(bias2)),
+        ("Gap \u2014 reducible",             _tv(gap_r)),
+        ("% of loss",                        str(pct_str)),
     ]
     cross_rows = [
         ("Mean gap \u2014 train",         f"{float(mg_tr):.6f}"  if mg_tr  is not None else '\u2014'),
