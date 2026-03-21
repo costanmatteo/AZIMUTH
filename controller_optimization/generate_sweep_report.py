@@ -545,15 +545,14 @@ def build_config_html(sweep_cfg: dict | None) -> str:
 
 def build_page1_html(s: dict, now: datetime,
                      b64_scatter, b64_box, b64_imp, b64_heat,
-                     sweep_dir: str, page_num: int = 1,
-                     n_pages: int = 2) -> str:
+                     sweep_dir: str, config_html: str = '') -> str:
     n    = s['n_runs']
     ts   = now.strftime('%Y-%m-%d &nbsp;%H:%M:%S')
     return f"""
 <div class="page">
   <div class="hdr-row">
     <span class="title">Controller Sweep Report</span>
-    <span class="meta">{ts} &nbsp;·&nbsp; {sweep_dir} &nbsp;·&nbsp; {n} runs &nbsp;·&nbsp; page {page_num} / {n_pages}</span>
+    <span class="meta">{ts} &nbsp;·&nbsp; {sweep_dir} &nbsp;·&nbsp; {n} runs &nbsp;·&nbsp; page 1 / 2</span>
   </div>
   <hr class="rule-heavy">
 
@@ -579,6 +578,8 @@ def build_page1_html(s: dict, now: datetime,
       <div class="kpi-s">{s['best_run']}</div>
     </div>
   </div>
+
+  {config_html}
 
   <div class="sec-head">01 &#8212; aggregate statistics</div>
   <hr class="rule-thin">
@@ -688,30 +689,7 @@ def build_page1_html(s: dict, now: datetime,
 """
 
 
-def build_config_page_html(config_html: str, now: datetime, sweep_dir: str,
-                           n_runs: int, n_pages: int = 3) -> str:
-    """Build a dedicated configuration page (page 1 when config is present)."""
-    ts = now.strftime('%Y-%m-%d &nbsp;%H:%M:%S')
-    return f"""
-<div class="page">
-  <div class="hdr-row">
-    <span class="title">Controller Sweep Report &#8212; Configuration</span>
-    <span class="meta">{ts} &nbsp;&#183;&nbsp; {sweep_dir} &nbsp;&#183;&nbsp; {n_runs} runs &nbsp;&#183;&nbsp; page 1 / {n_pages}</span>
-  </div>
-  <hr class="rule-heavy">
-
-  {config_html}
-
-  <div class="footer">
-    <span>auto-generated &nbsp;&#183;&nbsp; {sweep_dir} &nbsp;&#183;&nbsp; sweep_report.pdf</span>
-    <span>controller_optimization &middot; generate_sweep_report.py</span>
-  </div>
-</div>
-"""
-
-
-def build_page2_html(df: pd.DataFrame, now: datetime, sweep_dir: str,
-                     page_num: int = 2, n_pages: int = 2) -> str:
+def build_page2_html(df: pd.DataFrame, now: datetime, sweep_dir: str) -> str:
     df = df.sort_values('gap_ctrl_train', ascending=True).reset_index(drop=True)
 
     q25 = df['gap_ctrl_train'].quantile(0.25)
@@ -744,7 +722,7 @@ def build_page2_html(df: pd.DataFrame, now: datetime, sweep_dir: str,
 <div class="page">
   <div class="hdr-row">
     <span class="title">Controller Sweep Report &#8212; All Runs</span>
-    <span class="meta">{ts} &nbsp;&#183;&nbsp; {len(df)} runs &nbsp;&#183;&nbsp; page {page_num} / {n_pages}</span>
+    <span class="meta">{ts} &nbsp;&#183;&nbsp; {len(df)} runs &nbsp;&#183;&nbsp; page 2 / 2</span>
   </div>
   <hr class="rule-heavy">
 
@@ -837,23 +815,16 @@ def generate_sweep_report(sweep_dir: Path, output_path: Path | None = None):
     # ── configuration ────────────────────────────────────────────────────────
     sweep_cfg = load_sweep_config(sweep_dir)
     config_html = build_config_html(sweep_cfg)
-    has_config = bool(config_html.strip())
-    n_pages = 3 if has_config else 2
 
     # ── HTML assembly ─────────────────────────────────────────────────────────
     now = datetime.now()
     sd  = str(sweep_dir)
 
-    html_body = ''
-    if has_config:
-        html_body += build_config_page_html(config_html, now, sd,
-                                            n_runs=len(df), n_pages=n_pages)
-    stats_page_num = 2 if has_config else 1
-    html_body += build_page1_html(s, now, b64_scatter, b64_box, b64_imp,
-                                  b64_heat, sd, page_num=stats_page_num,
-                                  n_pages=n_pages)
-    html_body += build_page2_html(df, now, sd,
-                                  page_num=n_pages, n_pages=n_pages)
+    html_body = (
+        build_page1_html(s, now, b64_scatter, b64_box, b64_imp, b64_heat, sd,
+                         config_html=config_html)
+        + build_page2_html(df, now, sd)
+    )
 
     full_html = f"""<!DOCTYPE html>
 <html lang="en">
