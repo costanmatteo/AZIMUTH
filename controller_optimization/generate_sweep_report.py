@@ -68,6 +68,28 @@ def load_run_results(run_dir: Path) -> dict | None:
         return None
 
 
+def load_sweep_config(sweep_dir: Path) -> dict | None:
+    """Load the configuration from the first available sweep run."""
+    for d in sorted(sweep_dir.iterdir()):
+        if not d.is_dir():
+            continue
+        results_file = d / "final_results.json"
+        if not results_file.exists():
+            continue
+        try:
+            with open(results_file) as f:
+                data = json.load(f)
+            return {
+                'config':       data.get('config', {}),
+                'dataset_mode': data.get('dataset_mode', 'unknown'),
+                'st_params':    data.get('st_params'),
+                'n_processes':  data.get('n_processes'),
+            }
+        except Exception:
+            continue
+    return None
+
+
 def aggregate_results(sweep_dir: Path) -> pd.DataFrame:
     rows = []
     for d in sorted(sweep_dir.iterdir()):
@@ -369,6 +391,18 @@ body {
           display: flex; justify-content: space-between;
           font-size: 7px; color: #888; }
 .legend { font-size: 7px; color: #888; margin-top: 4px; }
+
+/* ── config section ── */
+.cfg-grid  { display: table; width: 100%; table-layout: fixed;
+             margin-bottom: 5px; }
+.cfg-col   { display: table-cell; vertical-align: top; padding-right: 12px; }
+.cfg-col:last-child { padding-right: 0; }
+.cfg-row   { display: flex; justify-content: space-between; padding: 1px 0;
+             border-bottom: 0.5px solid #eee; font-size: 7.5px; }
+.cfg-row:last-child { border-bottom: none; }
+.cfg-k     { color: #888; }
+.cfg-v     { font-weight: 500; }
+.cfg-sub   { font-size: 7px; color: #aaa; margin-left: 6px; }
 """
 
 
@@ -394,16 +428,132 @@ def _gap_ctrl_cls(v, q25, q75) -> str:
     return ''
 
 
+def _cfg_row(key: str, val, sub: str = '') -> str:
+    sub_html = f'<span class="cfg-sub">{sub}</span>' if sub else ''
+    return f'<div class="cfg-row"><span class="cfg-k">{key}{sub_html}</span><span class="cfg-v">{val}</span></div>'
+
+
+def build_config_html(sweep_cfg: dict | None) -> str:
+    """Build a compact HTML section showing controller and process configuration."""
+    if sweep_cfg is None:
+        return ''
+
+    cfg = sweep_cfg.get('config', {})
+    pg = cfg.get('policy_generator', {})
+    tr = cfg.get('training', {})
+    sc = cfg.get('scenarios', {})
+    cl = tr.get('curriculum_learning', {})
+    sr = cfg.get('surrogate', {})
+    val = cfg.get('validation', {})
+    dataset_mode = sweep_cfg.get('dataset_mode', '?')
+    n_procs = sweep_cfg.get('n_processes', '?')
+    st_params = sweep_cfg.get('st_params')
+
+    # ── Controller column ──
+    arch = pg.get('architecture', '?')
+    hidden = pg.get('hidden_sizes', '?')
+    if arch == 'custom' and hidden:
+        arch_str = f"custom {hidden}"
+    else:
+        arch_str = arch
+
+    sched = tr.get('lr_scheduler')
+    if isinstance(sched, dict):
+        sched_str = f"{sched.get('type', '?')}"
+        if sched.get('T_max'):
+            sched_str += f" T_max={sched['T_max']}"
+    else:
+        sched_str = 'none'
+
+    cl_str = 'off'
+    if cl.get('enabled'):
+        cl_str = (f"on &middot; warmup {cl.get('warmup_fraction', '?')} &middot; "
+                  f"&#955;bc {cl.get('lambda_bc_start', '?')}&#8594;{cl.get('lambda_bc_end', '?')} "
+                  f"&middot; {cl.get('reliability_weight_curve', '?')}")
+
+    ctrl_html = (
+        _cfg_row('Architecture', arch_str)
+        + _cfg_row('Dropout', pg.get('dropout', '?'))
+        + _cfg_row('BatchNorm', pg.get('use_batchnorm', '?'))
+        + _cfg_row('Scenario encoder', pg.get('use_scenario_encoder', '?'))
+        + _cfg_row('Epochs', tr.get('epochs', '?'))
+        + _cfg_row('Batch size', tr.get('batch_size', '?'))
+        + _cfg_row('Learning rate', tr.get('learning_rate', '?'))
+        + _cfg_row('Optimizer', tr.get('optimizer', '?'))
+        + _cfg_row('Weight decay', tr.get('weight_decay', '?'))
+        + _cfg_row('Grad clip norm', tr.get('gradient_clip_norm', 'none'))
+        + _cfg_row('LR scheduler', sched_str)
+    )
+
+    # ── Training details column ──
+    train_html = (
+        _cfg_row('&#955;bc', tr.get('lambda_bc', '?'))
+        + _cfg_row('Reliability scale', tr.get('reliability_loss_scale', '?'))
+        + _cfg_row('Patience', tr.get('patience', '?'))
+        + _cfg_row('Early stop metric', tr.get('early_stopping_metric', '?'))
+        + _cfg_row('Curriculum', cl_str)
+        + _cfg_row('Surrogate', sr.get('type', '?'))
+        + _cfg_row('Deterministic', sr.get('use_deterministic_sampling', '?'))
+        + _cfg_row('Validation', f"within={val.get('within_scenario_enabled', '?')} "
+                   f"split={val.get('within_scenario_split', '?')}")
+        + _cfg_row('n_train scenarios', sc.get('n_train', '?'))
+        + _cfg_row('n_test scenarios', sc.get('n_test', '?'))
+        + _cfg_row('seed_target', f"{sc.get('seed_target', '?')} (varies per run)")
+        + _cfg_row('seed_baseline', f"{sc.get('seed_baseline', '?')} (varies per run)")
+    )
+
+    # ── Process column ──
+    proc_html = _cfg_row('Dataset mode', dataset_mode)
+    proc_html += _cfg_row('N processes', n_procs)
+
+    process_names = cfg.get('process_names')
+    if process_names:
+        proc_html += _cfg_row('Process filter', ' &#8594; '.join(process_names))
+
+    if st_params and dataset_mode == 'st':
+        proc_html += (
+            _cfg_row('ST n', f"{st_params.get('n', '?')}", 'input vars')
+            + _cfg_row('ST m', f"{st_params.get('m', '?')}", 'stages')
+            + _cfg_row('ST p', f"{st_params.get('p', '?')}", 'outputs')
+            + _cfg_row('ST me', f"{st_params.get('me', '?')}", 'env vars')
+            + _cfg_row('ST &#945;', st_params.get('alpha', '?'), 'shift')
+            + _cfg_row('ST &#947;', st_params.get('gamma', '?'), 'mult')
+            + _cfg_row('ST &#961;', st_params.get('rho', '?'), 'noise')
+            + _cfg_row('env_mode', st_params.get('env_mode', '?'))
+            + _cfg_row('x_domain', st_params.get('x_domain', '?'))
+        )
+
+    return f"""
+  <div class="sec-head">00 &#8212; configuration</div>
+  <hr class="rule-thin">
+  <div class="cfg-grid">
+    <div class="cfg-col">
+      <div class="blk-title">Controller &middot; policy generator</div>
+      {ctrl_html}
+    </div>
+    <div class="cfg-col">
+      <div class="blk-title">Controller &middot; training</div>
+      {train_html}
+    </div>
+    <div class="cfg-col">
+      <div class="blk-title">Processes</div>
+      {proc_html}
+    </div>
+  </div>
+"""
+
+
 def build_page1_html(s: dict, now: datetime,
                      b64_scatter, b64_box, b64_imp, b64_heat,
-                     sweep_dir: str) -> str:
+                     sweep_dir: str, page_num: int = 1,
+                     n_pages: int = 2) -> str:
     n    = s['n_runs']
     ts   = now.strftime('%Y-%m-%d &nbsp;%H:%M:%S')
     return f"""
 <div class="page">
   <div class="hdr-row">
     <span class="title">Controller Sweep Report</span>
-    <span class="meta">{ts} &nbsp;·&nbsp; {sweep_dir} &nbsp;·&nbsp; {n} runs &nbsp;·&nbsp; page 1 / 2</span>
+    <span class="meta">{ts} &nbsp;·&nbsp; {sweep_dir} &nbsp;·&nbsp; {n} runs &nbsp;·&nbsp; page {page_num} / {n_pages}</span>
   </div>
   <hr class="rule-heavy">
 
@@ -538,7 +688,30 @@ def build_page1_html(s: dict, now: datetime,
 """
 
 
-def build_page2_html(df: pd.DataFrame, now: datetime, sweep_dir: str) -> str:
+def build_config_page_html(config_html: str, now: datetime, sweep_dir: str,
+                           n_runs: int, n_pages: int = 3) -> str:
+    """Build a dedicated configuration page (page 1 when config is present)."""
+    ts = now.strftime('%Y-%m-%d &nbsp;%H:%M:%S')
+    return f"""
+<div class="page">
+  <div class="hdr-row">
+    <span class="title">Controller Sweep Report &#8212; Configuration</span>
+    <span class="meta">{ts} &nbsp;&#183;&nbsp; {sweep_dir} &nbsp;&#183;&nbsp; {n_runs} runs &nbsp;&#183;&nbsp; page 1 / {n_pages}</span>
+  </div>
+  <hr class="rule-heavy">
+
+  {config_html}
+
+  <div class="footer">
+    <span>auto-generated &nbsp;&#183;&nbsp; {sweep_dir} &nbsp;&#183;&nbsp; sweep_report.pdf</span>
+    <span>controller_optimization &middot; generate_sweep_report.py</span>
+  </div>
+</div>
+"""
+
+
+def build_page2_html(df: pd.DataFrame, now: datetime, sweep_dir: str,
+                     page_num: int = 2, n_pages: int = 2) -> str:
     df = df.sort_values('gap_ctrl_train', ascending=True).reset_index(drop=True)
 
     q25 = df['gap_ctrl_train'].quantile(0.25)
@@ -571,7 +744,7 @@ def build_page2_html(df: pd.DataFrame, now: datetime, sweep_dir: str) -> str:
 <div class="page">
   <div class="hdr-row">
     <span class="title">Controller Sweep Report &#8212; All Runs</span>
-    <span class="meta">{ts} &nbsp;&#183;&nbsp; {len(df)} runs &nbsp;&#183;&nbsp; page 2 / 2</span>
+    <span class="meta">{ts} &nbsp;&#183;&nbsp; {len(df)} runs &nbsp;&#183;&nbsp; page {page_num} / {n_pages}</span>
   </div>
   <hr class="rule-heavy">
 
@@ -661,14 +834,26 @@ def generate_sweep_report(sweep_dir: Path, output_path: Path | None = None):
     b64_heat    = plot_heatmap(df)
     print("  Done.")
 
+    # ── configuration ────────────────────────────────────────────────────────
+    sweep_cfg = load_sweep_config(sweep_dir)
+    config_html = build_config_html(sweep_cfg)
+    has_config = bool(config_html.strip())
+    n_pages = 3 if has_config else 2
+
     # ── HTML assembly ─────────────────────────────────────────────────────────
     now = datetime.now()
     sd  = str(sweep_dir)
 
-    html_body = (
-        build_page1_html(s, now, b64_scatter, b64_box, b64_imp, b64_heat, sd)
-        + build_page2_html(df, now, sd)
-    )
+    html_body = ''
+    if has_config:
+        html_body += build_config_page_html(config_html, now, sd,
+                                            n_runs=len(df), n_pages=n_pages)
+    stats_page_num = 2 if has_config else 1
+    html_body += build_page1_html(s, now, b64_scatter, b64_box, b64_imp,
+                                  b64_heat, sd, page_num=stats_page_num,
+                                  n_pages=n_pages)
+    html_body += build_page2_html(df, now, sd,
+                                  page_num=n_pages, n_pages=n_pages)
 
     full_html = f"""<!DOCTYPE html>
 <html lang="en">
