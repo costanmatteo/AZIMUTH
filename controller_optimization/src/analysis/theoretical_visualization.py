@@ -11,6 +11,42 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 
 
+def apply_plot_style():
+    plt.rcParams.update({
+        'font.family':           'monospace',
+        'font.size':             8,
+        'axes.titlesize':        9,
+        'axes.titleweight':      'normal',
+        'axes.titlelocation':    'left',
+        'axes.labelsize':        8,
+        'axes.labelweight':      'normal',
+        'axes.linewidth':        0.5,
+        'axes.spines.top':       False,
+        'axes.spines.right':     False,
+        'axes.grid':             True,
+        'grid.color':            '#DDDDDD',
+        'grid.linewidth':        0.4,
+        'grid.alpha':            1.0,
+        'xtick.labelsize':       7.5,
+        'ytick.labelsize':       7.5,
+        'xtick.major.width':     0.4,
+        'ytick.major.width':     0.4,
+        'xtick.major.size':      3,
+        'ytick.major.size':      3,
+        'legend.fontsize':       7.5,
+        'legend.framealpha':     0.9,
+        'legend.edgecolor':      '#DDDDDD',
+        'legend.fancybox':       False,
+        'legend.borderpad':      0.4,
+        'figure.facecolor':      'white',
+        'axes.facecolor':        'white',
+        'savefig.facecolor':     'white',
+        'savefig.dpi':           150,
+        'savefig.bbox':          'tight',
+        'lines.linewidth':       1.4,
+    })
+
+
 def plot_loss_vs_L_min(
     epochs: List[int],
     observed_loss: List[float],
@@ -41,7 +77,10 @@ def plot_loss_vs_L_min(
     Returns:
         Matplotlib Figure object
     """
+    apply_plot_style()
     fig, ax = plt.subplots(figsize=figsize)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
 
     epochs = np.array(epochs)
     observed = np.array(observed_loss)
@@ -127,7 +166,10 @@ def plot_efficiency_over_time(
     Returns:
         Matplotlib Figure object
     """
+    apply_plot_style()
     fig, ax = plt.subplots(figsize=figsize)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
 
     epochs = np.array(epochs)
     eff_empirical = np.array(efficiency)
@@ -228,7 +270,10 @@ def plot_loss_decomposition(
     Returns:
         Matplotlib Figure object
     """
+    apply_plot_style()
     fig, ax = plt.subplots(figsize=figsize)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
 
     # Data
     components = ['Var(F)\n(Irreducible)', 'Bias²\n(Irreducible)', 'Gap\n(Reducible)']
@@ -247,7 +292,7 @@ def plot_loss_decomposition(
             xytext=(0, 3),
             textcoords="offset points",
             ha='center', va='bottom',
-            fontsize=11, fontweight='bold'
+            fontsize=11
         )
 
     # Compute percentages
@@ -279,7 +324,8 @@ def plot_loss_decomposition(
         f'Total Loss = {total:.4f}\n'
         f'Efficiency = {100*L_min/total:.1f}%' if total > 0 else ''
     )
-    props = dict(boxstyle='round', facecolor='wheat', alpha=0.5)
+    props = dict(boxstyle='square,pad=0.3', facecolor='white',
+                 edgecolor='#CCCCCC', linewidth=0.5, alpha=0.9)
     ax.text(0.02, 0.98, textstr, transform=ax.transAxes, fontsize=9,
             verticalalignment='top', bbox=props)
 
@@ -317,7 +363,10 @@ def plot_loss_scatter(
     Returns:
         Matplotlib Figure object
     """
+    apply_plot_style()
     fig, ax = plt.subplots(figsize=figsize)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
 
     observed = np.array(observed_loss)
     theoretical = np.array(theoretical_L_min)
@@ -368,7 +417,8 @@ def plot_loss_scatter(
         fontsize=9,
         verticalalignment='bottom',
         horizontalalignment='right',
-        bbox=dict(boxstyle='round', facecolor='white', alpha=0.8)
+        bbox=dict(boxstyle='square,pad=0.3', facecolor='white',
+                  edgecolor='#CCCCCC', linewidth=0.5, alpha=0.9)
     )
 
     plt.tight_layout()
@@ -464,6 +514,7 @@ def create_summary_figure(
     Returns:
         Matplotlib Figure object
     """
+    apply_plot_style()
     fig = plt.figure(figsize=figsize)
 
     epochs = tracker_data['epochs']
@@ -486,6 +537,8 @@ def create_summary_figure(
 
     # 1. Loss vs L_min (top left)
     ax1 = fig.add_subplot(2, 2, 1)
+    ax1.spines['top'].set_visible(False)
+    ax1.spines['right'].set_visible(False)
     ax1.plot(epochs, observed_loss, 'b-', linewidth=2, label='Observed Loss', marker='o', markersize=2)
     ax1.plot(epochs, theoretical_L_min, 'r--', linewidth=2, label='L_min (empirical)')
     if bellman_data is not None:
@@ -502,6 +555,8 @@ def create_summary_figure(
 
     # 2. Efficiency (top right)
     ax2 = fig.add_subplot(2, 2, 2)
+    ax2.spines['top'].set_visible(False)
+    ax2.spines['right'].set_visible(False)
 
     bellman_val = None
     if bellman_data is not None:
@@ -533,6 +588,8 @@ def create_summary_figure(
 
     # 3. Loss decomposition (bottom left)
     ax3 = fig.add_subplot(2, 2, 3)
+    ax3.spines['top'].set_visible(False)
+    ax3.spines['right'].set_visible(False)
     components = ['Var(F)', 'Bias²', 'Gap']
     values = [final_Var_F, final_Bias2, max(final_gap, 0)]
     colors_bar = ['#ff6b6b', '#feca57', '#48dbfb']
@@ -551,6 +608,8 @@ def create_summary_figure(
 
     # 4. Scatter plot (bottom right)
     ax4 = fig.add_subplot(2, 2, 4)
+    ax4.spines['top'].set_visible(False)
+    ax4.spines['right'].set_visible(False)
     scatter = ax4.scatter(theoretical_L_min, observed_loss, c=epochs, cmap='viridis',
                          s=30, alpha=0.7, edgecolors='black', linewidth=0.3)
     all_vals = np.concatenate([observed_loss, theoretical_L_min])

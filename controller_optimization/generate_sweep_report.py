@@ -7,653 +7,863 @@ Usage:
 
 This script:
 1. Loads results from all sweep runs
-2. Computes aggregate statistics
-3. Generates visualizations including target vs baseline vs actual scatter
-4. Creates a comprehensive PDF report
+2. Computes aggregate statistics (train + test splits)
+3. Generates matplotlib plots embedded as base64
+4. Renders a pixel-faithful HTML layout to PDF via WeasyPrint
+   (landscape A4, Courier monospace, matches the design spec exactly)
 """
 
 import argparse
+import base64
+import io
 import json
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
-from matplotlib.backends.backend_pdf import PdfPages
 
-# ReportLab imports for PDF generation
-from reportlab.lib.pagesizes import A4, landscape
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import inch, cm
-from reportlab.lib import colors
-from reportlab.platypus import (
-    SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle,
-    PageBreak, KeepTogether
-)
-from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
-from reportlab.platypus.flowables import HRFlowable
+# ── WeasyPrint for HTML → PDF ────────────────────────────────────────────────
+try:
+    from weasyprint import HTML as WPHtml, CSS
+except ImportError:
+    raise SystemExit(
+        "WeasyPrint is required.  Install with:\n"
+        "    pip install weasyprint --break-system-packages"
+    )
 
 
-def load_run_results(run_dir: Path) -> dict:
-    """Load results from a single run directory."""
+# ════════════════════════════════════════════════════════════════════════════
+# 1.  DATA LOADING
+# ════════════════════════════════════════════════════════════════════════════
+
+def load_run_results(run_dir: Path) -> dict | None:
     results_file = run_dir / "final_results.json"
     if not results_file.exists():
         return None
-
     try:
-        with open(results_file, 'r') as f:
+        with open(results_file) as f:
             data = json.load(f)
-
-        # Extract key metrics
         config = data.get('config', {})
-        scenarios_config = config.get('scenarios', {})
-
+        sc = config.get('scenarios', {})
         return {
-            'run_name': run_dir.name,
-            'seed_target': scenarios_config.get('seed_target'),
-            'seed_baseline': scenarios_config.get('seed_baseline'),
-            # Train metrics
-            'F_star_train': data.get('train', {}).get('F_star'),
-            'F_baseline_train': data.get('train', {}).get('F_baseline_mean'),
-            'F_actual_train': data.get('train', {}).get('F_actual_mean'),
-            'F_actual_std_train': data.get('train', {}).get('F_actual_std'),
-            'improvement_train': data.get('train', {}).get('improvement_pct'),
-            'target_gap_train': data.get('train', {}).get('target_gap_pct'),
-            # Test metrics
-            'F_star_test': data.get('test', {}).get('F_star'),
-            'F_baseline_test': data.get('test', {}).get('F_baseline_mean'),
-            'F_actual_test': data.get('test', {}).get('F_actual_mean'),
-            'improvement_test': data.get('test', {}).get('improvement_pct'),
-            # Advanced metrics
-            'success_rate_train': data.get('advanced_metrics', {}).get('success_rate_train', {}).get('success_rate_pct'),
-            'success_rate_test': data.get('advanced_metrics', {}).get('success_rate_test', {}).get('success_rate_pct'),
-            'worst_case_gap_train': data.get('advanced_metrics', {}).get('worst_case_gap_train', {}).get('worst_case_gap'),
-            'worst_case_gap_test': data.get('advanced_metrics', {}).get('worst_case_gap_test', {}).get('worst_case_gap'),
-            'gap_closure_train': data.get('advanced_metrics', {}).get('gap_closure_train', {}).get('gap_closure_mean'),
-            'gap_closure_test': data.get('advanced_metrics', {}).get('gap_closure_test', {}).get('gap_closure_mean'),
-            'gap_closure_worst_train': data.get('advanced_metrics', {}).get('gap_closure_train', {}).get('gap_closure_min'),
-            'gap_closure_worst_test': data.get('advanced_metrics', {}).get('gap_closure_test', {}).get('gap_closure_min'),
+            'run_name':          run_dir.name,
+            'seed_target':       sc.get('seed_target'),
+            'seed_baseline':     sc.get('seed_baseline'),
+            # train
+            'F_star_train':      data.get('train', {}).get('F_star'),
+            'F_baseline_train':  data.get('train', {}).get('F_baseline_mean'),
+            'F_actual_train':    data.get('train', {}).get('F_actual_mean'),
+            # test
+            'F_star_test':       data.get('test', {}).get('F_star'),
+            'F_baseline_test':   data.get('test', {}).get('F_baseline_mean'),
+            'F_actual_test':     data.get('test', {}).get('F_actual_mean'),
         }
     except Exception as e:
-        print(f"Error loading {results_file}: {e}")
+        print(f"  Warning: could not load {results_file}: {e}")
         return None
+
+
+def load_sweep_config(sweep_dir: Path) -> dict | None:
+    """Load the configuration from the first available sweep run."""
+    for d in sorted(sweep_dir.iterdir()):
+        if not d.is_dir():
+            continue
+        results_file = d / "final_results.json"
+        if not results_file.exists():
+            continue
+        try:
+            with open(results_file) as f:
+                data = json.load(f)
+            return {
+                'config':       data.get('config', {}),
+                'dataset_mode': data.get('dataset_mode', 'unknown'),
+                'st_params':    data.get('st_params'),
+                'n_processes':  data.get('n_processes'),
+            }
+        except Exception:
+            continue
+    return None
 
 
 def aggregate_results(sweep_dir: Path) -> pd.DataFrame:
-    """Aggregate results from all runs in sweep directory."""
-    results = []
-
-    for run_dir in sorted(sweep_dir.iterdir()):
-        if not run_dir.is_dir():
+    rows = []
+    for d in sorted(sweep_dir.iterdir()):
+        if not d.is_dir():
             continue
-
-        run_results = load_run_results(run_dir)
-        if run_results is not None:
-            results.append(run_results)
-            print(f"  Loaded: {run_dir.name}")
-
-    if not results:
-        print("No results found!")
+        r = load_run_results(d)
+        if r is not None:
+            rows.append(r)
+            print(f"  Loaded: {d.name}")
+    if not rows:
         return pd.DataFrame()
-
-    return pd.DataFrame(results)
-
-
-def plot_target_baseline_actual_scatter(df: pd.DataFrame, save_path: Path):
-    """
-    Two side-by-side scatter plots:
-    - Left: F* vs F_baseline (red)
-    - Right: F* vs F_actual (blue)
-    Both have diagonal line for perfect match.
-    """
-    fig, axes = plt.subplots(1, 2, figsize=(16, 7))
-
-    F_star = df['F_star_train'].values
-    F_baseline = df['F_baseline_train'].values
-    F_actual = df['F_actual_train'].values
-
-    # Common limits for both plots (filter out None/NaN)
-    all_values = np.array([v for v in np.concatenate([F_star, F_baseline, F_actual]) if v is not None and not np.isnan(float(v))])
-    if len(all_values) == 0:
-        print("  WARNING: No valid data for scatter plot, skipping.")
-        plt.close()
-        return save_path
-    min_val = all_values.min()
-    max_val = all_values.max()
-    margin = (max_val - min_val) * 0.1
-
-    # Calculate gaps
-    gap_baseline = F_star - F_baseline
-    gap_actual = F_star - F_actual
-    controller_wins = np.sum(gap_actual < gap_baseline)
-    n_runs = len(df)
-
-    # LEFT PLOT: Baseline
-    ax1 = axes[0]
-    ax1.scatter(F_baseline, F_star,
-                c='red', s=100, alpha=0.6,
-                edgecolors='darkred', linewidths=1.5,
-                marker='s')
-    ax1.plot([min_val - margin, max_val + margin],
-             [min_val - margin, max_val + margin],
-             'k--', linewidth=2, alpha=0.5, label='Perfect (F = F*)')
-    ax1.set_xlabel('F\' (Baseline Reliability)', fontsize=12, fontweight='bold')
-    ax1.set_ylabel('F* (Target Reliability)', fontsize=12, fontweight='bold')
-    ax1.set_title('Baseline (No Controller)', fontsize=14, fontweight='bold', color='darkred')
-    ax1.set_xlim(min_val - margin, max_val + margin)
-    ax1.set_ylim(min_val - margin, max_val + margin)
-    ax1.grid(True, alpha=0.3)
-    ax1.legend(loc='lower right')
-    ax1.set_aspect('equal')
-
-    # Stats for baseline
-    stats1 = f'Gap range: [{gap_baseline.min():.4f}, {gap_baseline.max():.4f}]\nMedian gap: {np.median(gap_baseline):.4f}'
-    ax1.text(0.02, 0.98, stats1, transform=ax1.transAxes, fontsize=10,
-             verticalalignment='top', bbox=dict(boxstyle='round', facecolor='mistyrose', alpha=0.8))
-
-    # RIGHT PLOT: Controller
-    ax2 = axes[1]
-    ax2.scatter(F_actual, F_star,
-                c='blue', s=100, alpha=0.6,
-                edgecolors='darkblue', linewidths=1.5,
-                marker='o')
-    ax2.plot([min_val - margin, max_val + margin],
-             [min_val - margin, max_val + margin],
-             'k--', linewidth=2, alpha=0.5, label='Perfect (F = F*)')
-    ax2.set_xlabel('F (Controller Reliability)', fontsize=12, fontweight='bold')
-    ax2.set_ylabel('F* (Target Reliability)', fontsize=12, fontweight='bold')
-    ax2.set_title('Controller', fontsize=14, fontweight='bold', color='darkblue')
-    ax2.set_xlim(min_val - margin, max_val + margin)
-    ax2.set_ylim(min_val - margin, max_val + margin)
-    ax2.grid(True, alpha=0.3)
-    ax2.legend(loc='lower right')
-    ax2.set_aspect('equal')
-
-    # Stats for controller
-    stats2 = f'Gap range: [{gap_actual.min():.4f}, {gap_actual.max():.4f}]\nMedian gap: {np.median(gap_actual):.4f}'
-    ax2.text(0.02, 0.98, stats2, transform=ax2.transAxes, fontsize=10,
-             verticalalignment='top', bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
-
-    # Overall title
-    fig.suptitle(f'Target vs Reliability Comparison (n={n_runs}, Controller wins: {controller_wins}/{n_runs} = {100*controller_wins/n_runs:.1f}%)',
-                 fontsize=14, fontweight='bold', y=1.02)
-
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches='tight')
-    plt.close()
-
-    return save_path
+    return pd.DataFrame(rows)
 
 
-def plot_improvement_distribution(df: pd.DataFrame, save_path: Path):
-    """
-    Plot distribution of gaps: F* - F (smaller is better).
+# ════════════════════════════════════════════════════════════════════════════
+# 2.  STATISTICS
+# ════════════════════════════════════════════════════════════════════════════
 
-    Shows how close the controller gets to the target compared to baseline.
-    """
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+def compute_stats(df: pd.DataFrame) -> dict:
+    gb_tr = df['F_star_train']  - df['F_baseline_train']
+    gc_tr = df['F_star_train']  - df['F_actual_train']
+    gd_tr = gb_tr - gc_tr                              # positive = ctrl better
 
-    # Calculate gaps (F* - F, smaller = better)
-    gap_baseline_train = df['F_star_train'] - df['F_baseline_train']
-    gap_actual_train = df['F_star_train'] - df['F_actual_train']
+    gb_te = df['F_star_test']   - df['F_baseline_test']
+    gc_te = df['F_star_test']   - df['F_actual_test']
+    gd_te = gb_te - gc_te
 
-    # Left plot: Gap distribution comparison (Train)
-    ax1 = axes[0]
-    bins = np.linspace(
-        min(gap_baseline_train.min(), gap_actual_train.min()),
-        max(gap_baseline_train.max(), gap_actual_train.max()),
-        25
-    )
-    ax1.hist(gap_baseline_train, bins=bins, color='red', edgecolor='darkred',
-             alpha=0.5, label='Baseline Gap (F* - F\')')
-    ax1.hist(gap_actual_train, bins=bins, color='blue', edgecolor='darkblue',
-             alpha=0.5, label='Controller Gap (F* - F)')
-    ax1.axvline(0, color='green', linestyle='-', linewidth=2, label='Perfect (gap = 0)')
-    ax1.set_xlabel('Gap (F* - F)', fontsize=11)
-    ax1.set_ylabel('Count', fontsize=11)
-    ax1.set_title('Gap Distribution: Baseline vs Controller (Train)', fontsize=12)
-    ax1.legend()
-    ax1.grid(True, alpha=0.3)
+    wins = (gc_tr < gb_tr).sum()
 
-    # Right plot: Gap reduction (how much controller improved over baseline)
-    ax2 = axes[1]
-    gap_reduction = gap_baseline_train - gap_actual_train  # Positive = controller better
-    ax2.hist(gap_reduction, bins=25, color='forestgreen', edgecolor='black', alpha=0.7)
-    ax2.axvline(0, color='red', linestyle='--', linewidth=2, label='No improvement')
-
-    # Count wins/losses
-    wins = (gap_reduction > 0).sum()
-    losses = (gap_reduction < 0).sum()
-    ties = (gap_reduction == 0).sum()
-
-    ax2.set_xlabel('Gap Reduction (positive = controller better)', fontsize=11)
-    ax2.set_ylabel('Count', fontsize=11)
-    ax2.set_title(f'Controller Improvement: {wins} wins, {losses} losses', fontsize=12)
-    ax2.legend()
-    ax2.grid(True, alpha=0.3)
-
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches='tight')
-    plt.close()
-
-    return save_path
-
-
-def plot_seed_heatmap(df: pd.DataFrame, save_path: Path):
-    """Plot heatmap of gap reduction by seed combination.
-
-    Gap reduction = baseline_gap - controller_gap
-    Positive = controller better (green)
-    Negative = baseline better (red)
-    """
-    fig, ax = plt.subplots(figsize=(10, 8))
-
-    # Calculate gap reduction
+    # derived columns stored back into df for plotting / table
     df = df.copy()
-    df['gap_reduction'] = (df['F_star_train'] - df['F_baseline_train']) - (df['F_star_train'] - df['F_actual_train'])
+    df['gap_baseline_train'] = gb_tr
+    df['gap_ctrl_train']     = gc_tr
+    df['gap_delta_train']    = gd_tr
+    df['gap_baseline_test']  = gb_te
+    df['gap_ctrl_test']      = gc_te
+    df['gap_delta_test']     = gd_te
 
-    # Create pivot table
-    pivot = df.pivot_table(values='gap_reduction', index='seed_baseline', columns='seed_target', aggfunc='first')
+    best_idx  = gc_tr.idxmin()
+    worst_idx = gc_tr.idxmax()
 
-    # Handle case with single value
-    if pivot.shape[0] < 2 or pivot.shape[1] < 2:
-        ax.text(0.5, 0.5, 'Not enough data for heatmap\n(need multiple seed values)',
-                ha='center', va='center', fontsize=12, transform=ax.transAxes)
-        plt.savefig(save_path, dpi=150, bbox_inches='tight')
-        plt.close()
-        return save_path
-
-    # Plot heatmap - use diverging colormap centered at 0
-    vmax = max(abs(pivot.values.min()), abs(pivot.values.max()))
-    im = ax.imshow(pivot.values, cmap='RdYlGn', aspect='auto', vmin=-vmax, vmax=vmax)
-
-    # Set ticks
-    ax.set_xticks(np.arange(len(pivot.columns)))
-    ax.set_yticks(np.arange(len(pivot.index)))
-    ax.set_xticklabels(pivot.columns.astype(int))
-    ax.set_yticklabels(pivot.index.astype(int))
-
-    # Add colorbar
-    cbar = plt.colorbar(im, ax=ax)
-    cbar.set_label('Gap Reduction (positive = controller better)', fontsize=11)
-
-    # Add value annotations
-    for i in range(len(pivot.index)):
-        for j in range(len(pivot.columns)):
-            val = pivot.values[i, j]
-            if not np.isnan(val):
-                text_color = 'white' if abs(val) > vmax * 0.5 else 'black'
-                ax.text(j, i, f'{val:.3f}', ha='center', va='center',
-                        color=text_color, fontsize=8)
-
-    ax.set_xlabel('seed_target', fontsize=12)
-    ax.set_ylabel('seed_baseline', fontsize=12)
-    ax.set_title('Gap Reduction by Seed Combination\n(Green = Controller Better, Red = Baseline Better)', fontsize=14)
-
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches='tight')
-    plt.close()
-
-    return save_path
-
-
-def plot_f_values_boxplot(df: pd.DataFrame, save_path: Path):
-    """Create boxplot comparing gap distributions: F* - F' (baseline) vs F* - F (controller)."""
-    fig, ax = plt.subplots(figsize=(10, 6))
-
-    # Calculate gaps (smaller = better, closer to target)
-    gap_baseline = df['F_star_train'] - df['F_baseline_train']
-    gap_controller = df['F_star_train'] - df['F_actual_train']
-
-    data = [
-        gap_baseline.dropna(),
-        gap_controller.dropna()
-    ]
-    labels = ['Baseline Gap\n(F* - F\')', 'Controller Gap\n(F* - F)']
-    colors_list = ['red', 'blue']
-
-    bp = ax.boxplot(data, tick_labels=labels, patch_artist=True)
-
-    for patch, color in zip(bp['boxes'], colors_list):
-        patch.set_facecolor(color)
-        patch.set_alpha(0.6)
-
-    # Add horizontal line at 0 (perfect match)
-    ax.axhline(0, color='green', linestyle='--', linewidth=2, label='Perfect (gap = 0)')
-
-    ax.set_ylabel('Gap (F* - F)', fontsize=12)
-    ax.set_title('Gap Distribution: Baseline vs Controller\n(smaller gap = better)', fontsize=14)
-    ax.grid(True, alpha=0.3, axis='y')
-    ax.legend(loc='upper right')
-
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches='tight')
-    plt.close()
-
-    return save_path
-
-
-def generate_summary_stats(df: pd.DataFrame) -> dict:
-    """Compute summary statistics from sweep results using gaps (F* - F)."""
-
-    # Calculate gaps
-    gap_baseline = df['F_star_train'] - df['F_baseline_train']
-    gap_controller = df['F_star_train'] - df['F_actual_train']
-    gap_reduction = gap_baseline - gap_controller  # Positive = controller better
-
-    # Count wins (controller gap < baseline gap)
-    controller_wins = (gap_controller < gap_baseline).sum()
-
-    stats = {
-        'n_runs': len(df),
-        'controller_wins': controller_wins,
-        'controller_win_rate': 100 * controller_wins / len(df) if len(df) > 0 else 0,
-
-        # Gap statistics (F* - F, smaller is better)
-        'gap_baseline_min': gap_baseline.min(),
-        'gap_baseline_max': gap_baseline.max(),
-        'gap_baseline_median': gap_baseline.median(),
-
-        'gap_controller_min': gap_controller.min(),
-        'gap_controller_max': gap_controller.max(),
-        'gap_controller_median': gap_controller.median(),
-
-        # Gap reduction (baseline_gap - controller_gap, positive = improvement)
-        'gap_reduction_min': gap_reduction.min(),
-        'gap_reduction_max': gap_reduction.max(),
-        'gap_reduction_median': gap_reduction.median(),
-
-        # Best and worst runs based on controller gap
-        'best_run': df.loc[gap_controller.idxmin(), 'run_name'] if len(df) > 0 and gap_controller.notna().any() else None,
-        'best_gap': gap_controller.min(),
-        'worst_run': df.loc[gap_controller.idxmax(), 'run_name'] if len(df) > 0 and gap_controller.notna().any() else None,
-        'worst_gap': gap_controller.max(),
+    return {
+        'df': df,
+        'n_runs':         len(df),
+        'wins':           wins,
+        'win_rate':       100.0 * wins / len(df),
+        # train
+        'gb_tr_min':  gb_tr.min(),  'gb_tr_med':  gb_tr.median(),  'gb_tr_max':  gb_tr.max(),
+        'gc_tr_min':  gc_tr.min(),  'gc_tr_med':  gc_tr.median(),  'gc_tr_max':  gc_tr.max(),
+        'gd_tr_min':  gd_tr.min(),  'gd_tr_med':  gd_tr.median(),  'gd_tr_max':  gd_tr.max(),
+        # test
+        'gb_te_min':  gb_te.min(),  'gb_te_med':  gb_te.median(),  'gb_te_max':  gb_te.max(),
+        'gc_te_min':  gc_te.min(),  'gc_te_med':  gc_te.median(),  'gc_te_max':  gc_te.max(),
+        'gd_te_min':  gd_te.min(),  'gd_te_med':  gd_te.median(),  'gd_te_max':  gd_te.max(),
+        # best / worst
+        'best_run':   df.loc[best_idx,  'run_name'],
+        'best_gap':   gc_tr.min(),
+        'worst_run':  df.loc[worst_idx, 'run_name'],
+        'worst_gap':  gc_tr.max(),
+        # generalisation
+        'degrad':     gc_te.median() - gc_tr.median(),
+        # F*
+        'fstar_min':  df['F_star_train'].min(),
+        'fstar_med':  df['F_star_train'].median(),
+        'fstar_max':  df['F_star_train'].max(),
     }
 
-    return stats
+
+# ════════════════════════════════════════════════════════════════════════════
+# 3.  PLOTS  (returns base64 PNG string)
+# ════════════════════════════════════════════════════════════════════════════
+
+_GREEN  = '#1D9E75'
+_RED    = '#D85A30'
+_AMBER  = '#BA7517'
+_MONO   = 'DejaVu Sans Mono'   # closest fallback to Courier on Linux
 
 
-class SweepReportGenerator:
-    """PDF report generator for sweep results."""
+def _b64(fig) -> str:
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png', dpi=150, bbox_inches='tight',
+                facecolor='white', edgecolor='none')
+    plt.close(fig)
+    buf.seek(0)
+    return base64.b64encode(buf.read()).decode()
 
-    def __init__(self, output_path: Path):
-        self.output_path = output_path
-        self.styles = getSampleStyleSheet()
-        self.story = []
 
-        # Custom styles
-        self.styles.add(ParagraphStyle(
-            name='ReportTitle',
-            parent=self.styles['Heading1'],
-            fontSize=18,
-            leading=22,
-            alignment=TA_CENTER,
-            spaceAfter=6
-        ))
+def plot_scatter(df: pd.DataFrame) -> str:
+    fig, ax = plt.subplots(figsize=(4.2, 3.4))
+    fstar = df['F_star_train']
+    ax.scatter(fstar, df['F_baseline_train'], color=_RED,   s=14, alpha=0.55,
+               linewidths=0, label="Baseline F'")
+    ax.scatter(fstar, df['F_actual_train'],   color='#2563EB', s=14, alpha=0.55,
+               linewidths=0, label='Controller F')
+    lo = min(fstar.min(), df['F_baseline_train'].min(), df['F_actual_train'].min()) - 0.02
+    hi = fstar.max() + 0.02
+    ax.plot([lo, hi], [lo, hi], 'k--', lw=0.8, alpha=0.4)
+    ax.set_xlabel('F*  (target)', fontsize=7, fontfamily=_MONO)
+    ax.set_ylabel('F  (achieved)', fontsize=7, fontfamily=_MONO)
+    ax.set_title('F* vs F\' (red) and F* vs F (blue)', fontsize=7.5,
+                 fontfamily=_MONO, fontweight='bold')
+    ax.tick_params(labelsize=6)
+    ax.legend(fontsize=6, framealpha=0.6)
+    ax.grid(True, alpha=0.18, lw=0.4)
+    fig.tight_layout(pad=0.6)
+    return _b64(fig)
 
-        self.styles.add(ParagraphStyle(
-            name='ReportSubtitle',
-            parent=self.styles['Normal'],
-            fontSize=11,
-            leading=14,
-            alignment=TA_CENTER,
-            spaceAfter=12
-        ))
 
-        self.styles.add(ParagraphStyle(
-            name='SectionTitle',
-            parent=self.styles['Heading2'],
-            fontSize=12,
-            leading=14,
-            fontName='Helvetica-Bold',
-            spaceAfter=6,
-            spaceBefore=12
-        ))
+def plot_boxplot(df: pd.DataFrame) -> str:
+    fig, ax = plt.subplots(figsize=(4.2, 3.4))
+    data   = [df['gap_baseline_train'].dropna(), df['gap_ctrl_train'].dropna()]
+    labels = ["Gap baseline\n(F* − F')", "Gap ctrl\n(F* − F)"]
+    bp = ax.boxplot(data, tick_labels=labels, patch_artist=True, widths=0.45,
+                    medianprops=dict(color='black', lw=1.2))
+    bp['boxes'][0].set(facecolor=_RED,   alpha=0.55)
+    bp['boxes'][1].set(facecolor=_GREEN, alpha=0.55)
+    ax.set_ylabel('Gap', fontsize=7, fontfamily=_MONO)
+    ax.set_title('Gap distribution: baseline vs controller', fontsize=7.5,
+                 fontfamily=_MONO, fontweight='bold')
+    ax.tick_params(labelsize=6)
+    ax.grid(True, axis='y', alpha=0.18, lw=0.4)
+    fig.tight_layout(pad=0.6)
+    return _b64(fig)
 
-        # Modify existing BodyText style instead of adding new one
-        self.styles['BodyText'].fontSize = 9
-        self.styles['BodyText'].leading = 11
 
-    def add_title(self, timestamp: datetime):
-        """Add report title."""
-        title = Paragraph("<b>Controller Seed Sweep Report</b>", self.styles['ReportTitle'])
-        date_str = timestamp.strftime('%Y-%m-%d %H:%M:%S')
-        subtitle = Paragraph(f"Generated: {date_str}", self.styles['ReportSubtitle'])
+def plot_improvement(df: pd.DataFrame) -> str:
+    fig, axes = plt.subplots(1, 2, figsize=(4.2, 3.4))
 
-        self.story.append(title)
-        self.story.append(subtitle)
-        self.story.append(HRFlowable(width="100%", thickness=2, color=colors.black, spaceAfter=12))
+    # left: overlapping distributions
+    ax = axes[0]
+    bins = np.linspace(
+        min(df['gap_baseline_train'].min(), df['gap_ctrl_train'].min()),
+        max(df['gap_baseline_train'].max(), df['gap_ctrl_train'].max()),
+        30
+    )
+    ax.hist(df['gap_baseline_train'], bins=bins, color=_RED,   alpha=0.55,
+            label="Baseline", density=True)
+    ax.hist(df['gap_ctrl_train'],     bins=bins, color=_GREEN, alpha=0.55,
+            label="Ctrl",     density=True)
+    ax.set_xlabel('Gap', fontsize=7, fontfamily=_MONO)
+    ax.set_ylabel('Density', fontsize=7, fontfamily=_MONO)
+    ax.set_title('Gap overlap', fontsize=7.5, fontfamily=_MONO, fontweight='bold')
+    ax.legend(fontsize=6)
+    ax.tick_params(labelsize=6)
+    ax.grid(True, alpha=0.18, lw=0.4)
 
-    def add_section(self, title: str):
-        """Add section title."""
-        para = Paragraph(f"<b>{title}</b>", self.styles['SectionTitle'])
-        line = HRFlowable(width="100%", thickness=1, color=colors.darkgray, spaceAfter=6)
-        self.story.append(para)
-        self.story.append(line)
+    # right: delta distribution
+    ax = axes[1]
+    deltas = df['gap_delta_train'].sort_values()
+    colors_bar = [_GREEN if v >= 0 else _RED for v in deltas]
+    ax.bar(range(len(deltas)), deltas, color=colors_bar, width=1.0, linewidth=0)
+    ax.axhline(0, color='black', lw=0.6)
+    ax.set_xlabel('Run (sorted)', fontsize=7, fontfamily=_MONO)
+    ax.set_ylabel('Gap Δ  (F − F\')', fontsize=7, fontfamily=_MONO)
+    ax.set_title('Gap reduction per run', fontsize=7.5,
+                 fontfamily=_MONO, fontweight='bold')
+    ax.tick_params(labelsize=6)
+    ax.grid(True, axis='y', alpha=0.18, lw=0.4)
 
-    def add_summary_table(self, stats: dict):
-        """Add summary statistics table using gap-based metrics."""
-        self.add_section("Summary Statistics")
+    fig.tight_layout(pad=0.6)
+    return _b64(fig)
 
-        data = [
-            ['Metric', 'Value'],
-            ['Total Runs', f"{stats['n_runs']}"],
-            ['Controller Wins', f"{stats['controller_wins']}/{stats['n_runs']} ({stats['controller_win_rate']:.1f}%)"],
-            ['', ''],
-            ['Baseline Gap (F* - F\')', '(smaller = better)'],
-            ['  Range', f"[{stats['gap_baseline_min']:.4f}, {stats['gap_baseline_max']:.4f}]"],
-            ['  Median', f"{stats['gap_baseline_median']:.4f}"],
-            ['', ''],
-            ['Controller Gap (F* - F)', '(smaller = better)'],
-            ['  Range', f"[{stats['gap_controller_min']:.4f}, {stats['gap_controller_max']:.4f}]"],
-            ['  Median', f"{stats['gap_controller_median']:.4f}"],
-            ['', ''],
-            ['Gap Reduction', '(positive = controller better)'],
-            ['  Range', f"[{stats['gap_reduction_min']:.4f}, {stats['gap_reduction_max']:.4f}]"],
-            ['  Median', f"{stats['gap_reduction_median']:.4f}"],
-            ['', ''],
-            ['Best Run (smallest gap)', f"{stats['best_run']} (gap: {stats['best_gap']:.4f})"],
-            ['Worst Run (largest gap)', f"{stats['worst_run']} (gap: {stats['worst_gap']:.4f})"],
-        ]
 
-        table = Table(data, colWidths=[3*inch, 3*inch])
-        table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
-            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, -1), 9),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
-            ('BACKGROUND', (0, 1), (-1, -1), colors.white),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-        ]))
+def plot_heatmap(df: pd.DataFrame) -> str:
+    df = df.copy()
+    df['seed_t'] = pd.to_numeric(df['seed_target'],  errors='coerce')
+    df['seed_b'] = pd.to_numeric(df['seed_baseline'], errors='coerce')
+    df = df.dropna(subset=['seed_t', 'seed_b', 'gap_delta_train'])
 
-        self.story.append(table)
-        self.story.append(Spacer(1, 0.5*cm))
+    pivot = df.pivot_table(index='seed_t', columns='seed_b',
+                           values='gap_delta_train', aggfunc='mean')
 
-    def add_image(self, image_path: Path, width: float = 6*inch, caption: str = None):
-        """Add image to report."""
-        if image_path.exists():
-            img = Image(str(image_path), width=width, height=width*0.6)
-            self.story.append(img)
-            if caption:
-                cap = Paragraph(f"<i>{caption}</i>", self.styles['BodyText'])
-                self.story.append(cap)
-            self.story.append(Spacer(1, 0.3*cm))
+    fig, ax = plt.subplots(figsize=(4.2, 3.4))
+    vmax = max(abs(pivot.values[~np.isnan(pivot.values)]).max(), 0.01)
+    im = ax.imshow(pivot.values, aspect='auto', cmap='RdYlGn',
+                   vmin=-vmax, vmax=vmax, origin='upper')
+    ax.set_xticks(range(len(pivot.columns)))
+    ax.set_xticklabels([str(int(c)) for c in pivot.columns],
+                       fontsize=5, fontfamily=_MONO)
+    ax.set_yticks(range(len(pivot.index)))
+    ax.set_yticklabels([str(int(i)) for i in pivot.index],
+                       fontsize=5, fontfamily=_MONO)
+    ax.set_xlabel('seed_b', fontsize=7, fontfamily=_MONO)
+    ax.set_ylabel('seed_t', fontsize=7, fontfamily=_MONO)
+    ax.set_title('Gap reduction by seed combination', fontsize=7.5,
+                 fontfamily=_MONO, fontweight='bold')
+    cb = fig.colorbar(im, ax=ax, fraction=0.03, pad=0.03)
+    cb.ax.tick_params(labelsize=5)
+    fig.tight_layout(pad=0.6)
+    return _b64(fig)
 
-    def add_runs_table(self, df: pd.DataFrame):
-        """Add table with all runs sorted by controller gap (smallest = best)."""
-        self.add_section("All Runs (sorted by controller gap, smallest first)")
 
-        # Calculate gaps and sort
-        df = df.copy()
-        df['gap_baseline'] = df['F_star_train'] - df['F_baseline_train']
-        df['gap_controller'] = df['F_star_train'] - df['F_actual_train']
-        df_sorted = df.sort_values('gap_controller', ascending=True)
+# ════════════════════════════════════════════════════════════════════════════
+# 4.  HTML TEMPLATE
+# ════════════════════════════════════════════════════════════════════════════
 
-        # Create table data
-        data = [['Run', 'seed_t', 'seed_b', 'F*', 'Gap Baseline', 'Gap Controller', 'Winner']]
+PAGE_CSS = """
+@page {
+  size: 297mm 210mm;
+  margin: 0;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 9px;
+  line-height: 1.45;
+  color: #1a1a1a;
+  background: white;
+}
+.page {
+  width: 297mm;
+  height: 210mm;
+  padding: 13px 18px 9px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  page-break-after: always;
+}
+.page:last-child { page-break-after: auto; }
 
-        for _, row in df_sorted.iterrows():
-            gap_b = row['gap_baseline']
-            gap_c = row['gap_controller']
-            winner = '✓ Ctrl' if gap_c < gap_b else '✗ Base'
+.hdr-row { display: flex; justify-content: space-between; align-items: baseline;
+           margin-bottom: 2px; }
+.title   { font-size: 11px; font-weight: 500; }
+.meta    { font-size: 8px; color: #666; }
+.rule-heavy { border: none; border-top: 1px solid #1a1a1a; margin: 3px 0 7px; }
+.rule-thin  { border: none; border-top: 0.5px solid #aaa;  margin: 2px 0 5px; }
 
-            data.append([
-                row['run_name'][:15],
-                int(row['seed_target']) if pd.notna(row['seed_target']) else 'N/A',
-                int(row['seed_baseline']) if pd.notna(row['seed_baseline']) else 'N/A',
-                f"{row['F_star_train']:.4f}" if pd.notna(row['F_star_train']) else 'N/A',
-                f"{gap_b:.4f}" if pd.notna(gap_b) else 'N/A',
-                f"{gap_c:.4f}" if pd.notna(gap_c) else 'N/A',
-                winner,
-            ])
+.g  { color: #1D9E75; }
+.r  { color: #D85A30; }
+.a  { color: #BA7517; }
+.dg { color: #1D9E75; font-weight: 500; }
+.dr { color: #D85A30; font-weight: 500; }
+.da { color: #BA7517; font-weight: 500; }
 
-        # Create table with smaller font
-        table = Table(data, colWidths=[1.2*inch, 0.6*inch, 0.6*inch, 0.8*inch, 0.9*inch, 0.9*inch, 0.7*inch])
-        table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, -1), 7),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
-            ('BACKGROUND', (0, 1), (-1, -1), colors.white),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.Color(0.95, 0.95, 0.95)]),
-        ]))
+/* ── KPI row ── */
+.kpi-row { display: table; width: 100%; border: 0.5px solid #ccc;
+           margin-bottom: 7px; table-layout: fixed; }
+.kpi     { display: table-cell; padding: 5px 8px;
+           border-right: 0.5px solid #ccc; vertical-align: top; }
+.kpi:last-child { border-right: none; }
+.kpi-l   { font-size: 7px; color: #888; text-transform: uppercase;
+           letter-spacing: 0.4px; }
+.kpi-v   { font-size: 13px; font-weight: 500; margin: 1px 0; }
+.kpi-s   { font-size: 7px; color: #888; }
 
-        self.story.append(table)
+/* ── section headings ── */
+.sec-head { font-size: 7px; font-weight: 500; text-transform: uppercase;
+            letter-spacing: 0.9px; color: #888; margin-bottom: 3px;
+            margin-top: 5px; }
+.blk-title { font-size: 7.5px; font-weight: 500; text-transform: uppercase;
+             letter-spacing: 0.5px; color: #888; margin-bottom: 3px;
+             border-left: 2px solid #1a1a1a; padding-left: 4px; }
 
-    def build(self):
-        """Build the PDF document."""
-        doc = SimpleDocTemplate(
-            str(self.output_path),
-            pagesize=A4,
-            rightMargin=1*cm,
-            leftMargin=1*cm,
-            topMargin=1*cm,
-            bottomMargin=1*cm
+/* ── stat rows ── */
+.stat-lbl    { font-size: 7.5px; font-weight: 500; color: #1a1a1a;
+               margin-bottom: 2px; margin-top: 4px; }
+.stat-sublbl { font-size: 7px; color: #888; }
+.row { display: flex; justify-content: space-between; padding: 1.5px 0;
+       border-bottom: 0.5px solid #eee; font-size: 8px; gap: 6px; }
+.row:last-child { border-bottom: none; }
+.rk  { color: #888; }
+.rv  { font-weight: 500; }
+
+/* ── four‑column stats grid ── */
+.stats-grid  { display: table; width: 100%; margin-bottom: 7px;
+               table-layout: fixed; }
+.sg-col      { display: table-cell; padding-right: 12px;
+               vertical-align: top; }
+.sg-col:last-child { padding-right: 0; }
+.sg-inner    { display: table; width: 100%; table-layout: fixed; }
+.sg-sub      { display: table-cell; padding-right: 5px; vertical-align: top; }
+.sg-sub:last-child { padding-right: 0; }
+
+/* ── plot grid ── */
+.plot-grid { display: flex; width: 100%; flex: 1; gap: 6px; }
+.plot-cell { flex: 1 1 0; min-width: 0; }
+.plot-img  { width: 100%; height: auto; display: block; }
+.plot-cap  { font-size: 6.5px; color: #888; margin-top: 2px;
+             font-style: italic; line-height: 1.3; }
+
+/* ── runs table ── */
+.tbl { width: 100%; border-collapse: collapse; font-size: 8px; }
+.tbl th {
+  text-align: left; padding: 3px 4px;
+  background: #f5f5f5; border-bottom: 0.5px solid #1a1a1a;
+  font-size: 7.5px; font-weight: 500; color: #888; white-space: nowrap;
+}
+.tbl th .def { font-size: 6.5px; font-weight: 400; color: #aaa;
+               display: block; letter-spacing: 0; text-transform: none; }
+.tbl td { padding: 2px 4px; border-bottom: 0.5px solid #eee;
+          white-space: nowrap; }
+.tbl tr:nth-child(even) td { background: #fafafa; }
+.tbl tr:last-child td { border-bottom: none; }
+
+/* ── footer ── */
+.footer { margin-top: auto; border-top: 1px solid #1a1a1a; padding-top: 3px;
+          display: flex; justify-content: space-between;
+          font-size: 7px; color: #888; }
+.legend { font-size: 7px; color: #888; margin-top: 4px; }
+
+/* ── config section ── */
+.cfg-grid  { display: table; width: 100%; table-layout: fixed;
+             margin-bottom: 5px; }
+.cfg-col   { display: table-cell; vertical-align: top; padding-right: 12px; }
+.cfg-col:last-child { padding-right: 0; }
+.cfg-row   { display: flex; justify-content: space-between; padding: 1px 0;
+             border-bottom: 0.5px solid #eee; font-size: 7.5px; }
+.cfg-row:last-child { border-bottom: none; }
+.cfg-k     { color: #888; }
+.cfg-v     { font-weight: 500; }
+.cfg-sub   { font-size: 7px; color: #aaa; margin-left: 6px; }
+"""
+
+
+def _fmt(v, digits=4) -> str:
+    if v is None or (isinstance(v, float) and np.isnan(v)):
+        return 'N/A'
+    return f"{v:.{digits}f}"
+
+
+def _sign(v) -> str:
+    return f"+{v:.3f}" if v >= 0 else f"{v:.3f}"
+
+
+def _delta_cls(v) -> str:
+    if v >= 0.05:  return 'dg'
+    if v >= 0:     return 'da'
+    return 'dr'
+
+
+def _gap_ctrl_cls(v, q25, q75) -> str:
+    if v <= q25: return 'g'
+    if v >= q75: return 'r'
+    return ''
+
+
+def _cfg_row(key: str, val, sub: str = '') -> str:
+    sub_html = f'<span class="cfg-sub">{sub}</span>' if sub else ''
+    return f'<div class="cfg-row"><span class="cfg-k">{key}{sub_html}</span><span class="cfg-v">{val}</span></div>'
+
+
+def build_config_html(sweep_cfg: dict | None) -> str:
+    """Build a compact HTML section showing controller and process configuration."""
+    if sweep_cfg is None:
+        return ''
+
+    cfg = sweep_cfg.get('config', {})
+    pg = cfg.get('policy_generator', {})
+    tr = cfg.get('training', {})
+    sc = cfg.get('scenarios', {})
+    cl = tr.get('curriculum_learning', {})
+    sr = cfg.get('surrogate', {})
+    val = cfg.get('validation', {})
+    dataset_mode = sweep_cfg.get('dataset_mode', '?')
+    n_procs = sweep_cfg.get('n_processes', '?')
+    st_params = sweep_cfg.get('st_params')
+
+    # ── Controller column ──
+    arch = pg.get('architecture', '?')
+    hidden = pg.get('hidden_sizes', '?')
+    if arch == 'custom' and hidden:
+        arch_str = f"custom {hidden}"
+    else:
+        arch_str = arch
+
+    sched = tr.get('lr_scheduler')
+    if isinstance(sched, dict):
+        sched_str = f"{sched.get('type', '?')}"
+        if sched.get('T_max'):
+            sched_str += f" T_max={sched['T_max']}"
+    else:
+        sched_str = 'none'
+
+    cl_str = 'off'
+    if cl.get('enabled'):
+        cl_str = (f"on &middot; warmup {cl.get('warmup_fraction', '?')} &middot; "
+                  f"&#955;bc {cl.get('lambda_bc_start', '?')}&#8594;{cl.get('lambda_bc_end', '?')} "
+                  f"&middot; {cl.get('reliability_weight_curve', '?')}")
+
+    ctrl_html = (
+        _cfg_row('Architecture', arch_str)
+        + _cfg_row('Dropout', pg.get('dropout', '?'))
+        + _cfg_row('BatchNorm', pg.get('use_batchnorm', '?'))
+        + _cfg_row('Scenario encoder', pg.get('use_scenario_encoder', '?'))
+        + _cfg_row('Epochs', tr.get('epochs', '?'))
+        + _cfg_row('Batch size', tr.get('batch_size', '?'))
+        + _cfg_row('Learning rate', tr.get('learning_rate', '?'))
+        + _cfg_row('Optimizer', tr.get('optimizer', '?'))
+        + _cfg_row('Weight decay', tr.get('weight_decay', '?'))
+        + _cfg_row('Grad clip norm', tr.get('gradient_clip_norm', 'none'))
+        + _cfg_row('LR scheduler', sched_str)
+    )
+
+    # ── Training details column ──
+    train_html = (
+        _cfg_row('&#955;bc', tr.get('lambda_bc', '?'))
+        + _cfg_row('Reliability scale', tr.get('reliability_loss_scale', '?'))
+        + _cfg_row('Patience', tr.get('patience', '?'))
+        + _cfg_row('Early stop metric', tr.get('early_stopping_metric', '?'))
+        + _cfg_row('Curriculum', cl_str)
+        + _cfg_row('Surrogate', sr.get('type', '?'))
+        + _cfg_row('Deterministic', sr.get('use_deterministic_sampling', '?'))
+        + _cfg_row('Validation', f"within={val.get('within_scenario_enabled', '?')} "
+                   f"split={val.get('within_scenario_split', '?')}")
+        + _cfg_row('n_train scenarios', sc.get('n_train', '?'))
+        + _cfg_row('n_test scenarios', sc.get('n_test', '?'))
+        + _cfg_row('seed_target', f"{sc.get('seed_target', '?')} (varies per run)")
+        + _cfg_row('seed_baseline', f"{sc.get('seed_baseline', '?')} (varies per run)")
+    )
+
+    # ── Process column ──
+    proc_html = _cfg_row('Dataset mode', dataset_mode)
+    proc_html += _cfg_row('N processes', n_procs)
+
+    process_names = cfg.get('process_names')
+    if process_names:
+        proc_html += _cfg_row('Process filter', ' &#8594; '.join(process_names))
+
+    if st_params and dataset_mode == 'st':
+        proc_html += (
+            _cfg_row('ST n', f"{st_params.get('n', '?')}", 'input vars')
+            + _cfg_row('ST m', f"{st_params.get('m', '?')}", 'stages')
+            + _cfg_row('ST p', f"{st_params.get('p', '?')}", 'outputs')
+            + _cfg_row('ST me', f"{st_params.get('me', '?')}", 'env vars')
+            + _cfg_row('ST &#945;', st_params.get('alpha', '?'), 'shift')
+            + _cfg_row('ST &#947;', st_params.get('gamma', '?'), 'mult')
+            + _cfg_row('ST &#961;', st_params.get('rho', '?'), 'noise')
+            + _cfg_row('env_mode', st_params.get('env_mode', '?'))
+            + _cfg_row('x_domain', st_params.get('x_domain', '?'))
         )
-        doc.build(self.story)
+
+    return f"""
+  <div class="sec-head">00 &#8212; configuration</div>
+  <hr class="rule-thin">
+  <div class="cfg-grid">
+    <div class="cfg-col">
+      <div class="blk-title">Controller &middot; policy generator</div>
+      {ctrl_html}
+    </div>
+    <div class="cfg-col">
+      <div class="blk-title">Controller &middot; training</div>
+      {train_html}
+    </div>
+    <div class="cfg-col">
+      <div class="blk-title">Processes</div>
+      {proc_html}
+    </div>
+  </div>
+"""
 
 
-def generate_sweep_report(sweep_dir: Path, output_path: Path = None):
-    """Main function to generate the sweep report."""
+def build_page1_html(s: dict, now: datetime,
+                     b64_scatter, b64_box, b64_imp, b64_heat,
+                     sweep_dir: str, config_html: str = '') -> str:
+    n    = s['n_runs']
+    ts   = now.strftime('%Y-%m-%d &nbsp;%H:%M:%S')
+    return f"""
+<div class="page">
+  <div class="hdr-row">
+    <span class="title">Controller Sweep Report</span>
+    <span class="meta">{ts} &nbsp;·&nbsp; {sweep_dir} &nbsp;·&nbsp; {n} runs &nbsp;·&nbsp; page 1 / 2</span>
+  </div>
+  <hr class="rule-heavy">
+
+  <div class="kpi-row">
+    <div class="kpi">
+      <div class="kpi-l">Total runs</div>
+      <div class="kpi-v">{n}</div>
+      <div class="kpi-s">valid runs</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-l">Controller wins</div>
+      <div class="kpi-v g">{s['wins']}/{n}</div>
+      <div class="kpi-s">win rate {s['win_rate']:.1f}%</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-l">Median gap &#916; (train)</div>
+      <div class="kpi-v g">{_sign(s['gd_tr_med'])}</div>
+      <div class="kpi-s">F&#8722;F' improvement</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-l">Best ctrl gap (train)</div>
+      <div class="kpi-v">{_fmt(s['gc_tr_min'])}</div>
+      <div class="kpi-s">{s['best_run']}</div>
+    </div>
+  </div>
+
+  {config_html}
+
+  <div class="sec-head">01 &#8212; aggregate statistics</div>
+  <hr class="rule-thin">
+
+  <div class="stats-grid">
+    <!-- train -->
+    <div class="sg-col">
+      <div class="blk-title">Train split</div>
+      <div class="sg-inner">
+        <div class="sg-sub">
+          <div class="stat-lbl">Gap baseline</div>
+          <div class="stat-sublbl">F* &#8722; F'</div>
+          <div class="row"><span class="rk">Min</span><span class="rv">{_fmt(s['gb_tr_min'])}</span></div>
+          <div class="row"><span class="rk">Median</span><span class="rv">{_fmt(s['gb_tr_med'])}</span></div>
+          <div class="row"><span class="rk">Max</span><span class="rv">{_fmt(s['gb_tr_max'])}</span></div>
+        </div>
+        <div class="sg-sub">
+          <div class="stat-lbl">Gap ctrl</div>
+          <div class="stat-sublbl">F* &#8722; F</div>
+          <div class="row"><span class="rk">Min</span><span class="rv g">{_fmt(s['gc_tr_min'])}</span></div>
+          <div class="row"><span class="rk">Median</span><span class="rv">{_fmt(s['gc_tr_med'])}</span></div>
+          <div class="row"><span class="rk">Max</span><span class="rv r">{_fmt(s['gc_tr_max'])}</span></div>
+        </div>
+        <div class="sg-sub">
+          <div class="stat-lbl">Gap &#916;</div>
+          <div class="stat-sublbl">F &#8722; F'</div>
+          <div class="row"><span class="rk">Min</span><span class="rv a">{_sign(s['gd_tr_min'])}</span></div>
+          <div class="row"><span class="rk">Median</span><span class="rv g">{_sign(s['gd_tr_med'])}</span></div>
+          <div class="row"><span class="rk">Max</span><span class="rv g">{_sign(s['gd_tr_max'])}</span></div>
+        </div>
+      </div>
+    </div>
+    <!-- test -->
+    <div class="sg-col">
+      <div class="blk-title">Test split</div>
+      <div class="sg-inner">
+        <div class="sg-sub">
+          <div class="stat-lbl">Gap baseline</div>
+          <div class="stat-sublbl">F* &#8722; F'</div>
+          <div class="row"><span class="rk">Min</span><span class="rv">{_fmt(s['gb_te_min'])}</span></div>
+          <div class="row"><span class="rk">Median</span><span class="rv">{_fmt(s['gb_te_med'])}</span></div>
+          <div class="row"><span class="rk">Max</span><span class="rv">{_fmt(s['gb_te_max'])}</span></div>
+        </div>
+        <div class="sg-sub">
+          <div class="stat-lbl">Gap ctrl</div>
+          <div class="stat-sublbl">F* &#8722; F</div>
+          <div class="row"><span class="rk">Min</span><span class="rv g">{_fmt(s['gc_te_min'])}</span></div>
+          <div class="row"><span class="rk">Median</span><span class="rv">{_fmt(s['gc_te_med'])}</span></div>
+          <div class="row"><span class="rk">Max</span><span class="rv r">{_fmt(s['gc_te_max'])}</span></div>
+        </div>
+        <div class="sg-sub">
+          <div class="stat-lbl">Gap &#916;</div>
+          <div class="stat-sublbl">F &#8722; F'</div>
+          <div class="row"><span class="rk">Min</span><span class="rv a">{_sign(s['gd_te_min'])}</span></div>
+          <div class="row"><span class="rk">Median</span><span class="rv g">{_sign(s['gd_te_med'])}</span></div>
+          <div class="row"><span class="rk">Max</span><span class="rv g">{_sign(s['gd_te_max'])}</span></div>
+        </div>
+      </div>
+    </div>
+    <!-- best/worst + generalisation -->
+    <div class="sg-col">
+      <div class="blk-title">Best &amp; worst &middot; generalisation</div>
+      <div class="row"><span class="rk">Best run (min gap tr.)</span><span class="rv g">{s['best_run']} &#8212; {_fmt(s['best_gap'])}</span></div>
+      <div class="row"><span class="rk">Worst run (max gap tr.)</span><span class="rv r">{s['worst_run']} &#8212; {_fmt(s['worst_gap'])}</span></div>
+      <div style="margin-top:4px;border-top:0.5px solid #eee;padding-top:3px">
+        <div class="row"><span class="rk">Median gap ctrl train</span><span class="rv">{_fmt(s['gc_tr_med'])}</span></div>
+        <div class="row"><span class="rk">Median gap ctrl test</span><span class="rv">{_fmt(s['gc_te_med'])}</span></div>
+        <div class="row"><span class="rk">Degradation (tst&#8722;tr)</span><span class="rv a">{_sign(s['degrad'])}</span></div>
+      </div>
+    </div>
+    <!-- F* -->
+    <div class="sg-col" style="width:14%">
+      <div class="blk-title">F* (target)</div>
+      <div class="stat-sublbl" style="margin-top:3px;margin-bottom:4px">varies per run if seed_target differs</div>
+      <div class="row"><span class="rk">Min</span><span class="rv">{_fmt(s['fstar_min'])}</span></div>
+      <div class="row"><span class="rk">Median</span><span class="rv">{_fmt(s['fstar_med'])}</span></div>
+      <div class="row"><span class="rk">Max</span><span class="rv">{_fmt(s['fstar_max'])}</span></div>
+    </div>
+  </div>
+
+  <div class="sec-head">02 &#8212; visualizations</div>
+  <hr class="rule-thin">
+  <div class="plot-grid">
+    <div class="plot-cell">
+      <img class="plot-img" src="data:image/png;base64,{b64_scatter}">
+      <div class="plot-cap">F* vs F' (red) and F* vs F (blue) &#8212; diagonal = perfect</div>
+    </div>
+    <div class="plot-cell">
+      <img class="plot-img" src="data:image/png;base64,{b64_box}">
+      <div class="plot-cap">Gap distribution: baseline vs controller</div>
+    </div>
+    <div class="plot-cell">
+      <img class="plot-img" src="data:image/png;base64,{b64_imp}">
+      <div class="plot-cap">Gap overlap + gap reduction per run</div>
+    </div>
+    <div class="plot-cell">
+      <img class="plot-img" src="data:image/png;base64,{b64_heat}">
+      <div class="plot-cap">Gap reduction by seed combination &#8212; green = ctrl better</div>
+    </div>
+  </div>
+
+  <div class="footer">
+    <span>auto-generated &nbsp;&#183;&nbsp; {sweep_dir} &nbsp;&#183;&nbsp; sweep_report.pdf &nbsp;&#183;&nbsp; all runs table on next page</span>
+    <span>controller_optimization &middot; generate_sweep_report.py</span>
+  </div>
+</div>
+"""
+
+
+def build_page2_html(df: pd.DataFrame, now: datetime, sweep_dir: str) -> str:
+    df = df.sort_values('gap_ctrl_train', ascending=True).reset_index(drop=True)
+
+    q25 = df['gap_ctrl_train'].quantile(0.25)
+    q75 = df['gap_ctrl_train'].quantile(0.75)
+    ts  = now.strftime('%Y-%m-%d &nbsp;%H:%M:%S')
+
+    rows_html = ''
+    for _, r in df.iterrows():
+        gc_cls = _gap_ctrl_cls(r['gap_ctrl_train'], q25, q75)
+        gct_cls = _gap_ctrl_cls(r['gap_ctrl_test'],  q25, q75)
+        dtr_cls = _delta_cls(r['gap_delta_train'])
+        dte_cls = _delta_cls(r['gap_delta_test'])
+
+        rows_html += f"""
+      <tr>
+        <td>{r['run_name']}</td>
+        <td>{int(r['seed_target']) if pd.notna(r['seed_target']) else 'N/A'}</td>
+        <td>{int(r['seed_baseline']) if pd.notna(r['seed_baseline']) else 'N/A'}</td>
+        <td>{_fmt(r['F_star_train'])}</td>
+        <td>{_fmt(r['F_baseline_train'])}</td>
+        <td>{_fmt(r['F_actual_train'])}</td>
+        <td>{_fmt(r['gap_baseline_train'])}</td>
+        <td class="{gc_cls}">{_fmt(r['gap_ctrl_train'])}</td>
+        <td class="{gct_cls}">{_fmt(r['gap_ctrl_test'])}</td>
+        <td class="{dtr_cls}">{_sign(r['gap_delta_train'])}</td>
+        <td class="{dte_cls}">{_sign(r['gap_delta_test'])}</td>
+      </tr>"""
+
+    return f"""
+<div class="page">
+  <div class="hdr-row">
+    <span class="title">Controller Sweep Report &#8212; All Runs</span>
+    <span class="meta">{ts} &nbsp;&#183;&nbsp; {len(df)} runs &nbsp;&#183;&nbsp; page 2 / 2</span>
+  </div>
+  <hr class="rule-heavy">
+
+  <div class="sec-head">
+    03 &#8212; all runs
+    <span style="font-size:7px;font-weight:400;text-transform:none;letter-spacing:0">
+      sorted by gap ctrl train &middot; ascending &nbsp;&#183;&nbsp;
+      &#916; = F&#8722;F' &nbsp;&#183;&nbsp; positive = ctrl better
+    </span>
+  </div>
+  <hr class="rule-thin">
+
+  <table class="tbl">
+    <thead>
+      <tr>
+        <th>Run</th>
+        <th>Seed T</th>
+        <th>Seed B</th>
+        <th>F*</th>
+        <th>F' baseline</th>
+        <th>F controller</th>
+        <th>Gap baseline<span class="def">F* &#8722; F'</span></th>
+        <th>Gap ctrl &#8212; train<span class="def">F* &#8722; F</span></th>
+        <th>Gap ctrl &#8212; test<span class="def">F* &#8722; F</span></th>
+        <th>Gap &#916; &#8212; train<span class="def">(F*&#8722;F') &#8722; (F*&#8722;F)</span></th>
+        <th>Gap &#916; &#8212; test<span class="def">(F*&#8722;F') &#8722; (F*&#8722;F)</span></th>
+      </tr>
+    </thead>
+    <tbody>
+      {rows_html}
+    </tbody>
+  </table>
+
+  <div class="legend">
+    Gap ctrl colored:
+    <span class="g">green = best quartile</span> &nbsp;&#183;&nbsp;
+    <span class="r">red = worst quartile</span> &nbsp;&#183;&nbsp;
+    Gap &#916; colored:
+    <span class="dg">green = ctrl better</span> &nbsp;&#183;&nbsp;
+    <span class="da">amber = marginal (&lt;0.05)</span> &nbsp;&#183;&nbsp;
+    <span class="dr">red = baseline better</span> &nbsp;&#183;&nbsp;
+    F* shown per-run as it may vary across seed combinations
+  </div>
+
+  <div class="footer">
+    <span>auto-generated &nbsp;&#183;&nbsp; {sweep_dir} &nbsp;&#183;&nbsp; sweep_report.pdf</span>
+    <span>controller_optimization &middot; generate_sweep_report.py</span>
+  </div>
+</div>
+"""
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# 5.  MAIN PIPELINE
+# ════════════════════════════════════════════════════════════════════════════
+
+def generate_sweep_report(sweep_dir: Path, output_path: Path | None = None):
     print(f"Scanning sweep directory: {sweep_dir}")
+    df_raw = aggregate_results(sweep_dir)
 
-    # Load all results
-    df = aggregate_results(sweep_dir)
-
-    if df.empty:
-        print("No results found. Cannot generate report.")
+    if df_raw.empty:
+        print("No results found.  Cannot generate report.")
         return None
 
-    print(f"\nLoaded {len(df)} runs")
+    print(f"\nLoaded {len(df_raw)} runs")
 
-    # Drop runs with missing core metrics
-    core_cols = ['F_star_train', 'F_baseline_train', 'F_actual_train']
-    valid_before = len(df)
-    df = df.dropna(subset=core_cols)
-    if len(df) < valid_before:
-        print(f"  Dropped {valid_before - len(df)} runs with missing F values ({len(df)} valid runs remaining)")
-    df = df.reset_index(drop=True)
+    core = ['F_star_train', 'F_baseline_train', 'F_actual_train']
+    before = len(df_raw)
+    df_raw = df_raw.dropna(subset=core).reset_index(drop=True)
+    if len(df_raw) < before:
+        print(f"  Dropped {before - len(df_raw)} runs with missing F values "
+              f"({len(df_raw)} valid remaining)")
 
-    if df.empty:
-        print("No valid runs with complete metrics. Cannot generate report.")
+    if df_raw.empty:
+        print("No valid runs remaining.")
         return None
 
-    # Compute summary statistics
-    stats = generate_summary_stats(df)
+    # ── stats ────────────────────────────────────────────────────────────────
+    s = compute_stats(df_raw)
+    df = s['df']
 
-    # Create plots directory
-    plots_dir = sweep_dir / 'sweep_plots'
-    plots_dir.mkdir(exist_ok=True)
+    # ── plots ────────────────────────────────────────────────────────────────
+    print("\nGenerating plots…")
+    b64_scatter = plot_scatter(df)
+    b64_box     = plot_boxplot(df)
+    b64_imp     = plot_improvement(df)
+    b64_heat    = plot_heatmap(df)
+    print("  Done.")
 
-    # Generate plots
-    print("\nGenerating plots...")
+    # ── configuration ────────────────────────────────────────────────────────
+    sweep_cfg = load_sweep_config(sweep_dir)
+    config_html = build_config_html(sweep_cfg)
 
-    print("  - Target vs Baseline vs Actual scatter plot...")
-    scatter_path = plot_target_baseline_actual_scatter(df, plots_dir / 'target_baseline_actual_scatter.png')
+    # ── HTML assembly ─────────────────────────────────────────────────────────
+    now = datetime.now()
+    sd  = str(sweep_dir)
 
-    print("  - Improvement distribution...")
-    dist_path = plot_improvement_distribution(df, plots_dir / 'improvement_distribution.png')
+    html_body = (
+        build_page1_html(s, now, b64_scatter, b64_box, b64_imp, b64_heat, sd,
+                         config_html=config_html)
+        + build_page2_html(df, now, sd)
+    )
 
-    print("  - F values boxplot...")
-    boxplot_path = plot_f_values_boxplot(df, plots_dir / 'f_values_boxplot.png')
+    full_html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>{PAGE_CSS}</style>
+</head>
+<body>
+{html_body}
+</body>
+</html>"""
 
-    print("  - Gap reduction heatmap...")
-    heatmap_path = plot_seed_heatmap(df, plots_dir / 'gap_reduction_heatmap.png')
-
-    # Generate PDF report
+    # ── render to PDF ─────────────────────────────────────────────────────────
     if output_path is None:
         output_path = sweep_dir / 'sweep_report.pdf'
 
-    print(f"\nGenerating PDF report: {output_path}")
+    print(f"\nRendering PDF → {output_path}")
+    WPHtml(string=full_html).write_pdf(str(output_path))
+    print(f"Report saved: {output_path}")
 
-    report = SweepReportGenerator(output_path)
-    report.add_title(datetime.now())
-    report.add_summary_table(stats)
-
-    # Add scatter plot
-    report.add_section("Target vs Baseline vs Actual (All Runs)")
-    report.add_image(scatter_path, width=6.5*inch,
-                     caption="Figure 1: Scatter plot showing controller (blue) vs baseline (red). Points on diagonal = perfect match with target F*.")
-
-    report.story.append(PageBreak())
-
-    # Add boxplot
-    report.add_section("Gap Distribution")
-    report.add_image(boxplot_path, width=5*inch,
-                     caption="Figure 2: Gap distribution (F* - F). Smaller gap = better. Green line = perfect (gap=0).")
-
-    # Add gap distribution
-    report.add_section("Gap Comparison: Baseline vs Controller")
-    report.add_image(dist_path, width=6*inch,
-                     caption="Figure 3: Left: overlapping gap distributions. Right: gap reduction (positive = controller wins).")
-
-    report.story.append(PageBreak())
-
-    # Add heatmap
-    report.add_section("Gap Reduction by Seed Combination")
-    report.add_image(heatmap_path, width=5.5*inch,
-                     caption="Figure 4: Gap reduction by seed combination. Green = controller better, Red = baseline better.")
-
-    report.story.append(PageBreak())
-
-    # Add runs table
-    report.add_runs_table(df)
-
-    # Build PDF
-    report.build()
-
-    # Save CSV summary
+    # ── CSV summary ───────────────────────────────────────────────────────────
     csv_path = sweep_dir / 'sweep_results_summary.csv'
     df.to_csv(csv_path, index=False)
-    print(f"Results CSV saved: {csv_path}")
-
-    print(f"\nReport generated: {output_path}")
+    print(f"CSV summary : {csv_path}")
 
     return output_path
 
 
 def main():
     parser = argparse.ArgumentParser(description='Generate sweep report PDF')
-    parser.add_argument('--sweep_dir', type=str,
-                        default='controller_optimization/checkpoints/sweep',
+    parser.add_argument('--sweep_dir', default='controller_optimization/checkpoints/sweep',
                         help='Directory containing sweep run results')
-    parser.add_argument('--output', type=str, default=None,
-                        help='Output PDF file path')
+    parser.add_argument('--output', default=None,
+                        help='Output PDF path (default: <sweep_dir>/sweep_report.pdf)')
     args = parser.parse_args()
 
     sweep_dir = Path(args.sweep_dir)
     if not sweep_dir.exists():
-        print(f"Error: Sweep directory not found: {sweep_dir}")
-        return
+        raise SystemExit(f"Error: sweep directory not found: {sweep_dir}")
 
-    output_path = Path(args.output) if args.output else None
-    generate_sweep_report(sweep_dir, output_path)
+    generate_sweep_report(sweep_dir, Path(args.output) if args.output else None)
 
 
 if __name__ == '__main__':
