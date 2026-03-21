@@ -262,7 +262,7 @@ def plot_heatmap(df: pd.DataFrame) -> str:
     pivot = df.pivot_table(index='seed_t', columns='seed_b',
                            values='gap_delta_train', aggfunc='mean')
 
-    fig, ax = plt.subplots(figsize=(5.0, 3.8))
+    fig, ax = plt.subplots(figsize=(5.0, 3.4))
     vmax = max(abs(pivot.values[~np.isnan(pivot.values)]).max(), 0.01)
     im = ax.imshow(pivot.values, aspect='auto', cmap='RdYlGn',
                    vmin=-vmax, vmax=vmax, origin='upper')
@@ -364,11 +364,9 @@ body {
 .sg-sub:last-child { padding-right: 0; }
 
 /* ── plot grid ── */
-.plot-grid { display: table; width: 100%; flex: 1; table-layout: fixed; }
-.plot-cell { display: table-cell; padding: 0 3px; vertical-align: top; }
-.plot-cell:first-child { padding-left: 0; }
-.plot-cell:last-child  { padding-right: 0; }
-.plot-img  { width: 100%; height: auto; display: block; }
+.plot-grid { display: flex; width: 100%; flex: 1; gap: 6px; align-items: stretch; }
+.plot-cell { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; }
+.plot-img  { width: 100%; flex: 1; display: block; object-fit: contain; }
 .plot-cap  { font-size: 6.5px; color: #888; margin-top: 2px;
              font-style: italic; line-height: 1.3; }
 
