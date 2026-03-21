@@ -1374,10 +1374,7 @@ def main(config=None):
 
                 # ── Bellman backward-induction L_min ──────────────────────
                 try:
-                    bellman_cfg = BellmanConfig(
-                        N_R=50, N_eps=8, K_mc=500, M_actions=50,
-                        N_forward=5000, use_antithetic=True,
-                    )
+                    bellman_cfg = BellmanConfig(**cfg['bellman'])
                     # Memory estimate for terminal step: (N_R, N_eps^3, M_actions)
                     _mem_elements = bellman_cfg.N_R * bellman_cfg.N_eps**3 * bellman_cfg.M_actions
                     _mem_mb = _mem_elements * 8 / 1e6
