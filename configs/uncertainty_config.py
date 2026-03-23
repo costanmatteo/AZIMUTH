@@ -21,7 +21,7 @@ GLOBAL_UNCERTAINTY_CONFIG = {
     'ensemble_base_seed': 42,
 
     # SWAG configuration (used if uncertainty_method='swag')
-    'swag_start_epoch': 0.6,      # Start SWA at 60% of training
+    'swag_start_epoch': 0.9,      # Start SWA at 90% of training
     'swag_learning_rate': 0.005,  # LR during SWA phase
     'swag_max_rank': 20,          # Low-rank covariance dimension
     'swag_collection_freq': 1,    # Collect weights every N epochs
@@ -35,9 +35,9 @@ GLOBAL_UNCERTAINTY_CONFIG = {
 # Configurazione modello/training condivisa da tutti i processi ST
 DEFAULT_ST_UNCERTAINTY_PREDICTOR = {
     'model': {
-        'hidden_sizes': [256, 128, 64, 32],
-        'dropout_rate': 0.05,
-        'use_batchnorm': True,
+        'hidden_sizes': [64, 32],
+        'dropout_rate': 0.1,
+        'use_batchnorm': False,
         'min_variance': 1e-6,
     },
     'training': {

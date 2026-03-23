@@ -42,7 +42,7 @@ DATASET_MODE = 'st'
 # ═══════════════════════════════════════════════════════════════════════════════
 ST_DATASET_CONFIG = {
     # Numero di processi in sequenza
-    'n_processes': 3,
+    'n_processes': 15,
 
     # Numero di campioni da generare per processo
     'n_samples': 2000,
@@ -50,7 +50,7 @@ ST_DATASET_CONFIG = {
     # Coefficiente adattivo inter-processo per il surrogate.
     # τ_i = base_target + adaptive_coeff × (Y_{i-1} - τ_{i-1})  per i > 1
     # Se 0.0, tutti i processi usano un target fisso (base_target).
-    'adaptive_coeff': 0.3,
+    'adaptive_coeff': 0.8,
 
     # Parametri STConfig — ogni processo usa la stessa configurazione
     'st_params': {

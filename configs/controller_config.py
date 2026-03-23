@@ -113,13 +113,13 @@ CONTROLLER_CONFIG = {
 
     # Training parameters
     'training': {
-        'epochs': 100,  # Each epoch cycles through all training scenarios once
+        'epochs': 500,  # Each epoch cycles through all training scenarios once
         'batch_size': 3000,  # Total samples per epoch (split equally across scenarios)
         'learning_rate': 0.0019017383571692538,
         'weight_decay': 0.001,
         'lambda_bc': 0.001,  # Behavior cloning weight
         'reliability_loss_scale': 100.0,  # Scale factor for reliability loss (F - F*)^2
-        'patience': 50,
+        'patience': 200,
         'device': 'auto',
         'checkpoint_dir': 'controller_optimization/checkpoints/controller',
 
@@ -162,8 +162,8 @@ CONTROLLER_CONFIG = {
     # Scenario generation (train/test split)
     'scenarios': {
         'n_train': 1,        # Training scenarios (diverse operating conditions)
-        'n_test': 10,          # Test scenarios (final evaluation, never seen during training)
-        'seed_target': 50,     # Seed for target trajectory generation (train)
+        'n_test': 5,          # Test scenarios (final evaluation, never seen during training)
+        'seed_target': 64,     # Seed for target trajectory generation (train)
         'seed_baseline': 134,   # Seed for baseline process noise (same inputs, different noise)
         'test_seed_offset': 1000,  # Offset added to seeds for test scenarios (ensures different from train)
     },
@@ -194,7 +194,7 @@ CONTROLLER_CONFIG = {
     # Surrogate model
     'surrogate': {
         # Surrogate type: 'reliability_function' (mathematical formula) or 'casualit' (learned transformer)
-        'type': 'reliability_function',
+        'type': 'casualit',
 
         # Common settings
         'use_deterministic_sampling': False,  # True = use mean (stable), False = use sampling (stochastic)
@@ -223,12 +223,12 @@ CONTROLLER_CONFIG = {
 
     # Bellman backward-induction L_min
     'bellman': {
-        'N_R': 50,               # Grid points for remaining reliability R
-        'N_eps': 16,             # Grid points per noise dimension
+        'N_R': 20,               # Grid points for remaining reliability R
+        'N_eps': 6,             # Grid points per noise dimension
         'eps_range': 3.0,        # Noise range: [-eps_range, +eps_range]
         'R_min': -0.1,           # Lower bound of R grid
         'M_actions': 50,         # Number of action candidates per process
-        'K_mc': 500,             # MC samples for non-terminal steps
+        'K_mc': 200,             # MC samples for non-terminal steps
         'use_antithetic': True,  # Antithetic variates
         'N_forward': 5000,       # Forward simulation trajectories
         'sigma_shrinkage': 0.01, # Shrinkage for Sigma if not PD
