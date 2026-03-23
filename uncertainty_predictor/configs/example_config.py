@@ -30,8 +30,8 @@ CONFIG = {
     'model': {
         'model_type': 'custom',  # 'small', 'medium', 'large', or 'custom'
         # If 'custom', specify architecture below:
-        'hidden_sizes': [64, 32, 16],  # Used only if model_type='custom'
-        'dropout_rate': 0.1,
+        'hidden_sizes': [256, 128, 64, 32],  # Used only if model_type='custom'
+        'dropout_rate': 0.05,
         'use_batchnorm': True,
         'min_variance': 1e-6,  # Minimum variance for numerical stability
 
@@ -50,7 +50,7 @@ CONFIG = {
         #   | ensemble | Nx            | Yes       | Best     |
         #   | swag     | ~1.25x        | Yes       | Good     |
         # ═══════════════════════════════════════════════════════════════════
-        'uncertainty_method': 'single',  # 'single', 'ensemble', or 'swag'
+        'uncertainty_method': 'swag',  # 'single', 'ensemble', or 'swag'
 
         # ─────────────────────────────────────────────────────────────────────
         # Deep Ensemble configuration (used if uncertainty_method='ensemble')
@@ -78,11 +78,11 @@ CONFIG = {
 
         # Fraction of training to complete before starting SWA collection
         # 0.5 = start collecting weights at 50% of training
-        'swag_start_epoch': 0.5,
+        'swag_start_epoch': 0.6,
 
         # Learning rate during SWA phase (typically higher than final LR)
         # Higher LR helps explore the posterior better
-        'swag_learning_rate': 0.01,
+        'swag_learning_rate': 0.005,
 
         # Maximum rank for low-rank covariance approximation
         # Higher = more accurate but more memory. 20-30 is usually sufficient
@@ -102,11 +102,11 @@ CONFIG = {
 
     # Training configuration
     'training': {
-        'batch_size': 64,
-        'epochs': 400,
+        'batch_size': 32,
+        'epochs': 500,
         'learning_rate': 0.001,
-        'weight_decay': 0.001,  # L2 regularization
-        'patience': 30,  # Early stopping patience
+        'weight_decay': 0.0005,  # L2 regularization
+        'patience': 50,  # Early stopping patience
         'device': 'auto',  # 'auto', 'cuda', or 'cpu'
         'checkpoint_dir': 'checkpoints_uncertainty',
 
@@ -118,7 +118,7 @@ CONFIG = {
         # α = 1.0: Standard Gaussian NLL
         # α < 1.0: Reduces penalty for large variances (recommended for over-confident models)
         # α > 1.0: Increases penalty for large variances
-        'variance_penalty_alpha': 0.1,  
+        'variance_penalty_alpha': 1.5,
 
         # Energy Score parameters (used only if loss_type='energy_score')
         # Number of Monte Carlo samples for Energy Score computation
@@ -133,7 +133,7 @@ CONFIG = {
 
     # Uncertainty configuration
     'uncertainty': {
-        'confidence_level': 0.99,  # For prediction intervals (0.95, 0.99, etc.)
+        'confidence_level': 0.95,  # For prediction intervals (0.95, 0.99, etc.)
     },
 
     # Miscellaneous
