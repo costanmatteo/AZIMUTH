@@ -930,6 +930,7 @@ class SWAGTrainer:
             # Check if we should switch to SWA phase (scheduled start)
             if epoch >= swa_start and not in_swa_phase:
                 in_swa_phase = True
+                self.swa_start_actual = epoch
                 self._set_learning_rate(self.swa_learning_rate)
                 print(f"\n{'─'*50}")
                 print(f"Entering SWA collection phase (epoch {epoch+1})")
@@ -981,16 +982,23 @@ class SWAGTrainer:
 
             # Check if we can stop training
             n_samples_collected = self.swag_model.n_models_collected.item()
-            if epoch >= epochs:
-                if n_samples_collected >= self.min_samples:
-                    break
-                else:
-                    # Need more samples, continue training
-                    if epoch == epochs:  # Print message only once
-                        print(f"\n{'─'*50}")
-                        print(f"Extending training: only {n_samples_collected}/{self.min_samples} samples collected")
-                        print(f"Continuing until minimum samples reached...")
-                        print(f"{'─'*50}\n")
+
+            if in_swa_phase and n_samples_collected >= self.min_samples:
+                # Enough samples collected — stop training
+                if epoch < epochs:
+                    print(f"\n{'─'*50}")
+                    print(f"Collected {n_samples_collected}/{self.min_samples} SWA samples — stopping early at epoch {epoch}")
+                    print(f"{'─'*50}\n")
+                break
+
+            if epoch >= epochs and not in_swa_phase:
+                # Reached max epochs without entering SWA — force SWA phase
+                in_swa_phase = True
+                self._set_learning_rate(self.swa_learning_rate)
+                self.swa_start_actual = epoch
+                print(f"\n{'─'*50}")
+                print(f"Reached {epochs} epochs without SWA phase — starting SWA collection now")
+                print(f"{'─'*50}\n")
 
             # Safety check: don't run forever (max 2x original epochs)
             if epoch >= epochs * 2:

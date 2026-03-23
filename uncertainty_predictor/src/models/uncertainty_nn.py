@@ -103,6 +103,7 @@ class UncertaintyPredictor(nn.Module):
 
         # Predict variance (log-space for stability, then exp)
         log_variance = self.log_variance_head(features)
+        log_variance = torch.clamp(log_variance, min=-20.0, max=10.0)  # prevent inf/underflow
         variance = torch.exp(log_variance) + self.min_variance  # ensure positivity
 
         return mean, variance

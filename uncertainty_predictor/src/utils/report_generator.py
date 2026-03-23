@@ -26,7 +26,7 @@ except ImportError:
 
 # ── page geometry ─────────────────────────────────────────────────────────────
 PW, PH  = landscape(A4)
-M       = 1.1 * cm
+M       = 0.8 * cm
 HDR_H   = 1.6 * cm
 FTR_H   = 0.65 * cm
 LW      = 108 * mm
@@ -46,15 +46,15 @@ C_VGRAY = colors.HexColor('#F8F8F8')
 C_MUTED = colors.HexColor('#666666')
 
 # ── font sizes — match HTML reference exactly ─────────────────────────────────
-FS_TITLE   = 16    # "Uncertainty Quantification — Training Report"
-FS_META    = 8
+FS_TITLE   = 15    # "Uncertainty Quantification — Training Report"
+FS_META    = 7.5
 FS_SECTION = 7     # "01 — MODEL CONFIGURATION" uppercase
-FS_BODY    = 8     # all kv rows, table cells
-FS_KPI_LBL = 7     # "BEST VAL NLL" small caps label
-FS_KPI_VAL = 12    # "-0.5476" medium-bold value
-FS_KPI_SUB = 7     # "final -0.5024" sub line
-FS_CAPTION = 7
-FS_BADGE   = 7
+FS_BODY    = 7.5   # all kv rows, table cells
+FS_KPI_LBL = 6.5   # "BEST VAL NLL" small caps label
+FS_KPI_VAL = 11    # "-0.5476" medium-bold value
+FS_KPI_SUB = 6.5   # "final -0.5024" sub line
+FS_CAPTION = 6.5
+FS_BADGE   = 6.5
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -541,23 +541,13 @@ def _build_right(d):
     chk_dir = Path(d['config'].get('training',{}).get('checkpoint_dir','.'))
     F = []
 
-    avail = BODY_H - 100
-    h1 = avail * 0.22
-    h2 = avail * 0.26
-    h3 = avail * 0.48
-
-    # A and B: stacked, both use identical 2-column layout so plots align.
-    # half_w is the width of each individual plot slot in both sections.
-    p_val   = chk_dir / 'predictions_with_uncertainty.png'
-    p_train = chk_dir / 'training_predictions_with_uncertainty.png'
-    ev, et  = p_val.exists(), p_train.exists()
-    half_w  = (RW - 3*mm) / 2
+    avail = BODY_H - 80
+    h_ab = avail * 0.27
+    h_c  = avail * 0.38
 
     # ── Section A ──────────────────────────────────────────────────────────
     F += section_header("A \u2014 training history", RW)
-    # training_history.png contains NLL (left) and MSE (right) side by side.
-    # Scale it to exactly RW so its internal columns match half_w each.
-    a_img = scale_img(chk_dir / 'training_history.png', RW, h1)
+    a_img = scale_img(chk_dir / 'training_history.png', RW, h_ab)
     a_img.hAlign = 'LEFT'
     F.append(a_img)
     F.append(Paragraph("Training and Validation Loss (NLL and MSE)", ST_CAPTION))
@@ -565,41 +555,19 @@ def _build_right(d):
 
     # ── Section B ──────────────────────────────────────────────────────────
     F += section_header("B \u2014 predictions with uncertainty", RW)
-    if ev and et:
-        b_tbl = Table(
-            [[scale_img(p_val,   half_w, h2), scale_img(p_train, half_w, h2)],
-             [Paragraph("Validation Predictions with Uncertainty Bounds", ST_CAPTION),
-              Paragraph("Training Data with Uncertainty Bounds",          ST_CAPTION)]],
-            colWidths=[half_w, half_w])
-        b_tbl.setStyle(TableStyle([
-            ('VALIGN',        (0,0),(-1,-1), 'TOP'),
-            ('LEFTPADDING',   (0,0),(-1,-1), 0),
-            ('RIGHTPADDING',  (0,0),(-1,-1), 0),
-            ('TOPPADDING',    (0,0),(-1,-1), 0),
-            ('BOTTOMPADDING', (0,0),(-1,-1), 2),
-        ]))
-        F.append(b_tbl)
-    elif ev:
-        F.append(scale_img(p_val, RW, h2))
-        F.append(Paragraph("Validation Predictions with Uncertainty Bounds", ST_CAPTION))
-    elif et:
-        F.append(scale_img(p_train, RW, h2))
-        F.append(Paragraph("Training Data with Uncertainty Bounds", ST_CAPTION))
+    p_combined = chk_dir / 'predictions_combined.png'
+    if p_combined.exists():
+        b_img = scale_img(p_combined, RW, h_ab)
+        b_img.hAlign = 'LEFT'
+        F.append(b_img)
+        F.append(Paragraph("Training and Validation Predictions with Uncertainty Bounds", ST_CAPTION))
     else:
-        b_tbl = Table(
-            [[_placeholder(p_val.name, half_w, h2),
-              _placeholder(p_train.name, half_w, h2)]],
-            colWidths=[half_w, half_w])
-        b_tbl.setStyle(TableStyle([
-            ('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0),
-            ('TOPPADDING',(0,0),(-1,-1),0),('BOTTOMPADDING',(0,0),(-1,-1),0),
-        ]))
-        F.append(b_tbl)
+        F.append(_placeholder('predictions_combined.png', RW, h_ab))
     F.append(Spacer(1, 3))
 
-        # C — scatter
+    # ── Section C ──────────────────────────────────────────────────────────
     F += section_header("C \u2014 scatter with uncertainty coloring", RW)
-    F.append(scale_img(chk_dir / 'scatter_with_uncertainty.png', RW, h3))
+    F.append(scale_img(chk_dir / 'scatter_with_uncertainty.png', RW, h_c))
     F.append(Paragraph("Scatter Plot with Uncertainty Coloring", ST_CAPTION))
 
     return F
