@@ -82,6 +82,14 @@ ST_DATASET_CONFIG = {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# TRAINING DATASET PATH
+# ═══════════════════════════════════════════════════════════════════════════════
+# Path al dataset pre-generato di traiettorie. Se il file esiste,
+# train_processes.py lo carica invece di generare i dati al volo.
+# Può essere sovrascritto da CLI. Impostare a None per generare sempre al volo.
+TRAINING_DATASET_PATH = 'data/training_trajectories.parquet'
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # GLOBAL UNCERTAINTY CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════════════════
 # These settings apply to ALL processes unless overridden in process-specific config

@@ -83,7 +83,7 @@ uq_viz = importlib.util.module_from_spec(spec_viz)
 spec_viz.loader.exec_module(uq_viz)
 
 
-def train_single_process(process_config, device='auto', verbose=True, seed=42):
+def train_single_process(process_config, device='auto', verbose=True, seed=42, trajectories_df=None):
     """
     Addestra uncertainty predictor per un processo e genera report.
 
@@ -92,6 +92,9 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
         device (str): 'cuda', 'cpu', o 'auto'
         verbose (bool): Print progress
         seed (int): Random seed
+        trajectories_df (pd.DataFrame, optional): DataFrame di traiettorie pre-generate.
+            Se fornito, estrae i dati per questo processo dal DataFrame condiviso
+            invece di chiamare generate_scm_data().
 
     Returns:
         dict: {
@@ -135,22 +138,32 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
         print(f"Training Uncertainty Predictor for Process: {process_name.upper()}")
         print(f"{'='*70}")
 
-    # 1. Generate SCM dataset
-    if verbose:
-        print(f"\n[1/9] Generating SCM dataset ({scm_dataset_type})...")
+    # 1. Load or generate SCM dataset
+    if trajectories_df is not None:
+        if verbose:
+            print(f"\n[1/9] Extracting data for '{process_name}' from shared trajectories...")
+        from controller_optimization.src.training.trajectory_loader import extract_process_data
+        X, y = extract_process_data(trajectories_df, process_config)
+        input_cols = input_labels
+        output_cols = output_labels
+        if verbose:
+            print(f"  Extracted: {X.shape[0]} samples, {X.shape[1]} inputs, {y.shape[1]} outputs")
+    else:
+        if verbose:
+            print(f"\n[1/9] Generating SCM dataset ({scm_dataset_type})...")
 
-    # Per processi ST, passa st_params per costruire lo SCM
-    extra_kwargs = {}
-    if scm_dataset_type == 'st' and 'st_params' in process_config:
-        extra_kwargs['st_params'] = process_config['st_params']
+        # Per processi ST, passa st_params per costruire lo SCM
+        extra_kwargs = {}
+        if scm_dataset_type == 'st' and 'st_params' in process_config:
+            extra_kwargs['st_params'] = process_config['st_params']
 
-    X, y, input_cols, output_cols = generate_scm_data(
-        n_samples=training_config['n_samples'],
-        seed=seed,
-        dataset_type=scm_dataset_type,
-        save_graph_to=checkpoint_dir,  # Save SCM graph
-        **extra_kwargs
-    )
+        X, y, input_cols, output_cols = generate_scm_data(
+            n_samples=training_config['n_samples'],
+            seed=seed,
+            dataset_type=scm_dataset_type,
+            save_graph_to=checkpoint_dir,  # Save SCM graph
+            **extra_kwargs
+        )
 
     # 2. Preprocessing
     if verbose:

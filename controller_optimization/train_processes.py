@@ -22,8 +22,10 @@ sys.path.insert(0, str(REPO_ROOT))
 from controller_optimization.configs.processes_config import (
     PROCESSES, DATASET_MODE, get_process_by_name,
     ST_DATASET_CONFIG, _build_st_processes,
+    TRAINING_DATASET_PATH,
 )
 from controller_optimization.src.training.process_trainer import train_single_process
+from controller_optimization.src.training.trajectory_loader import load_or_generate_trajectories
 
 # Import report combining function
 import importlib.util
@@ -81,8 +83,14 @@ def main():
                         help='Number of ST processes in sequence (overrides n_processes)')
     parser.add_argument('--checkpoint_base_dir', type=str, default=None,
                         help='Override base checkpoint dir for all processes')
+    parser.add_argument('--dataset_path', type=str, default=None,
+                        help='Path to pre-generated trajectories dataset (parquet/csv). '
+                             'Overrides TRAINING_DATASET_PATH from config.')
 
     args = parser.parse_args()
+
+    # Resolve dataset path: CLI > config > None
+    dataset_path = args.dataset_path or TRAINING_DATASET_PATH
 
     # If ST dataset params are overridden via CLI, rebuild processes dynamically
     _st_overrides = {
@@ -130,6 +138,17 @@ def main():
     print(f"Device: {args.device}")
     print(f"Skip existing: {args.skip_existing}")
     print(f"Random seed: {args.seed}")
+
+    # Pre-load or generate the shared trajectory dataset
+    print(f"\n{'='*70}")
+    print("LOADING TRAINING TRAJECTORIES")
+    print(f"{'='*70}")
+    trajectories_df = load_or_generate_trajectories(
+        process_configs=_current_processes,
+        dataset_path=dataset_path,
+        n_samples=_current_processes[0]['uncertainty_predictor']['training'].get('n_samples', 5000),
+        seed=args.seed,
+    )
 
     # Storage for results
     all_results = {}
@@ -243,7 +262,8 @@ def main():
                 process_config=process_config,
                 device=args.device,
                 verbose=True,
-                seed=args.seed
+                seed=args.seed,
+                trajectories_df=trajectories_df,
             )
 
             all_results[process_name] = result
