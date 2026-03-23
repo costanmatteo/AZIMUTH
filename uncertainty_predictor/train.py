@@ -81,6 +81,8 @@ def main():
             )
             input_columns = CONFIG['data']['input_columns']
             output_columns = CONFIG['data']['output_columns']
+            env_columns = CONFIG['data'].get('env_columns', [])
+            control_columns = [c for c in input_columns if c not in env_columns]
         except FileNotFoundError:
             print(f"\nERROR: File not found: {csv_path}")
             print("\nTo test the system, create a sample CSV file with:")
@@ -96,12 +98,14 @@ def main():
         seed = scm_config.get('seed', 42)
         dataset_type = scm_config.get('dataset_type', 'one_to_one_ct')
 
-        X, y, input_columns, output_columns, _E, _env_cols = generate_scm_data(
+        X, y, input_columns, output_columns, E, env_columns = generate_scm_data(
             n_samples=n_samples,
             seed=seed,
             dataset_type=dataset_type,
             save_graph_to=CONFIG['training']['checkpoint_dir']
         )
+        # Identify which input columns are controllable vs environmental
+        control_columns = [c for c in input_columns if c not in env_columns]
     else:
         print("\nERROR: No data source specified.")
         print("Either provide a valid csv_path or enable use_scm in configs/example_config.py")
@@ -445,6 +449,22 @@ def main():
     # Save scaler for future use
     scaler_path = Path(CONFIG['training']['checkpoint_dir']) / 'scalers.pkl'
     preprocessor.save_scalers(scaler_path)
+
+    # Save column metadata: which inputs are controllable vs environmental
+    import json
+    column_meta = {
+        'input_columns': input_columns,
+        'output_columns': output_columns,
+        'control_columns': control_columns,
+        'env_columns': env_columns,
+    }
+    meta_path = Path(CONFIG['training']['checkpoint_dir']) / 'column_metadata.json'
+    with open(meta_path, 'w') as f:
+        json.dump(column_meta, f, indent=2)
+    print(f"  Column metadata saved: {meta_path}")
+    if column_meta['env_columns']:
+        print(f"    Control columns: {column_meta['control_columns']}")
+        print(f"    Environmental columns (not controllable): {column_meta['env_columns']}")
 
     # 8. VISUALIZATIONS
     print("\nGenerating visualizations...")
