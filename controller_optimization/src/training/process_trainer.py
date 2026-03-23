@@ -452,6 +452,23 @@ def train_single_process(process_config, train_loader, val_loader, test_loader,
         y_pred_epistemic=y_train_pred_epistemic_orig if (use_ensemble or use_swag) else None
     )
 
+    # Combined predictions plot (validation + training side by side in one PNG)
+    _decomp = use_ensemble or use_swag
+    uq_viz.plot_combined_predictions_with_uncertainty(
+        y_true_val=targets,
+        y_pred_mean_val=means,
+        y_pred_variance_val=variances,
+        y_true_train=y_train_orig,
+        y_pred_mean_train=y_train_pred_mean_orig,
+        y_pred_variance_train=y_train_pred_variance_orig,
+        output_names=output_labels,
+        save_path=str(checkpoint_dir / 'predictions_combined.png'),
+        y_pred_aleatoric_val=aleatorics if _decomp else None,
+        y_pred_epistemic_val=epistemics if _decomp else None,
+        y_pred_aleatoric_train=y_train_pred_aleatoric_orig if _decomp else None,
+        y_pred_epistemic_train=y_train_pred_epistemic_orig if _decomp else None
+    )
+
     # Scatter plot with uncertainty
     uq_viz.plot_scatter_with_uncertainty(
         y_true=targets,

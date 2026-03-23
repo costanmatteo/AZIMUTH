@@ -546,17 +546,9 @@ def _build_right(d):
     h2 = avail * 0.26
     h3 = avail * 0.48
 
-    # A and B: stacked, both use identical 2-column layout so plots align.
-    # half_w is the width of each individual plot slot in both sections.
-    p_val   = chk_dir / 'predictions_with_uncertainty.png'
-    p_train = chk_dir / 'training_predictions_with_uncertainty.png'
-    ev, et  = p_val.exists(), p_train.exists()
-    half_w  = (RW - 3*mm) / 2
-
     # ── Section A ──────────────────────────────────────────────────────────
     F += section_header("A \u2014 training history", RW)
     # training_history.png contains NLL (left) and MSE (right) side by side.
-    # Scale it to exactly RW so its internal columns match half_w each.
     a_img = scale_img(chk_dir / 'training_history.png', RW, h1)
     a_img.hAlign = 'LEFT'
     F.append(a_img)
@@ -565,36 +557,14 @@ def _build_right(d):
 
     # ── Section B ──────────────────────────────────────────────────────────
     F += section_header("B \u2014 predictions with uncertainty", RW)
-    if ev and et:
-        b_tbl = Table(
-            [[scale_img(p_val,   half_w, h2), scale_img(p_train, half_w, h2)],
-             [Paragraph("Validation Predictions with Uncertainty Bounds", ST_CAPTION),
-              Paragraph("Training Data with Uncertainty Bounds",          ST_CAPTION)]],
-            colWidths=[half_w, half_w])
-        b_tbl.setStyle(TableStyle([
-            ('VALIGN',        (0,0),(-1,-1), 'TOP'),
-            ('LEFTPADDING',   (0,0),(-1,-1), 0),
-            ('RIGHTPADDING',  (0,0),(-1,-1), 0),
-            ('TOPPADDING',    (0,0),(-1,-1), 0),
-            ('BOTTOMPADDING', (0,0),(-1,-1), 2),
-        ]))
-        F.append(b_tbl)
-    elif ev:
-        F.append(scale_img(p_val, RW, h2))
-        F.append(Paragraph("Validation Predictions with Uncertainty Bounds", ST_CAPTION))
-    elif et:
-        F.append(scale_img(p_train, RW, h2))
-        F.append(Paragraph("Training Data with Uncertainty Bounds", ST_CAPTION))
+    p_combined = chk_dir / 'predictions_combined.png'
+    if p_combined.exists():
+        b_img = scale_img(p_combined, RW, h2)
+        b_img.hAlign = 'LEFT'
+        F.append(b_img)
+        F.append(Paragraph("Validation and Training Predictions with Uncertainty Bounds", ST_CAPTION))
     else:
-        b_tbl = Table(
-            [[_placeholder(p_val.name, half_w, h2),
-              _placeholder(p_train.name, half_w, h2)]],
-            colWidths=[half_w, half_w])
-        b_tbl.setStyle(TableStyle([
-            ('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0),
-            ('TOPPADDING',(0,0),(-1,-1),0),('BOTTOMPADDING',(0,0),(-1,-1),0),
-        ]))
-        F.append(b_tbl)
+        F.append(_placeholder('predictions_combined.png', RW, h2))
     F.append(Spacer(1, 3))
 
         # C — scatter

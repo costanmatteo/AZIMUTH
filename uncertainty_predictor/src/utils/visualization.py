@@ -230,6 +230,103 @@ def plot_predictions_with_uncertainty(y_true, y_pred_mean, y_pred_variance,
     plt.close()
 
 
+def plot_combined_predictions_with_uncertainty(
+        y_true_val, y_pred_mean_val, y_pred_variance_val,
+        y_true_train, y_pred_mean_train, y_pred_variance_train,
+        output_names=None, save_path=None, confidence=0.95,
+        y_pred_aleatoric_val=None, y_pred_epistemic_val=None,
+        y_pred_aleatoric_train=None, y_pred_epistemic_train=None):
+    """
+    Plot validation and training predictions with uncertainty in a single
+    combined figure (left column = validation, right column = training).
+    """
+    apply_plot_style()
+
+    # Ensure 2-D
+    def _to2d(arr):
+        return arr.reshape(-1, 1) if arr is not None and len(arr.shape) == 1 else arr
+
+    y_true_val        = _to2d(y_true_val)
+    y_pred_mean_val   = _to2d(y_pred_mean_val)
+    y_pred_variance_val = _to2d(y_pred_variance_val)
+    y_pred_aleatoric_val  = _to2d(y_pred_aleatoric_val)
+    y_pred_epistemic_val  = _to2d(y_pred_epistemic_val)
+    y_true_train      = _to2d(y_true_train)
+    y_pred_mean_train = _to2d(y_pred_mean_train)
+    y_pred_variance_train = _to2d(y_pred_variance_train)
+    y_pred_aleatoric_train = _to2d(y_pred_aleatoric_train)
+    y_pred_epistemic_train = _to2d(y_pred_epistemic_train)
+
+    n_outputs = y_true_val.shape[1]
+    if output_names is None:
+        output_names = [f"Output {i+1}" for i in range(n_outputs)]
+
+    from scipy import stats
+    z_score = stats.norm.ppf((1 + confidence) / 2)
+
+    fig, axes = plt.subplots(n_outputs, 2, figsize=(12, 5 * n_outputs),
+                             squeeze=False)
+
+    for col_idx, (y_t, y_p, y_v, y_a, y_e, col_title) in enumerate([
+        (y_true_val, y_pred_mean_val, y_pred_variance_val,
+         y_pred_aleatoric_val, y_pred_epistemic_val, "Validation"),
+        (y_true_train, y_pred_mean_train, y_pred_variance_train,
+         y_pred_aleatoric_train, y_pred_epistemic_train, "Training"),
+    ]):
+        use_decomp = y_a is not None and y_e is not None
+        for i, name in enumerate(output_names):
+            ax = axes[i, col_idx]
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+
+            yt = y_t[:, i]
+            yp = y_p[:, i]
+            yv = y_v[:, i]
+            ystd = np.sqrt(yv)
+
+            sort_idx = np.argsort(yp)
+            yt_s = yt[sort_idx]
+            yp_s = yp[sort_idx]
+            ystd_s = ystd[sort_idx]
+            x_range = range(len(yp_s))
+
+            if use_decomp:
+                std_a_s = np.sqrt(y_a[:, i])[sort_idx]
+                ax.fill_between(x_range,
+                                yp_s - z_score * ystd_s,
+                                yp_s + z_score * ystd_s,
+                                alpha=0.2, color='orange',
+                                label=f'Epistemic ({int(confidence*100)}% CI)')
+                ax.fill_between(x_range,
+                                yp_s - z_score * std_a_s,
+                                yp_s + z_score * std_a_s,
+                                alpha=0.4, color='blue',
+                                label=f'Aleatoric ({int(confidence*100)}% CI)')
+            else:
+                ax.fill_between(x_range,
+                                yp_s - z_score * ystd_s,
+                                yp_s + z_score * ystd_s,
+                                alpha=0.3, color='blue',
+                                label=f'{int(confidence*100)}% Prediction Interval')
+
+            ax.plot(yp_s, 'b-', linewidth=2, label='Predicted Mean', alpha=0.7)
+            ax.plot(yt_s, 'ro', markersize=3, label='True Values', alpha=0.6)
+
+            ax.set_xlabel('Sample (sorted by prediction)')
+            ax.set_ylabel('Value')
+            ax.set_title(f'{col_title} — {name}')
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Combined predictions with uncertainty plot saved: {save_path}")
+
+    plt.close()
+
+
 def plot_scatter_with_uncertainty(y_true, y_pred_mean, y_pred_variance,
                                   output_names=None, save_path=None):
     """
