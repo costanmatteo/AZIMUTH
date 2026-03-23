@@ -11,6 +11,9 @@ Ogni processo specifica:
 DATASET_MODE controlla quale famiglia di dataset SCM usare:
   - 'physical': 4 processi fisici hardcoded (laser, plasma, galvanic, microetch)
   - 'st': N processi identici basati su Styblinski-Tang, configurabili via ST_DATASET_CONFIG
+
+La configurazione dell'uncertainty predictor è definita in configs/uncertainty_config.py
+e viene iniettata automaticamente nei dizionari di processo.
 """
 
 import sys
@@ -20,6 +23,12 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
+
+from configs.uncertainty_config import (  # noqa: E402
+    GLOBAL_UNCERTAINTY_CONFIG,
+    DEFAULT_ST_UNCERTAINTY_PREDICTOR,
+    PHYSICAL_UNCERTAINTY_PREDICTORS,
+)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # DATASET MODE SELECTION
@@ -60,48 +69,10 @@ ST_DATASET_CONFIG = {
         'cal_width_factor': 1.0,
     },
 
-    # Configurazione uncertainty predictor (uguale per tutti i processi ST)
-    'uncertainty_predictor': {
-        'model': {
-            'hidden_sizes': [256, 128, 64, 32],
-            'dropout_rate': 0.05,
-            'use_batchnorm': True,
-            'min_variance': 1e-6,
-        },
-        'training': {
-            'n_samples': 2000,
-            'batch_size': 32,
-            'epochs': 500,
-            'learning_rate': 0.001,
-            'weight_decay': 0.001,
-            'patience': 50,
-            'loss_type': 'gaussian_nll',
-            'variance_penalty_alpha': 1.0,
-        }
-    },
+    # Configurazione uncertainty predictor: importata da uncertainty_config.py
+    'uncertainty_predictor': DEFAULT_ST_UNCERTAINTY_PREDICTOR,
 }
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# GLOBAL UNCERTAINTY CONFIGURATION
-# ═══════════════════════════════════════════════════════════════════════════════
-# These settings apply to ALL processes unless overridden in process-specific config
-GLOBAL_UNCERTAINTY_CONFIG = {
-    # Uncertainty quantification method: 'single', 'ensemble', or 'swag'
-    'uncertainty_method': 'swag',
-
-    # Deep Ensemble configuration (used if uncertainty_method='ensemble')
-    'use_ensemble': False,  # DEPRECATED: use uncertainty_method='ensemble'
-    'n_ensemble_models': 5,
-    'ensemble_base_seed': 42,
-
-    # SWAG configuration (used if uncertainty_method='swag')
-    'swag_start_epoch': 0.6,      # Start SWA at 60% of training
-    'swag_learning_rate': 0.005,  # LR during SWA phase
-    'swag_max_rank': 20,          # Low-rank covariance dimension
-    'swag_collection_freq': 1,    # Collect weights every N epochs
-    'swag_n_samples': 30,         # Weight samples for prediction
-    'swag_min_samples': 20,       # Minimum samples before training can stop
-}
 # ═══════════════════════════════════════════════════════════════════════════════
 
 _PHYSICAL_PROCESSES = [
@@ -113,29 +84,7 @@ _PHYSICAL_PROCESSES = [
         'input_labels': ['PowerTarget', 'AmbientTemp'],
         'output_labels': ['ActualPower'],
         'controllable_inputs': ['PowerTarget'],  # AmbientTemp is environmental (non-controllable)
-
-        # Process-specific model settings (override global if needed)
-        'uncertainty_predictor': {
-            'model': {
-                'hidden_sizes': [64, 32],
-                'dropout_rate': 0.1,
-                'use_batchnorm': False,
-                'min_variance': 1e-6,
-                # Override global uncertainty_method here if needed for this process only
-                # 'uncertainty_method': 'swag',
-            },
-            'training': {
-                'n_samples': 2000,
-                'batch_size': 64,
-                'epochs': 200,
-                'learning_rate': 0.001,
-                'weight_decay': 0.001,
-                'patience': 30,
-                'loss_type': 'gaussian_nll',
-                'variance_penalty_alpha': 1,
-            }
-        },
-
+        'uncertainty_predictor': PHYSICAL_UNCERTAINTY_PREDICTORS['laser'],
         'checkpoint_dir': 'controller_optimization/checkpoints/laser',
     },
 
@@ -147,26 +96,7 @@ _PHYSICAL_PROCESSES = [
         'input_labels': ['RF_Power', 'Duration'],
         'output_labels': ['RemovalRate'],
         'controllable_inputs': ['RF_Power'],
-
-        'uncertainty_predictor': {
-            'model': {
-                'hidden_sizes': [64, 32],
-                'dropout_rate': 0.1,
-                'use_batchnorm': False,
-                'min_variance': 1e-6,
-            },
-            'training': {
-                'n_samples': 2000,
-                'batch_size': 64,
-                'epochs': 200,
-                'learning_rate': 0.001,
-                'weight_decay': 0.001,
-                'patience': 30,
-                'loss_type': 'gaussian_nll',
-                'variance_penalty_alpha': 0.5,
-            }
-        },
-
+        'uncertainty_predictor': PHYSICAL_UNCERTAINTY_PREDICTORS['plasma'],
         'checkpoint_dir': 'controller_optimization/checkpoints/plasma',
     },
 
@@ -178,26 +108,7 @@ _PHYSICAL_PROCESSES = [
         'input_labels': ['CurrentDensity', 'Duration'],
         'output_labels': ['Thickness'],
         'controllable_inputs': ['CurrentDensity', 'Duration'],
-
-        'uncertainty_predictor': {
-            'model': {
-                'hidden_sizes': [32, 16],
-                'dropout_rate': 0.1,
-                'use_batchnorm': False,
-                'min_variance': 1e-6,
-            },
-            'training': {
-                'n_samples': 2000,
-                'batch_size': 645,
-                'epochs': 200,
-                'learning_rate': 0.001,
-                'weight_decay': 0.001,
-                'patience': 30,
-                'loss_type': 'gaussian_nll',
-                'variance_penalty_alpha': 2,
-            }
-        },
-
+        'uncertainty_predictor': PHYSICAL_UNCERTAINTY_PREDICTORS['galvanic'],
         'checkpoint_dir': 'controller_optimization/checkpoints/galvanic',
     },
 
@@ -209,26 +120,7 @@ _PHYSICAL_PROCESSES = [
         'input_labels': ['Temperature', 'Concentration', 'Duration'],
         'output_labels': ['RemovalDepth'],
         'controllable_inputs': ['Concentration', 'Duration'],
-
-        'uncertainty_predictor': {
-            'model': {
-                'hidden_sizes': [64, 32, 16],
-                'dropout_rate': 0.1,
-                'use_batchnorm': False,
-                'min_variance': 1e-6,
-            },
-            'training': {
-                'n_samples': 2000,
-                'batch_size': 64,
-                'epochs': 200,
-                'learning_rate': 0.001,
-                'weight_decay': 0.001,
-                'patience': 30,
-                'loss_type': 'gaussian_nll',
-                'variance_penalty_alpha': 2,
-            }
-        },
-
+        'uncertainty_predictor': PHYSICAL_UNCERTAINTY_PREDICTORS['microetch'],
         'checkpoint_dir': 'controller_optimization/checkpoints/microetch',
     },
 ]

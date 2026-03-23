@@ -119,7 +119,7 @@ def train_single_process(process_config, train_loader, val_loader, test_loader,
     np.random.seed(seed)
 
     # Import global uncertainty config
-    from configs.processes_config import GLOBAL_UNCERTAINTY_CONFIG
+    from configs.uncertainty_config import GLOBAL_UNCERTAINTY_CONFIG
 
     # Extract config
     process_name = process_config['name']
