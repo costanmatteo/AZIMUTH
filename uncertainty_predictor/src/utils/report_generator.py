@@ -46,15 +46,15 @@ C_VGRAY = colors.HexColor('#F8F8F8')
 C_MUTED = colors.HexColor('#666666')
 
 # ── font sizes — match HTML reference exactly ─────────────────────────────────
-FS_TITLE   = 16    # "Uncertainty Quantification — Training Report"
-FS_META    = 8
-FS_SECTION = 7     # "01 — MODEL CONFIGURATION" uppercase
-FS_BODY    = 8     # all kv rows, table cells
-FS_KPI_LBL = 7     # "BEST VAL NLL" small caps label
-FS_KPI_VAL = 12    # "-0.5476" medium-bold value
-FS_KPI_SUB = 7     # "final -0.5024" sub line
-FS_CAPTION = 7
-FS_BADGE   = 7
+FS_TITLE   = 14    # "Uncertainty Quantification — Training Report"
+FS_META    = 6.5
+FS_SECTION = 6     # "01 — MODEL CONFIGURATION" uppercase
+FS_BODY    = 6.5   # all kv rows, table cells
+FS_KPI_LBL = 6     # "BEST VAL NLL" small caps label
+FS_KPI_VAL = 10    # "-0.5476" medium-bold value
+FS_KPI_SUB = 6     # "final -0.5024" sub line
+FS_CAPTION = 6
+FS_BADGE   = 6
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -530,6 +530,14 @@ def _build_left(d):
         f"Confidence level: {conf*100:.0f}%  \u00b7  Random seed: {rseed}",
         _s('_misc', FS_BODY)))
 
+    # ── Section A — training history (at bottom of left column) ────────────
+    chk_dir = Path(cfg.get('training',{}).get('checkpoint_dir','.'))
+    F += section_header("A \u2014 training history", LW)
+    a_img = scale_img(chk_dir / 'training_history.png', LW, BODY_H * 0.18)
+    a_img.hAlign = 'LEFT'
+    F.append(a_img)
+    F.append(Paragraph("Training and Validation Loss (NLL and MSE)", ST_CAPTION))
+
     return F
 
 
@@ -541,35 +549,25 @@ def _build_right(d):
     chk_dir = Path(d['config'].get('training',{}).get('checkpoint_dir','.'))
     F = []
 
-    avail = BODY_H - 100
-    h1 = avail * 0.22
-    h2 = avail * 0.26
-    h3 = avail * 0.48
-
-    # ── Section A ──────────────────────────────────────────────────────────
-    F += section_header("A \u2014 training history", RW)
-    # training_history.png contains NLL (left) and MSE (right) side by side.
-    a_img = scale_img(chk_dir / 'training_history.png', RW, h1)
-    a_img.hAlign = 'LEFT'
-    F.append(a_img)
-    F.append(Paragraph("Training and Validation Loss (NLL and MSE)", ST_CAPTION))
-    F.append(Spacer(1, 3))
+    avail = BODY_H - 60
+    h_b = avail * 0.55
+    h_c = avail * 0.45
 
     # ── Section B ──────────────────────────────────────────────────────────
     F += section_header("B \u2014 predictions with uncertainty", RW)
     p_combined = chk_dir / 'predictions_combined.png'
     if p_combined.exists():
-        b_img = scale_img(p_combined, RW, h2)
+        b_img = scale_img(p_combined, RW, h_b)
         b_img.hAlign = 'LEFT'
         F.append(b_img)
         F.append(Paragraph("Validation and Training Predictions with Uncertainty Bounds", ST_CAPTION))
     else:
-        F.append(_placeholder('predictions_combined.png', RW, h2))
+        F.append(_placeholder('predictions_combined.png', RW, h_b))
     F.append(Spacer(1, 3))
 
-        # C — scatter
+    # ── Section C ──────────────────────────────────────────────────────────
     F += section_header("C \u2014 scatter with uncertainty coloring", RW)
-    F.append(scale_img(chk_dir / 'scatter_with_uncertainty.png', RW, h3))
+    F.append(scale_img(chk_dir / 'scatter_with_uncertainty.png', RW, h_c))
     F.append(Paragraph("Scatter Plot with Uncertainty Coloring", ST_CAPTION))
 
     return F
