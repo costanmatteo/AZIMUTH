@@ -84,7 +84,7 @@ def plot_training_history(train_losses, val_losses, train_mse=None, val_mse=None
     axes[0].set_xlabel('Epoch')
     axes[0].set_ylabel('Negative Log-Likelihood')
     axes[0].set_title('Training History - NLL Loss')
-    axes[0].legend()
+    axes[0].legend(loc='upper left', fontsize=8.5)
     axes[0].grid(True, alpha=0.3)
 
     # Plot MSE if provided
@@ -100,7 +100,7 @@ def plot_training_history(train_losses, val_losses, train_mse=None, val_mse=None
         axes[1].set_xlabel('Epoch')
         axes[1].set_ylabel('Mean Squared Error')
         axes[1].set_title('Training History - MSE')
-        axes[1].legend()
+        axes[1].legend(loc='upper left', fontsize=8.5)
         axes[1].grid(True, alpha=0.3)
 
     plt.tight_layout()
@@ -315,7 +315,7 @@ def plot_combined_predictions_with_uncertainty(
             ax.set_xlabel('Sample (sorted by prediction)')
             ax.set_ylabel('Value')
             ax.set_title(f'{col_title} — {name}')
-            ax.legend()
+            ax.legend(fontsize=8.5)
             ax.grid(True, alpha=0.3)
 
     plt.tight_layout()

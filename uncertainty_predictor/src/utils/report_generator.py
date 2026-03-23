@@ -542,8 +542,8 @@ def _build_right(d):
     F = []
 
     avail = BODY_H - 80
-    h_ab = avail * 0.30
-    h_c  = avail * 0.32
+    h_ab = avail * 0.27
+    h_c  = avail * 0.38
 
     # ── Section A ──────────────────────────────────────────────────────────
     F += section_header("A \u2014 training history", RW)
