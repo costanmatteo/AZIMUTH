@@ -73,10 +73,10 @@ ST_DATASET_CONFIG = {
             'batch_size': 32,
             'epochs': 500,
             'learning_rate': 0.001,
-            'weight_decay': 0.0005,
+            'weight_decay': 0.001,
             'patience': 50,
             'loss_type': 'gaussian_nll',
-            'variance_penalty_alpha': 1.5,
+            'variance_penalty_alpha': 1.0,
         }
     },
 }
