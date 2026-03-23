@@ -271,21 +271,15 @@ def generate_scm_data(n_samples=5000, seed=42, dataset_type='one_to_one_ct', sav
     df = scm_dataset.sample(n=n_samples, seed=seed)
 
     # Extract input, environmental, and output columns
-    all_input_labels = list(scm_dataset.input_labels)
+    control_columns = list(scm_dataset.input_labels)
     output_columns = list(scm_dataset.target_labels)
 
     env_columns = []
     if hasattr(scm_dataset, 'structural_noise_vars'):
         env_columns = list(scm_dataset.structural_noise_vars)
 
-    # Control columns = input_labels minus env vars
-    control_columns = [c for c in all_input_labels if c not in env_columns]
-
-    # For ST datasets, env vars are NOT in input_labels → append them
-    # For physical datasets, env vars are already in input_labels
-    input_columns = list(all_input_labels)
-    if dataset_type == 'st':
-        input_columns = input_columns + env_columns
+    # X includes both control + env columns (for backward compatibility with UP)
+    input_columns = control_columns + env_columns
 
     X = df[input_columns].values
     y = df[output_columns].values
