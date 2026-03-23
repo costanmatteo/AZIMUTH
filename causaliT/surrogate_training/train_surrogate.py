@@ -159,7 +159,7 @@ class SurrogateTrainer:
         self.best_epoch = 0
 
     def load_data(self, data_dir: str):
-        """Load training data from disk."""
+        """Load training data from disk (npy format)."""
         data_path = Path(data_dir)
 
         print(f"\nLoading data from {data_path}...")
@@ -192,6 +192,115 @@ class SurrogateTrainer:
         self.test_X = torch.tensor(test_X, dtype=torch.float32)
         self.test_Y = torch.tensor(test_Y, dtype=torch.float32).squeeze()
         self.metadata = metadata
+
+        return metadata
+
+    def load_data_from_parquet(self, parquet_path: str, train_ratio=0.7,
+                                val_ratio=0.15, seed=42):
+        """
+        Load training data from trajectories_full.parquet (Phase 1 output).
+
+        The parquet contains columns: {proc}_input_{j}, {proc}_output_{j}, F
+        This method reshapes the data into (n_samples, n_processes, features)
+        where each process token = concat(inputs, outputs).
+
+        Args:
+            parquet_path: Path to trajectories_full.parquet
+            train_ratio: Fraction of data for training
+            val_ratio: Fraction of data for validation
+            seed: Random seed for split
+
+        Returns:
+            metadata dict
+        """
+        import pandas as pd
+        import json
+
+        parquet_file = Path(parquet_path)
+        print(f"\nLoading data from {parquet_file}...")
+
+        df = pd.read_parquet(parquet_file)
+        n_samples = len(df)
+        print(f"  Total samples: {n_samples}")
+
+        # Load metadata to get process info
+        metadata_path = parquet_file.parent / 'metadata.json'
+        if metadata_path.exists():
+            with open(metadata_path) as f:
+                meta = json.load(f)
+            process_names = meta['process_names']
+            input_dims = meta['process_input_dims']
+            output_dims = meta['process_output_dims']
+        else:
+            # Infer from column names
+            raise FileNotFoundError(
+                f"metadata.json not found at {metadata_path}. "
+                "Run 'python scm_ds/generate_data.py' first."
+            )
+
+        # Extract F values
+        F = df['F'].values
+
+        # Build token sequence: for each process, concat inputs and outputs
+        process_tokens = []
+        for proc_name in process_names:
+            in_dim = input_dims[proc_name]
+            out_dim = output_dims[proc_name]
+
+            input_cols = [f'{proc_name}_input_{j}' for j in range(in_dim)]
+            output_cols = [f'{proc_name}_output_{j}' for j in range(out_dim)]
+
+            token_data = df[input_cols + output_cols].values  # (n_samples, in+out)
+            process_tokens.append(token_data)
+
+        # Stack into (n_samples, n_processes, features)
+        # Pad tokens to same feature dim if needed
+        max_features = max(t.shape[1] for t in process_tokens)
+        padded_tokens = []
+        for t in process_tokens:
+            if t.shape[1] < max_features:
+                pad = np.zeros((n_samples, max_features - t.shape[1]))
+                t = np.concatenate([t, pad], axis=1)
+            padded_tokens.append(t)
+
+        X = np.stack(padded_tokens, axis=1)  # (n_samples, n_processes, features)
+        Y = F.reshape(-1, 1, 1)  # (n_samples, 1, 1)
+
+        print(f"  X shape: {X.shape}")
+        print(f"  Y shape: {Y.shape}")
+        print(f"  F: mean={F.mean():.4f}, std={F.std():.4f}")
+
+        # Split into train/val/test
+        rng = np.random.RandomState(seed)
+        indices = rng.permutation(n_samples)
+
+        n_train = int(n_samples * train_ratio)
+        n_val = int(n_samples * val_ratio)
+
+        train_idx = indices[:n_train]
+        val_idx = indices[n_train:n_train + n_val]
+        test_idx = indices[n_train + n_val:]
+
+        self.train_X = torch.tensor(X[train_idx], dtype=torch.float32)
+        self.train_Y = torch.tensor(Y[train_idx], dtype=torch.float32).squeeze()
+        self.val_X = torch.tensor(X[val_idx], dtype=torch.float32)
+        self.val_Y = torch.tensor(Y[val_idx], dtype=torch.float32).squeeze()
+        self.test_X = torch.tensor(X[test_idx], dtype=torch.float32)
+        self.test_Y = torch.tensor(Y[test_idx], dtype=torch.float32).squeeze()
+
+        metadata = {
+            'process_names': process_names,
+            'n_processes': len(process_names),
+            'features_per_process': max_features,
+            'n_samples': n_samples,
+            'seed': seed,
+            'source': str(parquet_file),
+        }
+        self.metadata = metadata
+
+        print(f"  Train: {len(train_idx)} samples")
+        print(f"  Val: {len(val_idx)} samples")
+        print(f"  Test: {len(test_idx)} samples")
 
         return metadata
 
@@ -616,7 +725,11 @@ def main():
     parser.add_argument('--output_dir', type=str, default='causaliT/checkpoints/surrogate',
                        help='Output directory')
     parser.add_argument('--data_dir', type=str, default='causaliT/data/surrogate_training',
-                       help='Data directory')
+                       help='Data directory (for legacy npy format)')
+    parser.add_argument('--parquet', type=str, default=None,
+                       help='Path to trajectories_full.parquet from Phase 1 '
+                            '(e.g. data/scm_trajectories/trajectories_full.parquet). '
+                            'When set, reads data from parquet instead of npy files.')
     parser.add_argument('--device', type=str, default='auto', help='Device (cpu/cuda/auto)')
     args = parser.parse_args()
 
@@ -635,32 +748,47 @@ def main():
     print("CasualiT Surrogate Training")
     print("="*70)
     print(f"Output directory: {args.output_dir}")
-    print(f"Data directory: {args.data_dir}")
 
-    # Generate data if requested or if data doesn't exist
-    data_path = Path(args.data_dir)
-    if args.data_only or args.generate_data or not (data_path / 'train_X.npy').exists():
-        print("\n[1/4] Generating training data...")
-        stats = generate_all_datasets(config, args.data_dir, device=args.device)
+    use_parquet = args.parquet is not None
 
-        if args.data_only:
-            print("\n" + "="*70)
-            print("Data Generation Complete!")
-            print("="*70)
-            print(f"Data saved to: {args.data_dir}")
-            for split, s in stats.items():
-                print(f"  {split}: {s['n_samples']} samples, F = {s['F_mean']:.4f} +/- {s['F_std']:.4f}")
-            return
+    if use_parquet:
+        print(f"Data source: {args.parquet} (parquet)")
     else:
-        print("\n[1/4] Using existing training data")
+        print(f"Data directory: {args.data_dir}")
 
     # Create trainer
     trainer = SurrogateTrainer(config, device=args.device)
 
-    # Load data
-    print("\n[2/4] Loading data...")
-    metadata = trainer.load_data(args.data_dir)
-    trainer.create_dataloaders()
+    if use_parquet:
+        # Load from Phase 1 parquet output
+        print("\n[1/4] Loading data from parquet (Phase 1 output)...")
+        metadata = trainer.load_data_from_parquet(
+            args.parquet,
+            seed=config['training'].get('seed', 42),
+        )
+        trainer.create_dataloaders()
+    else:
+        # Legacy path: generate or load npy data
+        data_path = Path(args.data_dir)
+        if args.data_only or args.generate_data or not (data_path / 'train_X.npy').exists():
+            print("\n[1/4] Generating training data...")
+            stats = generate_all_datasets(config, args.data_dir, device=args.device)
+
+            if args.data_only:
+                print("\n" + "="*70)
+                print("Data Generation Complete!")
+                print("="*70)
+                print(f"Data saved to: {args.data_dir}")
+                for split, s in stats.items():
+                    print(f"  {split}: {s['n_samples']} samples, F = {s['F_mean']:.4f} +/- {s['F_std']:.4f}")
+                return
+        else:
+            print("\n[1/4] Using existing training data")
+
+        # Load data
+        print("\n[2/4] Loading data...")
+        metadata = trainer.load_data(args.data_dir)
+        trainer.create_dataloaders()
 
     # Train
     if not args.skip_training:

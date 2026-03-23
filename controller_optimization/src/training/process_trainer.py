@@ -135,22 +135,26 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
         print(f"Training Uncertainty Predictor for Process: {process_name.upper()}")
         print(f"{'='*70}")
 
-    # 1. Generate SCM dataset
+    # 1. Load pre-generated SCM data from disk (produced by scm_ds/generate_data.py)
+    data_dir = Path(process_config.get(
+        'scm_data_dir',
+        f'data/scm_trajectories/{process_name}'
+    ))
+
     if verbose:
-        print(f"\n[1/9] Generating SCM dataset ({scm_dataset_type})...")
+        print(f"\n[1/9] Loading SCM data from {data_dir}...")
 
-    # Per processi ST, passa st_params per costruire lo SCM
-    extra_kwargs = {}
-    if scm_dataset_type == 'st' and 'st_params' in process_config:
-        extra_kwargs['st_params'] = process_config['st_params']
+    if not (data_dir / 'inputs.npy').exists():
+        raise FileNotFoundError(
+            f"Pre-generated SCM data not found at {data_dir}. "
+            f"Run 'python scm_ds/generate_data.py' first (Phase 1)."
+        )
 
-    X, y, input_cols, output_cols = generate_scm_data(
-        n_samples=training_config['n_samples'],
-        seed=seed,
-        dataset_type=scm_dataset_type,
-        save_graph_to=checkpoint_dir,  # Save SCM graph
-        **extra_kwargs
-    )
+    X = np.load(data_dir / 'inputs.npy')
+    y = np.load(data_dir / 'outputs.npy')
+
+    if verbose:
+        print(f"  Loaded: {X.shape[0]} samples, input_dim={X.shape[1]}, output_dim={y.shape[1]}")
 
     # 2. Preprocessing
     if verbose:
