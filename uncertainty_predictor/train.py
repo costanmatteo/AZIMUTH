@@ -40,8 +40,60 @@ from utils import (
     generate_uncertainty_training_report
 )
 
-# Import configuration
-from configs.example_config import CONFIG
+# Build CONFIG from the centralised processes_config
+# (the standalone example_config.py has been removed)
+_REPO_ROOT = Path(__file__).parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from configs.processes_config import (
+    PROCESSES, GLOBAL_UNCERTAINTY_CONFIG, ST_DATASET_CONFIG, DATASET_MODE
+)
+
+def _build_config_from_process(process_idx=0):
+    """Build a CONFIG dict compatible with this standalone script
+    by pulling values from the centralised processes_config."""
+    proc = PROCESSES[process_idx]
+    up = proc['uncertainty_predictor']
+
+    return {
+        'data': {
+            'csv_path': None,
+            'input_columns': proc['input_labels'],
+            'output_columns': proc['output_labels'],
+            'scaling_method': 'standard',
+            'train_size': 0.7,
+            'val_size': 0.15,
+            'test_size': 0.15,
+            'random_state': 42,
+            'use_scm': True,
+            'scm': {
+                'n_samples': up['training'].get('n_samples', 2000),
+                'seed': 42,
+                'dataset_type': proc.get('scm_dataset_type', 'st'),
+            },
+        },
+        'model': {
+            'model_type': 'custom',
+            **up['model'],
+            # Merge global uncertainty settings (SWAG/ensemble)
+            **GLOBAL_UNCERTAINTY_CONFIG,
+        },
+        'training': {
+            **up['training'],
+            'device': 'auto',
+            'checkpoint_dir': proc.get('checkpoint_dir', 'checkpoints_uncertainty'),
+        },
+        'uncertainty': {
+            'confidence_level': 0.95,
+        },
+        'misc': {
+            'random_seed': 42,
+            'verbose': True,
+        },
+    }
+
+CONFIG = _build_config_from_process(0)
 
 
 def main():
@@ -88,7 +140,7 @@ def main():
             print("\nTo test the system, create a sample CSV file with:")
             print("  - Input columns: " + ", ".join(CONFIG['data']['input_columns']))
             print("  - Output columns: " + ", ".join(CONFIG['data']['output_columns']))
-            print("\nOr set csv_path to None in configs/example_config.py to use SCM synthetic data.")
+            print("\nOr set csv_path to None in configs/processes_config.py to use SCM synthetic data.")
             return
     elif use_scm:
         # Generate synthetic data using SCM
@@ -108,7 +160,7 @@ def main():
         control_columns = [c for c in input_columns if c not in env_columns]
     else:
         print("\nERROR: No data source specified.")
-        print("Either provide a valid csv_path or enable use_scm in configs/example_config.py")
+        print("Either provide a valid csv_path or enable use_scm in configs/processes_config.py")
         return
 
     print(f"  Loaded {len(X)} samples")
