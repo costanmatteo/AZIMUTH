@@ -493,6 +493,7 @@ class SCMDataset:
     ) -> None:
         
         self.noise_model = NoiseModel(singles=singles, groups=groups)
+        self.specs = specs  # Store original specs for metadata generation
         specs_scm = Spec(
             name=name,
             nodes=specs,
@@ -503,6 +504,9 @@ class SCMDataset:
         self.input_labels = input_labels
         self.target_labels = target_labels
         self.source_labels = source_labels
+        self.name = name
+        self.description = description
+        self.tags = tags
         
         # meta
         created = datetime.date.today().isoformat()
@@ -515,6 +519,340 @@ class SCMDataset:
         
     def sample(self, n, seed=42):
         return self.scm.sample(n, seed)
+    
+    def _compute_transitive_closure(self) -> Dict[str, List[str]]:
+        """
+        Compute the transitive closure (reachability) from each source node.
+        
+        Returns a dict mapping each source variable to a list of all variables 
+        it can reach (directly or indirectly).
+        """
+        # Build adjacency list from specs: parent -> [children]
+        children_of: Dict[str, List[str]] = defaultdict(list)
+        for spec in self.specs:
+            for parent in spec.parents:
+                children_of[parent].append(spec.name)
+        
+        # Compute reachability using BFS from each source
+        all_sources = self.source_labels if self.source_labels else []
+        transitive_closure: Dict[str, List[str]] = {}
+        
+        for source in all_sources:
+            reachable = set()
+            queue = deque([source])
+            visited = {source}
+            
+            while queue:
+                node = queue.popleft()
+                for child in children_of.get(node, []):
+                    reachable.add(child)
+                    if child not in visited:
+                        visited.add(child)
+                        queue.append(child)
+            
+            transitive_closure[source] = sorted(list(reachable))
+        
+        return transitive_closure
+    
+    def _compute_expected_effects(self) -> Dict[str, Dict[str, bool]]:
+        """
+        Compute expected causal effects from each source to each input/target variable.
+        
+        Based on transitive closure: if source S can reach variable X, then 
+        do(S=x) should affect X.
+        """
+        transitive_closure = self._compute_transitive_closure()
+        
+        # Get all target variables for intervention effects
+        all_targets = list(self.input_labels) + list(self.target_labels)
+        all_sources = self.source_labels if self.source_labels else []
+        
+        expected_effects: Dict[str, Dict[str, bool]] = {}
+        
+        for source in all_sources:
+            reachable = set(transitive_closure.get(source, []))
+            expected_effects[source] = {
+                target: (target in reachable)
+                for target in all_targets
+            }
+        
+        return expected_effects
+    
+    def compute_interventional_expectation(
+        self, 
+        intervention: Dict[str, float],
+        target_vars: Optional[List[str]] = None,
+        method: str = "analytical",
+        n_samples: int = 10000,
+        seed: int = 42
+    ) -> Dict[str, float]:
+        """
+        Compute E[X | do(S=s)] for each target variable.
+        
+        This computes the expected value of downstream variables under a do-intervention.
+        For synthetic SCMs, this provides the ground-truth causal effect.
+        
+        Parameters
+        ----------
+        intervention : Dict[str, float]
+            Mapping from variable name to intervention value, e.g., {"S1": 0.5}
+        target_vars : Optional[List[str]]
+            List of target variable names to compute expectations for.
+            If None, uses all input_labels.
+        method : str
+            "analytical" - Use symbolic computation assuming E[eps] = 0
+            "monte_carlo" - Use sampling to estimate expectation
+        n_samples : int
+            Number of samples for Monte Carlo estimation (only used if method="monte_carlo")
+        seed : int
+            Random seed for Monte Carlo sampling
+            
+        Returns
+        -------
+        Dict[str, float]
+            Mapping from variable name to expected value under intervention
+            
+        Example
+        -------
+        >>> scm_ds.compute_interventional_expectation(
+        ...     intervention={"S2": 0.5},
+        ...     target_vars=["X1", "X2"],
+        ...     method="analytical"
+        ... )
+        {"X1": 0.5, "X2": 0.0}  # X1 depends on S2, X2 does not
+        """
+        if target_vars is None:
+            target_vars = list(self.input_labels)
+        
+        if method == "monte_carlo":
+            return self._compute_interventional_expectation_mc(
+                intervention, target_vars, n_samples, seed
+            )
+        elif method == "analytical":
+            return self._compute_interventional_expectation_analytical(
+                intervention, target_vars
+            )
+        else:
+            raise ValueError(f"Unknown method: {method}. Use 'analytical' or 'monte_carlo'.")
+    
+    def _compute_interventional_expectation_mc(
+        self,
+        intervention: Dict[str, float],
+        target_vars: List[str],
+        n_samples: int,
+        seed: int
+    ) -> Dict[str, float]:
+        """
+        Compute interventional expectations using Monte Carlo sampling.
+        
+        Samples from the intervened SCM and computes empirical mean.
+        """
+        scm_do = self.scm.do(intervention)
+        df_samples = scm_do.sample(n=n_samples, seed=seed)
+        
+        expectations = {}
+        for var in target_vars:
+            if var in df_samples.columns:
+                expectations[var] = float(df_samples[var].mean())
+            else:
+                # Variable might be in source_labels or not exist
+                if var in intervention:
+                    expectations[var] = intervention[var]
+                else:
+                    expectations[var] = float('nan')
+        
+        return expectations
+    
+    def _compute_interventional_expectation_analytical(
+        self,
+        intervention: Dict[str, float],
+        target_vars: List[str]
+    ) -> Dict[str, float]:
+        """
+        Compute interventional expectations analytically using SymPy.
+        
+        This propagates through the DAG in topological order, substituting:
+        - Intervention values for intervened variables
+        - E[eps] = 0 for noise terms (assuming zero-mean noise)
+        - Computed expectations for upstream variables
+        
+        Works for both linear and non-linear SCMs as long as E[f(eps)] = f(0)
+        for the functions involved (which holds for polynomial, tanh, sin, etc.
+        when noise is zero-mean and symmetric).
+        """
+        # Build symbolic expressions for each node
+        node_exprs: Dict[str, sp.Expr] = {}
+        expectations: Dict[str, float] = {}
+        
+        # Process nodes in topological order
+        for node in self.scm.order:
+            spec = self.scm.specs[node]
+            
+            # If this node is intervened upon, set to constant
+            if node in intervention:
+                node_exprs[node] = sp.Float(intervention[node])
+                expectations[node] = intervention[node]
+                continue
+            
+            # Build local symbol table for parents and noise
+            parent_symbols = {p: sp.symbols(p) for p in spec.parents}
+            eps_sym = sp.symbols(f"eps_{node}")
+            local_symbols = {**parent_symbols, f"eps_{node}": eps_sym}
+            
+            # Parse the expression
+            expr = sp.sympify(spec.expr, locals=local_symbols)
+            
+            # Substitute parent expectations (already computed due to topo order)
+            for parent in spec.parents:
+                if parent in expectations:
+                    expr = expr.subs(sp.symbols(parent), expectations[parent])
+            
+            # Set noise to zero (E[eps] = 0 assumption)
+            expr = expr.subs(eps_sym, 0)
+            
+            # Evaluate to float
+            try:
+                value = float(expr.evalf())
+            except (TypeError, ValueError):
+                # If expression can't be evaluated (e.g., remaining symbols), use NaN
+                value = float('nan')
+            
+            node_exprs[node] = expr
+            expectations[node] = value
+        
+        # Return only requested target variables
+        return {var: expectations.get(var, float('nan')) for var in target_vars}
+    
+    def compute_ate_ground_truth(
+        self,
+        do_values: List[float] = None,
+        method: str = "analytical",
+        n_samples: int = 10000,
+        seed: int = 42
+    ) -> Dict[str, Dict[str, float]]:
+        """
+        Compute ground-truth ATE for all source -> input variable combinations.
+        
+        Computes E[X | do(S=s)] for each source variable S, each do-value s,
+        and each input variable X.
+        
+        Parameters
+        ----------
+        do_values : List[float]
+            List of intervention values to compute. Default: [0, 1, -1]
+        method : str
+            "analytical" or "monte_carlo"
+        n_samples : int
+            Number of samples for Monte Carlo (if used)
+        seed : int
+            Random seed
+            
+        Returns
+        -------
+        Dict[str, Dict[str, float]]
+            Nested dict: ate_ground_truth[f"{source}={do_value}"][target_var] = E[target | do(source=do_value)]
+            
+        Example
+        -------
+        >>> ate_gt = scm_ds.compute_ate_ground_truth(do_values=[0, 1, -1])
+        >>> ate_gt["S2=0"]["X1"]  # E[X1 | do(S2=0)]
+        0.0
+        >>> ate_gt["S2=1"]["X1"]  # E[X1 | do(S2=1)]
+        1.0  # (for linear SCM with coefficient 1)
+        """
+        if do_values is None:
+            do_values = [0, 1, -1]
+        
+        if not self.source_labels:
+            raise ValueError("No source_labels defined. Cannot compute ATE ground truth.")
+        
+        ate_ground_truth: Dict[str, Dict[str, float]] = {}
+        
+        for source in self.source_labels:
+            for do_value in do_values:
+                intervention = {source: do_value}
+                key = f"{source}={do_value}"
+                
+                expectations = self.compute_interventional_expectation(
+                    intervention=intervention,
+                    target_vars=self.input_labels,
+                    method=method,
+                    n_samples=n_samples,
+                    seed=seed
+                )
+                
+                ate_ground_truth[key] = expectations
+        
+        return ate_ground_truth
+    
+    def _generate_dataset_metadata(self, shared_vars_map: Optional[Dict[str, int]] = None) -> Dict[str, Any]:
+        """
+        Generate comprehensive dataset metadata for evaluation functions.
+        
+        This metadata enables evaluation functions to be dataset-agnostic by providing:
+        - Variable information (labels, counts, index mappings)
+        - Causal structure (edges, transitive closure, expected effects)
+        
+        Returns:
+            Dict containing all metadata needed by evaluation functions.
+        """
+        # Compute direct edges from specs
+        direct_edges = []
+        for spec in self.specs:
+            for parent in spec.parents:
+                direct_edges.append([parent, spec.name])
+        
+        # Compute transitive closure and expected effects
+        transitive_closure = self._compute_transitive_closure()
+        expected_effects = self._compute_expected_effects()
+        
+        # Build variable index map
+        if shared_vars_map is not None:
+            variable_index_map = shared_vars_map
+        else:
+            # Build from individual label lists
+            variable_index_map = {}
+            idx = 1
+            if self.source_labels:
+                for var in self.source_labels:
+                    variable_index_map[var] = idx
+                    idx += 1
+            for var in self.input_labels:
+                variable_index_map[var] = idx
+                idx += 1
+            for var in self.target_labels:
+                variable_index_map[var] = idx
+                idx += 1
+        
+        metadata = {
+            "name": self.name,
+            "description": self.description,
+            "tags": self.tags,
+            "variable_info": {
+                "source_labels": self.source_labels if self.source_labels else [],
+                "input_labels": list(self.input_labels),
+                "target_labels": list(self.target_labels),
+                "n_source": len(self.source_labels) if self.source_labels else 0,
+                "n_input": len(self.input_labels),
+                "n_target": len(self.target_labels),
+            },
+            "causal_structure": {
+                "direct_edges": direct_edges,
+                "transitive_closure": transitive_closure,
+                "expected_effects": expected_effects,
+            },
+            "variable_index_map": variable_index_map,
+            # Feature indices define which column in the data tensor corresponds to which feature
+            # These are used for embedding configuration (value_idx, var_idx in OrthogonalMaskEmbedding)
+            # For SCM datasets: always {value: 0, variable: 1}
+            # For real-world datasets: may vary (e.g., dyconex has additional descriptive features)
+            "feature_indices": {
+                "value": 0,
+                "variable": 1,
+            },
+        }
+        
+        return metadata
     
     def _normalize(self, data: np.ndarray, method: str = "standardize"):
         """Normalize only the value features (feature index 0) using sklearn scalers."""
@@ -554,12 +892,16 @@ class SCMDataset:
                 if self.source_labels is not None:
                     all_labels.extend(self.source_labels)
                 all_labels.extend(self.input_labels)
-                all_labels.extend(self.target_labels)
+                if self.target_labels:  # Only add if non-empty
+                    all_labels.extend(self.target_labels)
                 shared_vars_map = {var: i+1 for i, var in enumerate(all_labels)}
             else:
                 shared_vars_map = None
             
             def to_numpy_(label, vars_map_override=None):
+                # Handle empty label list - return None values
+                if not label:
+                    return None, {}, {}, np.array([])
                 
                 df_ = pd.melt(df[label], id_vars=None, ignore_index=False)
                 unique_vars = df_["variable"].unique()
@@ -625,21 +967,27 @@ class SCMDataset:
         norm_stats = {}
         if normalize:
             input_np, input_stats = self._normalize(input_np, method=normalize_method)
-            target_np, target_stats = self._normalize(target_np, method=normalize_method)
-            norm_stats = {"input": input_stats, "target": target_stats}
+            norm_stats = {"input": input_stats}
+            
+            # Normalize target data if present (non-empty target_labels)
+            if target_np is not None:
+                target_np, target_stats = self._normalize(target_np, method=normalize_method)
+                norm_stats["target"] = target_stats
             
             # Normalize source data if present
             if source_np is not None:
                 source_np, source_stats = self._normalize(source_np, method=normalize_method)
                 norm_stats["source"] = source_stats
-                print(f"Data normalized using {normalize_method}")
-                print(f"  Input - mean: {input_stats.get('mean', 'N/A')}, std: {input_stats.get('std', 'N/A')}")
-                print(f"  Target - mean: {target_stats.get('mean', 'N/A')}, std: {target_stats.get('std', 'N/A')}")
-                print(f"  Source - mean: {source_stats.get('mean', 'N/A')}, std: {source_stats.get('std', 'N/A')}")
+            
+            # Print normalization stats
+            print(f"Data normalized using {normalize_method}")
+            print(f"  Input - mean: {input_stats.get('mean', 'N/A')}, std: {input_stats.get('std', 'N/A')}")
+            if target_np is not None:
+                print(f"  Target - mean: {norm_stats['target'].get('mean', 'N/A')}, std: {norm_stats['target'].get('std', 'N/A')}")
             else:
-                print(f"Data normalized using {normalize_method}")
-                print(f"  Input - mean: {input_stats.get('mean', 'N/A')}, std: {input_stats.get('std', 'N/A')}")
-                print(f"  Target - mean: {target_stats.get('mean', 'N/A')}, std: {target_stats.get('std', 'N/A')}")
+                print(f"  Target - (no target variables)")
+            if source_np is not None:
+                print(f"  Source - mean: {norm_stats['source'].get('mean', 'N/A')}, std: {norm_stats['source'].get('std', 'N/A')}")
         
         # todo train/test split
         
@@ -676,7 +1024,7 @@ class SCMDataset:
             else:
                 df_adj = self.scm.adjacency(positive_child=True, as_dataframe=True)
             
-            # Create 4 sliced attention masks for transformer
+            # Create attention masks for transformer
             # Rows are queries, columns are keys
             
             # Decoder 1 cross-attention: X attends to S (rows=input, cols=source)
@@ -689,15 +1037,19 @@ class SCMDataset:
             assert np.array_equal(df_d1sa.index.to_numpy(), df_d1sa.columns.to_numpy()) # self-attention: rows == cols
             assert np.array_equal(df_d1sa.index.map(iv_map).to_numpy(), iv_order)       # rows == input variable sequential order
             
-            # Decoder 2 cross-attention: Y attends to X (rows=target, cols=input)
-            df_d2ca = df_adj.loc[self.target_labels, self.input_labels]
-            assert np.array_equal(df_d2ca.index.map(tv_map).to_numpy(), tv_order)       # rows == target variable sequential order
-            assert np.array_equal(df_d2ca.columns.map(iv_map).to_numpy(), iv_order)     # cols == input variable sequential order
-            
-            # Decoder 2 self-attention: Y attends to Y (rows=target, cols=target)
-            df_d2sa = df_adj.loc[self.target_labels, self.target_labels]
-            assert np.array_equal(df_d2sa.index.to_numpy(), df_d2sa.columns.to_numpy()) # self-attention: rows == cols
-            assert np.array_equal(df_d2sa.index.map(tv_map).to_numpy(), tv_order)       # rows == target variable sequential order
+            # Decoder 2 masks only if target_labels is non-empty
+            df_d2ca = None
+            df_d2sa = None
+            if self.target_labels:
+                # Decoder 2 cross-attention: Y attends to X (rows=target, cols=input)
+                df_d2ca = df_adj.loc[self.target_labels, self.input_labels]
+                assert np.array_equal(df_d2ca.index.map(tv_map).to_numpy(), tv_order)       # rows == target variable sequential order
+                assert np.array_equal(df_d2ca.columns.map(iv_map).to_numpy(), iv_order)     # cols == input variable sequential order
+                
+                # Decoder 2 self-attention: Y attends to Y (rows=target, cols=target)
+                df_d2sa = df_adj.loc[self.target_labels, self.target_labels]
+                assert np.array_equal(df_d2sa.index.to_numpy(), df_d2sa.columns.to_numpy()) # self-attention: rows == cols
+                assert np.array_equal(df_d2sa.index.map(tv_map).to_numpy(), tv_order)       # rows == target variable sequential order
         
         
         # ------------ get SCM graph visualization --------------------
@@ -713,11 +1065,17 @@ class SCMDataset:
         # ---------------------- export -------------------------------
         makedirs(save_dir, exist_ok=True)
         
-        # Export data arrays
+        # Export data arrays - handle case where target_np may be None
         if source_np is not None:
-            np.savez_compressed(join(save_dir, "ds.npz"), x=input_np, y=target_np, s=source_np)
+            if target_np is not None:
+                np.savez_compressed(join(save_dir, "ds.npz"), x=input_np, y=target_np, s=source_np)
+            else:
+                np.savez_compressed(join(save_dir, "ds.npz"), x=input_np, s=source_np)
         else:
-            np.savez_compressed(join(save_dir, "ds.npz"), x=input_np, y=target_np)
+            if target_np is not None:
+                np.savez_compressed(join(save_dir, "ds.npz"), x=input_np, y=target_np)
+            else:
+                np.savez_compressed(join(save_dir, "ds.npz"), x=input_np)
         
         # Export attention masks based on source_labels presence
         if self.source_labels is None:
@@ -729,12 +1087,16 @@ class SCMDataset:
             # Export full DAG adjacency matrix
             df_adj.to_csv(join(save_dir, "dag_adj_mask.csv"))
             
-            # Export 4 sliced attention masks for transformer
+            # Export attention masks for transformer (2 or 4 depending on target_labels)
             df_d1ca.to_csv(join(save_dir, "dec1_cross_att_mask.csv"))  # X attends to S
             df_d1sa.to_csv(join(save_dir, "dec1_self_att_mask.csv"))   # X attends to X
-            df_d2ca.to_csv(join(save_dir, "dec2_cross_att_mask.csv"))  # Y attends to X
-            df_d2sa.to_csv(join(save_dir, "dec2_self_att_mask.csv"))   # Y attends to Y
-            print("Exported 4 sliced attention masks: dec1_cross, dec1_self, dec2_cross, dec2_self")
+            
+            if df_d2ca is not None and df_d2sa is not None:
+                df_d2ca.to_csv(join(save_dir, "dec2_cross_att_mask.csv"))  # Y attends to X
+                df_d2sa.to_csv(join(save_dir, "dec2_self_att_mask.csv"))   # Y attends to Y
+                print("Exported 4 sliced attention masks: dec1_cross, dec1_self, dec2_cross, dec2_self")
+            else:
+                print("Exported 2 sliced attention masks: dec1_cross, dec1_self (no target variables)")
         
         # Export metadata
         with open(join(save_dir, 'meta.json'),'w', encoding="utf-8")  as file:
@@ -774,6 +1136,51 @@ class SCMDataset:
         if norm_stats:
             with open(join(save_dir, 'normalization.json'),'w', encoding="utf-8")  as file:
                 json.dump(norm_stats, file, indent=2, sort_keys=True, ensure_ascii=False)
+
+        # Export dataset metadata for evaluation functions (NEW)
+        dataset_metadata = self._generate_dataset_metadata(shared_vars_map)
+        with open(join(save_dir, 'dataset_metadata.json'),'w', encoding="utf-8") as file:
+            json.dump(dataset_metadata, file, indent=2, sort_keys=True, ensure_ascii=False)
+        print(f"Exported dataset_metadata.json with causal structure and variable info")
+
+        # Export ATE ground truth for intervention evaluation
+        if self.source_labels:
+            try:
+                # Compute ATE ground truth using analytical method (default)
+                # Use standard do-values that match eval_interventions.py
+                ate_ground_truth = self.compute_ate_ground_truth(
+                    do_values=[0, 1, -1],
+                    method="analytical"
+                )
+                
+                # Also compute Monte Carlo estimates for validation
+                ate_ground_truth_mc = self.compute_ate_ground_truth(
+                    do_values=[0, 1, -1],
+                    method="monte_carlo",
+                    n_samples=50000,
+                    seed=seed
+                )
+                
+                # Package with metadata for evaluation functions
+                ate_export = {
+                    "description": "Ground-truth interventional expectations E[X | do(S=s)] for ATE evaluation",
+                    "do_values_used": [0, 1, -1],
+                    "computation_methods": {
+                        "analytical": "Symbolic computation assuming E[eps]=0",
+                        "monte_carlo": "Empirical mean from 50,000 samples"
+                    },
+                    "analytical": ate_ground_truth,
+                    "monte_carlo": ate_ground_truth_mc,
+                }
+                
+                with open(join(save_dir, 'ate_ground_truth.json'), 'w', encoding="utf-8") as file:
+                    json.dump(ate_export, file, indent=2, sort_keys=True, ensure_ascii=False)
+                print(f"Exported ate_ground_truth.json with {len(ate_ground_truth)} intervention combinations")
+                
+            except Exception as e:
+                print(f"Warning: Could not compute ATE ground truth: {e}")
+        else:
+            print("Skipping ATE ground truth export (no source_labels defined)")
 
         graph.render(str(join(save_dir, 'graph')), format="pdf", cleanup=True)
 

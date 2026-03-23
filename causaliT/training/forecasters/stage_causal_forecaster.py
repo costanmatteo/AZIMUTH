@@ -16,6 +16,7 @@ import torchmetrics as tm
 
 from causaliT.core.architectures.stage_causal import StageCausaliT
 from causaliT.core.utils import load_dag_masks
+from causaliT.proj_specific import build_dyconex_in_context_masks, merge_masks
 
 
 class StageCausalForecaster(pl.LightningModule):
@@ -48,7 +49,14 @@ class StageCausalForecaster(pl.LightningModule):
             self.loss_fn = nn.MSELoss(reduction="none")
         
         # Data indices for blanking values
-        self.val_idx = config["data"]["val_idx"]
+        # Support both shared val_idx (backward compatible) and separate indices for S/X and Y
+        self.val_idx = config["data"].get("val_idx", None)
+        self.val_idx_X = config["data"].get("val_idx_X", self.val_idx)  # For S and X (same structure)
+        self.val_idx_Y = config["data"].get("val_idx_Y", self.val_idx)  # For Y
+        
+        # Ensure at least one valid index is set
+        if self.val_idx_X is None or self.val_idx_Y is None:
+            raise ValueError("Must specify either 'val_idx' or both 'val_idx_X' and 'val_idx_Y' in config['data']")
         
         # Teacher forcing configuration
         self.teacher_forcing = config["training"].get("teacher_forcing", False)
@@ -62,10 +70,13 @@ class StageCausalForecaster(pl.LightningModule):
         self.log_acyclicity = config["training"].get("log_acyclicity", False)
         
         # Regularizers
-        self.gamma = config["training"].get("gamma", 0)   # Entropy regularization
+        # Entropy regularization - encourages focused attention (low entropy)
+        # Higher lambda = more penalty for high entropy = more focused attention
+        self.lambda_entropy_self = config["training"].get("lambda_entropy_self", 0.0)
+        self.lambda_entropy_cross = config["training"].get("lambda_entropy_cross", 0.0)
         self.kappa = config["training"].get("kappa", 0)   # Acyclicity regularization
         
-        # Sparsity regularization - L1 penalty on edge probabilities
+        # Sparsity regularization - L1 penalty on edge probabilities (phi)
         # Separate coefficients for self-attention and cross-attention (cross typically needs more)
         self.lambda_sparse = config["training"].get("lambda_sparse", 0)  # Uniform sparsity coefficient
         self.lambda_sparse_cross = config["training"].get("lambda_sparse_cross", None)  # Override for cross-attention
@@ -76,6 +87,23 @@ class StageCausalForecaster(pl.LightningModule):
         
         # Logging for sparsity
         self.log_sparsity = config["training"].get("log_sparsity", False)
+        
+        # L1 regularization on attention SCORES (works for ANY attention type, including ScaledDotAttention)
+        # These are independent parameters for fine-grained control over sparsity
+        self.lambda_l1_self_scores = config["training"].get("lambda_l1_self_scores", 0.0)
+        self.lambda_l1_cross_scores = config["training"].get("lambda_l1_cross_scores", 0.0)
+        self.log_l1_scores = config["training"].get("log_l1_scores", False)
+        
+        # In-context mask configuration (computed per-batch from data features)
+        self.use_in_context_masks = config["training"].get("use_in_context_masks", False)
+        self.in_context_mask_config = config["training"].get("in_context_mask_config", None)
+        
+        if self.use_in_context_masks:
+            if self.in_context_mask_config is None:
+                raise ValueError(
+                    "use_in_context_masks=True but no in_context_mask_config specified in config['training']"
+                )
+            print(f"✓ In-context masks enabled with config: {list(self.in_context_mask_config.keys())}")
         
         # Hard mask configuration
         self.use_hard_masks = config["training"].get("use_hard_masks", False)
@@ -95,18 +123,15 @@ class StageCausalForecaster(pl.LightningModule):
         self.save_hyperparameters(config)
         
         # Metrics for X reconstruction
-        self.mae_x = tm.MeanAbsoluteError()
-        self.rmse_x = tm.MeanSquaredError(squared=False)
-        self.r2_x = tm.R2Score()
+        self.mae_X = tm.MeanAbsoluteError()
+        self.r2_X = tm.R2Score()
         
         # Metrics for Y prediction
-        self.mae_y = tm.MeanAbsoluteError()
-        self.rmse_y = tm.MeanSquaredError(squared=False)
-        self.r2_y = tm.R2Score()
+        self.mae_Y = tm.MeanAbsoluteError()
+        self.r2_Y = tm.R2Score()
         
-        # Optionally freeze embeddings
-        if config["training"].get("freeze_embeddings", False):
-            self.freeze_embeddings()
+        # Total metrics (combined X and Y)
+        self.mae_total = tm.MeanAbsoluteError()
     
     def _register_hard_mask_placeholders(self):
         """
@@ -192,18 +217,9 @@ class StageCausalForecaster(pl.LightningModule):
         
         return masks if masks else None
     
-    def freeze_embeddings(self):
-        """
-        Freeze the shared embedding layer to train only attention mechanisms.
-        This sets requires_grad=False for the shared embedding system.
-        """
-        for param in self.model.shared_embedding.parameters():
-            param.requires_grad = False
-        
-        print("✓ Shared embeddings frozen. Training only attention and feedforward layers.")
-    
     def forward(self, data_source: torch.Tensor, data_intermediate: torch.Tensor, 
-                data_target: torch.Tensor, toggle_off_hard_masks: bool = False) -> Any:
+                data_target: torch.Tensor, disable_hard_masks: bool = False,
+                disable_in_context_masks: bool = False) -> Any:
         """
         Forward pass through the model.
         
@@ -211,9 +227,12 @@ class StageCausalForecaster(pl.LightningModule):
             data_source: Source nodes (S)
             data_intermediate: Intermediate variables (X)
             data_target: Target variables (Y)
-            toggle_off_hard_masks: If True, disables hard masks even if model was trained
-                                   with them. Useful for testing causality retention.
-                                   Default False = use masks if model was trained with them.
+            disable_hard_masks: If True, disables hard masks even if model was trained with them.
+                               Useful for ablation studies during inference. Default False = use
+                               masks if model was trained with them (self.use_hard_masks).
+            disable_in_context_masks: If True, disables in-context masks even if model was trained
+                                      with them. Default False = use masks if model was trained
+                                      with them (self.use_in_context_masks).
             
         Returns:
             pred_x: Predicted X from decoder 1
@@ -225,20 +244,35 @@ class StageCausalForecaster(pl.LightningModule):
         
         # Prepare intermediate input (blank X values for decoder 1)
         x_blanked = data_intermediate.clone()
-        x_blanked[:, :, self.val_idx] = 0.0
+        x_blanked[:, :, self.val_idx_X] = 0.0
         
         # Prepare target input (blank Y values for decoder 2)
         y_blanked = data_target.clone()
-        y_blanked[:, :, self.val_idx] = 0.0
+        y_blanked[:, :, self.val_idx_Y] = 0.0
         
         # Determine whether to use teacher forcing
         # Only use teacher forcing during training, never during validation/testing
         use_tf = self.teacher_forcing and self.training
         
-        # Determine whether to use hard masks
-        # Apply masks if: model was trained with masks AND toggle is not set to disable them
-        apply_hard_masks = self.use_hard_masks and not toggle_off_hard_masks
-        hard_masks = self.get_hard_masks() if apply_hard_masks else None
+        # Determine whether to use hard masks (static, from files)
+        apply_hard_masks = self.use_hard_masks and not disable_hard_masks
+        static_masks = self.get_hard_masks() if apply_hard_masks else None
+        
+        # Compute in-context masks (dynamic, computed from batch data)
+        apply_in_context = self.use_in_context_masks and not disable_in_context_masks
+        if apply_in_context:
+            in_context_masks = build_dyconex_in_context_masks(
+                S=data_source,
+                X=data_intermediate,
+                Y=data_target,
+                config=self.in_context_mask_config
+            )
+        else:
+            in_context_masks = None
+        
+        # Merge static and in-context masks
+        # If both are present for the same layer, they are combined (element-wise AND)
+        final_masks = merge_masks(static_masks, in_context_masks)
         
         # Model forward pass
         # Pass BOTH blanked (for decoder 1) and actual (for decoder 2 with teacher forcing)
@@ -248,7 +282,7 @@ class StageCausalForecaster(pl.LightningModule):
             intermediate_tensor_actual=data_intermediate,
             target_tensor=y_blanked,
             use_teacher_forcing=use_tf,
-            hard_masks=hard_masks,
+            hard_masks=final_masks,
         )
         
         return pred_x, pred_y, attention_weights, masks, entropies
@@ -272,8 +306,8 @@ class StageCausalForecaster(pl.LightningModule):
         S, X, Y = batch
         
         # Extract actual values for loss computation
-        x_val = X[:, :, self.val_idx]
-        y_val = Y[:, :, self.val_idx]
+        x_val = X[:, :, self.val_idx_X]
+        y_val = Y[:, :, self.val_idx_Y]
         
         # Forward pass
         pred_x, pred_y, attention_weights, masks, entropies = self.forward(
@@ -287,7 +321,7 @@ class StageCausalForecaster(pl.LightningModule):
         dec1_cross_ent, dec1_self_ent, dec2_cross_ent, dec2_self_ent = entropies
         
         # Compute entropy regularization if needed
-        if self.gamma > 0 or self.log_entropy:
+        if self.lambda_entropy_self > 0 or self.lambda_entropy_cross > 0 or self.log_entropy:
             # Average entropy across all layers
             dec1_cross_ent_batch = torch.concat(dec1_cross_ent, dim=0).mean()
             dec1_self_ent_batch = torch.concat(dec1_self_ent, dim=0).mean()
@@ -335,13 +369,13 @@ class StageCausalForecaster(pl.LightningModule):
         dec2_cross_runav_mean = getattr(dec2_cross_inner, 'runav_att_mean', None)
         dec2_cross_runav_snr = getattr(dec2_cross_inner, 'runav_att_snr', None)
         
-        # Entropy regularizer
-        if self.gamma > 0:
-            entropy_regularizer = self.gamma * (
-                1.0 / dec1_cross_ent_batch + 
-                1.0 / dec1_self_ent_batch + 
-                1.0 / dec2_cross_ent_batch + 
-                1.0 / dec2_self_ent_batch
+        # Entropy regularizer - encourages focused attention (low entropy)
+        # Higher entropy = more uniform attention = more exploration
+        # Lower entropy = more focused attention = more decisive
+        if self.lambda_entropy_self > 0 or self.lambda_entropy_cross > 0:
+            entropy_regularizer = (
+                self.lambda_entropy_self * (dec1_self_ent_batch + dec2_self_ent_batch) +
+                self.lambda_entropy_cross * (dec1_cross_ent_batch + dec2_cross_ent_batch)
             )
         else:
             entropy_regularizer = 0.0
@@ -437,6 +471,46 @@ class StageCausalForecaster(pl.LightningModule):
             self.lambda_sparse_cross * cross_attention_sparsity
         )
         
+        # L1 regularization on attention SCORES
+        # NOTE: This is INEFFECTIVE for ScaledDotProduct attention because post-softmax
+        # weights always sum to 1, making the mean approximately constant (1/seq_len).
+        # For ScaledDotProduct, use lambda_entropy_* instead for sparsity.
+        # This regularizer is kept for attention types with learnable phi parameters.
+        def _get_att_scores_l1(att_weights_list):
+            """L1 penalty on attention weights (post-softmax/activation).
+            
+            NOTE: Ineffective for ScaledDotProduct attention - use entropy regularization instead.
+            
+            Args:
+                att_weights_list: List of attention weight tensors from each layer
+                
+            Returns:
+                Mean L1 penalty across all layers
+            """
+            if not att_weights_list:
+                return 0.0
+            # Use the last layer's attention weights (most relevant for output)
+            # att_weights: (B, L, S) or (B, H, L, S)
+            return att_weights_list[-1].mean()
+        
+        # L1 on self-attention scores (dec1_self + dec2_self)
+        l1_self_scores = (
+            _get_att_scores_l1(dec1_self_att) + 
+            _get_att_scores_l1(dec2_self_att)
+        )
+        
+        # L1 on cross-attention scores (dec1_cross + dec2_cross)
+        l1_cross_scores = (
+            _get_att_scores_l1(dec1_cross_att) + 
+            _get_att_scores_l1(dec2_cross_att)
+        )
+        
+        # Total L1 scores regularizer
+        l1_scores_regularizer = (
+            self.lambda_l1_self_scores * l1_self_scores +
+            self.lambda_l1_cross_scores * l1_cross_scores
+        )
+        
         # Compute losses for X and Y
         x_target = torch.nan_to_num(x_val)
         y_target = torch.nan_to_num(y_val)
@@ -453,21 +527,40 @@ class StageCausalForecaster(pl.LightningModule):
                      entropy_regularizer + 
                      acyclic_regularizer +
                      prior_regularizer +
-                     sparsity_regularizer)
+                     sparsity_regularizer +
+                     l1_scores_regularizer)
         
-        # Log individual losses
-        self.log(f"{stage}_loss_x", loss_x, on_step=False, on_epoch=True, prog_bar=(stage == "val"))
-        self.log(f"{stage}_loss_y", loss_y, on_step=False, on_epoch=True, prog_bar=(stage == "val"))
+        # =====================================================================
+        # LOGGING - Coherent naming: {stage}_{metric}_{target}
+        # =====================================================================
         
-        # Log metrics for X reconstruction
-        for name, metric in [("mae", self.mae_x), ("rmse", self.rmse_x), ("r2", self.r2_x)]:
-            metric_eval = metric(pred_x.reshape(-1), x_target.reshape(-1))
-            self.log(f"{stage}_x_{name}", metric_eval, on_step=False, on_epoch=True, prog_bar=False)
+        # Flatten predictions and targets for metric computation
+        pred_x_flat = pred_x.reshape(-1)
+        pred_y_flat = pred_y.reshape(-1)
+        x_target_flat = x_target.reshape(-1)
+        y_target_flat = y_target.reshape(-1)
         
-        # Log metrics for Y prediction
-        for name, metric in [("mae", self.mae_y), ("rmse", self.rmse_y), ("r2", self.r2_y)]:
-            metric_eval = metric(pred_y.reshape(-1), y_target.reshape(-1))
-            self.log(f"{stage}_y_{name}", metric_eval, on_step=False, on_epoch=True, prog_bar=(stage == "val"))
+        # Log losses (MSE)
+        self.log(f"{stage}_loss_X", loss_x, on_step=False, on_epoch=True, prog_bar=False)
+        self.log(f"{stage}_loss_Y", loss_y, on_step=False, on_epoch=True, prog_bar=False)
+        
+        # Log MAE for X and Y
+        mae_x_val = self.mae_X(pred_x_flat, x_target_flat)
+        mae_y_val = self.mae_Y(pred_y_flat, y_target_flat)
+        self.log(f"{stage}_mae_X", mae_x_val, on_step=False, on_epoch=True, prog_bar=False)
+        self.log(f"{stage}_mae_Y", mae_y_val, on_step=False, on_epoch=True, prog_bar=(stage == "val"))
+        
+        # Log R2 for X and Y
+        r2_x_val = self.r2_X(pred_x_flat, x_target_flat)
+        r2_y_val = self.r2_Y(pred_y_flat, y_target_flat)
+        self.log(f"{stage}_r2_X", r2_x_val, on_step=False, on_epoch=True, prog_bar=False)
+        self.log(f"{stage}_r2_Y", r2_y_val, on_step=False, on_epoch=True, prog_bar=(stage == "val"))
+        
+        # Log total MAE (combined X and Y predictions)
+        all_preds = torch.cat([pred_x_flat, pred_y_flat], dim=0)
+        all_targets = torch.cat([x_target_flat, y_target_flat], dim=0)
+        mae_total_val = self.mae_total(all_preds, all_targets)
+        self.log(f"{stage}_mae", mae_total_val, on_step=False, on_epoch=True, prog_bar=(stage == "val"))
         
         # Log entropies if requested
         if self.log_entropy:
@@ -485,6 +578,11 @@ class StageCausalForecaster(pl.LightningModule):
             self.log(f"{stage}_sparsity_self", self_attention_sparsity, on_step=False, on_epoch=True)
             self.log(f"{stage}_sparsity_cross", cross_attention_sparsity, on_step=False, on_epoch=True)
             self.log(f"{stage}_sparsity_total", sparsity_regularizer, on_step=False, on_epoch=True)
+        
+        # Log L1 scores regularization if requested
+        if self.log_l1_scores:
+            self.log(f"{stage}_l1_self_scores", l1_self_scores, on_step=False, on_epoch=True)
+            self.log(f"{stage}_l1_cross_scores", l1_cross_scores, on_step=False, on_epoch=True)
         
         return total_loss, pred_x, pred_y, X, Y
     

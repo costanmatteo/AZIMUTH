@@ -17,14 +17,11 @@ from causaliT.paths import (
     get_dirs,
 )
 
-# Export main components (optional: requires pytorch_lightning)
-try:
-    from causaliT.core.model import ProT
-    from causaliT.core.architectures.stage_causal import StageCausaliT
-    from causaliT.training.forecasters import TransformerForecaster, StageCausalForecaster
-    from causaliT.training.dataloader import ProcessDataModule
-except ImportError:
-    pass
+# Export main components
+from causaliT.core.model import ProT
+from causaliT.core.architectures.stage_causal import StageCausaliT
+from causaliT.training.forecasters import TransformerForecaster, StageCausalForecaster
+from causaliT.training.dataloader import ProcessDataModule
 
 __all__ = [
     # Paths
