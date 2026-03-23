@@ -44,6 +44,9 @@ ST_DATASET_CONFIG = {
     # Numero di processi in sequenza
     'n_processes': 3,
 
+    # Numero di campioni da generare per processo
+    'n_samples': 2000,
+
     # Coefficiente adattivo inter-processo per il surrogate.
     # τ_i = base_target + adaptive_coeff × (Y_{i-1} - τ_{i-1})  per i > 1
     # Se 0.0, tutti i processi usano un target fisso (base_target).
@@ -79,6 +82,7 @@ _PHYSICAL_PROCESSES = [
     {
         'name': 'laser',
         'scm_dataset_type': 'laser',
+        'n_samples': 2000,
         'input_dim': 2,
         'output_dim': 1,
         'input_labels': ['PowerTarget', 'AmbientTemp'],
@@ -91,6 +95,7 @@ _PHYSICAL_PROCESSES = [
     {
         'name': 'plasma',
         'scm_dataset_type': 'plasma',
+        'n_samples': 2000,
         'input_dim': 2,
         'output_dim': 1,
         'input_labels': ['RF_Power', 'Duration'],
@@ -103,6 +108,7 @@ _PHYSICAL_PROCESSES = [
     {
         'name': 'galvanic',
         'scm_dataset_type': 'galvanic',
+        'n_samples': 2000,
         'input_dim': 2,
         'output_dim': 1,
         'input_labels': ['CurrentDensity', 'Duration'],
@@ -115,6 +121,7 @@ _PHYSICAL_PROCESSES = [
     {
         'name': 'microetch',
         'scm_dataset_type': 'microetch',
+        'n_samples': 2000,
         'input_dim': 3,
         'output_dim': 1,
         'input_labels': ['Temperature', 'Concentration', 'Duration'],
@@ -189,6 +196,7 @@ def _build_st_processes(st_dataset_config):
         process = {
             'name': f'st_{i}',
             'scm_dataset_type': 'st',
+            'n_samples': st_dataset_config.get('n_samples', 2000),
             'input_dim': input_dim,
             'output_dim': output_dim,
             'input_labels': input_labels,

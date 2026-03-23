@@ -4,7 +4,7 @@ Step 0: Genera dataset completo per l'intera catena di processi.
 Per ogni campione, percorre la traiettoria completa attraverso tutti i processi
 usando gli SCM da scm_ds/, e calcola F con ReliabilityFunction.
 
-Usa: python generate_dataset.py [--n_samples 5000 --seed 42 ...]
+Usa: python generate_dataset.py [--n_samples 2000 --seed 42 ...]
 
 Output:
 - data/per_process/{process_name}_dataset.pt  → {inputs, outputs} per processo
@@ -28,8 +28,8 @@ from configs.processes_config import (
 
 def main():
     parser = argparse.ArgumentParser(description='Generate dataset for all processes')
-    parser.add_argument('--n_samples', type=int, default=5000,
-                        help='Number of trajectory samples to generate')
+    parser.add_argument('--n_samples', type=int, default=None,
+                        help='Override n_samples (default: from processes_config)')
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed for reproducibility')
     parser.add_argument('--output_dir', type=str, default='data/',
@@ -75,12 +75,15 @@ def main():
     per_process_dir.mkdir(parents=True, exist_ok=True)
     trajectories_dir.mkdir(parents=True, exist_ok=True)
 
+    # Resolve n_samples: CLI override > process config
+    n_samples = args.n_samples if args.n_samples is not None else current_processes[0].get('n_samples', 2000)
+
     print("=" * 70)
     print("AZIMUTH - STEP 0: GENERATE DATASET")
     print("=" * 70)
     print(f"\nDataset mode: {DATASET_MODE}")
     print(f"Processes: {[p['name'] for p in current_processes]}")
-    print(f"Samples: {args.n_samples}")
+    print(f"Samples: {n_samples}")
     print(f"Seed: {args.seed}")
     print(f"Output dir: {output_dir}")
 
@@ -106,7 +109,7 @@ def main():
             extra_kwargs['st_params'] = proc['st_params']
 
         X, y, input_cols, output_cols, E, env_cols = generate_scm_data(
-            n_samples=args.n_samples,
+            n_samples=n_samples,
             seed=args.seed,
             dataset_type=scm_type,
             **extra_kwargs
@@ -169,7 +172,7 @@ def main():
         rf = ReliabilityFunction()
 
     full_trajectories = []
-    n = args.n_samples
+    n = n_samples
 
     for i in range(n):
         # Build trajectory dict for ReliabilityFunction (needs inputs with env)

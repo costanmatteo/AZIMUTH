@@ -41,7 +41,6 @@ DEFAULT_ST_UNCERTAINTY_PREDICTOR = {
         'min_variance': 1e-6,
     },
     'training': {
-        'n_samples': 2000,
         'batch_size': 32,
         'epochs': 500,
         'learning_rate': 0.001,
@@ -65,7 +64,6 @@ PHYSICAL_UNCERTAINTY_PREDICTORS = {
             'min_variance': 1e-6,
         },
         'training': {
-            'n_samples': 2000,
             'batch_size': 64,
             'epochs': 200,
             'learning_rate': 0.001,
@@ -84,7 +82,6 @@ PHYSICAL_UNCERTAINTY_PREDICTORS = {
             'min_variance': 1e-6,
         },
         'training': {
-            'n_samples': 2000,
             'batch_size': 64,
             'epochs': 200,
             'learning_rate': 0.001,
@@ -103,7 +100,6 @@ PHYSICAL_UNCERTAINTY_PREDICTORS = {
             'min_variance': 1e-6,
         },
         'training': {
-            'n_samples': 2000,
             'batch_size': 645,
             'epochs': 200,
             'learning_rate': 0.001,
@@ -122,7 +118,6 @@ PHYSICAL_UNCERTAINTY_PREDICTORS = {
             'min_variance': 1e-6,
         },
         'training': {
-            'n_samples': 2000,
             'batch_size': 64,
             'epochs': 200,
             'learning_rate': 0.001,
