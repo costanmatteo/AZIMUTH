@@ -264,7 +264,7 @@ def plot_combined_predictions_with_uncertainty(
     from scipy import stats
     z_score = stats.norm.ppf((1 + confidence) / 2)
 
-    fig, axes = plt.subplots(n_outputs, 2, figsize=(12, 5 * n_outputs),
+    fig, axes = plt.subplots(n_outputs, 2, figsize=(14, 3.5 * n_outputs),
                              squeeze=False)
 
     for col_idx, (y_t, y_p, y_v, y_a, y_e, col_title) in enumerate([
