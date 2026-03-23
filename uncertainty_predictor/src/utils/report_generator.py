@@ -560,7 +560,7 @@ def _build_right(d):
         b_img = scale_img(p_combined, RW, h_b)
         b_img.hAlign = 'LEFT'
         F.append(b_img)
-        F.append(Paragraph("Validation and Training Predictions with Uncertainty Bounds", ST_CAPTION))
+        F.append(Paragraph("Training and Validation Predictions with Uncertainty Bounds", ST_CAPTION))
     else:
         F.append(_placeholder('predictions_combined.png', RW, h_b))
     F.append(Spacer(1, 3))

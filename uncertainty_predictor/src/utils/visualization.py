@@ -268,10 +268,10 @@ def plot_combined_predictions_with_uncertainty(
                              squeeze=False)
 
     for col_idx, (y_t, y_p, y_v, y_a, y_e, col_title) in enumerate([
-        (y_true_val, y_pred_mean_val, y_pred_variance_val,
-         y_pred_aleatoric_val, y_pred_epistemic_val, "Validation"),
         (y_true_train, y_pred_mean_train, y_pred_variance_train,
          y_pred_aleatoric_train, y_pred_epistemic_train, "Training"),
+        (y_true_val, y_pred_mean_val, y_pred_variance_val,
+         y_pred_aleatoric_val, y_pred_epistemic_val, "Validation"),
     ]):
         use_decomp = y_a is not None and y_e is not None
         for i, name in enumerate(output_names):
