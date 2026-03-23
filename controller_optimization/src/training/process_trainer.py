@@ -154,10 +154,11 @@ def train_single_process(process_config, train_loader, val_loader, test_loader,
         print(f"  Val:   {n_val} samples")
         print(f"  Test:  {n_test} samples")
 
-    # Extract scaled training data for visualization later
-    X_train_scaled = torch.cat([batch[0] for batch in train_loader]).numpy()
+    # Extract scaled training data for visualization later (single pass to avoid shuffle mismatch)
+    _train_batches = list(train_loader)
+    X_train_scaled = torch.cat([batch[0] for batch in _train_batches]).numpy()
     y_train = preprocessor.output_scaler.inverse_transform(
-        torch.cat([batch[1] for batch in train_loader]).numpy()
+        torch.cat([batch[1] for batch in _train_batches]).numpy()
     )
 
     # Create UncertaintyPredictor (Ensemble, SWAG, or Single)
