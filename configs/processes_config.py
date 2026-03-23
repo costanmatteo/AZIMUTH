@@ -63,20 +63,20 @@ ST_DATASET_CONFIG = {
     # Configurazione uncertainty predictor (uguale per tutti i processi ST)
     'uncertainty_predictor': {
         'model': {
-            'hidden_sizes': [128, 64, 32],
-            'dropout_rate': 0.1,
-            'use_batchnorm': False,
+            'hidden_sizes': [256, 128, 64, 32],
+            'dropout_rate': 0.05,
+            'use_batchnorm': True,
             'min_variance': 1e-6,
         },
         'training': {
             'n_samples': 2000,
-            'batch_size': 64,
-            'epochs': 200,
+            'batch_size': 32,
+            'epochs': 500,
             'learning_rate': 0.001,
-            'weight_decay': 0.001,
-            'patience': 30,
+            'weight_decay': 0.0005,
+            'patience': 50,
             'loss_type': 'gaussian_nll',
-            'variance_penalty_alpha': 1,
+            'variance_penalty_alpha': 1.5,
         }
     },
 }
@@ -95,8 +95,8 @@ GLOBAL_UNCERTAINTY_CONFIG = {
     'ensemble_base_seed': 42,
 
     # SWAG configuration (used if uncertainty_method='swag')
-    'swag_start_epoch': 0.5,      # Start SWA at 50% of training
-    'swag_learning_rate': 0.01,   # LR during SWA phase
+    'swag_start_epoch': 0.6,      # Start SWA at 60% of training
+    'swag_learning_rate': 0.005,  # LR during SWA phase
     'swag_max_rank': 20,          # Low-rank covariance dimension
     'swag_collection_freq': 1,    # Collect weights every N epochs
     'swag_n_samples': 30,         # Weight samples for prediction
