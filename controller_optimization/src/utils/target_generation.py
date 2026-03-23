@@ -33,6 +33,11 @@ from scm_ds.datasets import (
     ds_scm_microetch
 )
 
+# F computation shared with scm_ds (numpy version, no torch dependency).
+# Can be used in place of surrogate.py when computing F on numpy trajectories
+# without needing torch autograd (e.g. data analysis, CausalIT preprocessing).
+from scm_ds.reliability_function import compute_F_numpy
+
 # Cache per SCM ST già costruiti (evita di ricostruire ad ogni chiamata)
 _st_scm_cache = {}
 
