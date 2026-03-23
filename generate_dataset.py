@@ -105,25 +105,40 @@ def main():
         if scm_type == 'st' and 'st_params' in proc:
             extra_kwargs['st_params'] = proc['st_params']
 
-        X, y, input_cols, output_cols = generate_scm_data(
+        X, y, input_cols, output_cols, E, env_cols = generate_scm_data(
             n_samples=args.n_samples,
             seed=args.seed,
             dataset_type=scm_type,
             **extra_kwargs
         )
 
-        inputs_tensor = torch.tensor(X, dtype=torch.float32)
+        # Separate control inputs from environmental variables
+        n_env = len(env_cols)
+        n_control = X.shape[1] - n_env
+        X_control = X[:, :n_control]
+        # E is already returned separately by generate_scm_data
+
+        inputs_tensor = torch.tensor(X_control, dtype=torch.float32)
+        env_tensor = torch.tensor(E, dtype=torch.float32)
         outputs_tensor = torch.tensor(y, dtype=torch.float32)
 
         per_process_data[proc_name] = {
-            'inputs': inputs_tensor,
+            'inputs': inputs_tensor,       # controllable only
+            'env': env_tensor,             # environmental (not controllable)
             'outputs': outputs_tensor,
+            'input_columns': input_cols[:n_control],
+            'env_columns': env_cols,
+            'output_columns': output_cols,
         }
 
-        # Save per-process dataset
+        # Save per-process dataset (inputs includes env for UP compatibility)
         save_path = per_process_dir / f'{proc_name}_dataset.pt'
-        torch.save(per_process_data[proc_name], save_path)
-        print(f"  {proc_name}: inputs {inputs_tensor.shape}, outputs {outputs_tensor.shape} → {save_path}")
+        torch.save({
+            'inputs': torch.tensor(X, dtype=torch.float32),  # control + env (UP needs both)
+            'outputs': outputs_tensor,
+        }, save_path)
+        print(f"  {proc_name}: control {inputs_tensor.shape}, env {env_tensor.shape}, "
+              f"outputs {outputs_tensor.shape} → {save_path}")
 
     # ── Step 2: Build full trajectories and compute F ───────────────────────
     print(f"\n[2/3] Building full trajectories and computing F...")
@@ -157,22 +172,29 @@ def main():
     n = args.n_samples
 
     for i in range(n):
-        trajectory = {}
+        # Build trajectory dict for ReliabilityFunction (needs inputs with env)
+        trajectory_for_rf = {}
         for proc in current_processes:
             pname = proc['name']
-            trajectory[pname] = {
-                'inputs': per_process_data[pname]['inputs'][i:i+1],
+            # RF expects inputs = control + env concatenated
+            full_inputs = torch.cat([
+                per_process_data[pname]['inputs'][i:i+1],
+                per_process_data[pname]['env'][i:i+1],
+            ], dim=1)
+            trajectory_for_rf[pname] = {
+                'inputs': full_inputs,
                 'outputs_mean': per_process_data[pname]['outputs'][i:i+1],
                 'outputs_sampled': per_process_data[pname]['outputs'][i:i+1],
             }
 
-        F = rf.compute_reliability(trajectory)
+        F = rf.compute_reliability(trajectory_for_rf)
         F_val = F.item() if isinstance(F, torch.Tensor) else float(F)
 
         full_trajectories.append({
             'trajectory': {
                 pname: {
                     'inputs': per_process_data[pname]['inputs'][i],
+                    'env': per_process_data[pname]['env'][i],
                     'outputs': per_process_data[pname]['outputs'][i],
                 }
                 for pname in [p['name'] for p in current_processes]
@@ -186,6 +208,11 @@ def main():
 
     F_values = [t['F'] for t in full_trajectories]
     print(f"\n  Trajectories: {len(full_trajectories)}")
+    # Show per-process structure
+    sample_traj = full_trajectories[0]['trajectory']
+    for pname, pdata in sample_traj.items():
+        print(f"  {pname}: inputs={pdata['inputs'].shape}, "
+              f"env={pdata['env'].shape}, outputs={pdata['outputs'].shape}")
     print(f"  F statistics: mean={np.mean(F_values):.4f}, "
           f"std={np.std(F_values):.4f}, "
           f"min={np.min(F_values):.4f}, max={np.max(F_values):.4f}")

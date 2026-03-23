@@ -96,7 +96,7 @@ def main():
         seed = scm_config.get('seed', 42)
         dataset_type = scm_config.get('dataset_type', 'one_to_one_ct')
 
-        X, y, input_columns, output_columns = generate_scm_data(
+        X, y, input_columns, output_columns, _E, _env_cols = generate_scm_data(
             n_samples=n_samples,
             seed=seed,
             dataset_type=dataset_type,

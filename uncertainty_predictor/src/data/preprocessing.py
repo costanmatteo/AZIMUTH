@@ -270,21 +270,27 @@ def generate_scm_data(n_samples=5000, seed=42, dataset_type='one_to_one_ct', sav
     print(f"Generating {n_samples} synthetic samples using SCM...")
     df = scm_dataset.sample(n=n_samples, seed=seed)
 
-    # Extract input and output columns
-    input_columns = list(scm_dataset.input_labels)
+    # Extract input, environmental, and output columns
+    control_columns = list(scm_dataset.input_labels)
     output_columns = list(scm_dataset.target_labels)
 
-    # Per ST datasets, includi anche le variabili ambientali (E_j) come input
-    # per coerenza con la configurazione processo che le include in input_labels
-    if dataset_type == 'st' and hasattr(scm_dataset, 'structural_noise_vars'):
-        structural_vars = list(scm_dataset.structural_noise_vars)
-        input_columns = input_columns + structural_vars
+    env_columns = []
+    if hasattr(scm_dataset, 'structural_noise_vars'):
+        env_columns = list(scm_dataset.structural_noise_vars)
+
+    # X includes both control + env columns (for backward compatibility with UP)
+    input_columns = control_columns + env_columns
 
     X = df[input_columns].values
     y = df[output_columns].values
 
+    # Separate env data
+    E = df[env_columns].values if env_columns else np.empty((len(df), 0))
+
     print(f"SCM data generated: {X.shape[0]} samples")
-    print(f"Input features: {X.shape[1]} - {input_columns}")
+    print(f"Control inputs: {len(control_columns)} - {control_columns}")
+    if env_columns:
+        print(f"Environmental vars: {len(env_columns)} - {env_columns}")
     print(f"Output features: {y.shape[1]} - {output_columns}")
 
     # Save SCM graph visualizations if requested
@@ -315,4 +321,4 @@ def generate_scm_data(n_samples=5000, seed=42, dataset_type='one_to_one_ct', sav
         except Exception as e:
             print(f"Warning: Could not save compact DAG: {e}")
 
-    return X, y, input_columns, output_columns
+    return X, y, input_columns, output_columns, E, env_columns
