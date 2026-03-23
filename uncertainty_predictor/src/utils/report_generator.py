@@ -26,7 +26,7 @@ except ImportError:
 
 # ── page geometry ─────────────────────────────────────────────────────────────
 PW, PH  = landscape(A4)
-M       = 1.1 * cm
+M       = 0.8 * cm
 HDR_H   = 1.6 * cm
 FTR_H   = 0.65 * cm
 LW      = 108 * mm
@@ -533,7 +533,7 @@ def _build_left(d):
     # ── Section A — training history (at bottom of left column) ────────────
     chk_dir = Path(cfg.get('training',{}).get('checkpoint_dir','.'))
     F += section_header("A \u2014 training history", LW)
-    a_img = scale_img(chk_dir / 'training_history.png', LW, BODY_H * 0.18)
+    a_img = scale_img(chk_dir / 'training_history.png', LW, BODY_H * 0.22)
     a_img.hAlign = 'LEFT'
     F.append(a_img)
     F.append(Paragraph("Training and Validation Loss (NLL and MSE)", ST_CAPTION))
@@ -550,8 +550,8 @@ def _build_right(d):
     F = []
 
     avail = BODY_H - 60
-    h_b = avail * 0.55
-    h_c = avail * 0.45
+    h_b = avail * 0.45
+    h_c = avail * 0.50
 
     # ── Section B ──────────────────────────────────────────────────────────
     F += section_header("B \u2014 predictions with uncertainty", RW)

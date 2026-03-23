@@ -61,7 +61,7 @@ def plot_training_history(train_losses, val_losses, train_mse=None, val_mse=None
     """
     apply_plot_style()
     n_plots = 2 if train_mse is not None else 1
-    fig, axes = plt.subplots(1, n_plots, figsize=(6*n_plots, 5))
+    fig, axes = plt.subplots(1, n_plots, figsize=(7*n_plots, 3.5))
 
     if n_plots == 1:
         axes = [axes]
