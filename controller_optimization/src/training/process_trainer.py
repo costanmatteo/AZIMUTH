@@ -3,6 +3,8 @@ Trainer per uncertainty predictor di un singolo processo.
 
 Importa e usa la classe UncertaintyPredictor esistente da uncertainty_predictor/
 GENERA REPORT PDF con metriche e visualizzazioni.
+
+Riceve DataLoader già pronti (costruiti dal chiamante, es. train_predictor.py).
 """
 
 import sys
@@ -21,7 +23,7 @@ UNCERTAINTY_PREDICTOR_PATH = REPO_ROOT / 'uncertainty_predictor'
 
 # CRITICAL: Add uncertainty_predictor to sys.path FIRST
 # This allows nested imports (like scm_ds.datasets) to work when calling
-# functions like generate_scm_data() from the loaded modules
+# functions from the loaded modules
 if str(UNCERTAINTY_PREDICTOR_PATH) not in sys.path:
     sys.path.insert(0, str(UNCERTAINTY_PREDICTOR_PATH))
 
@@ -58,7 +60,6 @@ preprocessing = importlib.util.module_from_spec(spec_preprocessing)
 sys.modules['preprocessing'] = preprocessing  # Register for pickle
 spec_preprocessing.loader.exec_module(preprocessing)
 DataPreprocessor = preprocessing.DataPreprocessor
-generate_scm_data = preprocessing.generate_scm_data
 
 spec_report = importlib.util.spec_from_file_location(
     "report_generator",
@@ -83,12 +84,19 @@ uq_viz = importlib.util.module_from_spec(spec_viz)
 spec_viz.loader.exec_module(uq_viz)
 
 
-def train_single_process(process_config, device='auto', verbose=True, seed=42):
+def train_single_process(process_config, train_loader, val_loader, test_loader,
+                         preprocessor, device='auto', verbose=True, seed=42):
     """
     Addestra uncertainty predictor per un processo e genera report.
 
+    Riceve DataLoader già pronti (costruiti dal chiamante).
+
     Args:
         process_config (dict): Config da PROCESSES
+        train_loader (DataLoader): Training data loader
+        val_loader (DataLoader): Validation data loader
+        test_loader (DataLoader): Test data loader
+        preprocessor (DataPreprocessor): Fitted preprocessor (per unscaling)
         device (str): 'cuda', 'cpu', o 'auto'
         verbose (bool): Print progress
         seed (int): Random seed
@@ -111,7 +119,7 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
     np.random.seed(seed)
 
     # Import global uncertainty config
-    from controller_optimization.configs.processes_config import GLOBAL_UNCERTAINTY_CONFIG
+    from configs.processes_config import GLOBAL_UNCERTAINTY_CONFIG
 
     # Extract config
     process_name = process_config['name']
@@ -135,80 +143,24 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
         print(f"Training Uncertainty Predictor for Process: {process_name.upper()}")
         print(f"{'='*70}")
 
-    # 1. Generate SCM dataset
-    if verbose:
-        print(f"\n[1/9] Generating SCM dataset ({scm_dataset_type})...")
-
-    # Per processi ST, passa st_params per costruire lo SCM
-    extra_kwargs = {}
-    if scm_dataset_type == 'st' and 'st_params' in process_config:
-        extra_kwargs['st_params'] = process_config['st_params']
-
-    X, y, input_cols, output_cols = generate_scm_data(
-        n_samples=training_config['n_samples'],
-        seed=seed,
-        dataset_type=scm_dataset_type,
-        save_graph_to=checkpoint_dir,  # Save SCM graph
-        **extra_kwargs
-    )
-
-    # 2. Preprocessing
-    if verbose:
-        print(f"\n[2/9] Preprocessing data...")
-
-    preprocessor = DataPreprocessor(scaling_method='standard')
-
-    # Split data
-    X_train, X_val, X_test, y_train, y_val, y_test = preprocessor.split_data(
-        X, y,
-        train_size=0.7,
-        val_size=0.15,
-        test_size=0.15,
-        random_state=seed
-    )
-
-    # Fit and transform
-    X_train_scaled, y_train_scaled = preprocessor.fit_transform(X_train, y_train)
-    X_val_scaled, y_val_scaled = preprocessor.transform(X_val, y_val)
-    X_test_scaled, y_test_scaled = preprocessor.transform(X_test, y_test)
-
-    # Convert to tensors
-    train_dataset = TensorDataset(
-        torch.FloatTensor(X_train_scaled),
-        torch.FloatTensor(y_train_scaled)
-    )
-    val_dataset = TensorDataset(
-        torch.FloatTensor(X_val_scaled),
-        torch.FloatTensor(y_val_scaled)
-    )
-    test_dataset = TensorDataset(
-        torch.FloatTensor(X_test_scaled),
-        torch.FloatTensor(y_test_scaled)
-    )
-
-    # Create data loaders
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=training_config['batch_size'],
-        shuffle=True
-    )
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=training_config['batch_size'],
-        shuffle=False
-    )
-    test_loader = DataLoader(
-        test_dataset,
-        batch_size=training_config['batch_size'],
-        shuffle=False
-    )
+    # Compute dataset sizes from loaders
+    n_train = len(train_loader.dataset)
+    n_val = len(val_loader.dataset)
+    n_test = len(test_loader.dataset)
 
     if verbose:
-        print(f"  Train: {len(X_train)} samples")
-        print(f"  Val:   {len(X_val)} samples")
-        print(f"  Test:  {len(X_test)} samples")
+        print(f"\n[1/7] Data received from caller:")
+        print(f"  Train: {n_train} samples")
+        print(f"  Val:   {n_val} samples")
+        print(f"  Test:  {n_test} samples")
 
-    # 3. Create UncertaintyPredictor (Ensemble, SWAG, or Single)
+    # Extract scaled training data for visualization later
+    X_train_scaled = torch.cat([batch[0] for batch in train_loader]).numpy()
+    y_train = preprocessor.output_scaler.inverse_transform(
+        torch.cat([batch[1] for batch in train_loader]).numpy()
+    )
+
+    # Create UncertaintyPredictor (Ensemble, SWAG, or Single)
     # Determine uncertainty method
     uncertainty_method = model_config.get('uncertainty_method', 'single')
 
@@ -222,7 +174,7 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
     if use_ensemble:
         n_ensemble_models = model_config.get('n_ensemble_models', 5)
         if verbose:
-            print(f"\n[3/9] Creating EnsembleUncertaintyPredictor with {n_ensemble_models} models...")
+            print(f"\n[2/7] Creating EnsembleUncertaintyPredictor with {n_ensemble_models} models...")
 
         model = EnsembleUncertaintyPredictor(
             input_size=input_dim,
@@ -244,7 +196,7 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
     elif use_swag:
         swag_max_rank = model_config.get('swag_max_rank', 20)
         if verbose:
-            print(f"\n[3/9] Creating SWAGUncertaintyPredictor...")
+            print(f"\n[2/7] Creating SWAGUncertaintyPredictor...")
 
         # Create base model
         base_model = UncertaintyPredictor(
@@ -267,7 +219,7 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
 
     else:
         if verbose:
-            print(f"\n[3/9] Creating UncertaintyPredictor model...")
+            print(f"\n[2/7] Creating UncertaintyPredictor model...")
 
         model = UncertaintyPredictor(
             input_size=input_dim,
@@ -282,12 +234,12 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
         if verbose:
             print(f"  Total parameters: {total_params:,}")
 
-    # 4. Create loss function
+    # Create loss function
     criterion = GaussianNLLLoss(alpha=training_config['variance_penalty_alpha'])
 
-    # 5. Create trainer
+    # Create trainer
     if verbose:
-        print(f"\n[4/9] Creating trainer...")
+        print(f"\n[3/7] Creating trainer...")
 
     if use_ensemble:
         ensemble_base_seed = model_config.get('ensemble_base_seed', 42)
@@ -320,9 +272,9 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
             weight_decay=training_config['weight_decay']
         )
 
-    # 6. Train
+    # Train
     if verbose:
-        print(f"\n[5/9] Training model...")
+        print(f"\n[4/7] Training model...")
 
     history = trainer.train(
         train_loader=train_loader,
@@ -332,9 +284,9 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
         save_dir=str(checkpoint_dir)
     )
 
-    # 7. Evaluate on test set
+    # Evaluate on test set
     if verbose:
-        print(f"\n[6/9] Evaluating on test set...")
+        print(f"\n[5/7] Evaluating on test set...")
 
     model.eval()
     all_means = []
@@ -463,9 +415,9 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
         y_train_pred_aleatoric_orig = y_train_pred_aleatoric
         y_train_pred_epistemic_orig = y_train_pred_epistemic
 
-    # 8. Generate visualizations
+    # Generate visualizations
     if verbose:
-        print(f"\n[7/9] Generating visualizations...")
+        print(f"\n[6/7] Generating visualizations...")
 
     # Training history plot (with SWA start marker if using SWAG)
     uq_viz.plot_training_history(
@@ -515,9 +467,9 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
         save_path=str(checkpoint_dir / 'uncertainty_distribution.png')
     )
 
-    # 9. Generate PDF report
+    # Generate PDF report
     if verbose:
-        print(f"\n[8/9] Generating PDF report...")
+        print(f"\n[7/7] Generating PDF report and saving artifacts...")
 
     # Build config dict for report
     config_dict = {
@@ -570,17 +522,13 @@ def train_single_process(process_config, device='auto', verbose=True, seed=42):
         input_dim=input_dim,
         output_dim=output_dim,
         total_params=total_params,
-        n_train=len(X_train),
-        n_val=len(X_val),
-        n_test=len(X_test),
+        n_train=n_train,
+        n_val=n_val,
+        n_test=n_test,
         checkpoint_dir=checkpoint_dir,
         timestamp=datetime.now(),
         coverage_results=coverage_results
     )
-
-    # 10. Save model, scaler, and metadata
-    if verbose:
-        print(f"\n[9/9] Saving artifacts...")
 
     # Save model weights
     model_path = checkpoint_dir / 'uncertainty_predictor.pth'
