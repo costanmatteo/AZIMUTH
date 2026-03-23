@@ -24,10 +24,11 @@ from causaliT.training.callbacks import (
     BestCheckpointCallback, DataIndexTracker, 
     KFoldResultsTracker, GradientJacobianLogger
 )
-from causaliT.training.forecasters import TransformerForecaster, StageCausalForecaster, SingleCausalForecaster
+from causaliT.training.forecasters import TransformerForecaster, StageCausalForecaster, SingleCausalForecaster, NoiseAwareCausalForecaster
 from causaliT.training.dataloader import ProcessDataModule
 from causaliT.training.stage_causal_dataloader import StageCausalDataModule
 from causaliT.training.experiment_control import update_config
+from causaliT.training.config_utils import populate_seq_lengths_from_dataset
 #from causaliT.predict import mk_quick_pred_plot
 
 os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
@@ -70,6 +71,10 @@ def trainer(
     seed = config["training"]["seed"]
     seed_everything(seed)
     torch.set_float32_matmul_precision("high")
+    
+    # Populate sequence lengths from dataset metadata
+    # This reads S_seq_len, X_seq_len, Y_seq_len from dataset_metadata.json
+    config = populate_seq_lengths_from_dataset(config, data_dir)
     
     # get model class and dataloader from configuration
     model_class = get_model_class(config)
@@ -120,6 +125,21 @@ def trainer(
     del temp_model  # Clean up temporary model
     
     for fold, (train_local_idx, val_local_idx) in enumerate(kfold.split(train_val_idx)):
+        
+        # =====================================================================
+        # RESET SEED BEFORE MODEL CREATION FOR REPRODUCIBLE INITIALIZATION
+        # =====================================================================
+        # This ensures all folds start with identical model weights while still
+        # having different train/val data splits. The KFold split is controlled
+        # by random_state=seed (numpy RNG), which is separate from PyTorch's RNG.
+        #
+        # Why this matters:
+        # - nn.Embedding initializes weights from N(0,1) using PyTorch's RNG
+        # - Without reset, fold N's model has different initialization than fold 0
+        # - This causes different DAGs to be learned even with same seed
+        # - With reset, all folds have identical starting point for fair comparison
+        # =====================================================================
+        seed_everything(seed)
         
         # re-initialize the model at any fold
         model = create_model_instance(config, data_dir)
@@ -255,6 +275,57 @@ def trainer(
     df_metric = pd.DataFrame.from_dict(metrics_dict, orient='index')
     df_metric = df_metric.applymap(lambda x: x.item() if isinstance(x, torch.Tensor) else x) # Convert tensor values to floats
     
+    # =========================================================================
+    # Post-Training Evaluations
+    # =========================================================================
+    # Run evaluation functions after training completes.
+    # This is wrapped in try-except to ensure training results are not lost
+    # if evaluation fails.
+    #
+    # Evaluation strategy is controlled by config["evaluation"]["functions"]:
+    # - If not specified: runs default evaluations (run_all_evaluations)
+    # - If specified: runs only the listed functions (run_evaluations_from_config)
+    #
+    # Available functions:
+    # - eval_train_metrics: Training curves and loss analysis
+    # - eval_attention_scores: DAG recovery metrics
+    # - eval_embed: Embedding evolution analysis
+    # - eval_interventions: Causal intervention tests
+    # - eval_embedding_dag_correlation: Embedding-DAG correlation
+    # - eval_dyconex_predictions: Dyconex-specific prediction evaluation
+    # - eval_metrics: Flexible metric plotting
+    try:
+        from causaliT.evaluation.eval_funs import run_all_evaluations, run_evaluations_from_config
+        print("\n" + "="*60)
+        print("Running post-training evaluations...")
+        print("="*60)
+        
+        # Check for evaluation config
+        eval_functions = config.get("evaluation", {}).get("functions", None)
+        
+        if eval_functions is not None:
+            # Use config-specified functions
+            print(f"Using config-specified evaluation functions: {eval_functions}")
+            eval_results = run_evaluations_from_config(
+                experiment=save_dir,
+                datadir_path=data_dir,
+                show_plots=False,  # Always False for cluster
+                functions=eval_functions,
+            )
+        else:
+            # Default behavior: run all standard evaluations
+            eval_results = run_all_evaluations(
+                experiment=save_dir,
+                datadir_path=data_dir,
+                show_plots=False,  # Always False for cluster
+            )
+        print("\nPost-training evaluations completed!")
+    except Exception as e:
+        print(f"\nWarning: Post-training evaluation failed: {e}")
+        import traceback
+        traceback.print_exc()
+        print("Training results are still saved. You can run evaluations manually later.")
+    
     return df_metric
 
 
@@ -270,7 +341,7 @@ def get_model_class(config: dict):
         Model class (Lightning Module class, not instance)
     """
     model_obj = config["model"]["model_object"]
-    available_models = ["proT", "StageCausaliT", "SingleCausalLayer", "LSTM", "GRU", "TCN", "MLP"]
+    available_models = ["proT", "StageCausaliT", "SingleCausalLayer", "NoiseAwareSingleCausalLayer", "LSTM", "GRU", "TCN", "MLP"]
     
     assert model_obj in available_models, AssertionError(f"{model_obj} unavailable! Choose between {available_models}")
 
@@ -278,6 +349,7 @@ def get_model_class(config: dict):
         "proT": TransformerForecaster,
         "StageCausaliT": StageCausalForecaster,
         "SingleCausalLayer": SingleCausalForecaster,
+        "NoiseAwareSingleCausalLayer": NoiseAwareCausalForecaster,
         # "GRU": RNNForecaster,
         # "LSTM": RNNForecaster,
         # "TCN": RNNForecaster,
@@ -292,18 +364,20 @@ def create_model_instance(config: dict, data_dir: str = None) -> pl.LightningMod
     
     Args:
         config: Configuration dictionary
-        data_dir: Data directory path (needed for StageCausaliT/SingleCausalLayer hard masks)
+        data_dir: Data directory path (needed for StageCausaliT/SingleCausalLayer/NoiseAwareSingleCausalLayer hard masks)
         
     Returns:
         Model instance (Lightning Module)
     """
     model_obj = config["model"]["model_object"]
     
-    # StageCausaliT and SingleCausalLayer need data_dir for hard mask loading
+    # StageCausaliT, SingleCausalLayer, and NoiseAwareSingleCausalLayer need data_dir for hard mask loading
     if model_obj == "StageCausaliT":
         return StageCausalForecaster(config, data_dir=data_dir)
     elif model_obj == "SingleCausalLayer":
         return SingleCausalForecaster(config, data_dir=data_dir)
+    elif model_obj == "NoiseAwareSingleCausalLayer":
+        return NoiseAwareCausalForecaster(config, data_dir=data_dir)
     elif model_obj == "proT":
         return TransformerForecaster(config)
     else:
@@ -318,7 +392,7 @@ def get_dataloader(config: dict, data_dir: str, cluster: bool, seed: int):
     
     Different models may require different data formats:
     - Standard models (ProT, LSTM, etc.): (X, Y) format
-    - StageCausaliT, SingleCausalLayer: (S, X, Y) format
+    - StageCausaliT, SingleCausalLayer, NoiseAwareSingleCausalLayer: (S, X, Y) format
     
     Args:
         config: Configuration dictionary
@@ -335,6 +409,7 @@ def get_dataloader(config: dict, data_dir: str, cluster: bool, seed: int):
         "proT": ProcessDataModule,
         "StageCausaliT": StageCausalDataModule,
         "SingleCausalLayer": StageCausalDataModule,  # Uses same (S, X, Y) format
+        "NoiseAwareSingleCausalLayer": StageCausalDataModule,  # Uses same (S, X, Y) format
         "LSTM": ProcessDataModule,
         "GRU": ProcessDataModule,
         "TCN": ProcessDataModule,
@@ -343,8 +418,8 @@ def get_dataloader(config: dict, data_dir: str, cluster: bool, seed: int):
     
     DataModuleClass = DATALOADER_REGISTRY.get(model_obj, ProcessDataModule)
     
-    # StageCausaliT and SingleCausalLayer use a single file with (s, x, y) arrays
-    if model_obj in ["StageCausaliT", "SingleCausalLayer"]:
+    # StageCausaliT, SingleCausalLayer, and NoiseAwareSingleCausalLayer use a single file with (s, x, y) arrays
+    if model_obj in ["StageCausaliT", "SingleCausalLayer", "NoiseAwareSingleCausalLayer"]:
         dm = DataModuleClass(
             data_dir=join(data_dir, config["data"]["dataset"]),
             input_file=config["data"]["filename_input"],  # Single .npz file with s, x, y

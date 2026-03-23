@@ -77,7 +77,7 @@ def find_config_file(folder_path: str) -> str:
         FileNotFoundError: If no config file is found
         ValueError: If more than one config file is found
     """
-    pattern = re.compile(r'^config_.*\.yaml$')
+    pattern = re.compile(r'^config(_.*)?\.yaml$')
     matching_files = []
     
     for filename in listdir(folder_path):
@@ -85,7 +85,7 @@ def find_config_file(folder_path: str) -> str:
             matching_files.append(join(folder_path, filename))
     
     if len(matching_files) == 0:
-        raise FileNotFoundError(f"No config_*.yaml found in {folder_path}")
+        raise FileNotFoundError(f"No config*.yaml found in {folder_path}")
     
     if len(matching_files) > 1:
         raise ValueError(f"More than one config file found in {folder_path}: {matching_files}")
@@ -1227,10 +1227,10 @@ def load_attention_evolution(
     Load attention scores and phi tensors across all training epochs to track their evolution.
     
     .. deprecated::
-        This function has been moved to `notebooks.eval_fun.load_attention_evolution` 
+        This function has been moved to `notebooks.eval_funs.load_attention_evolution`
         with an improved `n_evaluations` parameter. Please use:
         
-        >>> from notebooks.eval_fun import load_attention_evolution
+        >>> from notebooks.eval_funs import load_attention_evolution
         
         The new version supports `n_evaluations` parameter (default=10) which selects
         evenly-spaced checkpoints for consistent evaluation time regardless of total epochs.
@@ -1245,7 +1245,7 @@ def load_attention_evolution(
         datadir_path: Path to data directory. If None, uses "../data/" relative to notebooks
         dataset_label: One of ["train", "test", "all"]
         input_conditioning_fn: Optional function to condition inputs before forward pass
-        n_evaluations: [DEPRECATED - use eval_fun.load_attention_evolution instead]
+        n_evaluations: [DEPRECATED - use eval_funs.load_attention_evolution instead]
                       Number of checkpoints to evaluate. If None, evaluates ALL checkpoints.
         
     Returns:
@@ -1264,7 +1264,7 @@ def load_attention_evolution(
             - phi_{block}_{i}{j}_diff: difference from initialization
             
     Example:
-        >>> # DEPRECATED: Use notebooks.eval_fun.load_attention_evolution instead
+        >>> # DEPRECATED: Use notebooks.eval_funs.load_attention_evolution instead
         >>> from notebooks.eval_fun import load_attention_evolution
         >>> 
         >>> # Load attention evolution with 10 evaluation points (default)
@@ -1276,7 +1276,7 @@ def load_attention_evolution(
     import warnings
     warnings.warn(
         "load_attention_evolution in lib.py is deprecated. "
-        "Use 'from notebooks.eval_fun import load_attention_evolution' instead. "
+        "Use 'from notebooks.eval_funs import load_attention_evolution' instead. "
         "The new version supports n_evaluations parameter for faster evaluation.",
         DeprecationWarning,
         stacklevel=2
