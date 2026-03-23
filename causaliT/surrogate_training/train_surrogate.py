@@ -198,14 +198,14 @@ class SurrogateTrainer:
     def load_data_from_parquet(self, parquet_path: str, train_ratio=0.7,
                                 val_ratio=0.15, seed=42):
         """
-        Load training data from trajectories_full.parquet (Phase 1 output).
+        Load training data from trajectories_full.parquet/csv (Phase 1 output).
 
-        The parquet contains columns: {proc}_input_{j}, {proc}_output_{j}, F
+        The file contains columns: {proc}_input_{j}, {proc}_output_{j}, F
         This method reshapes the data into (n_samples, n_processes, features)
         where each process token = concat(inputs, outputs).
 
         Args:
-            parquet_path: Path to trajectories_full.parquet
+            parquet_path: Path to trajectories_full.parquet or .csv
             train_ratio: Fraction of data for training
             val_ratio: Fraction of data for validation
             seed: Random seed for split
@@ -217,9 +217,20 @@ class SurrogateTrainer:
         import json
 
         parquet_file = Path(parquet_path)
+
+        # Auto-detect: if parquet requested but only csv exists, use csv
+        if not parquet_file.exists():
+            alt = parquet_file.with_suffix('.csv') if parquet_file.suffix == '.parquet' \
+                  else parquet_file.with_suffix('.parquet')
+            if alt.exists():
+                parquet_file = alt
+
         print(f"\nLoading data from {parquet_file}...")
 
-        df = pd.read_parquet(parquet_file)
+        if parquet_file.suffix == '.csv':
+            df = pd.read_csv(parquet_file)
+        else:
+            df = pd.read_parquet(parquet_file)
         n_samples = len(df)
         print(f"  Total samples: {n_samples}")
 

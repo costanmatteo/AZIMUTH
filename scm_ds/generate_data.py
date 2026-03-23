@@ -235,9 +235,17 @@ def generate_all_data(processes, n_samples, seed, output_dir, save_graphs=True):
     parquet_data['F'] = F_numpy
 
     df_full = pd.DataFrame(parquet_data)
-    parquet_path = output_path / 'trajectories_full.parquet'
-    df_full.to_parquet(parquet_path, index=False)
-    print(f"  Saved full trajectories: {parquet_path} ({len(df_full)} rows)")
+
+    # Try parquet first, fall back to CSV if engine not available
+    try:
+        parquet_path = output_path / 'trajectories_full.parquet'
+        df_full.to_parquet(parquet_path, index=False)
+        print(f"  Saved full trajectories: {parquet_path} ({len(df_full)} rows)")
+    except ImportError:
+        csv_path = output_path / 'trajectories_full.csv'
+        df_full.to_csv(csv_path, index=False)
+        print(f"  Saved full trajectories: {csv_path} ({len(df_full)} rows)")
+        print(f"  (parquet unavailable — install pyarrow for parquet support)")
 
     # Save metadata
     metadata = {
