@@ -118,7 +118,7 @@ def _format_prot(trajectories, process_names):
     """
     Format for ProT (TransformerForecaster).
 
-    For each trajectory: concatenate [inputs, outputs] per process.
+    For each trajectory: concatenate [inputs, env, outputs] per process.
     Features are zero-padded to the max dimension across processes.
 
     Returns:
@@ -133,10 +133,12 @@ def _format_prot(trajectories, process_names):
     feature_dims = []
     for pname in process_names:
         inp = sample[pname]['inputs']
+        env = sample[pname].get('env')
         out = sample[pname]['outputs']
         inp_dim = inp.numel() if isinstance(inp, torch.Tensor) else np.array(inp).size
+        env_dim = (env.numel() if isinstance(env, torch.Tensor) else np.array(env).size) if env is not None else 0
         out_dim = out.numel() if isinstance(out, torch.Tensor) else np.array(out).size
-        feature_dims.append(inp_dim + out_dim)
+        feature_dims.append(inp_dim + env_dim + out_dim)
     max_features = max(feature_dims)
 
     # Build arrays
@@ -147,8 +149,12 @@ def _format_prot(trajectories, process_names):
         traj = traj_data['trajectory']
         for j, pname in enumerate(process_names):
             inp = _to_numpy_flat(traj[pname]['inputs'])
-            out = _to_numpy_flat(traj[pname]['outputs'])
-            features = np.concatenate([inp, out])
+            parts = [inp]
+            env = traj[pname].get('env')
+            if env is not None:
+                parts.append(_to_numpy_flat(env))
+            parts.append(_to_numpy_flat(traj[pname]['outputs']))
+            features = np.concatenate(parts)
             X[i, j, :len(features)] = features
         Y[i, 0, 0] = traj_data['F']
 

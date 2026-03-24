@@ -642,14 +642,13 @@ class CasualiTSurrogate:
         features_list = []
         batch_size = None
 
-        for proc_idx, pname in enumerate(process_names):
+        for pname in process_names:
             if pname not in trajectory:
                 continue
             data = trajectory[pname]
-            # Use only controllable inputs (exclude environmental variables),
-            # matching the [inputs, outputs] format from convert_dataset.py
-            ctrl_indices = self.process_chain.processes_info[proc_idx]['controllable_indices']
-            inputs = data['inputs'][:, ctrl_indices]
+            # Use full inputs (control + environmental variables),
+            # matching the [inputs, env, outputs] format from convert_dataset.py
+            inputs = data['inputs']
             if batch_size is None:
                 batch_size = inputs.shape[0]
             # Use sampled outputs (reparameterization trick), fall back to mean
