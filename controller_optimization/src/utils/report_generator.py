@@ -426,10 +426,12 @@ def _page1(d):
     F_star = d.get('F_star', 0.0)
     F_bl   = d.get('F_baseline', 0.0)
     F_act  = d.get('F_actual', 0.0)
+    F_form = d.get('F_formula')  # Formula-based F (only when using CasualiT)
 
     fstar_v, _       = _fval(F_star)
     fbl_v,   fbl_s   = _fval(F_bl)
     fact_v,  fact_s  = _fval(F_act)
+    fform_v, fform_s = _fval(F_form) if F_form is not None else (None, None)
 
     epochs     = tr_cfg.get('epochs', hist.get('epochs_trained', '\u2014'))
     max_epochs = tr_cfg.get('max_epochs', tr_cfg.get('epochs', '\u2014'))
@@ -471,24 +473,48 @@ def _page1(d):
     F.append(_rule_heavy())
 
     # ── KPI bar ───────────────────────────────────────────────────────────────
-    cw = TW / 4
-    kpi_data = [
-        [Paragraph("Controller F",  ST_KPI_LBL),
-         Paragraph("Target F*",     ST_KPI_LBL),
-         Paragraph("vs baseline",   ST_KPI_LBL),
-         Paragraph("Best loss",     ST_KPI_LBL)],
-        [Paragraph(f"{fact_v:.4f}",  ST_KPI_VAL),
-         Paragraph(f"{fstar_v:.4f}", ST_KPI_VAL),
-         Paragraph(f"{improv_pct:+.0f}%",
-                   _s('_kv_g', FS_KPI_VAL,
-                      color=C_GREEN if improv_pct >= 0 else C_RED)),
-         Paragraph(f"{best_loss:.4f}", ST_KPI_VAL)],
-        [Paragraph(f"\u00b1{rob_std:.4f} robustness", ST_KPI_SUB),
-         Paragraph(f"gap {gap_pct:.1f}%",             ST_KPI_SUB),
-         Paragraph(f"F\u2019 = {fbl_v:.4f}",          ST_KPI_SUB),
-         Paragraph(f"final {final_loss:.2f}",          ST_KPI_SUB)],
-    ]
-    kpi_tbl = Table(kpi_data, colWidths=[cw] * 4)
+    if fform_v is not None:
+        n_kpi = 5
+        cw = TW / n_kpi
+        kpi_data = [
+            [Paragraph("Controller F",  ST_KPI_LBL),
+             Paragraph("Formula F",     ST_KPI_LBL),
+             Paragraph("Target F*",     ST_KPI_LBL),
+             Paragraph("vs baseline",   ST_KPI_LBL),
+             Paragraph("Best loss",     ST_KPI_LBL)],
+            [Paragraph(f"{fact_v:.4f}",  ST_KPI_VAL),
+             Paragraph(f"{fform_v:.4f}", ST_KPI_VAL),
+             Paragraph(f"{fstar_v:.4f}", ST_KPI_VAL),
+             Paragraph(f"{improv_pct:+.0f}%",
+                       _s('_kv_g', FS_KPI_VAL,
+                          color=C_GREEN if improv_pct >= 0 else C_RED)),
+             Paragraph(f"{best_loss:.4f}", ST_KPI_VAL)],
+            [Paragraph(f"\u00b1{rob_std:.4f} robustness", ST_KPI_SUB),
+             Paragraph(f"\u00b1{fform_s:.4f}" if fform_s else "", ST_KPI_SUB),
+             Paragraph(f"gap {gap_pct:.1f}%",             ST_KPI_SUB),
+             Paragraph(f"F\u2019 = {fbl_v:.4f}",          ST_KPI_SUB),
+             Paragraph(f"final {final_loss:.2f}",          ST_KPI_SUB)],
+        ]
+    else:
+        n_kpi = 4
+        cw = TW / n_kpi
+        kpi_data = [
+            [Paragraph("Controller F",  ST_KPI_LBL),
+             Paragraph("Target F*",     ST_KPI_LBL),
+             Paragraph("vs baseline",   ST_KPI_LBL),
+             Paragraph("Best loss",     ST_KPI_LBL)],
+            [Paragraph(f"{fact_v:.4f}",  ST_KPI_VAL),
+             Paragraph(f"{fstar_v:.4f}", ST_KPI_VAL),
+             Paragraph(f"{improv_pct:+.0f}%",
+                       _s('_kv_g', FS_KPI_VAL,
+                          color=C_GREEN if improv_pct >= 0 else C_RED)),
+             Paragraph(f"{best_loss:.4f}", ST_KPI_VAL)],
+            [Paragraph(f"\u00b1{rob_std:.4f} robustness", ST_KPI_SUB),
+             Paragraph(f"gap {gap_pct:.1f}%",             ST_KPI_SUB),
+             Paragraph(f"F\u2019 = {fbl_v:.4f}",          ST_KPI_SUB),
+             Paragraph(f"final {final_loss:.2f}",          ST_KPI_SUB)],
+        ]
+    kpi_tbl = Table(kpi_data, colWidths=[cw] * n_kpi)
     kpi_tbl.setStyle(TableStyle([
         ('BOX',           (0, 0), (-1, -1), 0.5, C_MGRAY),
         ('INNERGRID',     (0, 0), (-1, -1), 0.5, C_MGRAY),
@@ -536,15 +562,20 @@ def _page1(d):
         [blk_title("Architecture")] + [kv_table(arch_rows,  cw4)],
         [blk_title("Training")]     + [kv_table(train_rows, cw4)],
         # col 3: reliability scores
-        [blk_title("Reliability scores")] + [kv_table([
-            ("F* (target)",             f"{fstar_v:.6f}"),
-            ("F\u2019 (baseline)",       _fstr(F_bl)),
-            ("F (controller)",           _fstr(F_act)),
-            ("Improvement vs baseline",  f"{improv_pct:+.2f}%",
-             ST_VAL_G if improv_pct >= 0 else ST_VAL_R),
-            ("Gap from target",          f"{gap_pct:.2f}%", ST_VAL_R),
-            ("Robustness (std)",         f"{rob_std:.6f}"),
-        ], cw4)],
+        [blk_title("Reliability scores")] + [kv_table(
+            [
+                ("F* (target)",             f"{fstar_v:.6f}"),
+                ("F\u2019 (baseline)",       _fstr(F_bl)),
+                ("F (controller)",           _fstr(F_act)),
+            ] + ([
+                ("F (formula)",              _fstr(F_form)),
+            ] if fform_v is not None else []) + [
+                ("Improvement vs baseline",  f"{improv_pct:+.2f}%",
+                 ST_VAL_G if improv_pct >= 0 else ST_VAL_R),
+                ("Gap from target",          f"{gap_pct:.2f}%", ST_VAL_R),
+                ("Robustness (std)",         f"{rob_std:.6f}"),
+            ],
+        cw4)],
         # col 4: performance
         [blk_title("Performance")] + [kv_table(
             _perf_rows(adv, n_scenarios), cw4)],
@@ -765,9 +796,13 @@ def _page1(d):
         tf_s  = traj.get('F_star',     fstar_v)
         tf_bl = traj.get('F_baseline', fbl_v)
         tf_ac = traj.get('F_actual',   fact_v)
-        foot_l = Paragraph(
-            f"F* {tf_s:.6f}  \u00b7  F\u2019 {tf_bl:.6f}  \u00b7  "
-            f"F {tf_ac:.6f}  \u00b7  scenario {sc_idx} only", ST_NOTE)
+        tf_form_ac = traj.get('F_formula_actual')
+        foot_text = (f"F* {tf_s:.6f}  \u00b7  F\u2019 {tf_bl:.6f}  \u00b7  "
+                     f"F {tf_ac:.6f}")
+        if tf_form_ac is not None:
+            foot_text += f"  \u00b7  F(formula) {tf_form_ac:.6f}"
+        foot_text += f"  \u00b7  scenario {sc_idx} only"
+        foot_l = Paragraph(foot_text, ST_NOTE)
         foot_r = Paragraph("\u2191 = closer to target than baseline", ST_NOTE_G)
         foot_t = Table([[foot_l, foot_r]], colWidths=[TW * 0.65, TW * 0.35])
         foot_t.setStyle(TableStyle([
@@ -1022,6 +1057,7 @@ def generate_controller_report(
     advanced_metrics=None,
     trajectory_values=None,
     theoretical_data=None,
+    F_formula=None,
 ):
     if timestamp is None:
         timestamp = datetime.now()
@@ -1042,6 +1078,7 @@ def generate_controller_report(
         trajectory_values=trajectory_values,
         theoretical_data=theoretical_data or {},
         checkpoint_dir=checkpoint_dir,
+        F_formula=F_formula,
     )
     _build_pdf(d, out)
     return str(out)
@@ -1056,7 +1093,7 @@ class ControllerReportGenerator:
     def generate(self, config, training_history, final_metrics, process_metrics,
                  F_star, F_baseline, F_actual, timestamp, n_scenarios=None,
                  advanced_metrics=None, trajectory_values=None,
-                 theoretical_data=None):
+                 theoretical_data=None, F_formula=None):
         if timestamp is None:
             timestamp = datetime.now()
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1074,6 +1111,7 @@ class ControllerReportGenerator:
             trajectory_values=trajectory_values,
             theoretical_data=theoretical_data or {},
             checkpoint_dir=self.output_path.parent,
+            F_formula=F_formula,
         )
         _build_pdf(d, self.output_path)
         return str(self.output_path)
