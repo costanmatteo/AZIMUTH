@@ -461,7 +461,7 @@ def _left_column(trainer, eval_results: dict, config: dict) -> list:
         ('Test Samples',  str(n_test)),
         ('Trajectories',  str(dc.get('n_trajectories', '-'))),
         ('Scenarios',     str(dc.get('n_scenarios', '-'))),
-        ('Processes',     ', '.join(dc.get('process_names', []))),
+        ('Processes',     ', '.join(str(p) for p in dc.get('process_names', []) if p is not None) or 'All'),
         ('Random Seed',   str(dc.get('random_seed', '-'))),
     ]:
         story.append(_kv(k, v))
@@ -622,7 +622,7 @@ def _right_bottom(trainer, config: dict, tmp: Path) -> list:
         ]))
         story.append(box)
     else:
-        proc_names = config['data'].get('process_names', [])
+        proc_names = [p for p in config['data'].get('process_names', []) if p is not None]
         n = min(phi.shape[0], len(proc_names)) if proc_names else phi.shape[0]
         if not proc_names:
             proc_names = [f'P{i}' for i in range(n)]
