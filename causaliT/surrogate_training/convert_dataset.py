@@ -11,6 +11,7 @@ Usage:
 """
 
 import sys
+import json
 import argparse
 from pathlib import Path
 import numpy as np
@@ -60,10 +61,11 @@ def convert_trajectories_to_causalit_format(
     print(f"  Processes: {process_names}")
 
     # Extract data based on model type
+    var_metadata = None
     if model_type == 'proT':
         X, Y = _format_prot(trajectories, process_names)
     elif model_type in ('StageCausaliT', 'SingleCausalLayer'):
-        S, Xint, Y = _format_stage_causal(trajectories, process_names)
+        S, Xint, Y, var_metadata = _format_stage_causal(trajectories, process_names)
     else:
         raise ValueError(f"Unknown model_type: {model_type}. "
                          f"Expected 'proT', 'StageCausaliT', or 'SingleCausalLayer'")
@@ -88,10 +90,14 @@ def convert_trajectories_to_causalit_format(
     if model_type == 'proT':
         _save_prot(X, Y, train_idx, val_idx, test_idx, output_path)
     else:
-        _save_stage_causal(S, Xint, Y, train_idx, val_idx, test_idx, output_path)
+        _save_stage_causal(S, Xint, Y, train_idx, val_idx, test_idx, output_path,
+                           var_metadata, process_names)
 
-    # Compute statistics
-    F_all = Y.flatten()
+    # Compute statistics (value is always at column 0 for stage-causal format)
+    if model_type in ('StageCausaliT', 'SingleCausalLayer'):
+        F_all = Y[:, :, 0].flatten()
+    else:
+        F_all = Y.flatten()
     stats = {
         'n_samples': n_samples,
         'n_train': len(train_idx),
@@ -153,41 +159,83 @@ def _format_stage_causal(trajectories, process_names):
     """
     Format for StageCausaliT / SingleCausalLayer.
 
+    Each input/output scalar becomes a separate token with [value, variable_id].
+    Variable IDs use shared (global) numbering:
+        S variables: 1 .. n_s
+        X variables: (n_s+1) .. (n_s+n_x)
+        Y variables: (n_s+n_x+1) .. (n_s+n_x+n_y)
+
+    This matches the SCM dataset format expected by StageCausaliT.
+
     Returns:
-        S: np.array (N, n_processes, s_features)  - controllable inputs
-        X: np.array (N, n_processes, x_features)  - process outputs
-        Y: np.array (N, 1)                        - F value
+        S: np.array (N, n_s, 2)     - source tokens [value, variable_id]
+        X: np.array (N, n_x, 2)     - intermediate tokens [value, variable_id]
+        Y: np.array (N, n_y, 2)     - target tokens [value, variable_id]
+        var_metadata: dict           - variable counts and labels
     """
     n_samples = len(trajectories)
-    n_processes = len(process_names)
 
-    # First pass: determine dimensions
+    # First pass: count total variables per stage
     sample = trajectories[0]['trajectory']
-    s_dims = []
-    x_dims = []
+    s_dims_per_process = []
+    x_dims_per_process = []
     for pname in process_names:
-        inp = sample[pname]['inputs']
-        out = sample[pname]['outputs']
-        s_dims.append(inp.numel() if isinstance(inp, torch.Tensor) else np.array(inp).size)
-        x_dims.append(out.numel() if isinstance(out, torch.Tensor) else np.array(out).size)
-    max_s = max(s_dims)
-    max_x = max(x_dims)
+        inp = _to_numpy_flat(sample[pname]['inputs'])
+        out = _to_numpy_flat(sample[pname]['outputs'])
+        s_dims_per_process.append(len(inp))
+        x_dims_per_process.append(len(out))
 
-    # Build arrays (zero-padded)
-    S = np.zeros((n_samples, n_processes, max_s), dtype=np.float32)
-    X = np.zeros((n_samples, n_processes, max_x), dtype=np.float32)
-    Y = np.zeros((n_samples, 1), dtype=np.float32)
+    n_s = sum(s_dims_per_process)   # total source variables
+    n_x = sum(x_dims_per_process)   # total intermediate variables
+    n_y = 1                         # F is a single target
+
+    # Build arrays: (N, seq_len, 2) with [value, variable_id]
+    S = np.zeros((n_samples, n_s, 2), dtype=np.float32)
+    X = np.zeros((n_samples, n_x, 2), dtype=np.float32)
+    Y = np.zeros((n_samples, n_y, 2), dtype=np.float32)
+
+    # Build variable labels for metadata
+    s_labels = []
+    x_labels = []
+    s_var_id = 1
+    x_var_id = n_s + 1
+    for pname in process_names:
+        n_inp = s_dims_per_process[process_names.index(pname)]
+        n_out = x_dims_per_process[process_names.index(pname)]
+        for k in range(n_inp):
+            s_labels.append(f"{pname}_in{k}")
+        for k in range(n_out):
+            x_labels.append(f"{pname}_out{k}")
+    y_labels = ["F"]
 
     for i, traj_data in enumerate(trajectories):
         traj = traj_data['trajectory']
-        for j, pname in enumerate(process_names):
+        s_idx = 0
+        x_idx = 0
+        for pname in process_names:
             inp = _to_numpy_flat(traj[pname]['inputs'])
             out = _to_numpy_flat(traj[pname]['outputs'])
-            S[i, j, :len(inp)] = inp
-            X[i, j, :len(out)] = out
-        Y[i, 0] = traj_data['F']
+            for val in inp:
+                S[i, s_idx] = [val, s_idx + 1]           # 1-indexed
+                s_idx += 1
+            for val in out:
+                X[i, x_idx] = [val, n_s + x_idx + 1]    # offset by n_s
+                x_idx += 1
+        Y[i, 0] = [traj_data['F'], n_s + n_x + 1]
 
-    return S, X, Y
+    var_metadata = {
+        'n_source': n_s,
+        'n_input': n_x,
+        'n_target': n_y,
+        'source_labels': s_labels,
+        'input_labels': x_labels,
+        'target_labels': y_labels,
+        's_dims_per_process': s_dims_per_process,
+        'x_dims_per_process': x_dims_per_process,
+    }
+
+    print(f"  Stage-causal format: S({n_s} vars), X({n_x} vars), Y({n_y} var)")
+    return S, X, Y, var_metadata
 
 
 def _to_numpy_flat(t):
@@ -211,13 +259,42 @@ def _save_prot(X, Y, train_idx, val_idx, test_idx, output_path):
     print(f"  Saved ProT format: {{split}}_X.npy, {{split}}_Y.npy")
 
 
-def _save_stage_causal(S, X, Y, train_idx, val_idx, test_idx, output_path):
-    """Save StageCausaliT/SingleCausalLayer format as .npz files."""
-    for split_name, idx in [('train', train_idx), ('val', val_idx), ('test', test_idx)]:
-        np.savez(output_path / f'{split_name}_ds.npz',
-                 s=S[idx], x=X[idx], y=Y[idx])
+def _save_stage_causal(S, X, Y, train_idx, val_idx, test_idx, output_path,
+                       var_metadata, process_names):
+    """Save StageCausaliT/SingleCausalLayer format as .npz files + metadata."""
+    # Save combined file (used by Lightning trainer with k-fold)
+    np.savez(output_path / 'ds.npz', s=S, x=X, y=Y)
 
-    print(f"  Saved stage-causal format: {{split}}_ds.npz with keys (s, x, y)")
+    # Also save per-split files for reference / pre-split mode
+    # Combine train+val for Lightning trainer (k-fold handles the val split)
+    train_val_idx = np.concatenate([train_idx, val_idx])
+    np.savez(output_path / 'train_ds.npz',
+             s=S[train_val_idx], x=X[train_val_idx], y=Y[train_val_idx])
+    np.savez(output_path / 'test_ds.npz',
+             s=S[test_idx], x=X[test_idx], y=Y[test_idx])
+
+    print(f"  Saved stage-causal format: ds.npz, train_ds.npz, test_ds.npz")
+
+    # Save dataset_metadata.json (required by Lightning trainer)
+    dataset_metadata = {
+        'name': 'surrogate_stage_causal',
+        'description': f'Stage-causal data from process chain trajectories ({", ".join(process_names)})',
+        'variable_info': {
+            'n_source': var_metadata['n_source'],
+            'n_input': var_metadata['n_input'],
+            'n_target': var_metadata['n_target'],
+            'source_labels': var_metadata['source_labels'],
+            'input_labels': var_metadata['input_labels'],
+            'target_labels': var_metadata['target_labels'],
+        },
+        'feature_indices': {
+            'value': 0,
+            'variable': 1,
+        },
+    }
+    with open(output_path / 'dataset_metadata.json', 'w') as f:
+        json.dump(dataset_metadata, f, indent=2)
+    print(f"  Saved dataset_metadata.json")
 
 
 def main():

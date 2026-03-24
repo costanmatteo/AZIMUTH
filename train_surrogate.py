@@ -609,6 +609,189 @@ Test Evaluation:
     return pdf_path
 
 
+def _train_stage_causal_lightning(casualit_model, config, args):
+    """
+    Train StageCausaliT or SingleCausalLayer using the PyTorch Lightning pipeline.
+
+    Builds the OmegaConf config expected by causaliT.training.trainer.trainer()
+    from the flat SURROGATE_CONFIG and the dataset_metadata.json produced by
+    convert_dataset.py, then launches training.
+    """
+    from omegaconf import OmegaConf
+    from causaliT.training.trainer import trainer as lightning_trainer
+
+    if casualit_model == 'SingleCausalLayer':
+        print(f"\n[INFO] SingleCausalLayer Lightning training not yet wired.")
+        print(f"  Data has been prepared in {args.data_dir}.")
+        return
+
+    # ── Load dataset metadata (created by convert_dataset.py) ─────────
+    metadata_path = Path(args.data_dir) / 'dataset_metadata.json'
+    if not metadata_path.exists():
+        print(f"\n[ERROR] dataset_metadata.json not found at {metadata_path}")
+        print("  Run with --use_existing_dataset or --generate_data first.")
+        return
+    with open(metadata_path) as f:
+        metadata = json.load(f)
+
+    n_s = metadata['variable_info']['n_source']
+    n_x = metadata['variable_info']['n_input']
+    n_y = metadata['variable_info']['n_target']
+    total_vars = n_s + n_x + n_y + 1  # +1 for padding_idx=0
+
+    # ── Read hyper-parameters from SURROGATE_CONFIG ───────────────────
+    d_model = config['model'].get('d_model_enc', 64)
+    d_ff    = config['model'].get('d_ff', 128)
+    d_qk    = config['model'].get('d_qk', 16)
+    n_heads = config['model'].get('n_heads', 4)
+    dropout = config['model'].get('dropout_emb', 0.1)
+
+    # ── Path handling: Lightning trainer joins data_dir + dataset ─────
+    # data lives directly in args.data_dir, so we split parent / name
+    data_parent  = str(Path(args.data_dir).parent)   # e.g. "causaliT/data"
+    dataset_name = str(Path(args.data_dir).name)      # e.g. "surrogate_training"
+
+    # ── Build the config dict expected by the Lightning pipeline ──────
+    lt_config = OmegaConf.create({
+        'model': {
+            'model_object': casualit_model,
+            'kwargs': {
+                'model': casualit_model,
+
+                # Shared embedding (same table for S, X, Y – global variable IDs)
+                'use_independent_embeddings': False,
+                'ds_embed_shared': {
+                    'setting': {'d_model': d_model, 'sparse_grad': False},
+                    'modules': [
+                        {'idx': 0, 'embed': 'linear', 'label': 'value',
+                         'kwargs': {'input_dim': 1, 'embedding_dim': d_model}},
+                        {'idx': 1, 'embed': 'nn_embedding', 'label': 'variable',
+                         'kwargs': {'num_embeddings': total_vars,
+                                    'embedding_dim': d_model,
+                                    'padding_idx': 0, 'sparse': False,
+                                    'max_norm': 1}},
+                        {'idx': 0, 'embed': 'mask', 'label': 'value_missing',
+                         'kwargs': {}},
+                        {'idx': 1, 'embed': 'pass', 'label': 'order',
+                         'kwargs': {}},
+                    ],
+                },
+                'comps_embed_shared': 'summation',
+                'val_idx_X': 0,  # value column to blank / predict
+
+                # Attention (plain scaled dot-product, no causal masks)
+                'dec1_cross_attention_type': 'ScaledDotProduct',
+                'dec1_cross_mask_type':      'Uniform',
+                'dec1_self_attention_type':   'ScaledDotProduct',
+                'dec1_self_mask_type':        'Uniform',
+                'dec2_cross_attention_type':  'ScaledDotProduct',
+                'dec2_cross_mask_type':       'Uniform',
+                'dec2_self_attention_type':   'ScaledDotProduct',
+                'dec2_self_mask_type':        'Uniform',
+                'n_heads':          n_heads,
+                'dec1_causal_mask': False,
+                'dec2_causal_mask': False,
+
+                # Architecture
+                'd1_layers':     config['model'].get('d_layers', 1),
+                'd2_layers':     config['model'].get('d_layers', 1),
+                'activation':    config['model'].get('activation', 'gelu'),
+                'norm':          'layer',
+                'use_final_norm': True,
+                'device':         'cuda' if args.device != 'cpu' else 'cpu',
+
+                # Dimensions
+                'out_dim':  1,
+                'd_ff':     d_ff,
+                'd_model':  d_model,
+                'd_qk':     d_qk,
+                'S_seq_len': n_s,
+                'X_seq_len': n_x,
+                'Y_seq_len': n_y,
+
+                # Dropout
+                'dropout_emb':                  dropout,
+                'dropout_attn_out':             dropout,
+                'dropout_ff':                   dropout,
+                'dec1_cross_dropout_qkv':       dropout,
+                'dec1_cross_attention_dropout':  dropout,
+                'dec1_self_dropout_qkv':        dropout,
+                'dec1_self_attention_dropout':   dropout,
+                'dec2_cross_dropout_qkv':       dropout,
+                'dec2_cross_attention_dropout':  dropout,
+                'dec2_self_dropout_qkv':        dropout,
+                'dec2_self_attention_dropout':   dropout,
+            },
+        },
+
+        'data': {
+            'dataset':        dataset_name,
+            'filename_input': 'ds.npz',
+            'val_idx':   0,   # value column
+            'val_idx_X': 0,
+            'val_idx_Y': 0,
+            'test_ds_ixd':    None,
+            'max_data_size':  None,
+            'S_seq_len': n_s,
+            'X_seq_len': n_x,
+            'Y_seq_len': n_y,
+        },
+
+        'training': {
+            'optimizer':      'adamw',
+            'lr':             config['training'].get('learning_rate', 1e-3),
+            'weight_decay':   config['training'].get('weight_decay', 0.01),
+            'use_scheduler':  config['training'].get('use_scheduler', True),
+            'loss_fn':        'mse',
+            'loss_weight_x':  1.0,
+            'loss_weight_y':  1.0,
+            'teacher_forcing': True,
+            'batch_size':     config['training'].get('batch_size', 64),
+            'max_epochs':     config['training'].get('max_epochs', 200),
+            'k_fold':         config['training'].get('k_fold', 1),
+            'seed':           config['training'].get('seed', 42),
+            'save_ckpt_every_n_epochs': 50,
+            'log_entropy':       False,
+            'log_acyclicity':    False,
+            'use_hard_masks':    False,
+            'use_in_context_masks': False,
+        },
+
+        'special':    {'mode': []},
+        'evaluation': {'functions': ['eval_train_metrics']},
+    })
+
+    save_dir = args.output_dir
+    os.makedirs(save_dir, exist_ok=True)
+
+    print(f"\n[2/4] Training {casualit_model} with PyTorch Lightning...")
+    print(f"  d_model={d_model}, n_heads={n_heads}, d_ff={d_ff}")
+    print(f"  S_seq_len={n_s}, X_seq_len={n_x}, Y_seq_len={n_y}")
+    print(f"  num_embeddings={total_vars} (shared)")
+
+    results_df = lightning_trainer(
+        config=lt_config,
+        data_dir=data_parent,
+        save_dir=save_dir,
+        cluster=False,
+    )
+
+    # Copy best checkpoint to the expected location
+    best_ckpt_src = Path(save_dir) / 'k_0' / 'best_checkpoint.ckpt'
+    best_ckpt_dst = Path(save_dir) / 'best_model.ckpt'
+    if best_ckpt_src.exists():
+        import shutil
+        shutil.copy2(best_ckpt_src, best_ckpt_dst)
+        print(f"  Best checkpoint copied to: {best_ckpt_dst}")
+
+    print("\n" + "="*70)
+    print("Training Complete!")
+    print("="*70)
+    print(f"  Checkpoints: {save_dir}")
+    if results_df is not None:
+        print(f"  Results:\n{results_df.to_string()}")
+
+
 def main():
     parser = argparse.ArgumentParser(description='Train CasualiT Surrogate')
     parser.add_argument('--epochs', type=int, default=None, help='Max epochs')
@@ -688,14 +871,8 @@ def main():
         print("\n[1/4] Using existing training data")
 
     # ── Load & train ───────────────────────────────────────────────────────
-    # For now, StageCausaliT/SingleCausalLayer training is not yet integrated
-    # into SurrogateTrainer (they use PyTorch Lightning). Only proT uses the
-    # built-in SimpleSurrogateModel trainer.
-    if casualit_model != 'proT':
-        print(f"\n[INFO] Model type '{casualit_model}' requires PyTorch Lightning training.")
-        print(f"  Data has been prepared in {args.data_dir}.")
-        print(f"  Use the causaliT training pipeline (causaliT/training/) to train")
-        print(f"  {casualit_model}, then place the checkpoint in {args.output_dir}/best_model.ckpt.")
+    if casualit_model in ('StageCausaliT', 'SingleCausalLayer'):
+        _train_stage_causal_lightning(casualit_model, config, args)
         return
 
     # Create trainer (proT path)
