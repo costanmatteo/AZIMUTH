@@ -657,20 +657,16 @@ def main():
 
         dataset_path = config['data'].get('dataset_path',
                                            'data/trajectories/full_trajectories.pt')
-        needs_conversion = _needs_conversion(data_path, casualit_model)
-        if needs_conversion:
-            print("\n[1/4] Converting existing dataset...")
-            convert_trajectories_to_causalit_format(
-                trajectories_path=dataset_path,
-                output_dir=args.data_dir,
-                model_type=casualit_model,
-                train_frac=config['data'].get('train_frac', 0.70),
-                val_frac=config['data'].get('val_frac', 0.15),
-                test_frac=config['data'].get('test_frac', 0.15),
-                seed=config['data'].get('random_seed', 42),
-            )
-        else:
-            print("\n[1/4] Using already-converted dataset")
+        print("\n[1/4] Converting existing dataset...")
+        convert_trajectories_to_causalit_format(
+            trajectories_path=dataset_path,
+            output_dir=args.data_dir,
+            model_type=casualit_model,
+            train_frac=config['data'].get('train_frac', 0.70),
+            val_frac=config['data'].get('val_frac', 0.15),
+            test_frac=config['data'].get('test_frac', 0.15),
+            seed=config['data'].get('random_seed', 42),
+        )
 
         if args.data_only:
             print("\nData conversion complete.")
@@ -733,14 +729,6 @@ def main():
     print("="*70)
     print(f"Checkpoints: {args.output_dir}")
     print(f"Report: {pdf_path}")
-
-
-def _needs_conversion(data_path: Path, model_type: str) -> bool:
-    """Check if data in data_path already matches the expected format for model_type."""
-    if model_type == 'proT':
-        return not (data_path / 'train_X.npy').exists()
-    else:  # StageCausaliT / SingleCausalLayer
-        return not (data_path / 'train_ds.npz').exists()
 
 
 if __name__ == '__main__':
