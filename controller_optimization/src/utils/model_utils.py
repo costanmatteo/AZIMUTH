@@ -48,7 +48,7 @@ def _infer_architecture_from_state_dict(state_dict):
     Works for single, ensemble, and SWAG models by finding the first/last linear layers.
 
     Returns:
-        (input_dim, output_dim, hidden_sizes) — any may be None if not inferrable
+        (input_dim, output_dim, hidden_sizes, has_batchnorm) — dims may be None if not inferrable
     """
     # Determine key prefix based on model type
     if any(k.startswith('models.') for k in state_dict):
@@ -61,19 +61,21 @@ def _infer_architecture_from_state_dict(state_dict):
         prefix = ''
 
     # Collect shared_network linear layer weights in order
+    # Only consider 2D tensors (Linear layers). BatchNorm layers also have
+    # .weight but are 1D, and must be excluded to avoid inflating hidden_sizes.
     layer_weights = {}
     for key, tensor in state_dict.items():
         if not key.startswith(prefix):
             continue
         suffix = key[len(prefix):]
-        if suffix.startswith('shared_network.') and suffix.endswith('.weight'):
+        if suffix.startswith('shared_network.') and suffix.endswith('.weight') and tensor.dim() == 2:
             # e.g. "shared_network.0.weight" → index 0
             parts = suffix.split('.')
             layer_idx = int(parts[1])
             layer_weights[layer_idx] = tensor.shape
 
     if not layer_weights:
-        return None, None, None
+        return None, None, None, False
 
     # input_dim from first layer's in_features
     first_idx = min(layer_weights.keys())
@@ -86,7 +88,16 @@ def _infer_architecture_from_state_dict(state_dict):
     mean_head_key = f'{prefix}mean_head.weight'
     output_dim = state_dict[mean_head_key].shape[0] if mean_head_key in state_dict else None
 
-    return input_dim, output_dim, hidden_sizes
+    # Detect use_batchnorm: check for 1D .weight tensors in shared_network
+    # (BatchNorm layers have 1D weight tensors)
+    has_batchnorm = any(
+        suffix.startswith('shared_network.') and suffix.endswith('.weight') and tensor.dim() == 1
+        for key, tensor in state_dict.items()
+        if key.startswith(prefix)
+        for suffix in [key[len(prefix):]]
+    )
+
+    return input_dim, output_dim, hidden_sizes, has_batchnorm
 
 
 def load_uncertainty_predictor(checkpoint_path, input_dim, output_dim, model_config, device='cpu'):
@@ -112,7 +123,7 @@ def load_uncertainty_predictor(checkpoint_path, input_dim, output_dim, model_con
     state_dict = torch.load(checkpoint_path, map_location=device)
 
     # Infer architecture from checkpoint to avoid config/checkpoint mismatches
-    ckpt_input_dim, ckpt_output_dim, ckpt_hidden_sizes = _infer_architecture_from_state_dict(state_dict)
+    ckpt_input_dim, ckpt_output_dim, ckpt_hidden_sizes, ckpt_batchnorm = _infer_architecture_from_state_dict(state_dict)
     if ckpt_input_dim is not None and ckpt_input_dim != input_dim:
         print(f"  ⚠ Checkpoint input_dim={ckpt_input_dim} differs from config input_dim={input_dim}, using checkpoint value")
         input_dim = ckpt_input_dim
@@ -122,6 +133,9 @@ def load_uncertainty_predictor(checkpoint_path, input_dim, output_dim, model_con
     if ckpt_hidden_sizes is not None and ckpt_hidden_sizes != model_config['hidden_sizes']:
         print(f"  ⚠ Checkpoint hidden_sizes={ckpt_hidden_sizes} differs from config {model_config['hidden_sizes']}, using checkpoint value")
         model_config = {**model_config, 'hidden_sizes': ckpt_hidden_sizes}
+    if ckpt_batchnorm != model_config.get('use_batchnorm', False):
+        print(f"  ⚠ Checkpoint use_batchnorm={ckpt_batchnorm} differs from config {model_config.get('use_batchnorm', False)}, using checkpoint value")
+        model_config = {**model_config, 'use_batchnorm': ckpt_batchnorm}
 
     # Detect model type from state_dict keys
     is_ensemble = any(key.startswith('models.') for key in state_dict.keys())
