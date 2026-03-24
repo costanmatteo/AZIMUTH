@@ -533,9 +533,13 @@ class CasualiTSurrogate:
             from train_surrogate import SimpleSurrogateModel
             config = checkpoint_data['config']
             model = SimpleSurrogateModel(config)
-            model.load_state_dict(checkpoint_data['model_state_dict'])
-            # SimpleSurrogateModel needs input_dim set; we defer to first inference call
-            self._simple_surrogate_needs_input_dim = True
+            # input_proj is None at init; infer n_features from saved weights
+            state = checkpoint_data['model_state_dict']
+            if 'input_proj.weight' in state:
+                n_features = state['input_proj.weight'].shape[1]
+                model.set_input_dim(n_features)
+            model.load_state_dict(state)
+            self._simple_surrogate_needs_input_dim = False
             print(f"  CasualiTSurrogate loaded SimpleSurrogateModel from {checkpoint_path}")
             model.eval()
             model.to(device)
