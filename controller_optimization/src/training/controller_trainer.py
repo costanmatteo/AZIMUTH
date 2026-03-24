@@ -490,8 +490,19 @@ class ControllerTrainer:
         # Debug: verify F is in the computation graph (first call only)
         if hasattr(self, '_debug_F_graph') and self._debug_F_graph:
             self._debug_F_graph = False
-            print(f"\n  [GRAD DEBUG] F.requires_grad={F.requires_grad}, "
-                  f"F.grad_fn={F.grad_fn}, F.shape={F.shape}")
+            print(f"\n{'='*60}", flush=True)
+            print(f"SURROGATE GRADIENT DEBUG", flush=True)
+            print(f"{'='*60}", flush=True)
+            print(f"  F.requires_grad = {F.requires_grad}", flush=True)
+            print(f"  F.grad_fn       = {F.grad_fn}", flush=True)
+            print(f"  F.shape         = {F.shape}", flush=True)
+            print(f"  F.mean()        = {F.mean().item():.6f}", flush=True)
+            print(f"  F*              = {self.surrogate.F_star:.6f}", flush=True)
+            if F.requires_grad and F.grad_fn is not None:
+                print(f"  STATUS: OK - Gradients WILL flow to controller", flush=True)
+            else:
+                print(f"  STATUS: BROKEN - F is detached, reliability loss has NO gradient effect!", flush=True)
+            print(f"{'='*60}\n", flush=True)
 
         F_star_tensor = torch.tensor(self.surrogate.F_star, dtype=torch.float32, device=self.device)
         reliability_loss = self.reliability_loss_scale * (F - F_star_tensor) ** 2
