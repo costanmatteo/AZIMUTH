@@ -534,7 +534,13 @@ class CasualiTSurrogate:
 
         # Load checkpoint once
         checkpoint_data = torch.load(checkpoint_path, map_location=device, weights_only=False)
-        model_type = checkpoint_data.get('model_type', 'proT')
+
+        # Determine model_type: may be at top level or inside hyper_parameters
+        # (Lightning checkpoints store the config under 'hyper_parameters')
+        hparams = checkpoint_data.get('hyper_parameters', {})
+        model_type = checkpoint_data.get('model_type', None)
+        if model_type is None:
+            model_type = hparams.get('model', {}).get('model_object', 'proT')
 
         if model_type not in model_class_map:
             raise ValueError(
@@ -543,33 +549,28 @@ class CasualiTSurrogate:
 
         model_cls = model_class_map[model_type]
 
-        # Try Lightning load first; fall back to manual instantiation
-        # if the checkpoint lacks Lightning metadata.
-        is_lightning_ckpt = 'pytorch-lightning_version' in checkpoint_data
-        if is_lightning_ckpt:
+        # Try Lightning's load_from_checkpoint first; if the checkpoint
+        # lacks Lightning metadata, fall back to manual instantiation.
+        try:
             model = model_cls.load_from_checkpoint(
                 checkpoint_path, map_location=device, weights_only=False)
-        else:
-            # Manual load: instantiate from saved hyper_parameters + state_dict
-            hparams = checkpoint_data.get('hyper_parameters', checkpoint_data.get('hparams', {}))
+        except (KeyError, TypeError):
+            # Manual load from hyper_parameters + state_dict
             if not hparams:
                 raise RuntimeError(
-                    f"Checkpoint has no 'hyper_parameters' key. "
-                    f"Cannot reconstruct {model_cls.__name__} without config.")
-
-            # StageCausaliT / SingleCausalLayer accept (config, data_dir)
+                    f"Checkpoint has no 'hyper_parameters' or Lightning metadata. "
+                    f"Cannot reconstruct {model_cls.__name__}.")
             if model_type in ('StageCausaliT', 'SingleCausalLayer'):
                 model = model_cls(hparams, data_dir=None)
             else:
                 model = model_cls(hparams)
-
             state_dict = checkpoint_data.get('state_dict', {})
             model.load_state_dict(state_dict, strict=False)
+            print(f"  (loaded via manual state_dict — checkpoint lacks Lightning metadata)")
 
         model.eval()
         model.to(device)
-        print(f"  CasualiTSurrogate loaded model_type='{model_type}' "
-              f"({'Lightning' if is_lightning_ckpt else 'manual'}) from {checkpoint_path}")
+        print(f"  CasualiTSurrogate loaded model_type='{model_type}' from {checkpoint_path}")
 
         return model, model_type
 
