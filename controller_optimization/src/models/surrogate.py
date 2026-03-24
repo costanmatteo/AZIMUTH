@@ -620,19 +620,55 @@ class CasualiTSurrogate:
 
     def _inference_prot(self, trajectory: Dict) -> torch.Tensor:
         """Run inference for ProT (TransformerForecaster or SimpleSurrogateModel)."""
-        X, Y = self.process_chain.trajectory_to_prot_format(trajectory)
-
-        # SimpleSurrogateModel: forward(x) -> (batch,)
-        if getattr(self, '_simple_surrogate_needs_input_dim', False):
-            self.model.set_input_dim(X.shape[2], device=X.device)
-            self._simple_surrogate_needs_input_dim = False
         from train_surrogate import SimpleSurrogateModel
         if isinstance(self.model, SimpleSurrogateModel):
-            return self.model(X)
+            return self._inference_simple_surrogate(trajectory)
 
         # TransformerForecaster: forward(data_input, data_trg) -> (output, ...)
+        X, Y = self.process_chain.trajectory_to_prot_format(trajectory)
         forecast_output, _, _, _ = self.model.forward(data_input=X, data_trg=Y)
         return forecast_output.squeeze()
+
+    def _inference_simple_surrogate(self, trajectory: Dict) -> torch.Tensor:
+        """
+        Run inference for SimpleSurrogateModel (from train_surrogate.py).
+
+        Builds input as [inputs, outputs_sampled] per process, matching
+        the [inputs, outputs] format used by convert_dataset.py.
+        outputs_sampled is the reparameterized sample from the uncertainty
+        predictor distribution, consistent with ProTSurrogate's analytical path.
+        """
+        process_names = self.process_chain.process_names
+        features_list = []
+        batch_size = None
+
+        for pname in process_names:
+            if pname not in trajectory:
+                continue
+            data = trajectory[pname]
+            inputs = data['inputs']
+            if batch_size is None:
+                batch_size = inputs.shape[0]
+            # Use sampled outputs (reparameterization trick), fall back to mean
+            outputs = data.get('outputs_sampled', data.get('outputs_mean'))
+            step_features = torch.cat([
+                inputs.view(batch_size, -1),
+                outputs.view(batch_size, -1),
+            ], dim=-1)
+            features_list.append(step_features)
+
+        # Pad to same feature dimension and stack
+        max_features = max(f.shape[-1] for f in features_list)
+        padded = []
+        for f in features_list:
+            if f.shape[-1] < max_features:
+                padding = torch.zeros(batch_size, max_features - f.shape[-1],
+                                      dtype=torch.float32, device=self.device)
+                f = torch.cat([f, padding], dim=-1)
+            padded.append(f)
+
+        X = torch.stack(padded, dim=1)  # (batch, n_processes, features)
+        return self.model(X)
 
     def _inference_stage_causal(self, trajectory: Dict) -> torch.Tensor:
         """
