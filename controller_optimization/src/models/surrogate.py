@@ -554,19 +554,47 @@ class CasualiTSurrogate:
         try:
             model = model_cls.load_from_checkpoint(
                 checkpoint_path, map_location=device, weights_only=False)
-        except (KeyError, TypeError):
+        except (KeyError, TypeError) as e:
+            print(f"  Lightning load_from_checkpoint failed ({e.__class__.__name__}: {e})")
+            print(f"  Checkpoint keys: {list(checkpoint_data.keys())}")
+
             # Manual load from hyper_parameters + state_dict
-            if not hparams:
-                raise RuntimeError(
-                    f"Checkpoint has no 'hyper_parameters' or Lightning metadata. "
-                    f"Cannot reconstruct {model_cls.__name__}.")
-            if model_type in ('StageCausaliT', 'SingleCausalLayer'):
-                model = model_cls(hparams, data_dir=None)
+            if hparams:
+                print(f"  Falling back to manual instantiation from 'hyper_parameters'")
+                if model_type in ('StageCausaliT', 'SingleCausalLayer'):
+                    model = model_cls(hparams, data_dir=None)
+                else:
+                    model = model_cls(hparams)
+                state_dict = checkpoint_data.get('state_dict', {})
+                model.load_state_dict(state_dict, strict=False)
+            elif 'state_dict' in checkpoint_data:
+                # Checkpoint has state_dict but no config — read config from
+                # the training YAML stored alongside the checkpoint.
+                print(f"  Falling back to config from checkpoint directory")
+                ckpt_dir = Path(checkpoint_path).parent
+                config_candidates = list(ckpt_dir.glob('config*.yaml')) + list(ckpt_dir.glob('hparams.yaml'))
+                if config_candidates:
+                    import yaml
+                    with open(config_candidates[0], 'r') as f:
+                        recovered_config = yaml.safe_load(f)
+                    print(f"  Using config from {config_candidates[0]}")
+                    if model_type in ('StageCausaliT', 'SingleCausalLayer'):
+                        model = model_cls(recovered_config, data_dir=None)
+                    else:
+                        model = model_cls(recovered_config)
+                    model.load_state_dict(checkpoint_data['state_dict'], strict=False)
+                else:
+                    raise RuntimeError(
+                        f"Checkpoint has no 'hyper_parameters' or Lightning metadata, "
+                        f"and no config YAML found in {ckpt_dir}. "
+                        f"Checkpoint keys: {list(checkpoint_data.keys())}. "
+                        f"Cannot reconstruct {model_cls.__name__}.")
             else:
-                model = model_cls(hparams)
-            state_dict = checkpoint_data.get('state_dict', {})
-            model.load_state_dict(state_dict, strict=False)
-            print(f"  (loaded via manual state_dict — checkpoint lacks Lightning metadata)")
+                raise RuntimeError(
+                    f"Checkpoint has no 'hyper_parameters', no 'state_dict', "
+                    f"and no Lightning metadata. "
+                    f"Checkpoint keys: {list(checkpoint_data.keys())}. "
+                    f"Cannot reconstruct {model_cls.__name__}.")
 
         model.eval()
         model.to(device)
