@@ -542,6 +542,7 @@ class CasualiTSurrogate:
             self._simple_surrogate_needs_input_dim = False
             print(f"  CasualiTSurrogate loaded SimpleSurrogateModel from {checkpoint_path}")
             model.eval()
+            model.requires_grad_(False)
             model.to(device)
             return model, model_type
 
@@ -577,6 +578,7 @@ class CasualiTSurrogate:
 
         self._simple_surrogate_needs_input_dim = False
         model.eval()
+        model.requires_grad_(False)
         model.to(device)
         print(f"  CasualiTSurrogate loaded model_type='{model_type}' from {checkpoint_path}")
 
@@ -606,13 +608,12 @@ class CasualiTSurrogate:
                 "CasualiTSurrogate uses ProcessChain for data conversion."
             )
 
-        with torch.no_grad():
-            if self.model_type == 'proT':
-                F = self._inference_prot(trajectory)
-            elif self.model_type in ('StageCausaliT', 'SingleCausalLayer'):
-                F = self._inference_stage_causal(trajectory)
-            else:
-                raise ValueError(f"Unsupported model_type: {self.model_type}")
+        if self.model_type == 'proT':
+            F = self._inference_prot(trajectory)
+        elif self.model_type in ('StageCausaliT', 'SingleCausalLayer'):
+            F = self._inference_stage_causal(trajectory)
+        else:
+            raise ValueError(f"Unsupported model_type: {self.model_type}")
 
         if return_quality_scores:
             return F, {}  # CasualiT doesn't provide per-process quality scores
