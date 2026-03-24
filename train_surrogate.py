@@ -368,6 +368,9 @@ class SurrogateTrainer:
             'best_val_loss': self.best_val_loss,
             'final_epoch': epoch,
             'final_val_loss': val_loss,
+            'final_train_loss': train_loss,
+            'final_train_mae': train_mae,
+            'final_val_mae': val_mae,
         }
 
     def evaluate(self, save_dir: str = None):
@@ -723,9 +726,53 @@ def main():
     eval_results = trainer.evaluate(args.output_dir if not args.skip_training else args.output_dir)
 
     # Generate report
-    from surrogate_report_generator import generate_pdf_report
-    report_dir = config['report']['output_dir']
-    pdf_path = generate_pdf_report(trainer, eval_results, config, report_dir)
+    from surrogate_report_generator import generate_surrogate_training_report
+
+    # Build full history dict expected by the report generator
+    history = dict(trainer.history)  # train_loss, val_loss, train_mae, val_mae, learning_rate
+    history['best_epoch'] = trainer.best_epoch
+    history['best_val_loss'] = trainer.best_val_loss
+    if not args.skip_training:
+        history['final_epoch'] = train_results['final_epoch']
+        history['final_val_loss'] = train_results['final_val_loss']
+        history['final_train_loss'] = train_results['final_train_loss']
+        history['final_train_mae'] = train_results['final_train_mae']
+        history['final_val_mae'] = train_results['final_val_mae']
+
+    # Compute floor metrics (MSE on top-decile reliability scores)
+    floor_metrics = None
+    targets = eval_results['targets']
+    preds = eval_results['predictions']
+    if len(targets) > 0:
+        q90 = np.percentile(targets, 90)
+        mask = targets >= q90
+        if mask.sum() > 0:
+            floor_preds = preds[mask]
+            floor_targets = targets[mask]
+            floor_metrics = {
+                'floor_mse': float(np.mean((floor_preds - floor_targets) ** 2)),
+                'floor_bias': float(np.mean(floor_preds - floor_targets)),
+            }
+
+    # Model dimensions
+    input_dim = trainer.train_X.shape[2]
+    output_dim = 1
+    total_params = sum(p.numel() for p in trainer.model.parameters())
+
+    checkpoint_dir = args.output_dir
+    pdf_path = generate_surrogate_training_report(
+        config=config,
+        history=history,
+        eval_results=eval_results,
+        input_dim=input_dim,
+        output_dim=output_dim,
+        total_params=total_params,
+        n_train=len(trainer.train_X),
+        n_val=len(trainer.val_X),
+        n_test=len(trainer.test_X),
+        checkpoint_dir=checkpoint_dir,
+        floor_metrics=floor_metrics,
+    )
 
     print("\n" + "="*70)
     print("Training Complete!")
