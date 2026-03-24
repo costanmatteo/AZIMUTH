@@ -520,26 +520,42 @@ class CasualiTSurrogate:
         Returns:
             Tuple of (model, model_type)
         """
-        # Peek at checkpoint to determine model_type
+        # Load checkpoint to determine model_type and instantiate
         checkpoint_data = torch.load(checkpoint_path, map_location=device, weights_only=False)
         model_type = checkpoint_data.get('model_type', 'proT')
 
+        # Determine the forecaster class
         if model_type == 'proT':
             from causaliT.training.forecasters.transformer_forecaster import TransformerForecaster
-            model = TransformerForecaster.load_from_checkpoint(
-                checkpoint_path, map_location=device, weights_only=False)
+            forecaster_cls = TransformerForecaster
         elif model_type == 'StageCausaliT':
             from causaliT.training.forecasters.stage_causal_forecaster import StageCausalForecaster
-            model = StageCausalForecaster.load_from_checkpoint(
-                checkpoint_path, map_location=device, weights_only=False)
+            forecaster_cls = StageCausalForecaster
         elif model_type == 'SingleCausalLayer':
             from causaliT.training.forecasters.single_causal_forecaster import SingleCausalForecaster
-            model = SingleCausalForecaster.load_from_checkpoint(
-                checkpoint_path, map_location=device, weights_only=False)
+            forecaster_cls = SingleCausalForecaster
         else:
             raise ValueError(
                 f"Unknown model_type '{model_type}' in checkpoint. "
                 f"Expected 'proT', 'StageCausaliT', or 'SingleCausalLayer'.")
+
+        # Try PL load_from_checkpoint first; fall back to manual load if
+        # checkpoint lacks PyTorch Lightning metadata
+        is_pl_checkpoint = 'pytorch-lightning_version' in checkpoint_data
+        if is_pl_checkpoint:
+            model = forecaster_cls.load_from_checkpoint(
+                checkpoint_path, map_location=device, weights_only=False)
+        else:
+            # Manual load: extract config from hyper_parameters and load state_dict
+            hparams = checkpoint_data.get('hyper_parameters', checkpoint_data.get('hparams', {}))
+            config = hparams if hparams else checkpoint_data.get('config', {})
+            if not config:
+                raise ValueError(
+                    f"Cannot find hyperparameters/config in checkpoint {checkpoint_path}. "
+                    f"Available keys: {list(checkpoint_data.keys())}")
+            state_dict = checkpoint_data.get('state_dict', checkpoint_data)
+            model = forecaster_cls(config)
+            model.load_state_dict(state_dict, strict=False)
 
         model.eval()
         model.to(device)
