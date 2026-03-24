@@ -47,6 +47,21 @@ def apply_plot_style():
     })
 
 
+def _get_surrogate_subtitle(surrogate_type: Optional[str],
+                            bellman_lmin: Optional[Dict[str, Any]],
+                            surrogate_lmin: Optional[float]) -> str:
+    """Build subtitle annotation indicating active surrogate mode."""
+    if surrogate_type == 'casualit' and surrogate_lmin is not None:
+        return "Surrogate: CasualiT  |  L\u0302_min via surrogate sampling (N=500)"
+    elif surrogate_type == 'reliability_function' and bellman_lmin is not None and bellman_lmin.get('L_min_bellman') is not None:
+        return "Surrogate: reliability_function  |  L_min via Bellman backward induction"
+    elif surrogate_type == 'casualit':
+        return "Surrogate: CasualiT  |  (L\u0302_min not available)"
+    elif surrogate_type == 'reliability_function':
+        return "Surrogate: reliability_function  |  (Bellman L_min not available)"
+    return ""
+
+
 def plot_loss_vs_L_min(
     epochs: List[int],
     observed_loss: List[float],
@@ -55,15 +70,19 @@ def plot_loss_vs_L_min(
     title: str = "Loss vs Theoretical Minimum",
     figsize: Tuple[int, int] = (10, 6),
     bellman_lmin: Optional[Dict[str, Any]] = None,
+    surrogate_lmin: Optional[float] = None,
+    var_F: Optional[float] = None,
+    surrogate_type: Optional[str] = None,
 ) -> plt.Figure:
     """
-    Plot observed loss and theoretical L_min over epochs.
+    Plot observed loss and the complete loss hierarchy over epochs.
 
-    Shows:
-    - Observed loss curve (solid blue)
-    - Theoretical L_min curve (dashed red)
-    - Shaded area showing reducible gap
-    - Bellman L_min horizontal line (if available)
+    Shows (bottom to top, only if computed):
+    1. Var(F) horizontal line — irreducible noise floor (always)
+    2. L_min Bellman horizontal line — only for reliability_function surrogate
+    3. L̂_min empirical horizontal line — only for casualit surrogate
+    4. Observed Loss curve (always)
+    Shaded fill between lowest reference and observed loss.
 
     Args:
         epochs: List of epoch numbers
@@ -73,6 +92,9 @@ def plot_loss_vs_L_min(
         title: Plot title
         figsize: Figure size
         bellman_lmin: Dict with Bellman results (keys: L_min_bellman, L_min_forward)
+        surrogate_lmin: Empirical L̂_min from surrogate sampling (casualit only)
+        var_F: Var(F) value for irreducible noise floor
+        surrogate_type: 'reliability_function' or 'casualit'
 
     Returns:
         Matplotlib Figure object
@@ -84,42 +106,67 @@ def plot_loss_vs_L_min(
 
     epochs = np.array(epochs)
     observed = np.array(observed_loss)
-    theoretical = np.array(theoretical_L_min)
 
-    # Plot observed loss
-    ax.plot(epochs, observed, 'b-', linewidth=2, label='Observed Loss', marker='o', markersize=3)
+    # Track lowest reference line for shaded fill
+    lowest_ref = None
 
-    # Plot theoretical L_min (empirical)
-    ax.plot(epochs, theoretical, 'r--', linewidth=2, label='L_min (empirical)')
+    # 1. Var(F) horizontal line — ALWAYS shown if available and > 0
+    if var_F is not None and var_F > 0:
+        ax.axhline(y=var_F, color='grey', linestyle='-', linewidth=1.5,
+                   label=f'Var(F) = {var_F:.4f} \u2014 irreducible noise floor')
+        lowest_ref = var_F
 
-    # Plot Bellman L_min lines if available
-    if bellman_lmin is not None:
+    # 2. L_min Bellman — only for reliability_function surrogate
+    bellman_val = None
+    if surrogate_type == 'reliability_function' and bellman_lmin is not None:
         bellman_val = bellman_lmin.get('L_min_bellman', None)
         if bellman_val is not None:
-            ax.axhline(y=bellman_val, color='green', linestyle='-.',
-                       linewidth=2.5, label=f'L_min Bellman = {bellman_val:.4f}')
+            ax.axhline(y=bellman_val, color='green', linestyle='--', linewidth=2,
+                       label=f'L_min Bellman = {bellman_val:.4f} \u2014 optimal Gaussian policy')
+            lowest_ref = min(lowest_ref, bellman_val) if lowest_ref is not None else bellman_val
 
-    # Fill area between L_min and observed (reducible gap)
-    ax.fill_between(
-        epochs,
-        theoretical,
-        observed,
-        alpha=0.3,
-        color='orange',
-        label='Reducible Gap'
-    )
+    # 3. L̂_min empirical (surrogate) — only for casualit surrogate
+    if surrogate_type == 'casualit' and surrogate_lmin is not None:
+        ax.axhline(y=surrogate_lmin, color='purple', linestyle='-.', linewidth=2,
+                   label=f'L\u0302_min empirical = {surrogate_lmin:.4f} \u2014 surrogate-based floor')
+        lowest_ref = min(lowest_ref, surrogate_lmin) if lowest_ref is not None else surrogate_lmin
 
-    all_vals = np.concatenate([observed, theoretical])
-    if bellman_lmin is not None:
-        extra = [v for v in [bellman_lmin.get('L_min_bellman')] if v is not None]
-        if extra:
-            all_vals = np.concatenate([all_vals, extra])
+    # 4. Observed Loss curve — ALWAYS shown
+    ax.plot(epochs, observed, 'b-', linewidth=2, label='Observed Loss', marker='o', markersize=3)
+
+    # Shaded fill between lowest reference line and observed loss
+    if lowest_ref is not None:
+        ax.fill_between(
+            epochs,
+            lowest_ref,
+            observed,
+            alpha=0.2,
+            color='orange',
+            label='Reducible gap (suboptimality)'
+        )
+
+    # Collect all values for y-axis limits
+    all_vals = list(observed)
+    if var_F is not None and var_F > 0:
+        all_vals.append(var_F)
+    if bellman_val is not None:
+        all_vals.append(bellman_val)
+    if surrogate_type == 'casualit' and surrogate_lmin is not None:
+        all_vals.append(surrogate_lmin)
+    all_vals = np.array(all_vals)
 
     # Labels and legend
     ax.set_xlabel('Epoch', fontsize=12)
     ax.set_ylabel('Loss', fontsize=12)
     ax.set_title(title, fontsize=14)
-    ax.legend(loc='upper right', fontsize=10)
+
+    # Subtitle annotation indicating active mode
+    subtitle = _get_surrogate_subtitle(surrogate_type, bellman_lmin, surrogate_lmin)
+    if subtitle:
+        ax.text(0.5, 1.02, subtitle, transform=ax.transAxes, fontsize=8,
+                ha='center', va='bottom', style='italic', color='#555555')
+
+    ax.legend(loc='upper right', fontsize=9)
     ax.grid(True, alpha=0.3)
 
     # Set reasonable y-axis limits
@@ -144,15 +191,17 @@ def plot_efficiency_over_time(
     figsize: Tuple[int, int] = (10, 5),
     bellman_lmin: Optional[Dict[str, Any]] = None,
     observed_loss: Optional[List[float]] = None,
+    surrogate_lmin: Optional[float] = None,
+    var_F: Optional[float] = None,
+    surrogate_type: Optional[str] = None,
 ) -> plt.Figure:
     """
-    Plot efficiency over epochs.
+    Plot up to three training efficiency curves over epochs.
 
-    When Bellman L_min is available, efficiency is defined as
-    L_min_Bellman / Loss_observed — so efficiency=1 means loss
-    has reached the absolute theoretical minimum.
-
-    Without Bellman, falls back to L_min_empirical / Loss_observed.
+    Hierarchy: eta_Var <= eta_min <= eta_emp <= 1
+      eta_Var  = Var(F) / L(Phi, epoch)          — always shown
+      eta_min  = L_min_Bellman / L(Phi, epoch)    — reliability_function only
+      eta_emp  = L_hat_min / L(Phi, epoch)        — casualit only
 
     Args:
         epochs: List of epoch numbers
@@ -161,7 +210,10 @@ def plot_efficiency_over_time(
         title: Plot title
         figsize: Figure size
         bellman_lmin: Dict with Bellman results (keys: L_min_bellman, L_min_forward)
-        observed_loss: List of observed loss values (needed for Bellman efficiency)
+        observed_loss: List of observed loss values (needed for computing efficiencies)
+        surrogate_lmin: Empirical L̂_min from surrogate sampling (casualit only)
+        var_F: Var(F) value for irreducible noise floor
+        surrogate_type: 'reliability_function' or 'casualit'
 
     Returns:
         Matplotlib Figure object
@@ -172,65 +224,54 @@ def plot_efficiency_over_time(
     ax.spines['right'].set_visible(False)
 
     epochs = np.array(epochs)
-    eff_empirical = np.array(efficiency)
+    obs_arr = np.array(observed_loss) if observed_loss is not None else None
 
-    # Determine if we can compute Bellman-based efficiency
+    # η_Var — ALWAYS shown if var_F available and observed_loss provided
+    if var_F is not None and var_F > 0 and obs_arr is not None and len(obs_arr) == len(epochs):
+        eta_var = np.where(obs_arr > 0, var_F / obs_arr, 0.0)
+        eta_var_clipped = np.clip(eta_var, 0, 1.05)
+        ax.plot(epochs, eta_var_clipped, color='grey', linestyle='-', linewidth=1.8,
+                label='\u03B7_Var = Var(F)/L(\u03A6) \u2014 irreducible floor')
+
+    # η_min — only for reliability_function with Bellman
     bellman_val = None
-    if bellman_lmin is not None:
+    if surrogate_type == 'reliability_function' and bellman_lmin is not None:
         bellman_val = bellman_lmin.get('L_min_bellman', None)
+    if bellman_val is not None and obs_arr is not None and len(obs_arr) == len(epochs):
+        eta_min = np.where(obs_arr > 0, bellman_val / obs_arr, 0.0)
+        eta_min_clipped = np.clip(eta_min, 0, 1.05)
+        ax.plot(epochs, eta_min_clipped, color='green', linestyle='--', linewidth=2,
+                label='\u03B7_min = L_min Bellman / L(\u03A6)')
 
-    if bellman_val is not None and observed_loss is not None and len(observed_loss) == len(epochs):
-        # Primary: Bellman-based efficiency
-        obs = np.array(observed_loss)
-        eff_bellman = np.where(obs > 0, bellman_val / obs, 0.0)
-        eff_bellman_clipped = np.clip(eff_bellman, 0, 1.5)
+    # η_emp — only for casualit with surrogate_lmin
+    if surrogate_type == 'casualit' and surrogate_lmin is not None and obs_arr is not None and len(obs_arr) == len(epochs):
+        eta_emp = np.where(obs_arr > 0, surrogate_lmin / obs_arr, 0.0)
+        eta_emp_clipped = np.clip(eta_emp, 0, 1.05)
+        ax.plot(epochs, eta_emp_clipped, color='purple', linestyle='-', linewidth=2,
+                label='\u03B7_emp = L\u0302_min / L(\u03A6) \u2014 empirical efficiency')
 
-        ax.plot(epochs, eff_bellman_clipped, 'g-', linewidth=2, marker='o', markersize=3,
-                label=f'Efficiency (Bellman, L_min={bellman_val:.4f})')
-
-        # Secondary: empirical efficiency as dashed reference
-        eff_emp_clipped = np.clip(eff_empirical, 0, 1.5)
-        ax.plot(epochs, eff_emp_clipped, 'b--', linewidth=1.5, alpha=0.5,
-                label='Efficiency (empirical)')
-
-        main_eff = eff_bellman_clipped
-        limit_label = 'Theoretical Limit — Bellman (100%)'
-    else:
-        # Fallback: empirical efficiency only
-        eff_emp_clipped = np.clip(eff_empirical, 0, 1.5)
-        ax.plot(epochs, eff_emp_clipped, 'g-', linewidth=2, marker='o', markersize=3,
-                label='Efficiency (empirical)')
-        main_eff = eff_emp_clipped
-        limit_label = 'Theoretical Limit (100%)'
-
-    # Add horizontal line at y=1 (theoretical limit)
-    ax.axhline(y=1.0, color='red', linestyle='--', linewidth=2, label=limit_label)
-
-    # Add horizontal lines at 90% and 95%
-    ax.axhline(y=0.9, color='orange', linestyle=':', linewidth=1, alpha=0.7, label='90% Efficiency')
-    ax.axhline(y=0.95, color='purple', linestyle=':', linewidth=1, alpha=0.7, label='95% Efficiency')
-
-    # Fill area above current efficiency (room for improvement)
-    ax.fill_between(
-        epochs,
-        main_eff,
-        1.0,
-        where=(main_eff < 1.0),
-        alpha=0.2,
-        color='red',
-        label='Room for Improvement'
-    )
+    # Reference lines
+    ax.axhline(y=1.0, color='red', linestyle='--', linewidth=2,
+               label='Theoretical limit 100%')
+    ax.axhline(y=0.9, color='orange', linestyle=':', linewidth=1, alpha=0.7,
+               label='90%')
 
     # Labels and legend
     ax.set_xlabel('Epoch', fontsize=12)
-    ylabel = 'Efficiency (L_min Bellman / Loss)' if bellman_val is not None else 'Efficiency (L_min / Loss)'
-    ax.set_ylabel(ylabel, fontsize=12)
+    ax.set_ylabel('Efficiency', fontsize=12)
     ax.set_title(title, fontsize=14)
+
+    # Subtitle annotation
+    subtitle = _get_surrogate_subtitle(surrogate_type, bellman_lmin, surrogate_lmin)
+    if subtitle:
+        ax.text(0.5, 1.02, subtitle, transform=ax.transAxes, fontsize=8,
+                ha='center', va='bottom', style='italic', color='#555555')
+
     ax.legend(loc='lower right', fontsize=9)
     ax.grid(True, alpha=0.3)
 
-    # Set y-axis from 0 to 1.1
-    ax.set_ylim(0, 1.1)
+    # y-axis clipped to [0, 1.05]
+    ax.set_ylim(0, 1.05)
 
     plt.tight_layout()
 
@@ -495,14 +536,15 @@ def plot_empirical_vs_theoretical(
 def create_summary_figure(
     tracker_data: Dict[str, Any],
     save_path: Optional[str] = None,
-    figsize: Tuple[int, int] = (14, 10)
+    figsize: Tuple[int, int] = (14, 10),
+    surrogate_lmin: Optional[float] = None,
 ) -> plt.Figure:
     """
     Create a comprehensive 2x2 summary figure.
 
     Quadrants:
-    1. Loss vs L_min over time
-    2. Efficiency over time
+    1. Loss vs L_min over time (complete hierarchy)
+    2. Efficiency over time (up to 3 curves)
     3. Loss decomposition (bar chart)
     4. Scatter plot
 
@@ -510,6 +552,7 @@ def create_summary_figure(
         tracker_data: Dictionary from TheoreticalLossTracker.to_dict()
         save_path: Path to save figure
         figsize: Figure size
+        surrogate_lmin: Empirical L̂_min from surrogate sampling (casualit only)
 
     Returns:
         Matplotlib Figure object
@@ -532,58 +575,101 @@ def create_summary_figure(
         final_Bias2 = 0
         final_gap = 0
 
-    # Extract Bellman data if available
+    # Extract Bellman data and surrogate info
     bellman_data = tracker_data.get('bellman_lmin', None)
+    if surrogate_lmin is None:
+        surrogate_lmin = tracker_data.get('surrogate_lmin', None)
 
-    # 1. Loss vs L_min (top left)
+    # Determine surrogate type from available data
+    if bellman_data is not None and bellman_data.get('L_min_bellman') is not None:
+        surrogate_type = 'reliability_function'
+    elif surrogate_lmin is not None:
+        surrogate_type = 'casualit'
+    else:
+        surrogate_type = None
+
+    var_F = final_Var_F if final_Var_F > 0 else None
+    obs_arr = np.array(observed_loss)
+    subtitle = _get_surrogate_subtitle(surrogate_type, bellman_data, surrogate_lmin)
+
+    # 1. Loss vs L_min (top left) — complete hierarchy
     ax1 = fig.add_subplot(2, 2, 1)
     ax1.spines['top'].set_visible(False)
     ax1.spines['right'].set_visible(False)
-    ax1.plot(epochs, observed_loss, 'b-', linewidth=2, label='Observed Loss', marker='o', markersize=2)
-    ax1.plot(epochs, theoretical_L_min, 'r--', linewidth=2, label='L_min (empirical)')
-    if bellman_data is not None:
+
+    lowest_ref = None
+
+    # Var(F) line — always
+    if var_F is not None:
+        ax1.axhline(y=var_F, color='grey', linestyle='-', linewidth=1.2,
+                     label=f'Var(F) = {var_F:.4f}')
+        lowest_ref = var_F
+
+    # L_min Bellman — reliability_function only
+    bellman_val = None
+    if surrogate_type == 'reliability_function' and bellman_data is not None:
         bellman_val = bellman_data.get('L_min_bellman', None)
         if bellman_val is not None:
-            ax1.axhline(y=bellman_val, color='green', linestyle='-.', linewidth=2,
-                        label=f'L_min Bellman = {bellman_val:.4f}')
-    ax1.fill_between(epochs, theoretical_L_min, observed_loss, alpha=0.3, color='orange', label='Gap')
+            ax1.axhline(y=bellman_val, color='green', linestyle='--', linewidth=1.8,
+                         label=f'L_min Bellman = {bellman_val:.4f}')
+            lowest_ref = min(lowest_ref, bellman_val) if lowest_ref is not None else bellman_val
+
+    # L̂_min surrogate — casualit only
+    if surrogate_type == 'casualit' and surrogate_lmin is not None:
+        ax1.axhline(y=surrogate_lmin, color='purple', linestyle='-.', linewidth=1.8,
+                     label=f'L\u0302_min emp = {surrogate_lmin:.4f}')
+        lowest_ref = min(lowest_ref, surrogate_lmin) if lowest_ref is not None else surrogate_lmin
+
+    # Observed loss
+    ax1.plot(epochs, observed_loss, 'b-', linewidth=2, label='Observed Loss', marker='o', markersize=2)
+
+    # Shaded fill
+    if lowest_ref is not None:
+        ax1.fill_between(epochs, lowest_ref, observed_loss, alpha=0.2, color='orange',
+                         label='Reducible gap')
+
     ax1.set_xlabel('Epoch')
     ax1.set_ylabel('Loss')
     ax1.set_title('Loss vs Theoretical Minimum')
+    if subtitle:
+        ax1.text(0.5, 1.02, subtitle, transform=ax1.transAxes, fontsize=6,
+                 ha='center', va='bottom', style='italic', color='#555555')
     ax1.legend(loc='upper right', fontsize=7)
     ax1.grid(True, alpha=0.3)
 
-    # 2. Efficiency (top right)
+    # 2. Efficiency (top right) — up to 3 curves
     ax2 = fig.add_subplot(2, 2, 2)
     ax2.spines['top'].set_visible(False)
     ax2.spines['right'].set_visible(False)
 
-    bellman_val = None
-    if bellman_data is not None:
-        bellman_val = bellman_data.get('L_min_bellman', None)
+    # η_Var — always
+    if var_F is not None and len(obs_arr) > 0:
+        eta_var = np.where(obs_arr > 0, var_F / obs_arr, 0.0)
+        ax2.plot(epochs, np.clip(eta_var, 0, 1.05), color='grey', linestyle='-', linewidth=1.5,
+                 label='\u03B7_Var')
 
-    if bellman_val is not None and len(observed_loss) > 0:
-        # Primary: Bellman-based efficiency per epoch
-        obs_arr = np.array(observed_loss)
-        bellman_eff_curve = np.where(obs_arr > 0, bellman_val / obs_arr, 0.0)
-        bellman_eff_clipped = np.clip(bellman_eff_curve, 0, 1.5)
-        ax2.plot(epochs, bellman_eff_clipped, 'g-', linewidth=2, marker='o', markersize=2,
-                 label=f'Efficiency (Bellman)')
-        # Empirical as dashed reference
-        ax2.plot(epochs, efficiency, 'b--', linewidth=1.5, alpha=0.5, marker='o', markersize=1,
-                 label='Efficiency (empirical)')
-        ax2.set_ylabel('Efficiency (L_min Bellman / Loss)')
-    else:
-        ax2.plot(epochs, efficiency, 'g-', linewidth=2, marker='o', markersize=2,
-                 label='Efficiency (empirical)')
-        ax2.set_ylabel('Efficiency (L_min / Loss)')
+    # η_min — reliability_function only
+    if surrogate_type == 'reliability_function' and bellman_val is not None and len(obs_arr) > 0:
+        eta_min = np.where(obs_arr > 0, bellman_val / obs_arr, 0.0)
+        ax2.plot(epochs, np.clip(eta_min, 0, 1.05), color='green', linestyle='--', linewidth=1.8,
+                 label='\u03B7_min (Bellman)')
+
+    # η_emp — casualit only
+    if surrogate_type == 'casualit' and surrogate_lmin is not None and len(obs_arr) > 0:
+        eta_emp = np.where(obs_arr > 0, surrogate_lmin / obs_arr, 0.0)
+        ax2.plot(epochs, np.clip(eta_emp, 0, 1.05), color='purple', linestyle='-', linewidth=1.8,
+                 label='\u03B7_emp (surrogate)')
 
     ax2.axhline(y=1.0, color='red', linestyle='--', linewidth=2, label='100%')
-    ax2.axhline(y=0.9, color='orange', linestyle=':', linewidth=1, alpha=0.7)
+    ax2.axhline(y=0.9, color='orange', linestyle=':', linewidth=1, alpha=0.7, label='90%')
     ax2.set_xlabel('Epoch')
+    ax2.set_ylabel('Efficiency')
     ax2.set_title('Training Efficiency')
+    if subtitle:
+        ax2.text(0.5, 1.02, subtitle, transform=ax2.transAxes, fontsize=6,
+                 ha='center', va='bottom', style='italic', color='#555555')
     ax2.legend(loc='lower right', fontsize=7)
-    ax2.set_ylim(0, 1.1)
+    ax2.set_ylim(0, 1.05)
     ax2.grid(True, alpha=0.3)
 
     # 3. Loss decomposition (bottom left)
@@ -664,6 +750,25 @@ def generate_all_theoretical_plots(
     # Extract Bellman data if available
     bellman_data = tracker_data.get('bellman_lmin', None)
 
+    # Extract surrogate_lmin (casualit) if available
+    surrogate_lmin_val = tracker_data.get('surrogate_lmin', None)
+
+    # Determine surrogate type from available data
+    if bellman_data is not None and bellman_data.get('L_min_bellman') is not None:
+        surrogate_type = 'reliability_function'
+    elif surrogate_lmin_val is not None:
+        surrogate_type = 'casualit'
+    else:
+        surrogate_type = None
+
+    # Extract Var(F) — constant across epochs
+    var_F = None
+    var_F_list = tracker_data.get('theoretical_Var_F', [])
+    if len(var_F_list) > 0:
+        var_F = var_F_list[-1]
+        if var_F <= 0:
+            var_F = None
+
     # 1. Loss vs L_min
     path = checkpoint_dir / 'loss_vs_L_min.png'
     plot_loss_vs_L_min(
@@ -672,6 +777,9 @@ def generate_all_theoretical_plots(
         theoretical_L_min=tracker_data['theoretical_L_min'],
         save_path=str(path),
         bellman_lmin=bellman_data,
+        surrogate_lmin=surrogate_lmin_val,
+        var_F=var_F,
+        surrogate_type=surrogate_type,
     )
     plots['loss_vs_L_min'] = path
     plt.close()
@@ -684,6 +792,9 @@ def generate_all_theoretical_plots(
         save_path=str(path),
         bellman_lmin=bellman_data,
         observed_loss=tracker_data['observed_loss'],
+        surrogate_lmin=surrogate_lmin_val,
+        var_F=var_F,
+        surrogate_type=surrogate_type,
     )
     plots['training_efficiency'] = path
     plt.close()
@@ -726,7 +837,7 @@ def generate_all_theoretical_plots(
 
     # 6. Summary figure (2x2)
     path = checkpoint_dir / 'theoretical_analysis_summary.png'
-    create_summary_figure(tracker_data, save_path=str(path))
+    create_summary_figure(tracker_data, save_path=str(path), surrogate_lmin=surrogate_lmin_val)
     plots['theoretical_summary'] = path
     plt.close()
 
