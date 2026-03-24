@@ -620,6 +620,78 @@ def _train_stage_causal_lightning(casualit_model, config, args):
         print(f"  Results:\n{results_df.to_string()}")
 
 
+def _save_training_plots(history, eval_results, output_dir):
+    """Generate the four PNG plots expected by the surrogate report generator."""
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+
+    epochs = list(range(1, len(history['train_loss']) + 1))
+
+    # 1. Loss curves (MSE)
+    fig, ax = plt.subplots(figsize=(6, 3.5))
+    ax.plot(epochs, history['train_loss'], label='Train')
+    ax.plot(epochs, history['val_loss'], label='Val')
+    ax.set_xlabel('Epoch')
+    ax.set_ylabel('MSE Loss')
+    ax.set_title('Loss Curves (MSE)')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(out / 'loss_curves.png', dpi=150)
+    plt.close(fig)
+
+    # 2. MAE curves
+    if history.get('train_mae') and history.get('val_mae'):
+        fig, ax = plt.subplots(figsize=(6, 3.5))
+        ax.plot(epochs, history['train_mae'], label='Train')
+        ax.plot(epochs, history['val_mae'], label='Val')
+        ax.set_xlabel('Epoch')
+        ax.set_ylabel('MAE')
+        ax.set_title('MAE Curves')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        fig.tight_layout()
+        fig.savefig(out / 'mae_curves.png', dpi=150)
+        plt.close(fig)
+
+    # 3. Predictions vs targets scatter
+    preds = eval_results.get('predictions')
+    targets = eval_results.get('targets')
+    if preds is not None and targets is not None:
+        fig, ax = plt.subplots(figsize=(6, 3.5))
+        ax.scatter(targets, preds, s=8, alpha=0.5, edgecolors='none')
+        lo = min(targets.min(), preds.min())
+        hi = max(targets.max(), preds.max())
+        ax.plot([lo, hi], [lo, hi], 'r--', linewidth=1, label='y = x')
+        ax.set_xlabel('True Reliability F')
+        ax.set_ylabel('Predicted F')
+        ax.set_title('Predictions vs True Reliability F')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        fig.tight_layout()
+        fig.savefig(out / 'pred_vs_target.png', dpi=150)
+        plt.close(fig)
+
+    # 4. Learning rate schedule
+    if history.get('learning_rate'):
+        fig, ax = plt.subplots(figsize=(6, 3.5))
+        ax.plot(epochs, history['learning_rate'])
+        ax.set_xlabel('Epoch')
+        ax.set_ylabel('Learning Rate')
+        ax.set_title('Learning Rate Schedule')
+        ax.set_yscale('log')
+        ax.grid(True, alpha=0.3)
+        fig.tight_layout()
+        fig.savefig(out / 'lr_schedule.png', dpi=150)
+        plt.close(fig)
+
+    print(f"  Training plots saved to {out}")
+
+
 def main():
     parser = argparse.ArgumentParser(description='Train CasualiT Surrogate')
     parser.add_argument('--epochs', type=int, default=None, help='Max epochs')
@@ -724,6 +796,9 @@ def main():
     # Evaluate
     print("\n[4/4] Evaluating model...")
     eval_results = trainer.evaluate(args.output_dir if not args.skip_training else args.output_dir)
+
+    # Generate training plots for the report
+    _save_training_plots(trainer.history, eval_results, args.output_dir)
 
     # Generate report
     from surrogate_report_generator import generate_surrogate_training_report

@@ -493,8 +493,9 @@ def _build_left(d):
 # ════════════════════════════════════════════════════════════════════════════
 
 def _build_right(d):
-    chk_dir = Path(d['config'].get('checkpoints', {}).get('save_dir',
-              d['config'].get('training', {}).get('checkpoint_dir', '.')))
+    chk_dir = Path(d.get('checkpoint_dir',
+              d['config'].get('checkpoints', {}).get('save_dir',
+              d['config'].get('training', {}).get('checkpoint_dir', '.'))))
 
     # Expected plot filenames (produced by the surrogate training script)
     PLOTS = [
