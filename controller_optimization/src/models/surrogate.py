@@ -510,8 +510,9 @@ class CasualiTSurrogate:
         """
         Load a trained CausalIT model from checkpoint.
 
-        Reads 'model_type' from checkpoint metadata to determine which
-        forecaster class to instantiate.
+        Supports two checkpoint formats:
+        - PyTorch Lightning checkpoints (from trainer.save_checkpoint)
+        - Plain torch.save checkpoints (from train_surrogate.py SimpleSurrogateModel)
 
         Args:
             checkpoint_path: Path to .ckpt file
@@ -520,11 +521,27 @@ class CasualiTSurrogate:
         Returns:
             Tuple of (model, model_type)
         """
-        # Load checkpoint to determine model_type and instantiate
         checkpoint_data = torch.load(checkpoint_path, map_location=device, weights_only=False)
         model_type = checkpoint_data.get('model_type', 'proT')
 
-        # Determine the forecaster class
+        is_pl_checkpoint = 'pytorch-lightning_version' in checkpoint_data
+        # SimpleSurrogateModel checkpoints use 'model_state_dict' key
+        is_simple_surrogate = 'model_state_dict' in checkpoint_data
+
+        if is_simple_surrogate:
+            # Checkpoint saved by train_surrogate.py (SimpleSurrogateModel)
+            from train_surrogate import SimpleSurrogateModel
+            config = checkpoint_data['config']
+            model = SimpleSurrogateModel(config)
+            model.load_state_dict(checkpoint_data['model_state_dict'])
+            # SimpleSurrogateModel needs input_dim set; we defer to first inference call
+            self._simple_surrogate_needs_input_dim = True
+            print(f"  CasualiTSurrogate loaded SimpleSurrogateModel from {checkpoint_path}")
+            model.eval()
+            model.to(device)
+            return model, model_type
+
+        # CausaliT Lightning forecaster classes
         if model_type == 'proT':
             from causaliT.training.forecasters.transformer_forecaster import TransformerForecaster
             forecaster_cls = TransformerForecaster
@@ -539,14 +556,11 @@ class CasualiTSurrogate:
                 f"Unknown model_type '{model_type}' in checkpoint. "
                 f"Expected 'proT', 'StageCausaliT', or 'SingleCausalLayer'.")
 
-        # Try PL load_from_checkpoint first; fall back to manual load if
-        # checkpoint lacks PyTorch Lightning metadata
-        is_pl_checkpoint = 'pytorch-lightning_version' in checkpoint_data
         if is_pl_checkpoint:
             model = forecaster_cls.load_from_checkpoint(
                 checkpoint_path, map_location=device, weights_only=False)
         else:
-            # Manual load: extract config from hyper_parameters and load state_dict
+            # Manual load from non-PL checkpoint with CausaliT config
             hparams = checkpoint_data.get('hyper_parameters', checkpoint_data.get('hparams', {}))
             config = hparams if hparams else checkpoint_data.get('config', {})
             if not config:
@@ -557,6 +571,7 @@ class CasualiTSurrogate:
             model = forecaster_cls(config)
             model.load_state_dict(state_dict, strict=False)
 
+        self._simple_surrogate_needs_input_dim = False
         model.eval()
         model.to(device)
         print(f"  CasualiTSurrogate loaded model_type='{model_type}' from {checkpoint_path}")
@@ -600,8 +615,18 @@ class CasualiTSurrogate:
         return F
 
     def _inference_prot(self, trajectory: Dict) -> torch.Tensor:
-        """Run inference for ProT (TransformerForecaster)."""
+        """Run inference for ProT (TransformerForecaster or SimpleSurrogateModel)."""
         X, Y = self.process_chain.trajectory_to_prot_format(trajectory)
+
+        # SimpleSurrogateModel: forward(x) -> (batch,)
+        if getattr(self, '_simple_surrogate_needs_input_dim', False):
+            self.model.set_input_dim(X.shape[2], device=X.device)
+            self._simple_surrogate_needs_input_dim = False
+        from train_surrogate import SimpleSurrogateModel
+        if isinstance(self.model, SimpleSurrogateModel):
+            return self.model(X)
+
+        # TransformerForecaster: forward(data_input, data_trg) -> (output, ...)
         forecast_output, _, _, _ = self.model.forward(data_input=X, data_trg=Y)
         return forecast_output.squeeze()
 
