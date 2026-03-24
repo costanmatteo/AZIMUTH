@@ -124,10 +124,10 @@ echo ""
 
 # ---- Step 2: Train controller with seed pair ----
 echo "Step 2: Training controller..."
-echo "Command: python controller_optimization/train_controller.py --output_dir $OUTPUT_DIR --run_name $RUN_NAME --no_pdf --st_n $ST_N --st_m $ST_M --st_rho $ST_RHO --st_n_processes $ST_NPROC --up_checkpoint_dir $UP_DIR --seed_target $SEED_T --seed_baseline $SEED_B"
+echo "Command: python train_controller.py --output_dir $OUTPUT_DIR --run_name $RUN_NAME --no_pdf --st_n $ST_N --st_m $ST_M --st_rho $ST_RHO --st_n_processes $ST_NPROC --up_checkpoint_dir $UP_DIR --seed_target $SEED_T --seed_baseline $SEED_B"
 echo ""
 
-python controller_optimization/train_controller.py \
+python train_controller.py \
     --output_dir "$OUTPUT_DIR" \
     --run_name "$RUN_NAME" \
     --no_pdf \
