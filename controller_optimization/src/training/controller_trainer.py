@@ -622,6 +622,11 @@ class ControllerTrainer:
         # Zero gradients once per epoch (gradient accumulation across scenarios)
         self.optimizer.zero_grad()
 
+        # Debug: check gradient flow on first epoch, first scenario only
+        _check_grad_flow = hasattr(self, '_debug_F_graph') and self._debug_F_graph
+        if _check_grad_flow:
+            print("[DEBUG] Entering train_epoch loop, will check F grad on first scenario", flush=True)
+
         # Cycle through all scenarios exactly once
         for scenario_idx in scenario_order:
             # Forward pass through process chain for this scenario
@@ -648,6 +653,27 @@ class ControllerTrainer:
                 lambda_bc=lambda_bc,
                 return_quality_scores=True
             )
+
+            # Check gradient flow on first scenario of first epoch
+            if _check_grad_flow:
+                _check_grad_flow = False
+                self._debug_F_graph = False
+                F_tensor = F if torch.is_tensor(F) else torch.tensor(F)
+                print(f"\n{'='*60}", flush=True)
+                print(f"SURROGATE GRADIENT DEBUG", flush=True)
+                print(f"{'='*60}", flush=True)
+                print(f"  F.requires_grad = {F_tensor.requires_grad}", flush=True)
+                print(f"  F.grad_fn       = {F_tensor.grad_fn}", flush=True)
+                print(f"  F.shape         = {F_tensor.shape}", flush=True)
+                print(f"  F.mean()        = {F_tensor.mean().item():.6f}", flush=True)
+                print(f"  F*              = {self.surrogate.F_star:.6f}", flush=True)
+                print(f"  total_loss.requires_grad = {total_loss.requires_grad}", flush=True)
+                print(f"  total_loss.grad_fn       = {total_loss.grad_fn}", flush=True)
+                if F_tensor.requires_grad and F_tensor.grad_fn is not None:
+                    print(f"  STATUS: OK - Gradients WILL flow to controller", flush=True)
+                else:
+                    print(f"  STATUS: BROKEN - F is detached, no gradient effect!", flush=True)
+                print(f"{'='*60}\n", flush=True)
 
             # Compute within-scenario validation loss (no gradient)
             if val_trajectory is not None:

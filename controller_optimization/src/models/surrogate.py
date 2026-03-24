@@ -542,7 +542,11 @@ class CasualiTSurrogate:
             self._simple_surrogate_needs_input_dim = False
             print(f"  CasualiTSurrogate loaded SimpleSurrogateModel from {checkpoint_path}")
             model.eval()
-            model.requires_grad_(False)
+            # NOTE: Do NOT use requires_grad_(False) here. Freezing parameters
+            # blocks gradient flow through the model (including w.r.t. inputs).
+            # The surrogate parameters are not in the controller's optimizer,
+            # so they won't be updated. But we need the computation graph intact
+            # for gradients to flow from F back to the controller.
             model.to(device)
             return model, model_type
 
@@ -578,7 +582,7 @@ class CasualiTSurrogate:
 
         self._simple_surrogate_needs_input_dim = False
         model.eval()
-        model.requires_grad_(False)
+        # NOTE: Do NOT use requires_grad_(False) - see comment above.
         model.to(device)
         print(f"  CasualiTSurrogate loaded model_type='{model_type}' from {checkpoint_path}")
 
