@@ -270,7 +270,7 @@ def generate_all_datasets(config: dict, output_dir: str, device: str = 'cpu'):
 
 
 if __name__ == '__main__':
-    from causaliT.surrogate_training.configs.surrogate_config import SURROGATE_CONFIG
+    from configs.surrogate_config import SURROGATE_CONFIG
 
     output_dir = 'causaliT/data/surrogate_training'
     stats = generate_all_datasets(SURROGATE_CONFIG, output_dir, device='cpu')

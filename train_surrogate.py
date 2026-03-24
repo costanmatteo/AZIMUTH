@@ -30,7 +30,7 @@ from datetime import datetime
 import numpy as np
 
 # Add paths
-REPO_ROOT = Path(__file__).parent.parent.parent
+REPO_ROOT = Path(__file__).parent
 sys.path.insert(0, str(REPO_ROOT))
 
 # Check for required dependencies
@@ -45,7 +45,7 @@ except ImportError as e:
     print("Please install: pip install torch tqdm")
     sys.exit(1)
 
-from causaliT.surrogate_training.configs.surrogate_config import SURROGATE_CONFIG
+from configs.surrogate_config import SURROGATE_CONFIG
 from causaliT.surrogate_training.data_generator import generate_all_datasets, TrajectoryDataGenerator
 
 

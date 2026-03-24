@@ -19,7 +19,7 @@ import torch
 REPO_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from causaliT.surrogate_training.configs.surrogate_config import SURROGATE_CONFIG
+from configs.surrogate_config import SURROGATE_CONFIG
 
 
 def convert_trajectories_to_causalit_format(
