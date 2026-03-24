@@ -119,8 +119,28 @@ def load_uncertainty_predictor(checkpoint_path, input_dim, output_dim, model_con
     """
     checkpoint_path = Path(checkpoint_path)
 
-    # Load weights first to detect model type
-    state_dict = torch.load(checkpoint_path, map_location=device)
+    # Load checkpoint (may be a raw state_dict or a checkpoint dict with metadata)
+    raw = torch.load(checkpoint_path, map_location=device)
+
+    # Detect checkpoint dict format from uncertainty_trainer.py
+    # (has 'base_model_state_dict' for SWAG, or 'model_state_dict' for base/ensemble)
+    if 'base_model_state_dict' in raw:
+        # SWAG trainer checkpoint — reconstruct full SWAGUncertaintyPredictor state_dict
+        base_sd = raw['base_model_state_dict']
+        state_dict = {f'base_model.{k}': v for k, v in base_sd.items()}
+        state_dict['swa_mean'] = raw['swa_mean']
+        state_dict['swa_sq_mean'] = raw['swa_sq_mean']
+        state_dict['deviation_matrix'] = raw['deviation_matrix']
+        if 'n_models_collected' in raw:
+            state_dict['n_models_collected'] = raw['n_models_collected']
+        if 'deviation_idx' in raw:
+            state_dict['deviation_idx'] = raw['deviation_idx']
+    elif 'model_state_dict' in raw:
+        # Base/ensemble trainer checkpoint
+        state_dict = raw['model_state_dict']
+    else:
+        # Already a raw state_dict
+        state_dict = raw
 
     # Infer architecture from checkpoint to avoid config/checkpoint mismatches
     ckpt_input_dim, ckpt_output_dim, ckpt_hidden_sizes, ckpt_batchnorm = _infer_architecture_from_state_dict(state_dict)
