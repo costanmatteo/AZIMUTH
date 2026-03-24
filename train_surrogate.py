@@ -698,7 +698,7 @@ def _train_stage_causal_lightning(casualit_model, config, args):
                 'activation':    config['model'].get('activation', 'gelu'),
                 'norm':          'layer',
                 'use_final_norm': True,
-                'device':         'cuda' if args.device != 'cpu' else 'cpu',
+                'device':         'cuda' if (args.device == 'cuda' or (args.device == 'auto' and torch.cuda.is_available())) else 'cpu',
 
                 # Dimensions
                 'out_dim':  1,
