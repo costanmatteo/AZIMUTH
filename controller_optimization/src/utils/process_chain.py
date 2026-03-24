@@ -701,7 +701,8 @@ class ProcessChain(nn.Module):
             Y: (batch, seq_len, features) - decoder input/target
 
         The trajectory is encoded as a sequence where each step is a process:
-            - Each process contributes: [inputs, outputs_mean, outputs_var]
+            - Each process contributes: [inputs, outputs_sampled, outputs_var]
+              (falls back to outputs_mean when outputs_sampled is absent)
             - Sequence length = number of processes
             - Features are padded to max feature dimension across processes
 
@@ -734,14 +735,14 @@ class ProcessChain(nn.Module):
             if batch_size is None:
                 batch_size = inputs.shape[0]
 
-            # Get outputs
-            outputs_mean = data['outputs_mean']
+            # Get outputs — use sampled outputs when available, fall back to mean
+            outputs = data.get('outputs_sampled', data['outputs_mean'])
             outputs_var = data['outputs_var']
 
-            # Concatenate features for this process step: [inputs, outputs_mean, outputs_var]
+            # Concatenate features for this process step: [inputs, outputs, outputs_var]
             step_features = torch.cat([
                 inputs.view(batch_size, -1),
-                outputs_mean.view(batch_size, -1),
+                outputs.view(batch_size, -1),
                 outputs_var.view(batch_size, -1),
             ], dim=-1)
 
