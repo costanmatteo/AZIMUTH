@@ -630,6 +630,7 @@ def main(config=None):
     mode_str = f"{n_scenarios} scenarios × {eval_batch_size} samples" if plot_all_samples else f"{n_scenarios} scenarios"
     print(f"  Computing baseline reliability for {mode_str}...")
     F_baseline_values = []
+    F_formula_baseline_values = []
 
     with torch.no_grad():
         for scenario_idx in range(n_scenarios):
@@ -648,15 +649,23 @@ def main(config=None):
             # Compute reliability for baseline
             F_baseline_i = surrogate.compute_reliability(baseline_scenario_tensor).item()
 
+            # Compute formula-based baseline (if using CasualiT)
+            F_formula_baseline_i = None
+            if formula_surrogate is not None:
+                F_formula_baseline_i = formula_surrogate.compute_reliability(baseline_scenario_tensor).item()
+
             # If plotting all samples, replicate for each sample in the batch
             # Otherwise, just add once per scenario
             n_replicas = eval_batch_size if plot_all_samples else 1
             for _ in range(n_replicas):
                 F_baseline_values.append(F_baseline_i)
+                if F_formula_baseline_i is not None:
+                    F_formula_baseline_values.append(F_formula_baseline_i)
 
     F_baseline_array = np.array(F_baseline_values)
     F_baseline_mean = np.mean(F_baseline_array)
     F_baseline_std = np.std(F_baseline_array)
+    F_formula_baseline_array = np.array(F_formula_baseline_values) if F_formula_baseline_values else None
 
     # F* is a single scalar (same for all scenarios) — replicate for plotting compatibility
     F_star_mean = F_star_value
@@ -878,6 +887,45 @@ def main(config=None):
         print(f"    → Controller performs BETTER on test (generalizes well)")
     else:
         print(f"    → Controller performs WORSE on test (overfitting concern)")
+
+    # Formula-based advanced metrics (only when using CasualiT surrogate)
+    formula_advanced_metrics = {}
+    if formula_surrogate is not None and F_formula_per_sample is not None:
+        print(f"\n  Computing formula-based advanced metrics...")
+
+        # Per-scenario formula F means (same reshaping as surrogate F)
+        if plot_all_samples:
+            F_formula_per_scenario_mean = F_formula_per_sample.reshape(n_scenarios, eval_batch_size).mean(axis=1)
+            F_formula_baseline_per_scenario_mean = F_formula_baseline_array.reshape(n_scenarios, eval_batch_size).mean(axis=1)
+        else:
+            F_formula_per_scenario_mean = F_formula_per_sample
+            F_formula_baseline_per_scenario_mean = F_formula_baseline_array
+
+        # Formula test arrays
+        F_formula_actual_test_array = np.array(F_formula_actual_test_values)
+        F_formula_baseline_test_array = np.array(F_formula_baseline_test_values)
+
+        # Use same F* for fair comparison (surrogate F*)
+        formula_advanced_metrics['formula_worst_case_gap_train'] = compute_worst_case_gap(
+            F_star_per_scenario_mean, F_formula_per_scenario_mean)
+        formula_advanced_metrics['formula_worst_case_gap_test'] = compute_worst_case_gap(
+            F_star_test_array, F_formula_actual_test_array)
+        formula_advanced_metrics['formula_success_rate_train'] = compute_success_rate(
+            F_star_per_scenario_mean, F_formula_per_scenario_mean, threshold=success_threshold)
+        formula_advanced_metrics['formula_success_rate_test'] = compute_success_rate(
+            F_star_test_array, F_formula_actual_test_array, threshold=success_threshold)
+        formula_advanced_metrics['formula_train_test_gap'] = compute_train_test_gap(
+            F_star_per_scenario_mean, F_formula_per_scenario_mean,
+            F_star_test_array, F_formula_actual_test_array)
+        formula_advanced_metrics['formula_gap_closure_train'] = compute_gap_closure(
+            F_star_per_scenario_mean, F_formula_baseline_per_scenario_mean, F_formula_per_scenario_mean)
+        formula_advanced_metrics['formula_gap_closure_test'] = compute_gap_closure(
+            F_star_test_array, F_formula_baseline_test_array, F_formula_actual_test_array)
+
+        print(f"    Success rate (formula) — train: {formula_advanced_metrics['formula_success_rate_train']['success_rate_pct']:.1f}%")
+        print(f"    Success rate (formula) — test:  {formula_advanced_metrics['formula_success_rate_test']['success_rate_pct']:.1f}%")
+        print(f"    Worst-case gap (formula) — train: {formula_advanced_metrics['formula_worst_case_gap_train']['worst_case_gap']:.6f}")
+        print(f"    Worst-case gap (formula) — test:  {formula_advanced_metrics['formula_worst_case_gap_test']['worst_case_gap']:.6f}")
 
     # Within-Scenario Overfitting Check (intra-scenario: train split vs val split)
     if (len(history.get('val_within_F_values', [])) > 0
@@ -1160,6 +1208,7 @@ def main(config=None):
             'within_scenario_gap': within_scenario_gap_metrics,
             'diversity_train': diversity_train,
             'diversity_test': diversity_test,
+            **formula_advanced_metrics,  # formula_* keys (empty dict if not using CasualiT)
         }
 
         # Generate embedding visualization plots (if scenario encoder is enabled)
