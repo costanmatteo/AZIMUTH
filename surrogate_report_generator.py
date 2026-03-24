@@ -1,771 +1,786 @@
 """
-PDF Report Generator — CasualiT Surrogate Training
-====================================================
-Generates a single A4-landscape page via WeasyPrint (HTML → PDF).
+PDF Report Generator for Surrogate Transformer Training
+A4 Landscape, single page. Layout and style mirror uncertainty_predictor/report_generator.py exactly:
+  - Courier monospace font throughout
+  - Same color palette (C_GREEN / C_RED / C_AMBER)
+  - Same page geometry (HDR / left-column / right-column / FTR frames)
+  - Same KPI bar (4 boxes, label / big-value / sub-line)
+  - Same section-header style (small-caps + thin HR)
+  - Same kv_table helper (key LEFT, value RIGHT)
 
-Visual style is identical to the Uncertainty Predictor report:
-  - Courier New monospace throughout
-  - Same colour tokens: #1D9E75 green / #D85A30 red / #BA7517 amber
-  - Same KPI row (4 tiles, top of left column)
-  - Same section-header style (uppercase, letter-spaced, grey)
-  - Same row layout (key right-aligned grey / value bold)
-  - Same table style (thin rules, uppercase headers)
-  - Same footer bar
-  - Right column: 4 plots (A loss · B scatter · C residuals · D F-distribution)
-    + conditional DAG section at bottom (only with LieAttention phi tensors)
-
-Drop-in replacement for generate_pdf_report() in train_surrogate.py.
-Signature unchanged — main() needs no edits.
-
-Requirements: weasyprint, matplotlib, numpy
+Public API
+----------
+    generate_surrogate_training_report(
+        config, history, eval_results,
+        input_dim, output_dim, total_params,
+        n_train, n_val, n_test,
+        checkpoint_dir,
+        timestamp=None,
+        floor_metrics=None,
+    ) -> str          # path to the generated PDF
 """
 
-from __future__ import annotations
-
-import base64
 import math
-import tempfile
-import traceback
 from datetime import datetime
-from io import BytesIO
 from pathlib import Path
-from typing import Optional
 
-import numpy as np
+from reportlab.lib.pagesizes import landscape, A4
+from reportlab.lib.styles import ParagraphStyle
+from reportlab.lib.units import cm, mm
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
+from reportlab.platypus import (
+    BaseDocTemplate, Frame, PageTemplate, FrameBreak,
+    Paragraph, Spacer, Image, Table, TableStyle,
+)
+from reportlab.platypus.flowables import HRFlowable, KeepInFrame
 
-# matplotlib — imported lazily inside plot helpers to avoid backend issues
+# ── page geometry (identical to uncertainty_predictor) ────────────────────────
+PW, PH  = landscape(A4)
+M       = 0.8 * cm
+HDR_H   = 1.6 * cm
+FTR_H   = 0.65 * cm
+LW      = 108 * mm
+GAP     = 6 * mm
+FULL_W  = PW - 2 * M
+RW      = FULL_W - LW - GAP
+BODY_H  = PH - 2 * M - HDR_H - FTR_H - 2 * mm
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  Colour helpers
-# ─────────────────────────────────────────────────────────────────────────────
-_GREEN = '#1D9E75'
-_RED   = '#D85A30'
-_AMBER = '#BA7517'
-_GRAY  = '#888888'
-_MGRAY = '#cccccc'
-_BGRAY = '#f7f7f7'
+# ── colors (same palette) ─────────────────────────────────────────────────────
+C_GREEN = colors.HexColor('#1D9E75')
+C_RED   = colors.HexColor('#D85A30')
+C_AMBER = colors.HexColor('#BA7517')
+C_BLACK = colors.black
+C_GRAY  = colors.HexColor('#AAAAAA')
+C_LGRAY = colors.HexColor('#DDDDDD')
+C_VGRAY = colors.HexColor('#F8F8F8')
+C_MUTED = colors.HexColor('#666666')
+
+# ── font sizes ────────────────────────────────────────────────────────────────
+FS_TITLE   = 15
+FS_META    = 7.5
+FS_SECTION = 7
+FS_BODY    = 7.5
+FS_KPI_LBL = 6.5
+FS_KPI_VAL = 11
+FS_KPI_SUB = 6.5
+FS_CAPTION = 6.5
+FS_BADGE   = 6.5
 
 
-def _r2_col(v: float) -> str:
-    return _GREEN if v >= 0.90 else (_AMBER if v >= 0.70 else _RED)
+# ════════════════════════════════════════════════════════════════════════════
+#  HELPERS
+# ════════════════════════════════════════════════════════════════════════════
+
+def r2_color(v):
+    return C_GREEN if v >= 0.9 else (C_AMBER if v >= 0.7 else C_RED)
+
+def rmse_color(v, threshold_good=0.05, threshold_ok=0.15):
+    """Lower is better."""
+    return C_GREEN if v <= threshold_good else (C_AMBER if v <= threshold_ok else C_RED)
+
+def floor_color(v, threshold_good=0.01, threshold_ok=0.05):
+    """Floor fidelity MSE — lower is better."""
+    return C_GREEN if v <= threshold_good else (C_AMBER if v <= threshold_ok else C_RED)
 
 
-def _loss_col(v: float) -> str:
-    return _GREEN if v < 0.005 else (_AMBER if v < 0.02 else _RED)
-
-
-def _fmt_lr(lr: float) -> str:
+def fmt_lr(lr):
     if lr == 0:
-        return '0'
-    exp = int(math.floor(math.log10(abs(lr))))
-    m   = lr / (10 ** exp)
-    return f'{m:.3f} x 10<sup>{exp}</sup>'
-
-
-def _pct(v: float) -> str:
-    return f'{v * 100:.1f}%'
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  matplotlib plot helpers — return base-64 PNG data-URIs
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _fig_to_b64(fig) -> str:
-    import matplotlib.pyplot as plt
-    buf = BytesIO()
-    fig.savefig(buf, format='png', dpi=150, bbox_inches='tight', pad_inches=0.05)
-    plt.close(fig)
-    return 'data:image/png;base64,' + base64.b64encode(buf.getvalue()).decode()
-
-
-def _mpl_ax_style(ax, title: str, xlabel: str, ylabel: str):
-    ax.set_title(title, fontsize=8, fontweight='bold', pad=4)
-    ax.set_xlabel(xlabel, fontsize=7)
-    ax.set_ylabel(ylabel, fontsize=7)
-    ax.tick_params(labelsize=6.5)
-    ax.grid(True, alpha=0.25, linestyle='--', color=_MGRAY)
-    ax.set_facecolor('white')
-    for sp in ax.spines.values():
-        sp.set_edgecolor(_MGRAY)
-        sp.set_linewidth(0.6)
-
-
-def _plot_loss(history: dict, best_epoch: int) -> str:
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
-    fig, ax = plt.subplots(figsize=(5.2, 2.1))
-    fig.patch.set_facecolor('white')
-    ep = range(len(history['train_loss']))
-    ax.plot(ep, history['train_loss'], color=_GREEN, lw=1.5, label='Train MSE')
-    ax.plot(ep, history['val_loss'],   color=_RED,   lw=1.5, ls='--', label='Val MSE')
-    if best_epoch is not None and best_epoch < len(history['train_loss']):
-        ax.axvline(best_epoch, color=_AMBER, lw=1.0, ls=':',
-                   label=f'best (ep. {best_epoch})')
-    ax.legend(fontsize=6.5, framealpha=0.8, edgecolor=_MGRAY, loc='upper right')
-    _mpl_ax_style(ax, 'Training History — MSE Loss', 'Epoch', 'MSE Loss')
-    fig.tight_layout(pad=0.4)
-    return _fig_to_b64(fig)
-
-
-def _plot_scatter(preds: np.ndarray, targets: np.ndarray, r2: float) -> str:
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
-    fig, ax = plt.subplots(figsize=(2.5, 2.1))
-    fig.patch.set_facecolor('white')
-    ax.scatter(targets, preds, c=preds, cmap='viridis', alpha=0.5, s=8, lw=0)
-    lo = min(float(targets.min()), float(preds.min())) - 0.02
-    hi = max(float(targets.max()), float(preds.max())) + 0.02
-    ax.plot([lo, hi], [lo, hi], color=_RED, lw=1.4, ls='--', label='Perfect')
-    props = dict(boxstyle='round,pad=0.25', facecolor=_BGRAY, edgecolor=_MGRAY, alpha=0.9)
-    ax.text(0.05, 0.94, f'R² = {r2:.4f}',
-            transform=ax.transAxes, fontsize=7, va='top', bbox=props)
-    ax.legend(fontsize=6, framealpha=0.8, edgecolor=_MGRAY)
-    _mpl_ax_style(ax, 'Predicted vs True F', 'True F', 'Predicted F')
-    fig.tight_layout(pad=0.4)
-    return _fig_to_b64(fig)
-
-
-def _plot_residuals(preds: np.ndarray, targets: np.ndarray) -> str:
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
-    res = preds - targets
-    fig, ax = plt.subplots(figsize=(2.5, 2.1))
-    fig.patch.set_facecolor('white')
-    ax.hist(res, bins=28, color=_GREEN, edgecolor='white', alpha=0.85, lw=0.3)
-    ax.axvline(0, color=_RED, lw=1.4, ls='--')
-    props = dict(boxstyle='round,pad=0.25', facecolor=_BGRAY, edgecolor=_MGRAY, alpha=0.9)
-    ax.text(0.97, 0.95, f'μ={res.mean():.4f}\nσ={res.std():.4f}',
-            transform=ax.transAxes, fontsize=6, va='top', ha='right', bbox=props)
-    _mpl_ax_style(ax, 'Residual Distribution', 'F_pred − F_true', 'Count')
-    fig.tight_layout(pad=0.4)
-    return _fig_to_b64(fig)
-
-
-def _plot_fdist(preds: np.ndarray, targets: np.ndarray) -> str:
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
-    fig, ax = plt.subplots(figsize=(2.5, 2.1))
-    fig.patch.set_facecolor('white')
-    ax.hist(targets, bins=28, color=_GREEN, alpha=0.55, density=True,
-            label='True F',      edgecolor='white', lw=0.3)
-    ax.hist(preds,   bins=28, color=_AMBER, alpha=0.55, density=True,
-            label='Predicted F', edgecolor='white', lw=0.3)
-    ax.legend(fontsize=6, framealpha=0.8, edgecolor=_MGRAY)
-    _mpl_ax_style(ax, 'F Distribution', 'F value', 'Density')
-    fig.tight_layout(pad=0.4)
-    return _fig_to_b64(fig)
-
-
-def _plot_dag(phi: np.ndarray, proc_names: list) -> str:
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
-    n      = len(proc_names)
-    binary = (phi >= 0.5).astype(float)
-    fig, ax = plt.subplots(figsize=(3.8, 1.9))
-    fig.patch.set_facecolor('white')
-    im = ax.imshow(phi, cmap='Greens', vmin=0, vmax=1, aspect='auto')
-    cb = fig.colorbar(im, ax=ax, fraction=0.032, pad=0.02)
-    cb.set_label('Edge prob.', fontsize=6)
-    cb.ax.tick_params(labelsize=5.5)
-    ax.set_xticks(range(n))
-    ax.set_yticks(range(n))
-    ax.set_xticklabels(proc_names, fontsize=6.5, rotation=45, ha='right')
-    ax.set_yticklabels(proc_names, fontsize=6.5)
-    for i in range(n):
-        for j in range(n):
-            if binary[i, j] == 1:
-                ax.plot(j, i, 'o', color=_GREEN, ms=4.5, mew=0.5, mec='white')
-            else:
-                ax.plot(j, i, 'x', color='white', ms=3.5, mew=0.7)
-    ax.set_xlabel('Source', fontsize=7)
-    ax.set_ylabel('Target', fontsize=7)
-    ax.set_title('Estimated Causal DAG (LieAttention φ)', fontsize=8,
-                 fontweight='bold', pad=3)
-    ax.tick_params(labelsize=6.5)
-    fig.tight_layout(pad=0.35)
-    return _fig_to_b64(fig)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  Extract phi tensor from trainer/model if available
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _extract_phi(trainer) -> Optional[np.ndarray]:
-    model = trainer.model
-    if hasattr(model, 'get_dag_adjacency'):
-        try:
-            return model.get_dag_adjacency().detach().cpu().numpy()
-        except Exception:
-            pass
-    for attr in ('phi', 'phi_tensors'):
-        val = getattr(trainer, attr, None)
-        if val is None:
-            continue
-        try:
-            if isinstance(val, dict):
-                val = list(val.values())[0]
-            if hasattr(val, 'detach'):
-                val = val.detach().cpu().numpy()
-            val = np.array(val)
-            if val.ndim == 3:
-                val = val.mean(axis=0)
-            return val
-        except Exception:
-            pass
-    return None
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  CSS (identical tokens to uncertainty predictor HTML)
-# ─────────────────────────────────────────────────────────────────────────────
-
-PAGE_CSS = """
-* { box-sizing: border-box; margin: 0; padding: 0; }
-body {
-  background: #f0f0f0;
-  font-family: 'Courier New', Courier, monospace;
-  padding: 0;
-}
-.page {
-  background: white;
-  width: 297mm;
-  height: 210mm;
-  display: flex;
-  flex-direction: column;
-  padding: 18px 20px 10px;
-  color: #1a1a1a;
-  font-size: 9px;
-  line-height: 1.45;
-  overflow: hidden;
-}
-.hdr-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-end;
-  margin-bottom: 2px;
-}
-.hdr-title  { font-size: 11px; font-weight: 500; }
-.hdr-meta   { font-size: 8px; color: #666; margin-top: 2px; }
-.badge      { font-size: 8px; font-weight: 500; padding: 1px 5px; border: 0.5px solid; }
-.badge-g    { border-color: #1D9E75; color: #1D9E75; }
-.badge-r    { border-color: #D85A30; color: #D85A30; }
-.badge-a    { border-color: #BA7517; color: #BA7517; }
-.rule-heavy { border: none; border-top: 1px solid #1a1a1a; margin: 3px 0 4px; }
-.rule-thin  { border: none; border-top: 0.5px solid #aaa; margin: 2px 0 3px; }
-.g { color: #1D9E75; }
-.r { color: #D85A30; }
-.a { color: #BA7517; }
-.body {
-  display: flex;
-  gap: 10px;
-  flex: 1;
-  min-height: 0;
-}
-.left  {
-  width: 290px;
-  flex-shrink: 0;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
-.divider { width: 0.5px; background: #ddd; flex-shrink: 0; }
-.right {
-  flex: 1;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-}
-
-/* ── KPI row ── */
-.kpi-row {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0,1fr));
-  border: 0.5px solid #ccc;
-  margin-bottom: 5px;
-}
-.kpi            { padding: 4px 5px; border-right: 0.5px solid #ccc; }
-.kpi:last-child { border-right: none; }
-.kpi-l { font-size: 7px; color: #888; text-transform: uppercase; letter-spacing: 0.4px; }
-.kpi-v { font-size: 11px; font-weight: 500; margin: 1px 0; }
-.kpi-s { font-size: 7px; color: #888; }
-
-/* ── Section headers ── */
-.sec-head {
-  font-size: 7px;
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.9px;
-  color: #888;
-  margin-top: 4px;
-  margin-bottom: 2px;
-}
-
-/* ── Two-column key/value grid ── */
-.two { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 6px; }
-.row {
-  display: flex;
-  justify-content: space-between;
-  padding: 1.5px 0;
-  border-bottom: 0.5px solid #eee;
-  font-size: 8px;
-  gap: 4px;
-}
-.row:last-child { border-bottom: none; }
-.rk { color: #888; flex-shrink: 0; }
-.rv { font-weight: 500; text-align: right; }
-
-/* ── Metrics table ── */
-.tbl { width: 100%; border-collapse: collapse; font-size: 7.5px; }
-.tbl th {
-  text-align: left;
-  padding: 2px 3px;
-  border-bottom: 0.5px solid #1a1a1a;
-  font-weight: 500;
-  font-size: 7px;
-  color: #888;
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-}
-.tbl td { padding: 2px 3px; border-bottom: 0.5px solid #eee; }
-.tbl tr:last-child td { border-bottom: none; }
-.note { font-size: 7px; color: #888; margin-top: 2px; }
-
-/* ── Convergence badge row ── */
-.conv-row { margin-top: 3px; }
-.conv-badge {
-  display: inline-block;
-  font-size: 7px;
-  font-weight: 500;
-  padding: 1px 6px;
-  border: 0.5px solid;
-}
-
-/* ── Plot area ── */
-.plot-label {
-  font-size: 7px;
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.7px;
-  color: #888;
-  margin-top: 4px;
-  margin-bottom: 1px;
-}
-.plot-box {
-  background: #f7f7f7;
-  border: 0.5px solid #ccc;
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-}
-.plot-box img { width: 100%; height: 100%; object-fit: contain; }
-.plots-row { display: flex; gap: 4px; flex: 1; min-height: 0; }
-.plot-cap  { font-size: 7px; color: #999; margin-top: 1px; font-style: italic; }
-
-/* ── DAG section ── */
-.dag-placeholder {
-  background: #f7f7f7;
-  border: 0.5px solid #ccc;
-  padding: 8px;
-  font-size: 8px;
-  color: #888;
-  font-style: italic;
-  text-align: center;
-  margin-top: 2px;
-}
-
-/* ── Footer ── */
-.footer {
-  margin-top: 4px;
-  border-top: 1px solid #1a1a1a;
-  padding-top: 3px;
-  display: flex;
-  justify-content: space-between;
-  font-size: 7px;
-  color: #888;
-}
-"""
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  HTML builder
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _build_html(trainer, eval_results: dict, config: dict,
-                b64_loss: str, b64_scatter: str,
-                b64_residuals: str, b64_fdist: str,
-                b64_dag: Optional[str]) -> str:
-
-    now       = datetime.now()
-    date_str  = now.strftime('%Y-%m-%d')
-    time_str  = now.strftime('%H:%M:%S')
-
-    model   = trainer.model
-    history = trainer.history
-    mc      = config['model']
-    tc      = config['training']
-    dc      = config['data']
-
-    # counts
-    n_train = len(trainer.train_loader.dataset)  if trainer.train_loader  else 0
-    n_val   = len(trainer.val_loader.dataset)    if trainer.val_loader    else 0
-    n_test  = len(trainer.test_loader.dataset)   if trainer.test_loader   else 0
-    total_p = sum(p.numel() for p in model.parameters())
-    n_proc  = getattr(model, 'n_processes', '?') or '?'
-    n_feat  = getattr(model, 'n_features',  '?') or '?'
-
-    # metrics
-    bvl   = trainer.best_val_loss
-    r2    = eval_results['test_r2']
-    rmse  = eval_results['test_rmse']
-    mae   = eval_results['test_mae']
-    mse   = eval_results['test_mse']
-
-    final_train = history['train_loss'][-1] if history.get('train_loss') else float('nan')
-    final_val   = history['val_loss'][-1]   if history.get('val_loss')   else float('nan')
-
-    # colour tags
-    r2_col   = _r2_col(r2)
-    bvl_col  = _loss_col(bvl)
-    converged = bvl < 0.01
-
-    def _col_class(col):
-        return {_GREEN: 'g', _RED: 'r', _AMBER: 'a'}.get(col, '')
-
-    # header badge
-    if converged:
-        badge_html = '<span class="badge badge-g">converged</span>'
-    else:
-        badge_html = '<span class="badge badge-r">not converged</span>'
-
-    # meta line
-    sched_str = 'scheduler on' if tc.get('use_scheduler') else 'no scheduler'
-    meta_str  = (f'{date_str}&nbsp;&nbsp;{time_str}'
-                 f'&nbsp;·&nbsp;seed {dc.get("random_seed", "-")}'
-                 f'&nbsp;·&nbsp;epochs {trainer.best_epoch} / {tc["max_epochs"]}'
-                 f'&nbsp;·&nbsp;patience {tc.get("patience", "-")}'
-                 f'&nbsp;·&nbsp;{sched_str}')
-
-    # KPI tiles
-    kpi_bvl_cls  = _col_class(bvl_col)
-    kpi_r2_cls   = _col_class(r2_col)
-    kpi_rmse_cls = _col_class(_r2_col(r2))
-    kpi_mae_cls  = _col_class(_r2_col(r2))
-
-    # learning rate formatted
-    lr_html = _fmt_lr(tc['learning_rate'])
-
-    # convergence badge inline
-    if converged:
-        conv_badge = ('<span class="conv-badge" '
-                      'style="border-color:#1D9E75;color:#1D9E75;">CONVERGED</span>')
-    else:
-        conv_badge = ('<span class="conv-badge" '
-                      'style="border-color:#D85A30;color:#D85A30;">NOT CONVERGED</span>')
-
-    # R² cell colour
-    r2_cell = f'<td class="{_col_class(r2_col)}">{r2:.4f}</td>'
-
-    # processes list — filter None entries (None means "use all")
-    _raw_procs = [p for p in dc.get('process_names', []) if p is not None]
-    proc_str = ', '.join(_raw_procs) if _raw_procs else 'All'
-
-    # DAG right-bottom section
-    if b64_dag is not None:
-        dag_section = f'''
-      <div class="plot-label">D — causal structure (estimated DAG)</div>
-      <div class="plot-box" style="flex:1.6">
-        <img src="{b64_dag}" alt="DAG">
-      </div>
-      <div class="plot-cap">
-        Directed edges from attention &phi;-weights (threshold 0.50) &nbsp;&middot;&nbsp;
-        rows = target nodes, cols = source nodes
-      </div>'''
-    else:
-        dag_section = '''
-      <div class="plot-label">D — causal structure (estimated DAG)</div>
-      <div class="dag-placeholder">
-        DAG estimation not available — model uses standard self-attention (no LieAttention).<br>
-        Enable LieAttention to recover the causal graph structure.
-      </div>'''
-
-    html = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<style>
-{PAGE_CSS}
-</style>
-</head>
-<body>
-<div class="page">
-
-  <!-- HEADER -->
-  <div class="hdr-row">
-    <div>
-      <div class="hdr-title">CasualiT Surrogate — Training Report</div>
-      <div class="hdr-meta">{meta_str}</div>
-    </div>
-    {badge_html}
-  </div>
-  <hr class="rule-heavy">
-
-  <!-- BODY -->
-  <div class="body">
-
-    <!-- LEFT COLUMN -->
-    <div class="left">
-
-      <!-- KPI row -->
-      <div class="kpi-row">
-        <div class="kpi">
-          <div class="kpi-l">Best val loss</div>
-          <div class="kpi-v {kpi_bvl_cls}">{bvl:.6f}</div>
-          <div class="kpi-s">epoch {trainer.best_epoch}</div>
-        </div>
-        <div class="kpi">
-          <div class="kpi-l">Test R²</div>
-          <div class="kpi-v {kpi_r2_cls}">{r2:.4f}</div>
-          <div class="kpi-s">MSE {mse:.6f}</div>
-        </div>
-        <div class="kpi">
-          <div class="kpi-l">Test RMSE</div>
-          <div class="kpi-v {kpi_rmse_cls}">{rmse:.4f}</div>
-          <div class="kpi-s">lower is better</div>
-        </div>
-        <div class="kpi">
-          <div class="kpi-l">Test MAE</div>
-          <div class="kpi-v {kpi_mae_cls}">{mae:.4f}</div>
-          <div class="kpi-s">n_test {n_test}</div>
-        </div>
-      </div>
-
-      <!-- 01 Model configuration -->
-      <div class="sec-head">01 — model configuration</div>
-      <hr class="rule-thin">
-      <div class="two">
-        <div>
-          <div class="row"><span class="rk">Architecture</span><span class="rv">SimpleSurrogateModel</span></div>
-          <div class="row"><span class="rk">Type</span><span class="rv">Transformer Encoder</span></div>
-          <div class="row"><span class="rk">d_model</span><span class="rv">{mc['d_model_enc']}</span></div>
-          <div class="row"><span class="rk">d_ff</span><span class="rv">{mc['d_ff']}</span></div>
-          <div class="row"><span class="rk">Attn. heads</span><span class="rv">{mc['n_heads']}</span></div>
-          <div class="row"><span class="rk">Enc. layers</span><span class="rv">{mc['e_layers']}</span></div>
-          <div class="row"><span class="rk">Dropout</span><span class="rv">{mc['dropout_emb']}</span></div>
-          <div class="row"><span class="rk">Activation</span><span class="rv">GeLU + Sigmoid</span></div>
-          <div class="row"><span class="rk">Parameters</span><span class="rv">{total_p:,}</span></div>
-          <div class="row"><span class="rk">Input dim</span><span class="rv">{n_feat} feat × {n_proc} proc.</span></div>
-          <div class="row"><span class="rk">Output</span><span class="rv">scalar F ∈ [0, 1]</span></div>
-        </div>
-        <div>
-          <div class="row"><span class="rk">Train samples</span><span class="rv">{n_train:,} ({round(100*n_train/(n_train+n_val+n_test))}%)</span></div>
-          <div class="row"><span class="rk">Val samples</span><span class="rv">{n_val:,} ({round(100*n_val/(n_train+n_val+n_test))}%)</span></div>
-          <div class="row"><span class="rk">Test samples</span><span class="rv">{n_test:,} ({round(100*n_test/(n_train+n_val+n_test))}%)</span></div>
-          <div class="row"><span class="rk">Trajectories</span><span class="rv">{dc.get('n_trajectories', '-')}</span></div>
-          <div class="row"><span class="rk">Scenarios</span><span class="rv">{dc.get('n_scenarios', '-')}</span></div>
-          <div class="row"><span class="rk">Processes</span><span class="rv">{proc_str}</span></div>
-          <div class="row"><span class="rk">Random seed</span><span class="rv">{dc.get('random_seed', '-')}</span></div>
-        </div>
-      </div>
-
-      <!-- 02 Training & results -->
-      <div class="sec-head">02 — training &amp; results</div>
-      <hr class="rule-thin">
-      <div class="two">
-        <div>
-          <div class="row"><span class="rk">Epochs</span><span class="rv">{trainer.best_epoch} / {tc['max_epochs']}</span></div>
-          <div class="row"><span class="rk">Batch size</span><span class="rv">{tc['batch_size']}</span></div>
-          <div class="row"><span class="rk">Learning rate</span><span class="rv">{lr_html}</span></div>
-          <div class="row"><span class="rk">Weight decay</span><span class="rv">{tc['weight_decay']}</span></div>
-          <div class="row"><span class="rk">Loss fn</span><span class="rv">MSE</span></div>
-          <div class="row"><span class="rk">Optimizer</span><span class="rv">AdamW</span></div>
-          <div class="row"><span class="rk">Scheduler</span><span class="rv">{'ReduceLROnPlateau' if tc.get('use_scheduler') else 'None'}</span></div>
-          <div class="row"><span class="rk">Patience</span><span class="rv">{tc.get('patience', '-')}</span></div>
-          <div class="row"><span class="rk">Device</span><span class="rv">{getattr(trainer, 'device', 'auto')}</span></div>
-        </div>
-        <div>
-          <div class="row"><span class="rk">Final train MSE</span><span class="rv">{final_train:.6f}</span></div>
-          <div class="row"><span class="rk">Final val MSE</span><span class="rv">{final_val:.6f}</span></div>
-          <div class="row"><span class="rk">Best val loss</span><span class="rv {kpi_bvl_cls}">{bvl:.6f}</span></div>
-          <div class="row"><span class="rk">Test MSE</span><span class="rv">{mse:.6f}</span></div>
-          <div class="row"><span class="rk">Test RMSE</span><span class="rv">{rmse:.4f}</span></div>
-          <div class="row"><span class="rk">Test MAE</span><span class="rv">{mae:.4f}</span></div>
-          <div class="row"><span class="rk">Test R²</span><span class="rv {kpi_r2_cls}">{r2:.4f}</span></div>
-          <div class="row"><span class="rk">Converged</span>
-            <span class="rv {'g' if converged else 'r'}">{'Yes' if converged else 'No'}</span>
-          </div>
-        </div>
-      </div>
-      <div class="conv-row">{conv_badge}</div>
-
-      <!-- 03 Test metrics table -->
-      <div class="sec-head" style="margin-top:4px">03 — test metrics</div>
-      <hr class="rule-thin">
-      <table class="tbl">
-        <thead>
-          <tr>
-            <th>Output</th><th>MSE</th><th>RMSE</th><th>MAE</th><th>R²</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td>F (Reliability)</td>
-            <td>{mse:.6f}</td>
-            <td>{rmse:.4f}</td>
-            <td>{mae:.4f}</td>
-            {r2_cell}
-          </tr>
-        </tbody>
-      </table>
-      <div class="note">R² ≥ 0.90 → good &nbsp;·&nbsp; 0.70–0.90 → acceptable &nbsp;·&nbsp; &lt;0.70 → poor</div>
-
-    </div><!-- /left -->
-
-    <div class="divider"></div>
-
-    <!-- RIGHT COLUMN -->
-    <div class="right">
-
-      <!-- A: Loss curve (tall) -->
-      <div class="plot-label">A — training history</div>
-      <div class="plot-box" style="flex:2.0">
-        <img src="{b64_loss}" alt="loss curve">
-      </div>
-      <div class="plot-cap">Training and Validation Loss (MSE)</div>
-
-      <!-- B: scatter + residuals (side by side) -->
-      <div class="plot-label">B — predictions &amp; residuals</div>
-      <div class="plots-row" style="flex:1.9">
-        <div style="flex:1;display:flex;flex-direction:column;min-height:0">
-          <div class="plot-box" style="flex:1">
-            <img src="{b64_scatter}" alt="scatter">
-          </div>
-          <div class="plot-cap">Predicted vs True F</div>
-        </div>
-        <div style="flex:1;display:flex;flex-direction:column;min-height:0">
-          <div class="plot-box" style="flex:1">
-            <img src="{b64_residuals}" alt="residuals">
-          </div>
-          <div class="plot-cap">Residual Distribution</div>
-        </div>
-        <div style="flex:1;display:flex;flex-direction:column;min-height:0">
-          <div class="plot-box" style="flex:1">
-            <img src="{b64_fdist}" alt="f distribution">
-          </div>
-          <div class="plot-cap">F Distribution: True vs Predicted</div>
-        </div>
-      </div>
-
-      <!-- C / D: DAG (bottom) -->
-      {dag_section}
-
-    </div><!-- /right -->
-
-  </div><!-- /body -->
-
-  <!-- FOOTER -->
-  <div class="footer">
-    <span>auto-generated &nbsp;·&nbsp; {config['report'].get('output_dir', 'causaliT/reports/surrogate')}</span>
-    <span>causaliT surrogate</span>
-  </div>
-
-</div><!-- /page -->
-</body>
-</html>"""
-    return html
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  Public entry point
-# ─────────────────────────────────────────────────────────────────────────────
-
-def generate_pdf_report(trainer, eval_results: dict, config: dict,
-                        output_dir: str) -> Optional[Path]:
+        return "0"
+    exp  = int(math.floor(math.log10(abs(lr))))
+    mant = lr / (10 ** exp)
+    return f"{mant:.3f} x 10^{exp}"
+
+
+def short_dir(d, max_len=35):
+    parts = Path(d).parts
+    short = str(Path(*parts[-2:])) if len(parts) >= 2 else str(d)
+    return short if len(short) <= max_len else '...' + short[-(max_len - 3):]
+
+
+def scale_img(path, max_w, max_h):
+    if not Path(path).exists():
+        return _placeholder(Path(path).name, max_w, max_h)
+    img   = Image(str(path))
+    scale = min(max_w / img.imageWidth, max_h / img.imageHeight)
+    img.drawWidth  = img.imageWidth  * scale
+    img.drawHeight = img.imageHeight * scale
+    return img
+
+
+def _placeholder(name, w, h):
+    st = ParagraphStyle('_ph', fontName='Courier', fontSize=FS_CAPTION,
+                        alignment=TA_CENTER, textColor=C_GRAY)
+    t  = Table([[Paragraph(name, st)]], colWidths=[w], rowHeights=[h])
+    t.setStyle(TableStyle([
+        ('BOX',        (0, 0), (-1, -1), 0.5, C_GRAY),
+        ('BACKGROUND', (0, 0), (-1, -1), C_VGRAY),
+        ('VALIGN',     (0, 0), (-1, -1), 'MIDDLE'),
+        ('ALIGN',      (0, 0), (-1, -1), 'CENTER'),
+    ]))
+    return t
+
+
+# ── style factory (identical signature to uncertainty_predictor) ──────────────
+def _s(name, size, bold=False, italic=False, color=C_BLACK, align=TA_LEFT, leading=None):
+    font = 'Courier-Bold' if bold else ('Courier-Oblique' if italic else 'Courier')
+    return ParagraphStyle(name, fontName=font, fontSize=size,
+                          leading=leading or size * 1.3,
+                          textColor=color, alignment=align)
+
+# header / meta
+ST_TITLE    = _s('st_title',   FS_TITLE,   bold=False)
+ST_META     = _s('st_meta',    FS_META,    color=C_MUTED)
+# KPI
+ST_KPI_LBL  = _s('st_kpi_l',  FS_KPI_LBL, color=C_MUTED)
+ST_KPI_VAL  = _s('st_kpi_v',  FS_KPI_VAL, bold=True)
+ST_KPI_SUB  = _s('st_kpi_s',  FS_KPI_SUB, color=C_MUTED)
+# section
+ST_SECTION  = _s('st_sec',    FS_SECTION, bold=False, color=C_MUTED)
+# body kv
+ST_KEY      = _s('st_key',    FS_BODY,    color=C_BLACK, align=TA_LEFT)
+ST_VAL      = _s('st_val',    FS_BODY,    color=C_BLACK, align=TA_RIGHT)
+ST_VAL_G    = _s('st_val_g',  FS_BODY,    color=C_GREEN, align=TA_RIGHT)
+ST_VAL_R    = _s('st_val_r',  FS_BODY,    color=C_RED,   align=TA_RIGHT)
+ST_VAL_A    = _s('st_val_a',  FS_BODY,    color=C_AMBER, align=TA_RIGHT)
+# badge
+ST_BADGE_G  = _s('st_bg_g',  FS_BADGE,   color=C_GREEN, align=TA_CENTER)
+ST_BADGE_R  = _s('st_bg_r',  FS_BADGE,   color=C_RED,   align=TA_CENTER)
+ST_BADGE_A  = _s('st_bg_a',  FS_BADGE,   color=C_AMBER, align=TA_CENTER)
+# caption / footer
+ST_CAPTION  = _s('st_cap',   FS_CAPTION,  italic=True)
+ST_NOTE     = _s('st_note',  FS_CAPTION,  italic=True,  color=C_MUTED)
+ST_FOOTER_L = _s('st_ftrl',  FS_CAPTION,  color=C_MUTED, align=TA_LEFT)
+ST_FOOTER_R = _s('st_ftrr',  FS_CAPTION,  color=C_MUTED, align=TA_RIGHT)
+
+
+def _cv(c, align=TA_RIGHT):
+    """Dynamic color + align body style."""
+    return ParagraphStyle(f'_dyn{id(c)}{align}', fontName='Courier',
+                          fontSize=FS_BODY, leading=FS_BODY * 1.3,
+                          textColor=c, alignment=align)
+
+
+def _ckpi(c):
+    """Dynamic color KPI val style."""
+    return ParagraphStyle(f'_kpi{id(c)}', fontName='Courier-Bold',
+                          fontSize=FS_KPI_VAL, leading=FS_KPI_VAL * 1.2,
+                          textColor=c, alignment=TA_LEFT)
+
+
+def section_header(title, width):
+    """Section divider: small-caps label + thin HR below (same as uncertainty_predictor)."""
+    return [
+        Spacer(1, 5),
+        Paragraph(title.upper(), ST_SECTION),
+        HRFlowable(width=width, thickness=0.4, color=C_LGRAY, spaceAfter=1),
+    ]
+
+
+def kv_table(rows, col_w, key_frac=0.55):
     """
-    Generate a single-page A4-landscape PDF report for CasualiT surrogate training.
-
-    Style is identical to the Uncertainty Predictor report (HTML → WeasyPrint).
-
-    Args:
-        trainer      : SurrogateTrainer (needs .model, .history, .best_epoch,
-                       .best_val_loss, .{train,val,test}_loader)
-        eval_results : dict with test_mse, test_mae, test_rmse, test_r2,
-                       predictions (np.ndarray), targets (np.ndarray)
-        config       : SURROGATE_CONFIG dict
-        output_dir   : directory where the PDF is written
-
-    Returns:
-        Path to the generated PDF, or None on failure.
+    Two-column key/value table.  rows = [(key_str, val_str, val_style?), ...]
+    val_style defaults to ST_VAL.
     """
-    try:
-        import matplotlib
-        matplotlib.use('Agg')
-    except ImportError:
-        print('Warning: matplotlib not available — skipping PDF report')
-        return None
+    kw = col_w * key_frac
+    vw = col_w * (1 - key_frac)
+    data = []
+    for row in rows:
+        key  = row[0]
+        val  = row[1]
+        vstyle = row[2] if len(row) > 2 else ST_VAL
+        data.append([Paragraph(key, ST_KEY), Paragraph(str(val), vstyle)])
+    t = Table(data, colWidths=[kw, vw])
+    t.setStyle(TableStyle([
+        ('LINEBELOW',     (0, 0), (-1, -2), 0.2, C_LGRAY),
+        ('TOPPADDING',    (0, 0), (-1, -1), 1.2),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 1.2),
+        ('LEFTPADDING',   (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
+        ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
+    ]))
+    return t
 
-    try:
-        from weasyprint import HTML as WPHtml
-    except ImportError:
-        print('Warning: weasyprint not available — skipping PDF report')
-        print('Install with: pip install weasyprint')
-        return None
 
-    try:
-        out_dir = Path(output_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
+# ════════════════════════════════════════════════════════════════════════════
+#  HEADER
+# ════════════════════════════════════════════════════════════════════════════
 
-        ts_str   = datetime.now().strftime('%Y%m%d_%H%M%S')
-        pdf_path = out_dir / f'surrogate_training_report_{ts_str}.pdf'
+def _header_flowables(d):
+    cfg        = d['config']
+    ts         = d.get('timestamp', datetime.now())
+    ts_str     = ts.strftime('%Y-%m-%d %H:%M:%S') if isinstance(ts, datetime) else str(ts)
+    hist       = d.get('history', {})
+    eval_res   = d.get('eval_results', {})
+    seed       = cfg.get('data', {}).get('random_seed',
+                 cfg.get('training', {}).get('seed', '—'))
+    best_epoch = hist.get('best_epoch', '—')
+    max_epochs = cfg.get('training', {}).get('max_epochs',
+                 cfg.get('training', {}).get('epochs', '—'))
 
-        print(f'\nGenerating PDF report: {pdf_path}')
+    r2v      = float(eval_res.get('test_r2', 0.0))
+    if r2v >= 0.9:
+        badge_txt, badge_st, badge_col = "R²≥0.90", ST_BADGE_G, C_GREEN
+    elif r2v >= 0.7:
+        badge_txt, badge_st, badge_col = "R²≥0.70", ST_BADGE_A, C_AMBER
+    else:
+        badge_txt, badge_st, badge_col = "R²<0.70", ST_BADGE_R, C_RED
 
-        preds   = eval_results['predictions']
-        targets = eval_results['targets']
+    title_p  = Paragraph("Surrogate Transformer \u2014 Training Report", ST_TITLE)
+    badge_w  = 2.5 * cm
+    badge_p  = Paragraph(badge_txt, badge_st)
 
-        # Generate plots (inline base64 — no temp files needed)
-        print('  Rendering plots...')
-        b64_loss     = _plot_loss(trainer.history, trainer.best_epoch)
-        b64_scatter  = _plot_scatter(preds, targets, eval_results['test_r2'])
-        b64_residuals = _plot_residuals(preds, targets)
-        b64_fdist    = _plot_fdist(preds, targets)
+    row1 = Table([[title_p, badge_p]], colWidths=[FULL_W - badge_w, badge_w])
+    row1.setStyle(TableStyle([
+        ('VALIGN',        (0, 0), (-1, -1), 'MIDDLE'),
+        ('LEFTPADDING',   (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
+        ('TOPPADDING',    (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+        ('BOX',           (1, 0), (1, 0),   0.5, badge_col),
+        ('ALIGN',         (1, 0), (1, 0),   'CENTER'),
+    ]))
 
-        # DAG (conditional)
-        phi = _extract_phi(trainer)
-        if phi is not None:
-            proc_names = [p for p in config['data'].get('process_names', []) if p is not None]
-            n = min(phi.shape[0], len(proc_names)) if proc_names else phi.shape[0]
-            if not proc_names:
-                proc_names = [f'P{i}' for i in range(n)]
-            b64_dag = _plot_dag(phi[:n, :n], proc_names[:n])
-            print('  DAG rendered from LieAttention phi tensors.')
-        else:
-            b64_dag = None
-            print('  DAG not available (standard attention — no phi tensors).')
+    meta_p = Paragraph(
+        f"{ts_str}  \u00b7  seed {seed}  \u00b7  "
+        f"epochs {best_epoch} / {max_epochs}",
+        ST_META)
+    rule = HRFlowable(width=FULL_W, thickness=1, color=C_BLACK, spaceAfter=0)
+    return [row1, Spacer(1, 2), meta_p, Spacer(1, 2), rule]
 
-        # Build HTML
-        print('  Building HTML...')
-        html_str = _build_html(
-            trainer, eval_results, config,
-            b64_loss, b64_scatter, b64_residuals, b64_fdist, b64_dag,
+
+# ════════════════════════════════════════════════════════════════════════════
+#  FOOTER
+# ════════════════════════════════════════════════════════════════════════════
+
+def _footer_flowables(d):
+    cfg  = d['config']
+    chk  = short_dir(cfg.get('checkpoints', {}).get('save_dir',
+           cfg.get('training', {}).get('checkpoint_dir', '')))
+    rule = HRFlowable(width=FULL_W, thickness=1, color=C_BLACK,
+                      spaceBefore=2, spaceAfter=2)
+    tbl  = Table(
+        [[Paragraph(f"auto-generated  \u00b7  {chk}", ST_FOOTER_L),
+          Paragraph("surrogate_transformer", ST_FOOTER_R)]],
+        colWidths=[FULL_W * 0.75, FULL_W * 0.25],
+    )
+    tbl.setStyle(TableStyle([
+        ('VALIGN',        (0, 0), (-1, -1), 'MIDDLE'),
+        ('LEFTPADDING',   (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
+        ('TOPPADDING',    (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+        ('ALIGN',         (1, 0), (1, 0),   'RIGHT'),
+    ]))
+    return [rule, tbl]
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  LEFT COLUMN
+# ════════════════════════════════════════════════════════════════════════════
+
+def _build_left(d):
+    cfg      = d['config']
+    history  = d.get('history', {})
+    eval_res = d.get('eval_results', {})
+    floor    = d.get('floor_metrics') or {}
+    n_train  = d.get('n_train', 0)
+    n_val    = d.get('n_val',   0)
+    n_test   = d.get('n_test',  0)
+
+    model_cfg = cfg.get('model', {})
+    tr_cfg    = cfg.get('training', {})
+    data_cfg  = cfg.get('data', {})
+    chk_cfg   = cfg.get('checkpoints', {})
+
+    F = []
+
+    # ── KPI bar ───────────────────────────────────────────────────────────────
+    best_val  = float(history.get('best_val_loss',  history.get('final_val_loss', 0.0)))
+    final_val = float(history.get('final_val_loss', best_val))
+    r2v       = float(eval_res.get('test_r2',   0.0))
+    rmsev     = float(eval_res.get('test_rmse', 0.0))
+    floor_mse = float(floor.get('floor_mse', floor.get('mse_floor', 0.0)))
+
+    cw = LW / 4
+
+    kpi_lbl = [Paragraph(t, ST_KPI_LBL) for t in
+               ["BEST VAL MSE", "TEST R\u00b2", "TEST RMSE", "FLOOR MSE"]]
+    kpi_val = [
+        Paragraph(f"{best_val:.5f}",  ST_KPI_VAL),
+        Paragraph(f"{r2v:.4f}",       _ckpi(r2_color(r2v))),
+        Paragraph(f"{rmsev:.5f}",     _ckpi(rmse_color(rmsev))),
+        Paragraph(f"{floor_mse:.5f}", _ckpi(floor_color(floor_mse))),
+    ]
+    kpi_sub = [
+        Paragraph(f"final {final_val:.5f}",              ST_KPI_SUB),
+        Paragraph(f"MAE {eval_res.get('test_mae', 0):.5f}", ST_KPI_SUB),
+        Paragraph(f"MSE {eval_res.get('test_mse', 0):.5f}", ST_KPI_SUB),
+        Paragraph(f"top-decile F\u2265q\u2089\u2080",    ST_KPI_SUB),
+    ]
+
+    kpi_tbl = Table([kpi_lbl, kpi_val, kpi_sub], colWidths=[cw] * 4)
+    kpi_tbl.setStyle(TableStyle([
+        ('BOX',           (0, 0), (-1, -1), 0.5, C_BLACK),
+        ('INNERGRID',     (0, 0), (-1, -1), 0.5, C_BLACK),
+        ('TOPPADDING',    (0, 0), (-1, -1), 3),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+        ('LEFTPADDING',   (0, 0), (-1, -1), 4),
+        ('RIGHTPADDING',  (0, 0), (-1, -1), 4),
+        ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
+    ]))
+    F.append(kpi_tbl)
+
+    # ── Section 01 — model configuration ──────────────────────────────────────
+    F += section_header("01 \u2014 model configuration", LW)
+
+    half = LW / 2
+    arch_rows = [
+        ("Type",          "TransformerForecaster"),
+        ("d_model_enc",   str(model_cfg.get('d_model_enc', '—'))),
+        ("d_model_dec",   str(model_cfg.get('d_model_dec', '—'))),
+        ("d_ff",          str(model_cfg.get('d_ff', '—'))),
+        ("d_qk",          str(model_cfg.get('d_qk', '—'))),
+        ("e_layers",      str(model_cfg.get('e_layers', '—'))),
+        ("d_layers",      str(model_cfg.get('d_layers', '—'))),
+        ("n_heads",       str(model_cfg.get('n_heads', '—'))),
+    ]
+    reg_rows = [
+        ("Activation",    str(model_cfg.get('activation', '—'))),
+        ("Norm",          str(model_cfg.get('norm', '—'))),
+        ("Final norm",    str(model_cfg.get('use_final_norm', '—'))),
+        ("Dropout emb",   str(model_cfg.get('dropout_emb', '—'))),
+        ("Dropout attn",  str(model_cfg.get('dropout_attn_out', '—'))),
+        ("Dropout ff",    str(model_cfg.get('dropout_ff', '—'))),
+        ("Input dim",     str(d.get('input_dim', '—'))),
+        ("Total params",  f"{d.get('total_params', 0):,}"),
+    ]
+    sec01 = Table([[kv_table(arch_rows, half), kv_table(reg_rows, half)]],
+                  colWidths=[half, half])
+    sec01.setStyle(TableStyle([
+        ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
+        ('TOPPADDING',    (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+        ('LEFTPADDING',   (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
+    ]))
+    F.append(sec01)
+
+    # ── Section 02 — data & training parameters ────────────────────────────────
+    F += section_header("02 \u2014 data & training parameters", LW)
+
+    total_samples = (n_train + n_val + n_test) or 1
+    processes = data_cfg.get('process_names', [])
+    proc_str  = ', '.join(processes) if processes else '—'
+
+    data_rows = [
+        ("Processes",     proc_str),
+        ("Trajectories",  str(data_cfg.get('n_trajectories', '—'))),
+        ("Scenarios",     str(data_cfg.get('n_scenarios', '—'))),
+        ("Train",         f"{n_train:,} ({n_train/total_samples*100:.0f}%)"),
+        ("Val",           f"{n_val:,}   ({n_val/total_samples*100:.0f}%)"),
+        ("Test",          f"{n_test:,}  ({n_test/total_samples*100:.0f}%)"),
+        ("Random seed",   str(data_cfg.get('random_seed', '—'))),
+    ]
+    train_rows = [
+        ("Max epochs",    str(tr_cfg.get('max_epochs', tr_cfg.get('epochs', '—')))),
+        ("Batch size",    str(tr_cfg.get('batch_size', '—'))),
+        ("Learning rate", fmt_lr(tr_cfg.get('learning_rate', 0))),
+        ("Weight decay",  str(tr_cfg.get('weight_decay', '—'))),
+        ("Loss fn",       str(tr_cfg.get('loss_fn', 'mse'))),
+        ("Patience",      str(tr_cfg.get('patience', '—'))),
+        ("Scheduler",     str(tr_cfg.get('use_scheduler', False))),
+    ]
+
+    col_w = LW / 2
+    sec02 = Table([[kv_table(data_rows, col_w), kv_table(train_rows, col_w)]],
+                  colWidths=[col_w, col_w])
+    sec02.setStyle(TableStyle([
+        ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
+        ('TOPPADDING',    (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+        ('LEFTPADDING',   (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING',  (0, 0), (0, -1),  3),
+        ('LEFTPADDING',   (1, 0), (1, -1),  3),
+    ]))
+    F.append(sec02)
+
+    # ── Section 03 — test metrics ─────────────────────────────────────────────
+    F += section_header("03 \u2014 test metrics", LW)
+
+    cws3 = [r * LW for r in [0.20, 0.16, 0.16, 0.16, 0.16, 0.16]]
+    hdr3 = [Paragraph(h, _s('_h3', FS_BODY, bold=False, color=C_MUTED)) for h in
+            ["Metric", "MSE", "RMSE", "MAE", "R\u00b2", "Floor MSE"]]
+
+    mse_  = float(eval_res.get('test_mse',  0.0))
+    rmse_ = float(eval_res.get('test_rmse', 0.0))
+    mae_  = float(eval_res.get('test_mae',  0.0))
+    r2_   = float(eval_res.get('test_r2',   0.0))
+    fl_   = float(floor.get('floor_mse', floor.get('mse_floor', 0.0)))
+    fl_b  = floor.get('floor_bias', None)
+
+    row3 = [
+        Paragraph("Reliability F",          _s('_m0', FS_BODY)),
+        Paragraph(f"{mse_:.5f}",            _s('_m1', FS_BODY, align=TA_RIGHT)),
+        Paragraph(f"{rmse_:.5f}",           _cv(rmse_color(rmse_))),
+        Paragraph(f"{mae_:.5f}",            _s('_m3', FS_BODY, align=TA_RIGHT)),
+        Paragraph(f"{r2_:.4f}",             _cv(r2_color(r2_))),
+        Paragraph(f"{fl_:.5f}" if fl_ else "\u2014",
+                                            _cv(floor_color(fl_) if fl_ else C_GRAY)),
+    ]
+
+    mt = Table([hdr3, row3], colWidths=cws3)
+    mt.setStyle(TableStyle([
+        ('BOX',           (0, 0), (-1, -1), 0.5, C_BLACK),
+        ('LINEBELOW',     (0, 0), (-1,  0), 0.5, C_BLACK),
+        ('INNERGRID',     (0, 0), (-1, -1), 0.3, C_LGRAY),
+        ('TOPPADDING',    (0, 0), (-1, -1), 1.5),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 1.5),
+        ('LEFTPADDING',   (0, 0), (-1, -1), 2),
+        ('RIGHTPADDING',  (0, 0), (-1, -1), 2),
+        ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
+    ]))
+    F.append(mt)
+
+    note_parts = ["Floor MSE = MSE restricted to top-decile reliability scores (F \u2265 q\u2089\u2080)"]
+    if fl_b is not None:
+        note_parts.append(f"  \u00b7  floor bias {fl_b:+.5f}")
+    F.append(Paragraph('  '.join(note_parts), ST_NOTE))
+
+    # ── Section 04 — training results ─────────────────────────────────────────
+    F += section_header("04 \u2014 training results", LW)
+
+    final_ep  = history.get('final_epoch',  history.get('best_epoch', '—'))
+    best_ep   = history.get('best_epoch',   '—')
+    best_tr   = history.get('best_train_loss',  None)
+    final_tr  = history.get('final_train_loss', history.get('train_loss', [None])[-1]
+                            if isinstance(history.get('train_loss'), list) else None)
+    final_vl  = history.get('final_val_loss',   best_val)
+
+    res_rows = [
+        ("Final epoch",       str(final_ep)),
+        ("Best epoch",        str(best_ep)),
+        ("Final train MSE",   f"{float(final_tr):.6f}" if final_tr is not None else "—"),
+        ("Final val MSE",     f"{float(final_vl):.6f}"),
+        ("Best val MSE",      f"{best_val:.6f}"),
+    ]
+
+    # add MAE history if available
+    final_tr_mae = history.get('final_train_mae', None)
+    final_vl_mae = history.get('final_val_mae',   None)
+    if final_tr_mae is not None:
+        res_rows.append(("Final train MAE",  f"{float(final_tr_mae):.6f}"))
+    if final_vl_mae is not None:
+        res_rows.append(("Final val MAE",    f"{float(final_vl_mae):.6f}"))
+
+    F.append(kv_table(res_rows, LW))
+
+    # ── Section 05 — misc ─────────────────────────────────────────────────────
+    F += section_header("05 \u2014 misc", LW)
+    seed2    = data_cfg.get('random_seed', tr_cfg.get('seed', '—'))
+    verbose  = cfg.get('logging', {}).get('verbose', '—')
+    k_fold   = tr_cfg.get('k_fold', 1)
+    F.append(Paragraph(
+        f"Random seed: {seed2}  \u00b7  k-fold: {k_fold}  \u00b7  verbose: {verbose}",
+        _s('_misc', FS_BODY)))
+
+    return F
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  RIGHT COLUMN  — images
+# ════════════════════════════════════════════════════════════════════════════
+
+def _build_right(d):
+    chk_dir = Path(d['config'].get('checkpoints', {}).get('save_dir',
+              d['config'].get('training', {}).get('checkpoint_dir', '.')))
+
+    # Expected plot filenames (produced by the surrogate training script)
+    PLOTS = [
+        ('loss_curves.png',      'Loss Curves (MSE)'),
+        ('mae_curves.png',       'MAE Curves'),
+        ('pred_vs_target.png',   'Predictions vs True Reliability F'),
+        ('lr_schedule.png',      'Learning Rate Schedule'),
+    ]
+
+    F = []
+    n_slots  = len(PLOTS)
+    img_gap  = 3
+    cap_h    = 10
+    img_h    = (BODY_H - (n_slots - 1) * img_gap - n_slots * cap_h) / n_slots
+
+    for fname, caption in PLOTS:
+        img = scale_img(chk_dir / fname, RW, img_h)
+        cap = Paragraph(f"<i>{caption}</i>", ST_CAPTION)
+
+        img_tbl = Table([[img]], colWidths=[RW])
+        img_tbl.setStyle(TableStyle([
+            ('ALIGN',         (0, 0), (-1, -1), 'CENTER'),
+            ('LEFTPADDING',   (0, 0), (-1, -1), 0),
+            ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
+            ('TOPPADDING',    (0, 0), (-1, -1), 0),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+        ]))
+        F.append(img_tbl)
+        F.append(cap)
+        F.append(Spacer(1, img_gap))
+
+    return F
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  BUILD PDF
+# ════════════════════════════════════════════════════════════════════════════
+
+def _build_pdf(d, out_path):
+    hdr_f = Frame(M, PH - M - HDR_H, FULL_W, HDR_H, id='hdr',
+                  leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0)
+    lft_f = Frame(M, M + FTR_H, LW, BODY_H, id='lft',
+                  leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0)
+    rgt_f = Frame(M + LW + GAP, M + FTR_H, RW, BODY_H, id='rgt',
+                  leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0)
+    ftr_f = Frame(M, M, FULL_W, FTR_H, id='ftr',
+                  leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0)
+
+    pt  = PageTemplate(id='main',
+                       frames=[hdr_f, lft_f, rgt_f, ftr_f],
+                       pagesize=landscape(A4))
+    doc = BaseDocTemplate(str(out_path), pagesize=landscape(A4),
+                          leftMargin=M, rightMargin=M, topMargin=M, bottomMargin=M,
+                          pageTemplates=[pt])
+
+    lk = KeepInFrame(LW, BODY_H, _build_left(d),  mode='shrink')
+    rk = KeepInFrame(RW, BODY_H, _build_right(d), mode='shrink')
+
+    doc.build(
+        _header_flowables(d) + [FrameBreak()] +
+        [lk]                 + [FrameBreak()] +
+        [rk]                 + [FrameBreak()] +
+        _footer_flowables(d)
+    )
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  PUBLIC API
+# ════════════════════════════════════════════════════════════════════════════
+
+def generate_surrogate_training_report(
+    config,
+    history,
+    eval_results,
+    input_dim,
+    output_dim,
+    total_params,
+    n_train,
+    n_val,
+    n_test,
+    checkpoint_dir,
+    timestamp=None,
+    floor_metrics=None,
+):
+    """
+    Generate a PDF training report for the surrogate transformer.
+
+    Parameters
+    ----------
+    config : dict
+        Full SURROGATE_CONFIG dictionary (or equivalent structure with
+        'model', 'training', 'data', 'checkpoints', 'logging' keys).
+    history : dict
+        Training history with keys such as:
+          best_epoch, best_val_loss, final_epoch, final_val_loss,
+          final_train_loss, final_train_mae, final_val_mae,
+          train_loss (list), val_loss (list), train_mae (list), val_mae (list),
+          learning_rate (list).
+    eval_results : dict
+        Test-set evaluation results:
+          test_mse, test_mae, test_rmse, test_r2,
+          predictions (ndarray), targets (ndarray).
+    input_dim : int
+        Number of input features per sequence step.
+    output_dim : int
+        Output dimension (typically 1 for scalar reliability F).
+    total_params : int
+        Total number of trainable model parameters.
+    n_train, n_val, n_test : int
+        Dataset split sizes.
+    checkpoint_dir : str | Path
+        Directory where the report (and plots) are saved.
+    timestamp : datetime, optional
+        Training timestamp; uses now() if not provided.
+    floor_metrics : dict, optional
+        Surrogate-specific reliability floor fidelity metrics:
+          floor_mse  — MSE restricted to top-decile F scores,
+          floor_bias — mean bias in that region.
+
+    Returns
+    -------
+    str
+        Absolute path to the generated PDF file.
+    """
+    if timestamp is None:
+        timestamp = datetime.now()
+
+    checkpoint_dir = Path(checkpoint_dir)
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    out_path = checkpoint_dir / 'surrogate_training_report.pdf'
+
+    d = dict(
+        config=config,
+        history=history,
+        eval_results=eval_results,
+        floor_metrics=floor_metrics or {},
+        input_dim=input_dim,
+        output_dim=output_dim,
+        total_params=total_params,
+        n_train=n_train,
+        n_val=n_val,
+        n_test=n_test,
+        timestamp=timestamp,
+        checkpoint_dir=checkpoint_dir,
+    )
+
+    _build_pdf(d, out_path)
+    print(f"Surrogate report generated: {out_path}")
+    return str(out_path)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  CLASS-BASED ALIAS  (mirrors UncertaintyReportGenerator)
+# ════════════════════════════════════════════════════════════════════════════
+
+class SurrogateReportGenerator:
+    """
+    Thin class wrapper — kept for symmetry with UncertaintyReportGenerator.
+    Prefer the functional API (generate_surrogate_training_report) in new code.
+    """
+
+    def generate(
+        self,
+        config,
+        history,
+        eval_results,
+        input_dim,
+        output_dim,
+        total_params,
+        n_train,
+        n_val,
+        n_test,
+        checkpoint_dir,
+        timestamp=None,
+        floor_metrics=None,
+    ):
+        return generate_surrogate_training_report(
+            config=config,
+            history=history,
+            eval_results=eval_results,
+            input_dim=input_dim,
+            output_dim=output_dim,
+            total_params=total_params,
+            n_train=n_train,
+            n_val=n_val,
+            n_test=n_test,
+            checkpoint_dir=checkpoint_dir,
+            timestamp=timestamp,
+            floor_metrics=floor_metrics,
         )
 
-        # Render PDF
-        print('  Rendering PDF via WeasyPrint...')
-        WPHtml(string=html_str).write_pdf(str(pdf_path))
 
-        print(f'PDF report saved: {pdf_path}')
-        return pdf_path
+# ════════════════════════════════════════════════════════════════════════════
+#  QUICK SMOKE-TEST  (python surrogate_report_generator.py)
+# ════════════════════════════════════════════════════════════════════════════
 
-    except Exception:
-        print('Warning: PDF report generation failed.')
-        traceback.print_exc()
-        return None
+if __name__ == '__main__':
+    import numpy as np
+    from datetime import datetime
+
+    # ── minimal fake config (matches SURROGATE_CONFIG structure) ──────────────
+    cfg = {
+        'data': {
+            'n_trajectories': 1000,
+            'n_val_trajectories': 200,
+            'n_test_trajectories': 200,
+            'n_scenarios': 4,
+            'process_names': ['laser', 'plasma', 'galvanic', 'microetch'],
+            'random_seed': 42,
+        },
+        'model': {
+            'd_model_enc': 64,
+            'd_model_dec': 32,
+            'd_ff': 128,
+            'd_qk': 32,
+            'e_layers': 2,
+            'd_layers': 2,
+            'n_heads': 4,
+            'dropout_emb': 0.1,
+            'dropout_attn_out': 0.0,
+            'dropout_ff': 0.1,
+            'activation': 'gelu',
+            'norm': 'batch',
+            'use_final_norm': True,
+        },
+        'training': {
+            'max_epochs': 200,
+            'batch_size': 64,
+            'learning_rate': 1e-3,
+            'weight_decay': 0.01,
+            'loss_fn': 'mse',
+            'patience': 20,
+            'use_scheduler': True,
+            'scheduler_factor': 0.5,
+            'scheduler_patience': 10,
+            'seed': 42,
+        },
+        'checkpoints': {
+            'save_dir': '/tmp/surrogate_demo',
+        },
+        'logging': {
+            'verbose': True,
+        },
+    }
+
+    hist = {
+        'best_epoch':        87,
+        'best_val_loss':     0.003142,
+        'final_epoch':       107,
+        'final_val_loss':    0.003850,
+        'final_train_loss':  0.002710,
+        'final_train_mae':   0.039800,
+        'final_val_mae':     0.044200,
+        'train_loss':        list(np.linspace(0.08, 0.0027, 108)),
+        'val_loss':          list(np.linspace(0.09, 0.0039, 108)),
+        'train_mae':         list(np.linspace(0.20, 0.0398, 108)),
+        'val_mae':           list(np.linspace(0.22, 0.0442, 108)),
+        'learning_rate':     [1e-3 * (0.5 ** (i // 30)) for i in range(108)],
+    }
+
+    eval_res = {
+        'test_mse':  0.003219,
+        'test_mae':  0.041500,
+        'test_rmse': 0.056740,
+        'test_r2':   0.9413,
+        'predictions': np.random.uniform(0, 1, 200),
+        'targets':     np.random.uniform(0, 1, 200),
+    }
+
+    floor = {
+        'floor_mse':  0.004831,
+        'floor_bias': -0.008210,
+    }
+
+    out = generate_surrogate_training_report(
+        config=cfg,
+        history=hist,
+        eval_results=eval_res,
+        input_dim=20,
+        output_dim=1,
+        total_params=48_320,
+        n_train=1000,
+        n_val=200,
+        n_test=200,
+        checkpoint_dir='/tmp/surrogate_demo',
+        timestamp=datetime(2025, 6, 15, 14, 32, 7),
+        floor_metrics=floor,
+    )
+    print(f"\nDone → {out}")
