@@ -511,7 +511,9 @@ class CasualiTSurrogate:
         Load a trained CausalIT model from checkpoint.
 
         Reads 'model_type' from checkpoint metadata to determine which
-        forecaster class to instantiate.
+        forecaster class to instantiate.  Supports both native Lightning
+        checkpoints and plain torch.save checkpoints (which lack the
+        'pytorch-lightning_version' key).
 
         Args:
             checkpoint_path: Path to .ckpt file
@@ -520,30 +522,54 @@ class CasualiTSurrogate:
         Returns:
             Tuple of (model, model_type)
         """
-        # Peek at checkpoint to determine model_type
+        from causaliT.training.forecasters.transformer_forecaster import TransformerForecaster
+        from causaliT.training.forecasters.stage_causal_forecaster import StageCausalForecaster
+        from causaliT.training.forecasters.single_causal_forecaster import SingleCausalForecaster
+
+        model_class_map = {
+            'proT': TransformerForecaster,
+            'StageCausaliT': StageCausalForecaster,
+            'SingleCausalLayer': SingleCausalForecaster,
+        }
+
+        # Load checkpoint once
         checkpoint_data = torch.load(checkpoint_path, map_location=device, weights_only=False)
         model_type = checkpoint_data.get('model_type', 'proT')
 
-        if model_type == 'proT':
-            from causaliT.training.forecasters.transformer_forecaster import TransformerForecaster
-            model = TransformerForecaster.load_from_checkpoint(
-                checkpoint_path, map_location=device, weights_only=False)
-        elif model_type == 'StageCausaliT':
-            from causaliT.training.forecasters.stage_causal_forecaster import StageCausalForecaster
-            model = StageCausalForecaster.load_from_checkpoint(
-                checkpoint_path, map_location=device, weights_only=False)
-        elif model_type == 'SingleCausalLayer':
-            from causaliT.training.forecasters.single_causal_forecaster import SingleCausalForecaster
-            model = SingleCausalForecaster.load_from_checkpoint(
-                checkpoint_path, map_location=device, weights_only=False)
-        else:
+        if model_type not in model_class_map:
             raise ValueError(
                 f"Unknown model_type '{model_type}' in checkpoint. "
-                f"Expected 'proT', 'StageCausaliT', or 'SingleCausalLayer'.")
+                f"Expected one of {list(model_class_map.keys())}.")
+
+        model_cls = model_class_map[model_type]
+
+        # Try Lightning load first; fall back to manual instantiation
+        # if the checkpoint lacks Lightning metadata.
+        is_lightning_ckpt = 'pytorch-lightning_version' in checkpoint_data
+        if is_lightning_ckpt:
+            model = model_cls.load_from_checkpoint(
+                checkpoint_path, map_location=device, weights_only=False)
+        else:
+            # Manual load: instantiate from saved hyper_parameters + state_dict
+            hparams = checkpoint_data.get('hyper_parameters', checkpoint_data.get('hparams', {}))
+            if not hparams:
+                raise RuntimeError(
+                    f"Checkpoint has no 'hyper_parameters' key. "
+                    f"Cannot reconstruct {model_cls.__name__} without config.")
+
+            # StageCausaliT / SingleCausalLayer accept (config, data_dir)
+            if model_type in ('StageCausaliT', 'SingleCausalLayer'):
+                model = model_cls(hparams, data_dir=None)
+            else:
+                model = model_cls(hparams)
+
+            state_dict = checkpoint_data.get('state_dict', {})
+            model.load_state_dict(state_dict, strict=False)
 
         model.eval()
         model.to(device)
-        print(f"  CasualiTSurrogate loaded model_type='{model_type}' from {checkpoint_path}")
+        print(f"  CasualiTSurrogate loaded model_type='{model_type}' "
+              f"({'Lightning' if is_lightning_ckpt else 'manual'}) from {checkpoint_path}")
 
         return model, model_type
 
