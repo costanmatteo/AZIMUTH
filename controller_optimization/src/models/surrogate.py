@@ -638,8 +638,19 @@ class CasualiTSurrogate:
         """Run inference for SimpleSurrogateModel (from train_surrogate.py).
 
         Uses the same ProT-format input (X) that the model was trained on.
+        Truncates or pads features to match the model's expected input_dim.
         """
         X, _ = self.process_chain.trajectory_to_prot_format(trajectory)
+        # Align feature dimension with what the model was trained on
+        expected_features = self.model.n_features
+        actual_features = X.shape[-1]
+        if actual_features > expected_features:
+            X = X[..., :expected_features]
+        elif actual_features < expected_features:
+            padding = torch.zeros(
+                *X.shape[:-1], expected_features - actual_features,
+                dtype=X.dtype, device=X.device)
+            X = torch.cat([X, padding], dim=-1)
         F = self.model(X)  # (batch,)
         return F
 
