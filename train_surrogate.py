@@ -621,7 +621,11 @@ def _train_stage_causal_lightning(casualit_model, config, args):
 
 
 def _save_training_plots(history, eval_results, output_dir):
-    """Generate the four PNG plots expected by the surrogate report generator."""
+    """Generate the four PNG plots expected by the surrogate report generator.
+
+    Mirrors the plots that were originally produced by the removed
+    generate_pdf_report() function.
+    """
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
@@ -629,26 +633,30 @@ def _save_training_plots(history, eval_results, output_dir):
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
 
-    epochs = list(range(1, len(history['train_loss']) + 1))
+    best_epoch = history.get('best_epoch', 0)
+    epochs = list(range(len(history['train_loss'])))
 
-    # 1. Loss curves (MSE)
+    # 1. Loss curves (MSE) — log scale, best-epoch marker
     fig, ax = plt.subplots(figsize=(6, 3.5))
-    ax.plot(epochs, history['train_loss'], label='Train')
-    ax.plot(epochs, history['val_loss'], label='Val')
+    ax.plot(epochs, history['train_loss'], label='Train', alpha=0.8)
+    ax.plot(epochs, history['val_loss'], label='Validation', alpha=0.8)
+    ax.axvline(x=best_epoch, color='r', linestyle='--', alpha=0.5, label='Best')
     ax.set_xlabel('Epoch')
     ax.set_ylabel('MSE Loss')
-    ax.set_title('Loss Curves (MSE)')
+    ax.set_title('Loss Curves')
     ax.legend()
+    ax.set_yscale('log')
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
     fig.savefig(out / 'loss_curves.png', dpi=150)
     plt.close(fig)
 
-    # 2. MAE curves
+    # 2. MAE curves — best-epoch marker
     if history.get('train_mae') and history.get('val_mae'):
         fig, ax = plt.subplots(figsize=(6, 3.5))
-        ax.plot(epochs, history['train_mae'], label='Train')
-        ax.plot(epochs, history['val_mae'], label='Val')
+        ax.plot(epochs, history['train_mae'], label='Train', alpha=0.8)
+        ax.plot(epochs, history['val_mae'], label='Validation', alpha=0.8)
+        ax.axvline(x=best_epoch, color='r', linestyle='--', alpha=0.5, label='Best')
         ax.set_xlabel('Epoch')
         ax.set_ylabel('MAE')
         ax.set_title('MAE Curves')
@@ -658,28 +666,29 @@ def _save_training_plots(history, eval_results, output_dir):
         fig.savefig(out / 'mae_curves.png', dpi=150)
         plt.close(fig)
 
-    # 3. Predictions vs targets scatter
+    # 3. Predictions vs targets scatter — fixed [0,1] axes, R² in title
     preds = eval_results.get('predictions')
     targets = eval_results.get('targets')
     if preds is not None and targets is not None:
+        r2 = eval_results.get('test_r2', 0.0)
         fig, ax = plt.subplots(figsize=(6, 3.5))
-        ax.scatter(targets, preds, s=8, alpha=0.5, edgecolors='none')
-        lo = min(targets.min(), preds.min())
-        hi = max(targets.max(), preds.max())
-        ax.plot([lo, hi], [lo, hi], 'r--', linewidth=1, label='y = x')
-        ax.set_xlabel('True Reliability F')
+        ax.scatter(targets, preds, alpha=0.3, s=10)
+        ax.plot([0, 1], [0, 1], 'r--', label='Perfect')
+        ax.set_xlabel('True F')
         ax.set_ylabel('Predicted F')
-        ax.set_title('Predictions vs True Reliability F')
+        ax.set_title(f'Predictions vs Targets (R\u00b2={r2:.3f})')
         ax.legend()
+        ax.set_xlim([0, 1])
+        ax.set_ylim([0, 1])
         ax.grid(True, alpha=0.3)
         fig.tight_layout()
         fig.savefig(out / 'pred_vs_target.png', dpi=150)
         plt.close(fig)
 
-    # 4. Learning rate schedule
+    # 4. Learning rate schedule — log scale
     if history.get('learning_rate'):
         fig, ax = plt.subplots(figsize=(6, 3.5))
-        ax.plot(epochs, history['learning_rate'])
+        ax.plot(epochs, history['learning_rate'], color='green')
         ax.set_xlabel('Epoch')
         ax.set_ylabel('Learning Rate')
         ax.set_title('Learning Rate Schedule')
