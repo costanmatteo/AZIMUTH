@@ -380,7 +380,10 @@ def compute_surrogate_lmin(
         # ── Step 2: Draw N stochastic trajectory samples ─────────────────
         F_samples = []
 
-        for _ in range(n_samples):
+        # Diagnostic: print model_type and verify first sample
+        print(f"    Surrogate model_type: {surrogate.model_type}")
+
+        for k in range(n_samples):
             trajectory = {}
             for t, process_name in enumerate(process_chain.process_names):
                 mu_t = means[t]      # (output_dim,)
@@ -398,11 +401,20 @@ def compute_surrogate_lmin(
                     'outputs_sampled': o_sampled.unsqueeze(0), # (1, output_dim)
                 }
 
+                # Print first 2 samples for first process to verify stochasticity
+                if k < 2 and t == 0:
+                    print(f"    Sample {k}, {process_name}: "
+                          f"mean={mu_t.tolist()}, sampled={o_sampled.tolist()}, "
+                          f"diff={((o_sampled - mu_t).abs()).tolist()}")
+
             # Pass through frozen CasualiTSurrogate
             F_k = surrogate.compute_reliability(trajectory)
             if isinstance(F_k, torch.Tensor):
                 F_k = F_k.item()
             F_samples.append(F_k)
+
+            if k < 2:
+                print(f"    Sample {k}: F̂ = {F_k:.10f}")
 
         # ── Step 3: L̂_min = (1/N) Σ (F̂_k - F*)² × loss_scale ──────────
         F_arr = np.array(F_samples)
