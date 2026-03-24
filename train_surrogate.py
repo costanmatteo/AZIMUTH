@@ -748,7 +748,7 @@ def _train_stage_causal_lightning(casualit_model, config, args):
             'teacher_forcing': True,
             'batch_size':     config['training'].get('batch_size', 64),
             'max_epochs':     config['training'].get('max_epochs', 200),
-            'k_fold':         config['training'].get('k_fold', 1),
+            'k_fold':         max(config['training'].get('k_fold', 2), 2),
             'seed':           config['training'].get('seed', 42),
             'save_ckpt_every_n_epochs': 50,
             'log_entropy':       False,
