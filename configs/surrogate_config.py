@@ -52,18 +52,18 @@ SURROGATE_CONFIG = {
         # Which CausalIT architecture to use as surrogate.
         # Values: 'proT', 'StageCausaliT', 'SingleCausalLayer'
         'casualit_model': 'proT',
-        'd_model_enc': 64,
-        'd_model_dec': 32,
-        'd_ff': 128,
-        'd_qk': 16,
+        'd_model_enc': 32,
+        'd_model_dec': 16,
+        'd_ff': 64,
+        'd_qk': 8,
 
         'e_layers': 2,
         'd_layers': 1,
         'n_heads': 4,
 
-        'dropout_emb': 0.1,
-        'dropout_attn_out': 0.1,
-        'dropout_ff': 0.1,
+        'dropout_emb': 0.3,
+        'dropout_attn_out': 0.3,
+        'dropout_ff': 0.3,
 
         'activation': 'gelu',
         'norm': 'batch',
@@ -73,9 +73,9 @@ SURROGATE_CONFIG = {
     # Training
     'training': {
         'max_epochs': 200,
-        'batch_size': 64,
-        'learning_rate': 1e-3,
-        'weight_decay': 0.01,
+        'batch_size': 32,
+        'learning_rate': 5e-4,
+        'weight_decay': 0.05,
         'loss_fn': 'mse',
         'k_fold': 1,
         'seed': 42,
@@ -84,6 +84,10 @@ SURROGATE_CONFIG = {
         'use_scheduler': True,
         'scheduler_factor': 0.5,
         'scheduler_patience': 10,
+
+        # Prioritize Y prediction over X reconstruction
+        'loss_weight_x': 0.3,
+        'loss_weight_y': 1.0,
 
         'entropy_regularizer': False,
         'gamma': 0.05,
