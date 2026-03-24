@@ -549,33 +549,46 @@ class CasualiTSurrogate:
 
         model_cls = model_class_map[model_type]
 
-        # Try Lightning's load_from_checkpoint first; if the checkpoint
-        # lacks Lightning metadata, fall back to manual instantiation.
-        try:
-            model = model_cls.load_from_checkpoint(
-                checkpoint_path, map_location=device, weights_only=False)
-        except (KeyError, TypeError) as e:
-            print(f"  Lightning load_from_checkpoint failed ({e.__class__.__name__}: {e})")
-            print(f"  Checkpoint keys: {list(checkpoint_data.keys())}")
+        # Resolve state_dict: 'state_dict' (Lightning) or 'model_state_dict' (custom)
+        state_dict = checkpoint_data.get('state_dict',
+                     checkpoint_data.get('model_state_dict', {}))
 
-            # Resolve config: 'hyper_parameters' (Lightning) or 'config' (custom)
-            config = hparams or checkpoint_data.get('config', {})
-            # Resolve state_dict: 'state_dict' (Lightning) or 'model_state_dict' (custom)
-            state_dict = checkpoint_data.get('state_dict',
-                         checkpoint_data.get('model_state_dict', {}))
+        # Custom checkpoint from train_surrogate.py (SimpleSurrogateModel)
+        # Detected by 'model_state_dict' + 'config' keys and no Lightning metadata.
+        if 'model_state_dict' in checkpoint_data and 'config' in checkpoint_data:
+            from train_surrogate import SimpleSurrogateModel
+            config = checkpoint_data['config']
+            model = SimpleSurrogateModel(config)
+            # Infer input_dim from saved input_proj weight
+            if 'input_proj.weight' in state_dict:
+                n_features = state_dict['input_proj.weight'].shape[1]
+                model.set_input_dim(n_features)
+            model.load_state_dict(state_dict)
+            model_type = 'SimpleSurrogate'
+            print(f"  Loaded SimpleSurrogateModel from custom checkpoint")
+        else:
+            # Try Lightning's load_from_checkpoint for proper .ckpt files.
+            try:
+                model = model_cls.load_from_checkpoint(
+                    checkpoint_path, map_location=device, weights_only=False)
+            except (KeyError, TypeError) as e:
+                print(f"  Lightning load_from_checkpoint failed ({e.__class__.__name__}: {e})")
+                print(f"  Checkpoint keys: {list(checkpoint_data.keys())}")
 
-            if not config:
-                raise RuntimeError(
-                    f"Checkpoint has no config ('hyper_parameters' or 'config' key). "
-                    f"Keys: {list(checkpoint_data.keys())}. "
-                    f"Cannot reconstruct {model_cls.__name__}.")
+                # Resolve config: 'hyper_parameters' (Lightning)
+                config = hparams
+                if not config:
+                    raise RuntimeError(
+                        f"Checkpoint has no 'hyper_parameters' or Lightning metadata. "
+                        f"Keys: {list(checkpoint_data.keys())}. "
+                        f"Cannot reconstruct {model_cls.__name__}.")
 
-            print(f"  Falling back to manual instantiation from checkpoint config")
-            if model_type in ('StageCausaliT', 'SingleCausalLayer'):
-                model = model_cls(config, data_dir=None)
-            else:
-                model = model_cls(config)
-            model.load_state_dict(state_dict, strict=False)
+                print(f"  Falling back to manual instantiation from hyper_parameters")
+                if model_type in ('StageCausaliT', 'SingleCausalLayer'):
+                    model = model_cls(config, data_dir=None)
+                else:
+                    model = model_cls(config)
+                model.load_state_dict(state_dict, strict=False)
 
         model.eval()
         model.to(device)
@@ -608,7 +621,9 @@ class CasualiTSurrogate:
             )
 
         with torch.no_grad():
-            if self.model_type == 'proT':
+            if self.model_type == 'SimpleSurrogate':
+                F = self._inference_simple_surrogate(trajectory)
+            elif self.model_type == 'proT':
                 F = self._inference_prot(trajectory)
             elif self.model_type in ('StageCausaliT', 'SingleCausalLayer'):
                 F = self._inference_stage_causal(trajectory)
@@ -617,6 +632,15 @@ class CasualiTSurrogate:
 
         if return_quality_scores:
             return F, {}  # CasualiT doesn't provide per-process quality scores
+        return F
+
+    def _inference_simple_surrogate(self, trajectory: Dict) -> torch.Tensor:
+        """Run inference for SimpleSurrogateModel (from train_surrogate.py).
+
+        Uses the same ProT-format input (X) that the model was trained on.
+        """
+        X, _ = self.process_chain.trajectory_to_prot_format(trajectory)
+        F = self.model(X)  # (batch,)
         return F
 
     def _inference_prot(self, trajectory: Dict) -> torch.Tensor:
