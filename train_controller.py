@@ -87,6 +87,7 @@ from controller_optimization.src.analysis import (
     save_report_txt,
     save_report_json
 )
+from controller_optimization.src.analysis.theoretical_loss_analysis import compute_surrogate_lmin
 from controller_optimization.src.analysis.bellman_lmin import (
     BellmanConfig,
     compute_bellman_lmin,
@@ -1459,6 +1460,47 @@ def main(config=None):
                     print(f"  Full traceback:")
                     traceback.print_exc()
                     print()
+
+                # ── Surrogate L̂_min (CasualiTSurrogate only) ─────────────
+                if isinstance(surrogate, CasualiTSurrogate):
+                    try:
+                        print(f"\n  ── Empirical L̂_min via Surrogate Transformer ──")
+                        surrogate_lmin_val = compute_surrogate_lmin(
+                            surrogate=surrogate,
+                            process_chain=process_chain,
+                            F_star=F_star_for_L_min,
+                            loss_scale=loss_scale,
+                            n_samples=500,
+                            device=device,
+                        )
+                        theoretical_data['surrogate_lmin'] = surrogate_lmin_val
+
+                        # Save to dedicated JSON file
+                        surrogate_lmin_result = {
+                            'surrogate_lmin': surrogate_lmin_val,
+                            'F_star': float(F_star_for_L_min),
+                            'loss_scale': float(loss_scale),
+                            'n_samples': 500,
+                        }
+                        with open(checkpoint_dir / 'surrogate_lmin_result.json', 'w') as f:
+                            json.dump(surrogate_lmin_result, f, indent=2)
+
+                        # Summary
+                        observed_final = theoretical_data.get('summary', {}).get('final_loss', 0.0)
+                        gap_surr = observed_final - surrogate_lmin_val if observed_final else 0.0
+                        eta_emp = (surrogate_lmin_val / observed_final * 100) if observed_final > 0 else 0.0
+
+                        print(f"    Empirical L̂_min (surrogate):  {surrogate_lmin_val:.6f}")
+                        print(f"    Observed loss (final):         {observed_final:.6f}")
+                        print(f"    Suboptimality gap (L-L̂_min):  {gap_surr:.6f}")
+                        print(f"    η_emp = L̂_min / L(Φ):         {eta_emp:.1f}%")
+                        print(f"  Saved: {checkpoint_dir / 'surrogate_lmin_result.json'}")
+                        print(f"  ✓ Surrogate L̂_min completed\n")
+
+                    except Exception as e:
+                        import traceback
+                        print(f"  ✗ Surrogate L̂_min computation FAILED: {e}")
+                        traceback.print_exc()
 
                 # ── Generate plots and reports (after Bellman, so plots include Bellman lines) ──
                 print("  Generating theoretical analysis plots...")

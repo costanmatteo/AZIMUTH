@@ -312,6 +312,96 @@ def run_validation_sampling(
     return np.array(F_samples), mean_sigma2, F_star
 
 
+def compute_surrogate_lmin(
+    surrogate,
+    process_chain,
+    F_star: float,
+    loss_scale: float,
+    n_samples: int = 500,
+    device: str = 'cpu',
+) -> float:
+    """
+    Compute empirical L̂_min via the surrogate transformer (thesis §3.4.1.3).
+
+    Takes the target trajectory actions {a*_t} from scenario 0, feeds each
+    through the frozen uncertainty predictors to get (μ_t, σ²_t), draws
+    N stochastic trajectory samples via the reparameterization trick, passes
+    each through the frozen CasualiTSurrogate, and returns L̂_min.
+
+    Args:
+        surrogate: CasualiTSurrogate instance (frozen).
+        process_chain: ProcessChain instance with frozen uncertainty_predictors.
+        F_star: Target reliability (deterministic F*).
+        loss_scale: Scale factor matching training loss (e.g. 100.0).
+        n_samples: Number of stochastic trajectory samples (default 500).
+        device: Torch device.
+
+    Returns:
+        L̂_min value (already scaled by loss_scale).
+    """
+    process_chain.eval()
+
+    with torch.no_grad():
+        # ── Step 1: Get target trajectory actions for scenario 0 ─────────
+        # For each process t, get a*_t from the target trajectory.
+        # Then pass a*_t through uncertainty_predictors[t] → (μ_t, σ²_t).
+        means = []   # μ_t per process (unscaled)
+        variances = []  # σ²_t per process (unscaled)
+        target_inputs_list = []  # a*_t per process
+
+        for t, process_name in enumerate(process_chain.process_names):
+            # a*_t from target trajectory, scenario 0
+            target_inputs_all = process_chain.target_trajectory[process_name]['inputs']
+            a_star_t = target_inputs_all[0]  # scenario 0, shape (input_dim,)
+            a_star_tensor = torch.tensor(
+                a_star_t, dtype=torch.float32, device=device
+            ).unsqueeze(0)  # (1, input_dim)
+
+            target_inputs_list.append(a_star_tensor)
+
+            # Scale inputs → uncertainty predictor → unscale outputs
+            scaled_inputs = process_chain.scale_inputs(a_star_tensor, t)
+            mu_scaled, var_scaled = process_chain.uncertainty_predictors[t](scaled_inputs)
+            mu_t = process_chain.unscale_outputs(mu_scaled, t)       # (1, output_dim)
+            var_t = process_chain.unscale_variance(var_scaled, t)    # (1, output_dim)
+
+            means.append(mu_t.squeeze(0))    # (output_dim,)
+            variances.append(var_t.squeeze(0))  # (output_dim,)
+
+        # ── Step 2: Draw N stochastic trajectory samples ─────────────────
+        F_samples = []
+
+        for _ in range(n_samples):
+            trajectory = {}
+            for t, process_name in enumerate(process_chain.process_names):
+                mu_t = means[t]      # (output_dim,)
+                var_t = variances[t]  # (output_dim,)
+
+                # Reparameterization trick: o_{t,k} = μ_t + ε * sqrt(σ²_t)
+                std_t = torch.sqrt(var_t + 1e-8)
+                epsilon = torch.randn_like(mu_t)
+                o_sampled = mu_t + epsilon * std_t
+
+                trajectory[process_name] = {
+                    'inputs': target_inputs_list[t],           # (1, input_dim)
+                    'outputs_mean': mu_t.unsqueeze(0),         # (1, output_dim)
+                    'outputs_var': var_t.unsqueeze(0),         # (1, output_dim)
+                    'outputs_sampled': o_sampled.unsqueeze(0), # (1, output_dim)
+                }
+
+            # Pass through frozen CasualiTSurrogate
+            F_k = surrogate.compute_reliability(trajectory)
+            if isinstance(F_k, torch.Tensor):
+                F_k = F_k.item()
+            F_samples.append(F_k)
+
+        # ── Step 3: L̂_min = (1/N) Σ (F̂_k - F*)² × loss_scale ──────────
+        F_arr = np.array(F_samples)
+        surrogate_lmin = float(np.mean((F_arr - F_star) ** 2)) * loss_scale
+
+    return surrogate_lmin
+
+
 def compute_z_score(empirical: float, theoretical: float, std: float, n_samples: int) -> float:
     """
     Compute z-score for comparing empirical vs theoretical values.
