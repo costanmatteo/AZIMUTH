@@ -47,41 +47,41 @@ SURROGATE_CONFIG = {
         'process_names': [None],  # Use all processes
     },
 
-    # Model architecture (tiny)
+    # Model architecture
     'model': {
         # Which CausalIT architecture to use as surrogate.
         # Values: 'proT', 'StageCausaliT', 'SingleCausalLayer'
         'casualit_model': 'proT',
-        'd_model_enc': 16,
-        'd_model_dec': 8,
-        'd_ff': 32,
-        'd_qk': 8,
+        'd_model_enc': 64,
+        'd_model_dec': 32,
+        'd_ff': 128,
+        'd_qk': 16,
 
-        'e_layers': 1,
+        'e_layers': 2,
         'd_layers': 1,
-        'n_heads': 2,
+        'n_heads': 4,
 
-        'dropout_emb': 0.0,
-        'dropout_attn_out': 0.0,
-        'dropout_ff': 0.0,
+        'dropout_emb': 0.1,
+        'dropout_attn_out': 0.1,
+        'dropout_ff': 0.1,
 
         'activation': 'gelu',
         'norm': 'batch',
         'use_final_norm': True,
     },
 
-    # Training (fast)
+    # Training
     'training': {
-        'max_epochs': 20,
+        'max_epochs': 200,
         'batch_size': 64,
         'learning_rate': 1e-3,
         'weight_decay': 0.01,
         'loss_fn': 'mse',
         'k_fold': 1,
         'seed': 42,
-        'patience': 10,
+        'patience': 30,
 
-        'use_scheduler': False,
+        'use_scheduler': True,
         'scheduler_factor': 0.5,
         'scheduler_patience': 10,
 
