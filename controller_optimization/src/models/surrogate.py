@@ -450,15 +450,15 @@ def create_surrogate(config: Dict,
 
 class CasualiTSurrogate:
     """
-    Minimal adapter for using causaliT (ProT transformer) to predict reliability F.
+    Adapter for using a CausalIT model to predict reliability F.
 
-    This is a thin wrapper that:
-    1. Loads a trained TransformerForecaster model
-    2. Delegates format conversion to ProcessChain.trajectory_to_prot_format()
-    3. Provides the same interface as ProTSurrogate
+    Supports multiple model architectures:
+    - proT (TransformerForecaster): sequence-to-scalar prediction
+    - StageCausaliT (StageCausalForecaster): dual decoder S->X, X->Y
+    - SingleCausalLayer (SingleCausalForecaster): single decoder S->X
 
-    The actual data format conversion is done by ProcessChain, making it the
-    single source of truth for ProT format.
+    The model_type is read from the checkpoint metadata, so the controller
+    does not need to know which architecture was trained.
     """
 
     def __init__(self,
@@ -467,7 +467,7 @@ class CasualiTSurrogate:
                  device: str = 'cpu'):
         """
         Args:
-            checkpoint_path: Path to trained TransformerForecaster checkpoint
+            checkpoint_path: Path to trained model checkpoint
             target_trajectory: Target trajectory for F* computation
             device: Torch device
         """
@@ -477,7 +477,7 @@ class CasualiTSurrogate:
         self.process_chain = None  # Set via set_process_chain() after creation
 
         # Load the trained model from causaliT
-        self.model = self._load_model(checkpoint_path, device)
+        self.model, self.model_type = self._load_model(checkpoint_path, device)
 
         # Store target trajectory (same interface as ProTSurrogate)
         self.target_trajectory_tensors = {}
@@ -508,33 +508,52 @@ class CasualiTSurrogate:
 
     def _load_model(self, checkpoint_path: str, device: str):
         """
-        Load trained TransformerForecaster from causaliT checkpoint.
+        Load a trained CausalIT model from checkpoint.
+
+        Reads 'model_type' from checkpoint metadata to determine which
+        forecaster class to instantiate.
 
         Args:
             checkpoint_path: Path to .ckpt file
             device: Torch device
 
         Returns:
-            Loaded model in eval mode
+            Tuple of (model, model_type)
         """
-        from causaliT.training.forecasters.transformer_forecaster import TransformerForecaster
+        # Peek at checkpoint to determine model_type
+        checkpoint_data = torch.load(checkpoint_path, map_location=device, weights_only=False)
+        model_type = checkpoint_data.get('model_type', 'proT')
 
-        # Load model from checkpoint
-        model = TransformerForecaster.load_from_checkpoint(
-            checkpoint_path,
-            map_location=device
-        )
+        if model_type == 'proT':
+            from causaliT.training.forecasters.transformer_forecaster import TransformerForecaster
+            model = TransformerForecaster.load_from_checkpoint(
+                checkpoint_path, map_location=device)
+        elif model_type == 'StageCausaliT':
+            from causaliT.training.forecasters.stage_causal_forecaster import StageCausalForecaster
+            model = StageCausalForecaster.load_from_checkpoint(
+                checkpoint_path, map_location=device)
+        elif model_type == 'SingleCausalLayer':
+            from causaliT.training.forecasters.single_causal_forecaster import SingleCausalForecaster
+            model = SingleCausalForecaster.load_from_checkpoint(
+                checkpoint_path, map_location=device)
+        else:
+            raise ValueError(
+                f"Unknown model_type '{model_type}' in checkpoint. "
+                f"Expected 'proT', 'StageCausaliT', or 'SingleCausalLayer'.")
+
         model.eval()
         model.to(device)
+        print(f"  CasualiTSurrogate loaded model_type='{model_type}' from {checkpoint_path}")
 
-        return model
+        return model, model_type
 
     def compute_reliability(self, trajectory: Dict, return_quality_scores: bool = False):
         """
-        Compute reliability F using CasualiT model.
+        Compute reliability F using the loaded CausalIT model.
 
-        Uses ProcessChain.trajectory_to_prot_format() for data conversion,
-        then runs inference through the TransformerForecaster.
+        The input conversion adapts to the model type:
+        - proT: uses ProcessChain.trajectory_to_prot_format()
+        - StageCausaliT / SingleCausalLayer: extracts s (inputs) and x (outputs) separately
 
         Args:
             trajectory: Dict with process outputs from ProcessChain.forward()
@@ -549,26 +568,85 @@ class CasualiTSurrogate:
         if self.process_chain is None:
             raise RuntimeError(
                 "ProcessChain not set. Call set_process_chain() before compute_reliability(). "
-                "CasualiTSurrogate uses ProcessChain.trajectory_to_prot_format() for data conversion."
+                "CasualiTSurrogate uses ProcessChain for data conversion."
             )
 
-        # Use ProcessChain for format conversion (single source of truth)
-        X, Y = self.process_chain.trajectory_to_prot_format(trajectory)
-
-        # Run inference through causaliT model
         with torch.no_grad():
-            forecast_output, _, _, _ = self.model.forward(data_input=X, data_trg=Y)
-
-        # Extract F from forecast output (assumes F is the target)
-        F = forecast_output.squeeze()
+            if self.model_type == 'proT':
+                F = self._inference_prot(trajectory)
+            elif self.model_type in ('StageCausaliT', 'SingleCausalLayer'):
+                F = self._inference_stage_causal(trajectory)
+            else:
+                raise ValueError(f"Unsupported model_type: {self.model_type}")
 
         if return_quality_scores:
             return F, {}  # CasualiT doesn't provide per-process quality scores
         return F
 
+    def _inference_prot(self, trajectory: Dict) -> torch.Tensor:
+        """Run inference for ProT (TransformerForecaster)."""
+        X, Y = self.process_chain.trajectory_to_prot_format(trajectory)
+        forecast_output, _, _, _ = self.model.forward(data_input=X, data_trg=Y)
+        return forecast_output.squeeze()
+
+    def _inference_stage_causal(self, trajectory: Dict) -> torch.Tensor:
+        """
+        Run inference for StageCausaliT or SingleCausalLayer.
+
+        Extracts separate S (inputs) and X (outputs) tensors from the trajectory.
+        """
+        process_names = self.process_chain.process_names
+
+        # Build S and X tensors: (batch, n_processes, features)
+        s_list = []
+        x_list = []
+        batch_size = None
+
+        for pname in process_names:
+            data = trajectory[pname]
+            inputs = data['inputs']  # (batch, input_dim)
+            # Use sampled outputs if available, else mean
+            outputs = data.get('outputs_sampled', data.get('outputs_mean'))  # (batch, output_dim)
+
+            if batch_size is None:
+                batch_size = inputs.shape[0]
+
+            s_list.append(inputs)
+            x_list.append(outputs)
+
+        # Pad to same feature dim and stack
+        s_max = max(s.shape[1] for s in s_list)
+        x_max = max(x.shape[1] for x in x_list)
+
+        S = torch.zeros(batch_size, len(process_names), s_max,
+                        device=self.device, dtype=torch.float32)
+        X = torch.zeros(batch_size, len(process_names), x_max,
+                        device=self.device, dtype=torch.float32)
+
+        for j, (s, x) in enumerate(zip(s_list, x_list)):
+            S[:, j, :s.shape[1]] = s
+            X[:, j, :x.shape[1]] = x
+
+        if self.model_type == 'StageCausaliT':
+            # StageCausalForecaster.forward(S, X, Y) - Y is the target placeholder
+            Y_placeholder = torch.zeros(batch_size, 1, 1,
+                                        device=self.device, dtype=torch.float32)
+            pred_x, pred_y, _, _, _ = self.model.forward(
+                data_source=S, data_intermediate=X, data_target=Y_placeholder)
+            return pred_y.squeeze()
+        else:
+            # SingleCausalForecaster.forward(S, X) - only predicts X, no Y
+            # For SingleCausalLayer used as surrogate, the predicted X is fed through
+            # a simple aggregation. However, this model type doesn't directly predict F.
+            # In practice, StageCausaliT should be preferred for F prediction.
+            pred_x, _, _, _ = self.model.forward(
+                data_source=S, data_intermediate=X)
+            # SingleCausalLayer predicts X, not Y directly - return mean as proxy
+            return pred_x.mean(dim=(1, 2))
+
     def _compute_F_star_from_scenario_0(self) -> float:
         """
-        Compute F* from scenario 0 using CasualiT model.
+        Compute F* from scenario 0 using the CausalIT model.
 
         Returns:
             float: F_star value (single scalar)
@@ -582,7 +660,8 @@ class CasualiTSurrogate:
                 scenario_traj[process_name] = {
                     'inputs': data['inputs'][0:1],  # Scenario 0
                     'outputs_mean': data['outputs'][0:1],
-                    'outputs_var': torch.zeros_like(data['outputs'][0:1])
+                    'outputs_var': torch.zeros_like(data['outputs'][0:1]),
+                    'outputs_sampled': data['outputs'][0:1],
                 }
 
             F_star = self.compute_reliability(scenario_traj)

@@ -2,21 +2,23 @@
 """
 Train CasualiT as a Surrogate for Reliability F Prediction.
 
-This script trains a TransformerForecaster to predict reliability F from
-process chain trajectories.
+This script trains a model to predict reliability F from process chain
+trajectories.  The model architecture is selected via surrogate_config
+(casualit_model: proT | StageCausaliT | SingleCausalLayer).
 
 Usage:
     python train_surrogate.py [options]
 
 Options:
-    --epochs INT           Max training epochs (default: from config)
-    --batch_size INT       Batch size (default: from config)
-    --learning_rate FLOAT  Learning rate (default: from config)
-    --generate_data        Generate new training data before training
-    --data_only            Generate data only (no training)
-    --skip_training        Skip training, only generate report from existing results
-    --output_dir PATH      Output directory
-    --device STR           Device (cpu/cuda/auto)
+    --epochs INT              Max training epochs (default: from config)
+    --batch_size INT          Batch size (default: from config)
+    --learning_rate FLOAT     Learning rate (default: from config)
+    --generate_data           Generate new training data before training
+    --data_only               Generate data only (no training)
+    --skip_training           Skip training, only generate report from existing results
+    --use_existing_dataset    Load data converted by convert_dataset.py instead of generating
+    --output_dir PATH         Output directory
+    --device STR              Device (cpu/cuda/auto)
 """
 
 import sys
@@ -326,6 +328,7 @@ class SurrogateTrainer:
                     'optimizer_state_dict': optimizer.state_dict(),
                     'val_loss': val_loss,
                     'config': self.config,
+                    'model_type': self.config['model'].get('casualit_model', 'proT'),
                 }, save_path / 'best_model.ckpt')
             else:
                 epochs_without_improvement += 1
@@ -349,6 +352,7 @@ class SurrogateTrainer:
             'optimizer_state_dict': optimizer.state_dict(),
             'val_loss': val_loss,
             'config': self.config,
+            'model_type': self.config['model'].get('casualit_model', 'proT'),
         }, save_path / 'final_model.ckpt')
 
         # Save training history
@@ -613,6 +617,8 @@ def main():
     parser.add_argument('--generate_data', action='store_true', help='Generate new training data')
     parser.add_argument('--data_only', action='store_true', help='Generate data only (no training)')
     parser.add_argument('--skip_training', action='store_true', help='Skip training')
+    parser.add_argument('--use_existing_dataset', action='store_true',
+                       help='Use pre-existing full_trajectories.pt (converted by convert_dataset.py)')
     parser.add_argument('--output_dir', type=str, default='causaliT/checkpoints/surrogate',
                        help='Output directory')
     parser.add_argument('--data_dir', type=str, default='causaliT/data/surrogate_training',
@@ -631,15 +637,46 @@ def main():
     if args.learning_rate:
         config['training']['learning_rate'] = args.learning_rate
 
+    casualit_model = config['model'].get('casualit_model', 'proT')
+    use_existing = args.use_existing_dataset or config['data'].get('use_existing_dataset', False)
+
     print("="*70)
     print("CasualiT Surrogate Training")
     print("="*70)
+    print(f"Model type: {casualit_model}")
     print(f"Output directory: {args.output_dir}")
     print(f"Data directory: {args.data_dir}")
+    print(f"Use existing dataset: {use_existing}")
 
-    # Generate data if requested or if data doesn't exist
+    # ── Data preparation ───────────────────────────────────────────────────
     data_path = Path(args.data_dir)
-    if args.data_only or args.generate_data or not (data_path / 'train_X.npy').exists():
+
+    if use_existing:
+        # Convert from full_trajectories.pt if needed
+        from causaliT.surrogate_training.convert_dataset import convert_trajectories_to_causalit_format
+
+        dataset_path = config['data'].get('dataset_path',
+                                           'data/trajectories/full_trajectories.pt')
+        needs_conversion = _needs_conversion(data_path, casualit_model)
+        if needs_conversion:
+            print("\n[1/4] Converting existing dataset...")
+            convert_trajectories_to_causalit_format(
+                trajectories_path=dataset_path,
+                output_dir=args.data_dir,
+                model_type=casualit_model,
+                train_frac=config['data'].get('train_frac', 0.70),
+                val_frac=config['data'].get('val_frac', 0.15),
+                test_frac=config['data'].get('test_frac', 0.15),
+                seed=config['data'].get('random_seed', 42),
+            )
+        else:
+            print("\n[1/4] Using already-converted dataset")
+
+        if args.data_only:
+            print("\nData conversion complete.")
+            return
+
+    elif args.data_only or args.generate_data or not (data_path / 'train_X.npy').exists():
         print("\n[1/4] Generating training data...")
         stats = generate_all_datasets(config, args.data_dir, device=args.device)
 
@@ -654,7 +691,18 @@ def main():
     else:
         print("\n[1/4] Using existing training data")
 
-    # Create trainer
+    # ── Load & train ───────────────────────────────────────────────────────
+    # For now, StageCausaliT/SingleCausalLayer training is not yet integrated
+    # into SurrogateTrainer (they use PyTorch Lightning). Only proT uses the
+    # built-in SimpleSurrogateModel trainer.
+    if casualit_model != 'proT':
+        print(f"\n[INFO] Model type '{casualit_model}' requires PyTorch Lightning training.")
+        print(f"  Data has been prepared in {args.data_dir}.")
+        print(f"  Use the causaliT training pipeline (causaliT/training/) to train")
+        print(f"  {casualit_model}, then place the checkpoint in {args.output_dir}/best_model.ckpt.")
+        return
+
+    # Create trainer (proT path)
     trainer = SurrogateTrainer(config, device=args.device)
 
     # Load data
@@ -685,6 +733,14 @@ def main():
     print("="*70)
     print(f"Checkpoints: {args.output_dir}")
     print(f"Report: {pdf_path}")
+
+
+def _needs_conversion(data_path: Path, model_type: str) -> bool:
+    """Check if data in data_path already matches the expected format for model_type."""
+    if model_type == 'proT':
+        return not (data_path / 'train_X.npy').exists()
+    else:  # StageCausaliT / SingleCausalLayer
+        return not (data_path / 'train_ds.npz').exists()
 
 
 if __name__ == '__main__':
