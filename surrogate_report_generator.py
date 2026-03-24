@@ -370,8 +370,8 @@ def _build_left(d):
     F += section_header("02 \u2014 data & training parameters", LW)
 
     total_samples = (n_train + n_val + n_test) or 1
-    processes = data_cfg.get('process_names', [])
-    proc_str  = ', '.join(processes) if processes else '—'
+    processes = data_cfg.get('process_names', []) or []
+    proc_str  = ', '.join(str(p) for p in processes if p is not None) or '—'
 
     data_rows = [
         ("Processes",     proc_str),
