@@ -368,6 +368,15 @@ def compute_surrogate_lmin(
             means.append(mu_t.squeeze(0))    # (output_dim,)
             variances.append(var_t.squeeze(0))  # (output_dim,)
 
+        # ── Diagnostic: print per-process uncertainty statistics ──────────
+        print(f"    {'Process':<30s}  {'σ²_mean':>12s}  {'σ²_max':>12s}  {'σ_mean':>12s}  {'μ_norm':>12s}")
+        print(f"    {'─'*30}  {'─'*12}  {'─'*12}  {'─'*12}  {'─'*12}")
+        for t, process_name in enumerate(process_chain.process_names):
+            var_t = variances[t]
+            mu_t = means[t]
+            print(f"    {process_name:<30s}  {var_t.mean().item():>12.6e}  {var_t.max().item():>12.6e}"
+                  f"  {torch.sqrt(var_t + 1e-8).mean().item():>12.6e}  {mu_t.norm().item():>12.6e}")
+
         # ── Step 2: Draw N stochastic trajectory samples ─────────────────
         F_samples = []
 
@@ -398,6 +407,15 @@ def compute_surrogate_lmin(
         # ── Step 3: L̂_min = (1/N) Σ (F̂_k - F*)² × loss_scale ──────────
         F_arr = np.array(F_samples)
         surrogate_lmin = float(np.mean((F_arr - F_star) ** 2)) * loss_scale
+
+        # ── Diagnostic: F sample statistics ──────────────────────────────
+        print(f"    F* (target):       {F_star:.8f}")
+        print(f"    F̂ mean (samples):  {F_arr.mean():.8f}")
+        print(f"    F̂ std  (samples):  {F_arr.std():.8f}")
+        print(f"    F̂ min:             {F_arr.min():.8f}")
+        print(f"    F̂ max:             {F_arr.max():.8f}")
+        print(f"    mean(F̂-F*)²:       {np.mean((F_arr - F_star)**2):.8e}")
+        print(f"    L̂_min (scaled):    {surrogate_lmin:.8e}")
 
     return surrogate_lmin
 
