@@ -527,15 +527,15 @@ class CasualiTSurrogate:
         if model_type == 'proT':
             from causaliT.training.forecasters.transformer_forecaster import TransformerForecaster
             model = TransformerForecaster.load_from_checkpoint(
-                checkpoint_path, map_location=device)
+                checkpoint_path, map_location=device, weights_only=False)
         elif model_type == 'StageCausaliT':
             from causaliT.training.forecasters.stage_causal_forecaster import StageCausalForecaster
             model = StageCausalForecaster.load_from_checkpoint(
-                checkpoint_path, map_location=device)
+                checkpoint_path, map_location=device, weights_only=False)
         elif model_type == 'SingleCausalLayer':
             from causaliT.training.forecasters.single_causal_forecaster import SingleCausalForecaster
             model = SingleCausalForecaster.load_from_checkpoint(
-                checkpoint_path, map_location=device)
+                checkpoint_path, map_location=device, weights_only=False)
         else:
             raise ValueError(
                 f"Unknown model_type '{model_type}' in checkpoint. "
