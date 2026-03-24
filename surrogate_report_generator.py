@@ -474,8 +474,9 @@ def _build_html(trainer, eval_results: dict, config: dict,
     # R² cell colour
     r2_cell = f'<td class="{_col_class(r2_col)}">{r2:.4f}</td>'
 
-    # processes list
-    proc_str = ', '.join(dc.get('process_names', []))
+    # processes list — filter None entries (None means "use all")
+    _raw_procs = [p for p in dc.get('process_names', []) if p is not None]
+    proc_str = ', '.join(_raw_procs) if _raw_procs else 'All'
 
     # DAG right-bottom section
     if b64_dag is not None:
@@ -740,7 +741,7 @@ def generate_pdf_report(trainer, eval_results: dict, config: dict,
         # DAG (conditional)
         phi = _extract_phi(trainer)
         if phi is not None:
-            proc_names = config['data'].get('process_names', [])
+            proc_names = [p for p in config['data'].get('process_names', []) if p is not None]
             n = min(phi.shape[0], len(proc_names)) if proc_names else phi.shape[0]
             if not proc_names:
                 proc_names = [f'P{i}' for i in range(n)]
