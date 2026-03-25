@@ -67,10 +67,11 @@ def _infer_architecture_from_state_dict(state_dict):
             continue
         suffix = key[len(prefix):]
         if suffix.startswith('shared_network.') and suffix.endswith('.weight'):
-            # e.g. "shared_network.0.weight" → index 0
-            parts = suffix.split('.')
-            layer_idx = int(parts[1])
-            layer_weights[layer_idx] = tensor.shape
+            if tensor.dim() == 2:  # Only Linear layers (skip BatchNorm which is 1D)
+                # e.g. "shared_network.0.weight" → index 0
+                parts = suffix.split('.')
+                layer_idx = int(parts[1])
+                layer_weights[layer_idx] = tensor.shape
 
     if not layer_weights:
         return None, None, None

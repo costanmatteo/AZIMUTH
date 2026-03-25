@@ -486,6 +486,7 @@ def main(config=None):
     # Enable gradient debugging for first epoch
     trainer._debug_gradients = True
     trainer._debug_bc_loss = True
+    trainer._debug_F_graph = True
 
     # Set up validation data for overfitting detection
     print("\n[5.3/9] Setting up validation data for overfitting detection...")

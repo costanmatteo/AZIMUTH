@@ -487,6 +487,23 @@ class ControllerTrainer:
         # Scale prevents vanishing gradients when delta F is small (~0.1)
         F, quality_scores = self.surrogate.compute_reliability(trajectory, return_quality_scores=True)
 
+        # Debug: verify F is in the computation graph (first call only)
+        if hasattr(self, '_debug_F_graph') and self._debug_F_graph:
+            self._debug_F_graph = False
+            print(f"\n{'='*60}", flush=True)
+            print(f"SURROGATE GRADIENT DEBUG", flush=True)
+            print(f"{'='*60}", flush=True)
+            print(f"  F.requires_grad = {F.requires_grad}", flush=True)
+            print(f"  F.grad_fn       = {F.grad_fn}", flush=True)
+            print(f"  F.shape         = {F.shape}", flush=True)
+            print(f"  F.mean()        = {F.mean().item():.6f}", flush=True)
+            print(f"  F*              = {self.surrogate.F_star:.6f}", flush=True)
+            if F.requires_grad and F.grad_fn is not None:
+                print(f"  STATUS: OK - Gradients WILL flow to controller", flush=True)
+            else:
+                print(f"  STATUS: BROKEN - F is detached, reliability loss has NO gradient effect!", flush=True)
+            print(f"{'='*60}\n", flush=True)
+
         F_star_tensor = torch.tensor(self.surrogate.F_star, dtype=torch.float32, device=self.device)
         reliability_loss = self.reliability_loss_scale * (F - F_star_tensor) ** 2
 
@@ -683,14 +700,27 @@ class ControllerTrainer:
                     else:
                         print(f"  WARNING: No gradients at all!")
 
-                # Check if trajectory inputs have gradients
+                # Check if trajectory inputs/outputs are in the computation graph
                 print(f"\nTrajectory Gradient Check:")
                 for proc_name, data in trajectory.items():
                     inputs = data['inputs']
                     outputs_mean = data['outputs_mean']
+                    outputs_sampled = data.get('outputs_sampled')
                     print(f"  {proc_name}:")
-                    print(f"    inputs.requires_grad: {inputs.requires_grad}, inputs.grad_fn: {inputs.grad_fn}")
-                    print(f"    outputs_mean.requires_grad: {outputs_mean.requires_grad}, outputs_mean.grad_fn: {outputs_mean.grad_fn}")
+                    print(f"    inputs:          requires_grad={inputs.requires_grad}, grad_fn={inputs.grad_fn}")
+                    print(f"    outputs_mean:    requires_grad={outputs_mean.requires_grad}, grad_fn={outputs_mean.grad_fn}")
+                    if outputs_sampled is not None:
+                        print(f"    outputs_sampled: requires_grad={outputs_sampled.requires_grad}, grad_fn={outputs_sampled.grad_fn}")
+
+                # Check F tensor properties
+                print(f"\nF Tensor Check:")
+                F_tensor = F if torch.is_tensor(F) else torch.tensor(F)
+                print(f"  F.requires_grad={F_tensor.requires_grad}, F.grad_fn={F_tensor.grad_fn}")
+                print(f"  F value={F_tensor.mean().item():.6f}, F*={self.surrogate.F_star:.6f}")
+                if F_tensor.requires_grad:
+                    print(f"  -> Reliability loss WILL produce gradients for controller")
+                else:
+                    print(f"  -> WARNING: F is detached! Reliability loss has NO gradient effect!")
 
                 print(f"{'='*60}\n")
 
@@ -968,6 +998,7 @@ class ControllerTrainer:
                 ProcessChain.enable_debug(False)
                 self._debug_gradients = False  # Also disable gradient debug
                 self._debug_bc_loss = False  # Also disable BC loss debug
+                self._debug_F_graph = False  # Also disable F graph debug
 
             # Get dynamic loss weights for curriculum learning
             lambda_bc, reliability_weight, phase = self.get_loss_weights(epoch, epochs)

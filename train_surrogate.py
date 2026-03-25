@@ -2,21 +2,23 @@
 """
 Train CasualiT as a Surrogate for Reliability F Prediction.
 
-This script trains a TransformerForecaster to predict reliability F from
-process chain trajectories.
+This script trains a model to predict reliability F from process chain
+trajectories.  The model architecture is selected via surrogate_config
+(casualit_model: proT | StageCausaliT | SingleCausalLayer).
 
 Usage:
     python train_surrogate.py [options]
 
 Options:
-    --epochs INT           Max training epochs (default: from config)
-    --batch_size INT       Batch size (default: from config)
-    --learning_rate FLOAT  Learning rate (default: from config)
-    --generate_data        Generate new training data before training
-    --data_only            Generate data only (no training)
-    --skip_training        Skip training, only generate report from existing results
-    --output_dir PATH      Output directory
-    --device STR           Device (cpu/cuda/auto)
+    --epochs INT              Max training epochs (default: from config)
+    --batch_size INT          Batch size (default: from config)
+    --learning_rate FLOAT     Learning rate (default: from config)
+    --generate_data           Generate new training data before training
+    --data_only               Generate data only (no training)
+    --skip_training           Skip training, only generate report from existing results
+    --use_existing_dataset    Load data converted by convert_dataset.py instead of generating
+    --output_dir PATH         Output directory
+    --device STR              Device (cpu/cuda/auto)
 """
 
 import sys
@@ -28,7 +30,7 @@ from datetime import datetime
 import numpy as np
 
 # Add paths
-REPO_ROOT = Path(__file__).parent.parent.parent
+REPO_ROOT = Path(__file__).parent
 sys.path.insert(0, str(REPO_ROOT))
 
 # Check for required dependencies
@@ -43,7 +45,7 @@ except ImportError as e:
     print("Please install: pip install torch tqdm")
     sys.exit(1)
 
-from causaliT.surrogate_training.configs.surrogate_config import SURROGATE_CONFIG
+from configs.surrogate_config import SURROGATE_CONFIG
 from causaliT.surrogate_training.data_generator import generate_all_datasets, TrajectoryDataGenerator
 
 
@@ -326,6 +328,7 @@ class SurrogateTrainer:
                     'optimizer_state_dict': optimizer.state_dict(),
                     'val_loss': val_loss,
                     'config': self.config,
+                    'model_type': self.config['model'].get('casualit_model', 'proT'),
                 }, save_path / 'best_model.ckpt')
             else:
                 epochs_without_improvement += 1
@@ -349,6 +352,7 @@ class SurrogateTrainer:
             'optimizer_state_dict': optimizer.state_dict(),
             'val_loss': val_loss,
             'config': self.config,
+            'model_type': self.config['model'].get('casualit_model', 'proT'),
         }, save_path / 'final_model.ckpt')
 
         # Save training history
@@ -364,6 +368,9 @@ class SurrogateTrainer:
             'best_val_loss': self.best_val_loss,
             'final_epoch': epoch,
             'final_val_loss': val_loss,
+            'final_train_loss': train_loss,
+            'final_train_mae': train_mae,
+            'final_val_mae': val_mae,
         }
 
     def evaluate(self, save_dir: str = None):
@@ -428,181 +435,270 @@ class SurrogateTrainer:
         return results
 
 
-def generate_pdf_report(trainer: SurrogateTrainer, eval_results: dict,
-                       config: dict, output_dir: str):
-    """
-    Generate PDF report for surrogate training.
 
-    Args:
-        trainer: Trained SurrogateTrainer
-        eval_results: Evaluation results dict
-        config: Configuration dict
-        output_dir: Output directory for report
+
+def _train_stage_causal_lightning(casualit_model, config, args):
     """
-    try:
-        import matplotlib
-        matplotlib.use('Agg')
-        import matplotlib.pyplot as plt
-        from matplotlib.backends.backend_pdf import PdfPages
-    except ImportError:
-        print("Warning: matplotlib not available, skipping PDF report")
+    Train StageCausaliT or SingleCausalLayer using the PyTorch Lightning pipeline.
+
+    Builds the OmegaConf config expected by causaliT.training.trainer.trainer()
+    from the flat SURROGATE_CONFIG and the dataset_metadata.json produced by
+    convert_dataset.py, then launches training.
+    """
+    from omegaconf import OmegaConf
+    from causaliT.training.trainer import trainer as lightning_trainer
+
+    if casualit_model == 'SingleCausalLayer':
+        print(f"\n[INFO] SingleCausalLayer Lightning training not yet wired.")
+        print(f"  Data has been prepared in {args.data_dir}.")
         return
 
-    output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
+    # ── Load dataset metadata (created by convert_dataset.py) ─────────
+    metadata_path = Path(args.data_dir) / 'dataset_metadata.json'
+    if not metadata_path.exists():
+        print(f"\n[ERROR] dataset_metadata.json not found at {metadata_path}")
+        print("  Run with --use_existing_dataset or --generate_data first.")
+        return
+    with open(metadata_path) as f:
+        metadata = json.load(f)
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    pdf_path = output_path / f'surrogate_training_report_{timestamp}.pdf'
+    n_s = metadata['variable_info']['n_source']
+    n_x = metadata['variable_info']['n_input']
+    n_y = metadata['variable_info']['n_target']
+    total_vars = n_s + n_x + n_y + 1  # +1 for padding_idx=0
 
-    print(f"\nGenerating PDF report: {pdf_path}")
+    # ── Read hyper-parameters from SURROGATE_CONFIG ───────────────────
+    d_model = config['model'].get('d_model_enc', 64)
+    d_ff    = config['model'].get('d_ff', 128)
+    d_qk    = config['model'].get('d_qk', 16)
+    n_heads = config['model'].get('n_heads', 4)
+    dropout = config['model'].get('dropout_emb', 0.1)
 
-    with PdfPages(pdf_path) as pdf:
-        # Page 1: Title and Summary
-        fig, ax = plt.subplots(figsize=(11, 8.5))
-        ax.axis('off')
+    # ── Path handling: Lightning trainer joins data_dir + dataset ─────
+    # data lives directly in args.data_dir, so we split parent / name
+    data_parent  = str(Path(args.data_dir).parent)   # e.g. "causaliT/data"
+    dataset_name = str(Path(args.data_dir).name)      # e.g. "surrogate_training"
 
-        title_text = "CasualiT Surrogate Training Report"
-        summary_text = f"""
-Training Summary
-================
+    # ── Build the config dict expected by the Lightning pipeline ──────
+    lt_config = OmegaConf.create({
+        'model': {
+            'model_object': casualit_model,
+            'kwargs': {
+                'model': casualit_model,
 
-Date: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+                # Shared embedding (same table for S, X, Y – global variable IDs)
+                'use_independent_embeddings': False,
+                'ds_embed_shared': {
+                    'setting': {'d_model': d_model, 'sparse_grad': False},
+                    'modules': [
+                        {'idx': 0, 'embed': 'linear', 'label': 'value',
+                         'kwargs': {'input_dim': 1, 'embedding_dim': d_model}},
+                        {'idx': 1, 'embed': 'nn_embedding', 'label': 'variable',
+                         'kwargs': {'num_embeddings': total_vars,
+                                    'embedding_dim': d_model,
+                                    'padding_idx': 0, 'sparse': False,
+                                    'max_norm': 1}},
+                        {'idx': 0, 'embed': 'mask', 'label': 'value_missing',
+                         'kwargs': {}},
+                        {'idx': 1, 'embed': 'pass', 'label': 'order',
+                         'kwargs': {}},
+                    ],
+                },
+                'comps_embed_shared': 'summation',
+                'val_idx_X': 0,  # value column to blank / predict
 
-Configuration:
-- Max Epochs: {config['training']['max_epochs']}
-- Batch Size: {config['training']['batch_size']}
-- Learning Rate: {config['training']['learning_rate']}
-- Weight Decay: {config['training']['weight_decay']}
+                # Attention (plain scaled dot-product, no causal masks)
+                'dec1_cross_attention_type': 'ScaledDotProduct',
+                'dec1_cross_mask_type':      'Uniform',
+                'dec1_self_attention_type':   'ScaledDotProduct',
+                'dec1_self_mask_type':        'Uniform',
+                'dec2_cross_attention_type':  'ScaledDotProduct',
+                'dec2_cross_mask_type':       'Uniform',
+                'dec2_self_attention_type':   'ScaledDotProduct',
+                'dec2_self_mask_type':        'Uniform',
+                'n_heads':          n_heads,
+                'dec1_causal_mask': False,
+                'dec2_causal_mask': False,
 
-Model Architecture:
-- Encoder Dimension: {config['model']['d_model_enc']}
-- Feed-forward Dimension: {config['model']['d_ff']}
-- Attention Heads: {config['model']['n_heads']}
-- Encoder Layers: {config['model']['e_layers']}
-- Dropout: {config['model']['dropout_emb']}
+                # Architecture
+                'd1_layers':     config['model'].get('d_layers', 1),
+                'd2_layers':     config['model'].get('d_layers', 1),
+                'activation':    config['model'].get('activation', 'gelu'),
+                'norm':          'layer',
+                'use_final_norm': True,
+                'device':         'cuda' if (args.device == 'cuda' or (args.device == 'auto' and torch.cuda.is_available())) else 'cpu',
 
-Training Results:
-- Best Epoch: {trainer.best_epoch}
-- Best Validation Loss: {trainer.best_val_loss:.6f}
+                # Dimensions
+                'out_dim':  1,
+                'd_ff':     d_ff,
+                'd_model':  d_model,
+                'd_qk':     d_qk,
+                'S_seq_len': n_s,
+                'X_seq_len': n_x,
+                'Y_seq_len': n_y,
 
-Test Evaluation:
-- MSE: {eval_results['test_mse']:.6f}
-- MAE: {eval_results['test_mae']:.4f}
-- RMSE: {eval_results['test_rmse']:.4f}
-- R²: {eval_results['test_r2']:.4f}
-        """
+                # Dropout
+                'dropout_emb':                  dropout,
+                'dropout_attn_out':             dropout,
+                'dropout_ff':                   dropout,
+                'dec1_cross_dropout_qkv':       dropout,
+                'dec1_cross_attention_dropout':  dropout,
+                'dec1_self_dropout_qkv':        dropout,
+                'dec1_self_attention_dropout':   dropout,
+                'dec2_cross_dropout_qkv':       dropout,
+                'dec2_cross_attention_dropout':  dropout,
+                'dec2_self_dropout_qkv':        dropout,
+                'dec2_self_attention_dropout':   dropout,
+            },
+        },
 
-        ax.text(0.5, 0.95, title_text, transform=ax.transAxes, fontsize=20,
-                fontweight='bold', ha='center', va='top')
-        ax.text(0.1, 0.85, summary_text, transform=ax.transAxes, fontsize=11,
-                fontfamily='monospace', va='top')
-        pdf.savefig(fig, bbox_inches='tight')
-        plt.close()
+        'data': {
+            'dataset':        dataset_name,
+            'filename_input': 'ds.npz',
+            'val_idx':   0,   # value column
+            'val_idx_X': 0,
+            'val_idx_Y': 0,
+            'test_ds_ixd':    None,
+            'max_data_size':  None,
+            'S_seq_len': n_s,
+            'X_seq_len': n_x,
+            'Y_seq_len': n_y,
+        },
 
-        # Page 2: Training Curves
-        fig, axes = plt.subplots(2, 2, figsize=(11, 8.5))
+        'training': {
+            'optimizer':      'adamw',
+            'lr':             config['training'].get('learning_rate', 1e-3),
+            'weight_decay':   config['training'].get('weight_decay', 0.01),
+            'use_scheduler':  config['training'].get('use_scheduler', True),
+            'loss_fn':        'mse',
+            'loss_weight_x':  config['training'].get('loss_weight_x', 1.0),
+            'loss_weight_y':  config['training'].get('loss_weight_y', 1.0),
+            'teacher_forcing': True,
+            'batch_size':     config['training'].get('batch_size', 64),
+            'max_epochs':     config['training'].get('max_epochs', 200),
+            'k_fold':         max(config['training'].get('k_fold', 2), 2),
+            'seed':           config['training'].get('seed', 42),
+            'save_ckpt_every_n_epochs': 50,
+            'log_entropy':       False,
+            'log_acyclicity':    False,
+            'use_hard_masks':    False,
+            'use_in_context_masks': False,
+        },
 
-        # Loss curves
-        epochs = range(len(trainer.history['train_loss']))
-        axes[0, 0].plot(epochs, trainer.history['train_loss'], label='Train', alpha=0.8)
-        axes[0, 0].plot(epochs, trainer.history['val_loss'], label='Validation', alpha=0.8)
-        axes[0, 0].axvline(x=trainer.best_epoch, color='r', linestyle='--', alpha=0.5, label='Best')
-        axes[0, 0].set_xlabel('Epoch')
-        axes[0, 0].set_ylabel('MSE Loss')
-        axes[0, 0].set_title('Loss Curves')
-        axes[0, 0].legend()
-        axes[0, 0].set_yscale('log')
-        axes[0, 0].grid(True, alpha=0.3)
+        'special':    {'mode': []},
+        'evaluation': {'functions': ['eval_train_metrics']},
+    })
 
-        # MAE curves
-        axes[0, 1].plot(epochs, trainer.history['train_mae'], label='Train', alpha=0.8)
-        axes[0, 1].plot(epochs, trainer.history['val_mae'], label='Validation', alpha=0.8)
-        axes[0, 1].axvline(x=trainer.best_epoch, color='r', linestyle='--', alpha=0.5, label='Best')
-        axes[0, 1].set_xlabel('Epoch')
-        axes[0, 1].set_ylabel('MAE')
-        axes[0, 1].set_title('MAE Curves')
-        axes[0, 1].legend()
-        axes[0, 1].grid(True, alpha=0.3)
+    save_dir = args.output_dir
+    os.makedirs(save_dir, exist_ok=True)
 
-        # Learning rate
-        axes[1, 0].plot(epochs, trainer.history['learning_rate'], color='green')
-        axes[1, 0].set_xlabel('Epoch')
-        axes[1, 0].set_ylabel('Learning Rate')
-        axes[1, 0].set_title('Learning Rate Schedule')
-        axes[1, 0].set_yscale('log')
-        axes[1, 0].grid(True, alpha=0.3)
+    print(f"\n[2/4] Training {casualit_model} with PyTorch Lightning...")
+    print(f"  d_model={d_model}, n_heads={n_heads}, d_ff={d_ff}")
+    print(f"  S_seq_len={n_s}, X_seq_len={n_x}, Y_seq_len={n_y}")
+    print(f"  num_embeddings={total_vars} (shared)")
 
-        # Prediction vs Target
-        preds = eval_results['predictions']
-        targets = eval_results['targets']
-        axes[1, 1].scatter(targets, preds, alpha=0.3, s=10)
-        axes[1, 1].plot([0, 1], [0, 1], 'r--', label='Perfect')
-        axes[1, 1].set_xlabel('True F')
-        axes[1, 1].set_ylabel('Predicted F')
-        axes[1, 1].set_title(f'Predictions vs Targets (R²={eval_results["test_r2"]:.3f})')
-        axes[1, 1].legend()
-        axes[1, 1].set_xlim([0, 1])
-        axes[1, 1].set_ylim([0, 1])
-        axes[1, 1].grid(True, alpha=0.3)
+    results_df = lightning_trainer(
+        config=lt_config,
+        data_dir=data_parent,
+        save_dir=save_dir,
+        cluster=False,
+    )
 
-        plt.tight_layout()
-        pdf.savefig(fig, bbox_inches='tight')
-        plt.close()
+    # Copy best checkpoint to the expected location
+    best_ckpt_src = Path(save_dir) / 'k_0' / 'best_checkpoint.ckpt'
+    best_ckpt_dst = Path(save_dir) / 'best_model.ckpt'
+    if best_ckpt_src.exists():
+        import shutil
+        shutil.copy2(best_ckpt_src, best_ckpt_dst)
+        print(f"  Best checkpoint copied to: {best_ckpt_dst}")
 
-        # Page 3: Error Analysis
-        fig, axes = plt.subplots(2, 2, figsize=(11, 8.5))
+    print("\n" + "="*70)
+    print("Training Complete!")
+    print("="*70)
+    print(f"  Checkpoints: {save_dir}")
+    if results_df is not None:
+        print(f"  Results:\n{results_df.to_string()}")
 
-        errors = preds - targets
 
-        # Error distribution
-        axes[0, 0].hist(errors, bins=50, edgecolor='black', alpha=0.7)
-        axes[0, 0].axvline(x=0, color='r', linestyle='--')
-        axes[0, 0].set_xlabel('Prediction Error (Pred - True)')
-        axes[0, 0].set_ylabel('Count')
-        axes[0, 0].set_title(f'Error Distribution (Mean={np.mean(errors):.4f}, Std={np.std(errors):.4f})')
-        axes[0, 0].grid(True, alpha=0.3)
+def _save_training_plots(history, eval_results, output_dir):
+    """Generate the four PNG plots expected by the surrogate report generator.
 
-        # Absolute error vs target
-        abs_errors = np.abs(errors)
-        axes[0, 1].scatter(targets, abs_errors, alpha=0.3, s=10)
-        axes[0, 1].set_xlabel('True F')
-        axes[0, 1].set_ylabel('Absolute Error')
-        axes[0, 1].set_title('Absolute Error vs True F')
-        axes[0, 1].grid(True, alpha=0.3)
+    Mirrors the plots that were originally produced by the removed
+    generate_pdf_report() function.
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
 
-        # F distribution
-        axes[1, 0].hist(targets, bins=50, alpha=0.5, label='True F', edgecolor='black')
-        axes[1, 0].hist(preds, bins=50, alpha=0.5, label='Predicted F', edgecolor='black')
-        axes[1, 0].set_xlabel('F Value')
-        axes[1, 0].set_ylabel('Count')
-        axes[1, 0].set_title('Distribution of F Values')
-        axes[1, 0].legend()
-        axes[1, 0].grid(True, alpha=0.3)
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
 
-        # Residuals by percentile
-        percentiles = np.percentile(targets, np.linspace(0, 100, 11))
-        percentile_errors = []
-        percentile_labels = []
-        for i in range(len(percentiles) - 1):
-            mask = (targets >= percentiles[i]) & (targets < percentiles[i+1])
-            if mask.sum() > 0:
-                percentile_errors.append(np.abs(errors[mask]).mean())
-                percentile_labels.append(f'{int(percentiles[i]*100)}-{int(percentiles[i+1]*100)}%')
+    best_epoch = history.get('best_epoch', 0)
+    epochs = list(range(len(history['train_loss'])))
 
-        axes[1, 1].bar(range(len(percentile_errors)), percentile_errors)
-        axes[1, 1].set_xticks(range(len(percentile_labels)))
-        axes[1, 1].set_xticklabels(percentile_labels, rotation=45)
-        axes[1, 1].set_xlabel('F Percentile')
-        axes[1, 1].set_ylabel('Mean Absolute Error')
-        axes[1, 1].set_title('Error by F Percentile')
-        axes[1, 1].grid(True, alpha=0.3)
+    # 1. Loss curves (MSE) — log scale, best-epoch marker
+    fig, ax = plt.subplots(figsize=(6, 3.5))
+    ax.plot(epochs, history['train_loss'], label='Train', alpha=0.8)
+    ax.plot(epochs, history['val_loss'], label='Validation', alpha=0.8)
+    ax.axvline(x=best_epoch, color='r', linestyle='--', alpha=0.5, label='Best')
+    ax.set_xlabel('Epoch')
+    ax.set_ylabel('MSE Loss')
+    ax.set_title('Loss Curves')
+    ax.legend()
+    ax.set_yscale('log')
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(out / 'loss_curves.png', dpi=150)
+    plt.close(fig)
 
-        plt.tight_layout()
-        pdf.savefig(fig, bbox_inches='tight')
-        plt.close()
+    # 2. MAE curves — best-epoch marker
+    if history.get('train_mae') and history.get('val_mae'):
+        fig, ax = plt.subplots(figsize=(6, 3.5))
+        ax.plot(epochs, history['train_mae'], label='Train', alpha=0.8)
+        ax.plot(epochs, history['val_mae'], label='Validation', alpha=0.8)
+        ax.axvline(x=best_epoch, color='r', linestyle='--', alpha=0.5, label='Best')
+        ax.set_xlabel('Epoch')
+        ax.set_ylabel('MAE')
+        ax.set_title('MAE Curves')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        fig.tight_layout()
+        fig.savefig(out / 'mae_curves.png', dpi=150)
+        plt.close(fig)
 
-    print(f"PDF report saved to: {pdf_path}")
-    return pdf_path
+    # 3. Predictions vs targets scatter — fixed [0,1] axes, R² in title
+    preds = eval_results.get('predictions')
+    targets = eval_results.get('targets')
+    if preds is not None and targets is not None:
+        r2 = eval_results.get('test_r2', 0.0)
+        fig, ax = plt.subplots(figsize=(6, 3.5))
+        ax.scatter(targets, preds, alpha=0.3, s=10)
+        ax.plot([0, 1], [0, 1], 'r--', label='Perfect')
+        ax.set_xlabel('True F')
+        ax.set_ylabel('Predicted F')
+        ax.set_title(f'Predictions vs Targets (R\u00b2={r2:.3f})')
+        ax.legend()
+        ax.set_xlim([0, 1])
+        ax.set_ylim([0, 1])
+        ax.grid(True, alpha=0.3)
+        fig.tight_layout()
+        fig.savefig(out / 'pred_vs_target.png', dpi=150)
+        plt.close(fig)
+
+    # 4. Learning rate schedule — log scale
+    if history.get('learning_rate'):
+        fig, ax = plt.subplots(figsize=(6, 3.5))
+        ax.plot(epochs, history['learning_rate'], color='green')
+        ax.set_xlabel('Epoch')
+        ax.set_ylabel('Learning Rate')
+        ax.set_title('Learning Rate Schedule')
+        ax.set_yscale('log')
+        ax.grid(True, alpha=0.3)
+        fig.tight_layout()
+        fig.savefig(out / 'lr_schedule.png', dpi=150)
+        plt.close(fig)
+
+    print(f"  Training plots saved to {out}")
 
 
 def main():
@@ -613,6 +709,8 @@ def main():
     parser.add_argument('--generate_data', action='store_true', help='Generate new training data')
     parser.add_argument('--data_only', action='store_true', help='Generate data only (no training)')
     parser.add_argument('--skip_training', action='store_true', help='Skip training')
+    parser.add_argument('--use_existing_dataset', action='store_true',
+                       help='Use pre-existing full_trajectories.pt (converted by convert_dataset.py)')
     parser.add_argument('--output_dir', type=str, default='causaliT/checkpoints/surrogate',
                        help='Output directory')
     parser.add_argument('--data_dir', type=str, default='causaliT/data/surrogate_training',
@@ -631,15 +729,42 @@ def main():
     if args.learning_rate:
         config['training']['learning_rate'] = args.learning_rate
 
+    casualit_model = config['model'].get('casualit_model', 'proT')
+    use_existing = args.use_existing_dataset or config['data'].get('use_existing_dataset', False)
+
     print("="*70)
     print("CasualiT Surrogate Training")
     print("="*70)
+    print(f"Model type: {casualit_model}")
     print(f"Output directory: {args.output_dir}")
     print(f"Data directory: {args.data_dir}")
+    print(f"Use existing dataset: {use_existing}")
 
-    # Generate data if requested or if data doesn't exist
+    # ── Data preparation ───────────────────────────────────────────────────
     data_path = Path(args.data_dir)
-    if args.data_only or args.generate_data or not (data_path / 'train_X.npy').exists():
+
+    if use_existing:
+        # Convert from full_trajectories.pt if needed
+        from causaliT.surrogate_training.convert_dataset import convert_trajectories_to_causalit_format
+
+        dataset_path = config['data'].get('dataset_path',
+                                           'data/trajectories/full_trajectories.pt')
+        print("\n[1/4] Converting existing dataset...")
+        convert_trajectories_to_causalit_format(
+            trajectories_path=dataset_path,
+            output_dir=args.data_dir,
+            model_type=casualit_model,
+            train_frac=config['data'].get('train_frac', 0.70),
+            val_frac=config['data'].get('val_frac', 0.15),
+            test_frac=config['data'].get('test_frac', 0.15),
+            seed=config['data'].get('random_seed', 42),
+        )
+
+        if args.data_only:
+            print("\nData conversion complete.")
+            return
+
+    elif args.data_only or args.generate_data or not (data_path / 'train_X.npy').exists():
         print("\n[1/4] Generating training data...")
         stats = generate_all_datasets(config, args.data_dir, device=args.device)
 
@@ -654,7 +779,12 @@ def main():
     else:
         print("\n[1/4] Using existing training data")
 
-    # Create trainer
+    # ── Load & train ───────────────────────────────────────────────────────
+    if casualit_model in ('StageCausaliT', 'SingleCausalLayer'):
+        _train_stage_causal_lightning(casualit_model, config, args)
+        return
+
+    # Create trainer (proT path)
     trainer = SurrogateTrainer(config, device=args.device)
 
     # Load data
@@ -676,9 +806,57 @@ def main():
     print("\n[4/4] Evaluating model...")
     eval_results = trainer.evaluate(args.output_dir if not args.skip_training else args.output_dir)
 
+    # Generate training plots for the report
+    _save_training_plots(trainer.history, eval_results, args.output_dir)
+
     # Generate report
-    report_dir = config['report']['output_dir']
-    pdf_path = generate_pdf_report(trainer, eval_results, config, report_dir)
+    from surrogate_report_generator import generate_surrogate_training_report
+
+    # Build full history dict expected by the report generator
+    history = dict(trainer.history)  # train_loss, val_loss, train_mae, val_mae, learning_rate
+    history['best_epoch'] = trainer.best_epoch
+    history['best_val_loss'] = trainer.best_val_loss
+    if not args.skip_training:
+        history['final_epoch'] = train_results['final_epoch']
+        history['final_val_loss'] = train_results['final_val_loss']
+        history['final_train_loss'] = train_results['final_train_loss']
+        history['final_train_mae'] = train_results['final_train_mae']
+        history['final_val_mae'] = train_results['final_val_mae']
+
+    # Compute floor metrics (MSE on top-decile reliability scores)
+    floor_metrics = None
+    targets = eval_results['targets']
+    preds = eval_results['predictions']
+    if len(targets) > 0:
+        q90 = np.percentile(targets, 90)
+        mask = targets >= q90
+        if mask.sum() > 0:
+            floor_preds = preds[mask]
+            floor_targets = targets[mask]
+            floor_metrics = {
+                'floor_mse': float(np.mean((floor_preds - floor_targets) ** 2)),
+                'floor_bias': float(np.mean(floor_preds - floor_targets)),
+            }
+
+    # Model dimensions
+    input_dim = trainer.train_X.shape[2]
+    output_dim = 1
+    total_params = sum(p.numel() for p in trainer.model.parameters())
+
+    checkpoint_dir = args.output_dir
+    pdf_path = generate_surrogate_training_report(
+        config=config,
+        history=history,
+        eval_results=eval_results,
+        input_dim=input_dim,
+        output_dim=output_dim,
+        total_params=total_params,
+        n_train=len(trainer.train_X),
+        n_val=len(trainer.val_X),
+        n_test=len(trainer.test_X),
+        checkpoint_dir=checkpoint_dir,
+        floor_metrics=floor_metrics,
+    )
 
     print("\n" + "="*70)
     print("Training Complete!")
