@@ -331,38 +331,69 @@ def main(config=None):
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. Generate TRAINING scenarios (diverse structural + zero process noise)
+    #
+    # Scenario layout (n_samples = n_train + 1):
+    #   Scenario 0:      calibration only (fixed seed, never used for F* or training)
+    #   Scenario 1:      target trajectory + F* (controlled by seed_target)
+    #   Scenarios 1..N:  training diversity (N = n_train)
+    #
+    # F* is ALWAYS computed from scenario index 1 (post-slice: index 0).
     print("\n[1/9] Generating training scenarios...")
     n_train = cfg['scenarios']['n_train']
     n_test = cfg['scenarios']['n_test']
+    n_samples_total = n_train + 1  # +1 for calibration scenario 0
     print(f"  Training scenarios: {n_train}")
+    print(f"  Total samples (incl. calibration): {n_samples_total}")
     print(f"  Test scenarios: {n_test} (for future evaluation)")
 
-    # Generate TRAIN target trajectory
+    # Generate TRAIN target trajectory (includes calibration scenario 0)
     print("\n  Generating TRAIN target trajectory (a*)...")
-    target_trajectory_train = generate_target_trajectory(
+    target_trajectory_full = generate_target_trajectory(
         process_configs=selected_processes,
-        n_samples=n_train,
+        n_samples=n_samples_total,
         seed=cfg['scenarios']['seed_target']
     )
 
-    print("  Train target trajectory generated:")
-    for process_name, data in target_trajectory_train.items():
+    print("  Full target trajectory generated (incl. calibration):")
+    for process_name, data in target_trajectory_full.items():
         print(f"    {process_name}: inputs={data['inputs'].shape}, outputs={data['outputs'].shape}")
         if 'structural_conditions' in data and data['structural_conditions']:
             for var, vals in data['structural_conditions'].items():
                 print(f"      {var}: [{vals.min():.2f}, {vals.max():.2f}] (range)")
 
-    # Generate TRAIN baseline trajectory
+    # Generate TRAIN baseline trajectory (for all n_samples_total scenarios)
     print("\n  Generating TRAIN baseline trajectory (a')...")
-    baseline_trajectory_train = generate_baseline_trajectory(
+    baseline_trajectory_full = generate_baseline_trajectory(
         process_configs=selected_processes,
-        target_trajectory=target_trajectory_train,
-        n_samples=n_train,
+        target_trajectory=target_trajectory_full,
+        n_samples=n_samples_total,
         seed=cfg['scenarios']['seed_baseline']
     )
 
-    print("  Train baseline trajectory generated:")
-    for process_name, data in baseline_trajectory_train.items():
+    print("  Full baseline trajectory generated (incl. calibration):")
+    for process_name, data in baseline_trajectory_full.items():
+        print(f"    {process_name}: inputs={data['inputs'].shape}, outputs={data['outputs'].shape}")
+
+    # Slice: remove calibration scenario (index 0), keep training scenarios (indices 1..N)
+    target_trajectory_train = {}
+    baseline_trajectory_train = {}
+    for process_name in target_trajectory_full:
+        tgt = target_trajectory_full[process_name]
+        target_trajectory_train[process_name] = {
+            'inputs': tgt['inputs'][1:],
+            'outputs': tgt['outputs'][1:],
+            'structural_conditions': {
+                k: v[1:] for k, v in tgt['structural_conditions'].items()
+            } if tgt.get('structural_conditions') else {}
+        }
+        bsl = baseline_trajectory_full[process_name]
+        baseline_trajectory_train[process_name] = {
+            'inputs': bsl['inputs'][1:],
+            'outputs': bsl['outputs'][1:]
+        }
+
+    print(f"  Sliced training trajectories (calibration excluded):")
+    for process_name, data in target_trajectory_train.items():
         print(f"    {process_name}: inputs={data['inputs'].shape}, outputs={data['outputs'].shape}")
 
     # 2. Generate TEST scenarios (for future evaluation, not used yet)
@@ -475,9 +506,9 @@ def main(config=None):
         print(f"  Surrogate type: reliability_function (mathematical formula)")
 
     print(f"  Sampling mode: {'DETERMINISTIC (mean)' if use_deterministic_sampling else 'STOCHASTIC (reparameterization trick)'}")
-    F_star_value = surrogate.F_star  # Single scalar from scenario 0
+    F_star_value = surrogate.F_star  # Single scalar from training scenario 0 (= original scenario 1)
     print(f"  ✓ Surrogate initialized")
-    print(f"    F* = {F_star_value:.6f} (from scenario 0)")
+    print(f"    F* = {F_star_value:.6f} (from seed_target scenario)")
 
     # 5. Create Trainer
     print("\n[5/9] Creating controller trainer...")
@@ -717,9 +748,10 @@ def main(config=None):
     print("\n[7a.5/9] Preparing trajectory values for PDF report...")
     print("-"*70)
 
-    # Choose representative scenario (scenario 0 for simplicity)
+    # Choose representative scenario: index 0 (post-slice) = original scenario 1
+    # This is the F* reference scenario, controlled by seed_target
     representative_scenario_idx = 0
-    print(f"  Using scenario {representative_scenario_idx} for trajectory comparison...")
+    print(f"  Using scenario {representative_scenario_idx} (F* reference) for trajectory comparison...")
 
     # Generate actual trajectory for this scenario
     with torch.no_grad():

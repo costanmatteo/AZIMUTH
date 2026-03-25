@@ -30,7 +30,8 @@ class ProTSurrogate:
     Placeholder per surrogate model ProT.
 
     Valuta reliability di una trajectory completa.
-    F_star è un singolo scalare calcolato dalla target trajectory dello scenario 0.
+    F_star è un singolo scalare calcolato dalla target trajectory dello scenario 0
+    (calibration row è esclusa upstream; scenario 0 qui è il primo training scenario).
     """
 
     # Configuration for process-specific targets and quality scales
@@ -112,9 +113,9 @@ class ProTSurrogate:
             if self.n_scenarios is None:
                 self.n_scenarios = data['inputs'].shape[0]
 
-        # Compute F_star from scenario 0 (single scalar, same for all scenarios)
+        # Compute F_star from scenario 0 (= first training scenario, calibration excluded upstream)
         self.F_star = self._compute_F_star_from_scenario_0()
-        print(f"  F* = {self.F_star:.6f} (from scenario 0)")
+        print(f"  F* = {self.F_star:.6f} (from scenario 0, seed_target reference)")
 
     def compute_reliability(self, trajectory, return_quality_scores=False):
         """
@@ -270,11 +271,12 @@ class ProTSurrogate:
 
     def _compute_F_star_from_scenario_0(self):
         """
-        Calcola F* (reliability target) dalla target trajectory dello scenario 1.
+        Compute F* (reliability target) from scenario index 0.
 
-        F* è un singolo scalare: la reliability deterministica (var=0) della
-        target trajectory dello scenario 1 (primo scenario campionato dal seed,
-        scenario 0 è la calibration row fissa).
+        The calibration scenario has already been removed upstream: the
+        trajectories passed to the surrogate start at the first training
+        scenario (original index 1 = seed_target scenario).  Therefore
+        F* is always computed from index 0 of the stored tensors.
 
         Returns:
             float: F_star value
@@ -282,14 +284,10 @@ class ProTSurrogate:
         with torch.no_grad():
             scenario_traj = {}
             for process_name, data in self.target_trajectory_tensors.items():
-                # Use scenario 1 if available (scenario 0 is calibration row),
-                # fall back to scenario 0 when n_train=1
-                n_available = data['inputs'].shape[0]
-                idx = min(1, n_available - 1)
                 scenario_traj[process_name] = {
-                    'inputs': data['inputs'][idx:idx+1],
-                    'outputs_mean': data['outputs'][idx:idx+1],
-                    'outputs_var': torch.zeros_like(data['outputs'][idx:idx+1])
+                    'inputs': data['inputs'][0:1],
+                    'outputs_mean': data['outputs'][0:1],
+                    'outputs_var': torch.zeros_like(data['outputs'][0:1])
                 }
 
             F_star = self.compute_reliability(scenario_traj, return_quality_scores=False)
@@ -739,7 +737,11 @@ class CasualiTSurrogate:
 
     def _compute_F_star_from_scenario_0(self) -> float:
         """
-        Compute F* from scenario 1 using the CausalIT model.
+        Compute F* from scenario index 0 using the CausalIT model.
+
+        The calibration scenario has already been removed upstream: index 0
+        here corresponds to the first training scenario (original index 1,
+        controlled by seed_target).
 
         Returns:
             float: F_star value (single scalar)
@@ -750,15 +752,11 @@ class CasualiTSurrogate:
         with torch.no_grad():
             scenario_traj = {}
             for process_name, data in self.target_trajectory_tensors.items():
-                # Use scenario 1 if available (scenario 0 is calibration row),
-                # fall back to scenario 0 when n_train=1
-                n_available = data['inputs'].shape[0]
-                idx = min(1, n_available - 1)
                 scenario_traj[process_name] = {
-                    'inputs': data['inputs'][idx:idx+1],
-                    'outputs_mean': data['outputs'][idx:idx+1],
-                    'outputs_var': torch.zeros_like(data['outputs'][idx:idx+1]),
-                    'outputs_sampled': data['outputs'][idx:idx+1],
+                    'inputs': data['inputs'][0:1],
+                    'outputs_mean': data['outputs'][0:1],
+                    'outputs_var': torch.zeros_like(data['outputs'][0:1]),
+                    'outputs_sampled': data['outputs'][0:1],
                 }
 
             F_star = self.compute_reliability(scenario_traj)
