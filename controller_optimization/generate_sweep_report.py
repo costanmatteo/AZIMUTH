@@ -313,6 +313,14 @@ body {
   page-break-after: always;
 }
 .page:last-child { page-break-after: auto; }
+.page-flow {
+  width: 297mm;
+  padding: 13px 18px 9px;
+  overflow: visible;
+  page-break-after: auto;
+}
+.page-flow .tbl thead { display: table-header-group; }
+.page-flow .tbl tr { page-break-inside: avoid; }
 
 .hdr-row { display: flex; justify-content: space-between; align-items: baseline;
            margin-bottom: 2px; }
@@ -723,10 +731,10 @@ def build_page2_html(df: pd.DataFrame, now: datetime, sweep_dir: str) -> str:
       </tr>"""
 
     return f"""
-<div class="page">
+<div class="page-flow">
   <div class="hdr-row">
     <span class="title">Controller Sweep Report &#8212; All Runs</span>
-    <span class="meta">{ts} &nbsp;&#183;&nbsp; {len(df)} runs &nbsp;&#183;&nbsp; page 2 / 2</span>
+    <span class="meta">{ts} &nbsp;&#183;&nbsp; {len(df)} runs</span>
   </div>
   <hr class="rule-heavy">
 
