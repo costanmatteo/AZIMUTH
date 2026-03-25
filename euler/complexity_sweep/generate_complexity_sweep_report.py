@@ -464,23 +464,29 @@ body {
 .plot-cell { flex: 1 1 0; min-width: 0; }
 .plot-img  { width: 100%; height: auto; display: block; }
 .plot-cap  { font-size: 6.5px; color: #888; margin-top: 2px;
-             text-align: center; font-style: italic; }
+             font-style: italic; line-height: 1.3; }
 
-/* ── table ── */
-.tbl { width: 100%; border-collapse: collapse; font-size: 7.5px; }
-.tbl th { background: #f4f4f4; font-weight: 500; text-align: left;
-          padding: 2.5px 5px; border: 0.5px solid #ccc;
-          text-transform: uppercase; font-size: 7px; letter-spacing: 0.3px; }
-.tbl td { padding: 2px 5px; border: 0.5px solid #e4e4e4; }
+/* ── runs table ── */
+.tbl { width: 100%; border-collapse: collapse; font-size: 8px; }
+.tbl th {
+  text-align: left; padding: 3px 4px;
+  background: #f5f5f5; border-bottom: 0.5px solid #1a1a1a;
+  font-size: 7.5px; font-weight: 500; color: #888; white-space: nowrap;
+}
+.tbl th .def { font-size: 6.5px; font-weight: 400; color: #aaa;
+               display: block; letter-spacing: 0; text-transform: none; }
+.tbl td { padding: 2px 4px; border-bottom: 0.5px solid #eee;
+          white-space: nowrap; }
 .tbl tr:nth-child(even) td { background: #fafafa; }
-.tbl .def { font-size: 6px; color: #aaa; display: block; }
+.tbl tr:last-child td { border-bottom: none; }
 
 /* ── footer ── */
-.footer { display: flex; justify-content: space-between; font-size: 6.5px;
-          color: #aaa; margin-top: auto; padding-top: 4px; }
+.footer { margin-top: auto; border-top: 1px solid #1a1a1a; padding-top: 3px;
+          display: flex; justify-content: space-between;
+          font-size: 7px; color: #888; }
 
 /* ── legend ── */
-.legend { font-size: 6.5px; color: #888; margin-top: 4px; }
+.legend { font-size: 7px; color: #888; margin-top: 4px; }
 """
 
 
