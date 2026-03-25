@@ -716,7 +716,46 @@ def main():
     parser.add_argument('--data_dir', type=str, default='causaliT/data/surrogate_training',
                        help='Data directory')
     parser.add_argument('--device', type=str, default='auto', help='Device (cpu/cuda/auto)')
+
+    # ST dataset complexity overrides (for complexity sweep)
+    parser.add_argument('--st_n', type=int, default=None,
+                        help='ST input variables per process (overrides st_params.n)')
+    parser.add_argument('--st_m', type=int, default=None,
+                        help='ST cascaded stages per process (overrides st_params.m)')
+    parser.add_argument('--st_rho', type=float, default=None,
+                        help='ST noise intensity [0,1] (overrides st_params.rho)')
+    parser.add_argument('--st_n_processes', type=int, default=None,
+                        help='Number of ST processes in sequence (overrides n_processes)')
+    parser.add_argument('--up_checkpoint_dir', type=str, default=None,
+                        help='Override UP checkpoint base dir (reads UPs from here)')
+
     args = parser.parse_args()
+
+    # If ST dataset params are overridden via CLI, rebuild processes dynamically
+    from configs.processes_config import DATASET_MODE, ST_DATASET_CONFIG, _build_st_processes
+    _st_overrides = {
+        k: v for k, v in [('n', args.st_n), ('m', args.st_m), ('rho', args.st_rho)]
+        if v is not None
+    }
+    _has_n_processes_override = args.st_n_processes is not None
+    if (_st_overrides or _has_n_processes_override) and DATASET_MODE == 'st':
+        import copy as _copy
+        _st_cfg = _copy.deepcopy(ST_DATASET_CONFIG)
+        _st_cfg['st_params'].update(_st_overrides)
+        if _has_n_processes_override:
+            _st_cfg['n_processes'] = args.st_n_processes
+        _custom_processes = _build_st_processes(_st_cfg)
+        import configs.processes_config as _proc_mod
+        _proc_mod.PROCESSES = _custom_processes
+        print(f"\n[ST Override] Rebuilt processes with: {_st_overrides}"
+              f"{f', n_processes={args.st_n_processes}' if _has_n_processes_override else ''}")
+
+    # Override UP checkpoint dirs if --up_checkpoint_dir is provided
+    if args.up_checkpoint_dir is not None:
+        import configs.processes_config as _proc_mod
+        for p in _proc_mod.PROCESSES:
+            p['checkpoint_dir'] = str(Path(args.up_checkpoint_dir) / p['name'])
+        print(f"[UP Checkpoint Override] Base dir: {args.up_checkpoint_dir}")
 
     # Load config
     config = SURROGATE_CONFIG.copy()

@@ -163,6 +163,8 @@ def parse_args():
                         help='Number of ST processes in sequence (overrides n_processes)')
     parser.add_argument('--up_checkpoint_dir', type=str, default=None,
                         help='Override UP checkpoint base dir (reads UPs from here)')
+    parser.add_argument('--surrogate_checkpoint_dir', type=str, default=None,
+                        help='Override CasualiT surrogate checkpoint dir (reads model from here)')
 
     # Misc
     parser.add_argument('--no_pdf', action='store_true', default=False,
@@ -238,6 +240,16 @@ def apply_args_to_config(args, config):
         cfg['training']['curriculum_learning']['enabled'] = False
     elif args.curriculum_enabled is not None:
         cfg['training']['curriculum_learning']['enabled'] = args.curriculum_enabled
+
+    # Surrogate checkpoint override
+    if args.surrogate_checkpoint_dir is not None:
+        if 'surrogate' not in cfg:
+            cfg['surrogate'] = {}
+        if 'casualit' not in cfg['surrogate']:
+            cfg['surrogate']['casualit'] = {}
+        cfg['surrogate']['casualit']['checkpoint_path'] = str(
+            Path(args.surrogate_checkpoint_dir) / 'best_model.ckpt'
+        )
 
     # Report generation
     if args.no_pdf:
