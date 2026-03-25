@@ -575,18 +575,88 @@ def _plot_sensitivity_scatter(cfg_df: pd.DataFrame, path: Path):
     plt.close(fig)
 
 
-def _make_plots(cfg_df: pd.DataFrame, tmp_dir: Path) -> list[Path]:
-    paths = [
-        tmp_dir / "p1_win_rate_dist.png",
-        tmp_dir / "p2_win_rate_rho.png",
-        tmp_dir / "p3_win_rate_nvars.png",
-        tmp_dir / "p4_sensitivity.png",
+def _plot_win_rate_per_param(cfg_df: pd.DataFrame, param: str, label: str, path: Path):
+    """
+    Box plot of win rate grouped by a single parameter.
+    For continuous params (rho), bins into 6-8 groups.
+    """
+    fig, ax = plt.subplots(figsize=(3.8, 2.8))
+    df = cfg_df.copy()
+
+    # Bin continuous parameters
+    if df[param].nunique() > 8:
+        n_bins = min(8, max(4, len(df) // 4))
+        df["_bin"] = pd.cut(df[param], bins=n_bins, include_lowest=True)
+        groups = sorted(df["_bin"].dropna().unique(), key=lambda x: x.left)
+        data = [df.loc[df["_bin"] == g, "win_rate"].values for g in groups]
+        labels_x = [f"{g.left:.2f}" for g in groups]
+    else:
+        groups = sorted(df[param].unique())
+        data = [df.loc[df[param] == g, "win_rate"].values for g in groups]
+        labels_x = [str(int(g)) if g == int(g) else f"{g:.2f}" for g in groups]
+
+    # Filter empty groups
+    non_empty = [(d, l) for d, l in zip(data, labels_x) if len(d) > 0]
+    if not non_empty:
+        plt.close(fig)
+        return
+    data, labels_x = zip(*non_empty)
+
+    bp = ax.boxplot(data, positions=range(len(data)), widths=0.5,
+                    patch_artist=True,
+                    medianprops=dict(color="#D85A30", lw=1.5),
+                    boxprops=dict(facecolor="#F0F0F0", linewidth=0.7),
+                    whiskerprops=dict(linewidth=0.7),
+                    capprops=dict(linewidth=0.7),
+                    flierprops=dict(marker=".", markersize=3, linestyle="none"))
+
+    # Overlay individual points
+    for i, d in enumerate(data):
+        jitter = np.random.default_rng(42).uniform(-0.15, 0.15, size=len(d))
+        ax.scatter(np.full(len(d), i) + jitter, d, s=8, color="#111111",
+                   alpha=0.4, zorder=5, edgecolors="none")
+
+    ax.set_xticks(range(len(labels_x)))
+    ax.set_xticklabels(labels_x, fontsize=6, rotation=30 if len(labels_x) > 6 else 0)
+    ax.set_xlabel(label, fontsize=7, fontfamily="monospace")
+    ax.set_ylabel("Win rate", fontsize=7, fontfamily="monospace")
+    ax.set_title(f"Win Rate vs {label}", fontsize=8, fontfamily="monospace", fontweight="bold")
+    ax.axhline(0.5, color="#CCCCCC", lw=0.8, ls=":")
+    ax.tick_params(labelsize=6)
+    ax.spines[["top","right"]].set_visible(False)
+    fig.tight_layout(pad=0.3)
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _make_plots(cfg_df: pd.DataFrame, tmp_dir: Path) -> dict[str, Path]:
+    """Generate all plots and return a dict of name -> path."""
+    plots = {}
+
+    # Summary plots (page 1 row)
+    plots["win_rate_dist"] = tmp_dir / "p1_win_rate_dist.png"
+    plots["win_rate_rho"]  = tmp_dir / "p2_win_rate_rho.png"
+    plots["win_rate_nvars"]= tmp_dir / "p3_win_rate_nvars.png"
+    plots["sensitivity"]   = tmp_dir / "p4_sensitivity.png"
+
+    _plot_win_rate_distribution(cfg_df, plots["win_rate_dist"])
+    _plot_win_rate_vs_rho(cfg_df, plots["win_rate_rho"])
+    _plot_win_rate_vs_n_vars(cfg_df, plots["win_rate_nvars"])
+    _plot_sensitivity_scatter(cfg_df, plots["sensitivity"])
+
+    # Per-parameter plots (dedicated pages)
+    param_specs = [
+        ("n_vars",      "n (input variables)"),
+        ("n_stages",    "m (cascaded stages)"),
+        ("rho",         "ρ (noise intensity)"),
+        ("n_processes", "P (chain length)"),
     ]
-    _plot_win_rate_distribution(cfg_df, paths[0])
-    _plot_win_rate_vs_rho(cfg_df, paths[1])
-    _plot_win_rate_vs_n_vars(cfg_df, paths[2])
-    _plot_sensitivity_scatter(cfg_df, paths[3])
-    return paths
+    for param, label in param_specs:
+        key = f"param_{param}"
+        plots[key] = tmp_dir / f"p_param_{param}.png"
+        _plot_win_rate_per_param(cfg_df, param, label, plots[key])
+
+    return plots
 
 
 # ─────────────────────────────────────────────
@@ -821,37 +891,40 @@ def _build_aggregate_stats(cfg_df: pd.DataFrame) -> list:
     return story
 
 
-def _build_plots_row(plot_paths: list[Path]) -> list:
-    """Section 02 — 4 plots in a grid row."""
+def _build_plots_row(plots: dict[str, Path]) -> list:
+    """Section 02 — 4 summary plots in a grid row."""
     story = [
         _P("02 — visualizations", S_SEC),
         _HR(),
     ]
 
-    captions = [
-        "Win rate histogram across all LHS configs",
-        "Win rate vs noise ρ  (colour = n_vars)",
-        "Win rate distribution grouped by n_vars",
-        "Win rate vs n_stages and P  (colour = ρ)",
+    summary_keys = [
+        ("win_rate_dist",  "Win rate histogram across all LHS configs"),
+        ("win_rate_rho",   "Win rate vs noise ρ  (colour = n_vars)"),
+        ("win_rate_nvars", "Win rate distribution grouped by n_vars"),
+        ("sensitivity",    "Win rate vs n_stages and P  (colour = ρ)"),
     ]
 
     plot_w = FULL_W / 4 - 4
     plot_h = plot_w * 0.75
 
     cells = []
-    for p, cap in zip(plot_paths, captions):
-        img = Image(str(p), width=plot_w, height=plot_h)
-        cells.append([img, _P(cap, S_CAP)])
+    for key, cap in summary_keys:
+        p = plots.get(key)
+        if p and p.exists():
+            img = Image(str(p), width=plot_w, height=plot_h)
+            cells.append([img, _P(cap, S_CAP)])
 
-    tbl = Table([cells], colWidths=[FULL_W / 4] * 4)
-    tbl.setStyle(TableStyle([
-        ("VALIGN",       (0,0),(-1,-1), "TOP"),
-        ("LEFTPADDING",  (0,0),(-1,-1), 2),
-        ("RIGHTPADDING", (0,0),(-1,-1), 2),
-        ("TOPPADDING",   (0,0),(-1,-1), 0),
-        ("BOTTOMPADDING",(0,0),(-1,-1), 0),
-    ]))
-    story.append(tbl)
+    if cells:
+        tbl = Table([cells], colWidths=[FULL_W / 4] * len(cells))
+        tbl.setStyle(TableStyle([
+            ("VALIGN",       (0,0),(-1,-1), "TOP"),
+            ("LEFTPADDING",  (0,0),(-1,-1), 2),
+            ("RIGHTPADDING", (0,0),(-1,-1), 2),
+            ("TOPPADDING",   (0,0),(-1,-1), 0),
+            ("BOTTOMPADDING",(0,0),(-1,-1), 0),
+        ]))
+        story.append(tbl)
     return story
 
 
@@ -1037,6 +1110,205 @@ def _build_configs_table(cfg_df: pd.DataFrame) -> list:
 
 
 # ─────────────────────────────────────────────
+#  PER-PARAMETER PLOTS PAGE
+# ─────────────────────────────────────────────
+
+def _build_per_param_plots(plots: dict[str, Path], sweep_dir: str) -> list:
+    """Section with one plot per process parameter."""
+    story = [
+        _P("03 — win rate vs individual parameters", S_SEC),
+        _HR(),
+        _P("Box plots showing how win rate W(c) varies with each complexity "
+           "parameter independently.  Individual config points are overlaid.", S_MUTED),
+        Spacer(1, 4),
+    ]
+
+    param_keys = [
+        ("param_n_vars",      "n (input variables)"),
+        ("param_n_stages",    "m (cascaded stages)"),
+        ("param_rho",         "ρ (noise intensity)"),
+        ("param_n_processes", "P (chain length)"),
+    ]
+
+    # Two plots per row
+    plot_w = (FULL_W - 8) / 2
+    plot_h = plot_w * 0.72
+
+    row_cells = []
+    for key, caption in param_keys:
+        p = plots.get(key)
+        if p and p.exists():
+            img = Image(str(p), width=plot_w, height=plot_h)
+            row_cells.append([img, _P(caption, S_CAP)])
+        if len(row_cells) == 2:
+            tbl = Table([row_cells], colWidths=[FULL_W / 2, FULL_W / 2])
+            tbl.setStyle(TableStyle([
+                ("VALIGN", (0,0), (-1,-1), "TOP"),
+                ("LEFTPADDING", (0,0), (-1,-1), 2),
+                ("RIGHTPADDING",(0,0), (-1,-1), 2),
+                ("TOPPADDING",  (0,0), (-1,-1), 0),
+                ("BOTTOMPADDING",(0,0),(-1,-1), 4),
+            ]))
+            story.append(tbl)
+            row_cells = []
+
+    # Remaining odd plot
+    if row_cells:
+        tbl = Table([row_cells], colWidths=[FULL_W / 2])
+        tbl.setStyle(TableStyle([
+            ("VALIGN", (0,0), (-1,-1), "TOP"),
+            ("LEFTPADDING", (0,0), (-1,-1), 2),
+            ("RIGHTPADDING",(0,0), (-1,-1), 2),
+        ]))
+        story.append(tbl)
+
+    return story
+
+
+# ─────────────────────────────────────────────
+#  ALL-RUNS TABLE
+# ─────────────────────────────────────────────
+
+def _build_all_runs_header(sweep_dir: str, page: int) -> list:
+    data = [[
+        _P("Controller Complexity Sweep — All Runs", _S("art", size=9, bold=True)),
+        _P(f"page {page}  ·  {Path(sweep_dir).name}", S_MUTED),
+    ]]
+    tbl = Table(data, colWidths=[FULL_W * 0.5, FULL_W * 0.5])
+    tbl.setStyle(TableStyle([
+        ("VALIGN",       (0,0),(-1,-1), "BOTTOM"),
+        ("LEFTPADDING",  (0,0),(-1,-1), 0),
+        ("RIGHTPADDING", (0,0),(-1,-1), 0),
+        ("TOPPADDING",   (0,0),(-1,-1), 0),
+        ("BOTTOMPADDING",(0,0),(-1,-1), 2),
+    ]))
+    return [tbl, HRFlowable(width=FULL_W, thickness=1, color=C_BLACK, spaceAfter=4, spaceBefore=2)]
+
+
+def _build_all_runs_table(df: pd.DataFrame) -> list:
+    """
+    Multi-page table with one row per individual run, sorted by config then seeds.
+    """
+    has_test = "F_actual_test" in df.columns and df["F_actual_test"].notna().any()
+    has_gc   = "gap_closure_train" in df.columns and df["gap_closure_train"].notna().any()
+
+    # Column widths
+    col_w = [
+        28,  # n
+        28,  # m
+        30,  # rho
+        28,  # P
+        28,  # s_t
+        28,  # s_b
+        50,  # F*
+        50,  # F'
+        50,  # F
+        28,  # win
+    ]
+    header = [
+        _th("n"),
+        _th("m"),
+        _th("ρ"),
+        _th("P"),
+        _th("s_t", "seed"),
+        _th("s_b", "seed"),
+        _th("F*", "target"),
+        _th("F'", "baseline"),
+        _th("F", "actual"),
+        _th("W", "win"),
+    ]
+
+    if has_test:
+        col_w += [50, 50, 28]
+        header += [
+            _th("F' test", "baseline"),
+            _th("F test", "actual"),
+            _th("W_t", "win"),
+        ]
+    if has_gc:
+        col_w.append(42)
+        header.append(_th("GapCl", "closure"))
+
+    # Remaining space -> gap_delta column
+    gap_w = max(40, FULL_W - sum(col_w) - 50)
+    col_w.append(gap_w)
+    header.append(_th("Gap Δ", "F − F'"))
+
+    # Pad to fill FULL_W
+    remaining = FULL_W - sum(col_w)
+    if remaining > 0:
+        col_w[-1] += remaining
+
+    # Sort by config grouping then seeds
+    df_sorted = df.sort_values(
+        ["n_vars", "n_stages", "rho", "n_processes", "seed_target", "seed_baseline"]
+    ).reset_index(drop=True)
+
+    rows = [header]
+    ts = []
+
+    for i, (_, row) in enumerate(df_sorted.iterrows()):
+        w  = row["win"]
+        gd = row["gap_delta"]
+        wc = C_GREEN if w else C_RED
+        gdc = _gap_delta_color(gd) if not np.isnan(gd) else C_MUTED
+
+        bg = C_ALT if i % 2 == 1 else colors.white
+
+        r = [
+            _P(str(int(row["n_vars"])),      S_TD),
+            _P(str(int(row["n_stages"])),    S_TD),
+            _P(f"{row['rho']:.2f}",          S_TD),
+            _P(str(int(row["n_processes"])), S_TD),
+            _P(str(int(row["seed_target"])), S_TD),
+            _P(str(int(row["seed_baseline"])), S_TD),
+            _P(_fmt(row["F_star"]),          S_TD),
+            _P(_fmt(row["F_baseline"]),      S_TD),
+            _P(_fmt(row["F_actual"]),        S_TD),
+            Paragraph(f'<font color="#{wc.hexval()[2:]}">{"✓" if w else "✗"}</font>', S_TD),
+        ]
+
+        if has_test:
+            wt = row.get("win_test", 0)
+            wtc = C_GREEN if wt else C_RED
+            r += [
+                _P(_fmt(row.get("F_baseline_test", np.nan)), S_TD),
+                _P(_fmt(row.get("F_actual_test", np.nan)),   S_TD),
+                Paragraph(f'<font color="#{wtc.hexval()[2:]}">{"✓" if wt else "✗"}</font>', S_TD),
+            ]
+        if has_gc:
+            r.append(_P(_fmt(row.get("gap_closure_train", np.nan), 3), S_TD))
+
+        r.append(Paragraph(f'<font color="#{gdc.hexval()[2:]}">{_fmt(gd)}</font>', S_TD))
+
+        rows.append(r)
+        ts.append(("BACKGROUND", (0, i+1), (-1, i+1), bg))
+
+    base_style = [
+        ("BOX",            (0,0), (-1,-1), 0.5, C_BLACK),
+        ("INNERGRID",      (0,0), (-1,-1), 0.3, C_RULE),
+        ("LINEBELOW",      (0,0), (-1,0),  0.5, C_BLACK),
+        ("VALIGN",         (0,0), (-1,-1), "TOP"),
+        ("LEFTPADDING",    (0,0), (-1,-1), 2),
+        ("RIGHTPADDING",   (0,0), (-1,-1), 2),
+        ("TOPPADDING",     (0,0), (-1,-1), 1),
+        ("BOTTOMPADDING",  (0,0), (-1,-1), 1),
+    ] + ts
+
+    tbl = Table(rows, colWidths=col_w, repeatRows=1)
+    tbl.setStyle(TableStyle(base_style))
+
+    footer_note = _P(
+        f"{len(df_sorted)} runs  ·  W: ✓ = F > F' (controller wins)  ·  "
+        "Gap Δ: F − F' (positive = beats baseline)  ·  "
+        "green = win  ·  red = loss",
+        S_MUTED,
+    )
+
+    return [tbl, Spacer(1, 4), footer_note]
+
+
+# ─────────────────────────────────────────────
 #  MAIN ENTRY POINT
 # ─────────────────────────────────────────────
 
@@ -1061,7 +1333,7 @@ def generate_complexity_sweep_report(sweep_dir: str | Path, output_path: str | P
     import tempfile, shutil
     tmp_dir = Path(tempfile.mkdtemp(prefix="complexity_report_"))
     try:
-        plot_paths = _make_plots(cfg_df, tmp_dir)
+        plots = _make_plots(cfg_df, tmp_dir)
 
         doc = SimpleDocTemplate(
             output_path,
@@ -1072,17 +1344,28 @@ def generate_complexity_sweep_report(sweep_dir: str | Path, output_path: str | P
 
         story: list = []
 
-        # ── PAGE 1 ──
+        # ── PAGE 1: summary ──
         story += _build_header(sweep_dir, df, cfg_df)
         story += _build_kpi_bar(df, cfg_df)
         story += _build_aggregate_stats(cfg_df)
-        story += _build_plots_row(plot_paths)
+        story += _build_plots_row(plots)
         story += _build_footer(sweep_dir, output_path)
 
-        # ── PAGE 2…N ──
+        # ── PAGE 2: per-parameter plots ──
         story.append(PageBreak())
-        story += _build_configs_table_header_compact(sweep_dir, page=2)
+        story += _build_per_param_plots(plots, sweep_dir)
+        story += _build_footer(sweep_dir, output_path)
+
+        # ── PAGE 3…N: configs table ──
+        story.append(PageBreak())
+        story += _build_configs_table_header_compact(sweep_dir, page=3)
         story += _build_configs_table(cfg_df)
+        story += _build_footer(sweep_dir, output_path)
+
+        # ── PAGE N+1…: all runs table ──
+        story.append(PageBreak())
+        story += _build_all_runs_header(sweep_dir, page=4)
+        story += _build_all_runs_table(df)
         story += _build_footer(sweep_dir, output_path)
 
         doc.build(story)
