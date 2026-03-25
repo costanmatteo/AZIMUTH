@@ -109,12 +109,12 @@ def aggregate_results(sweep_dir: Path) -> pd.DataFrame:
 # ════════════════════════════════════════════════════════════════════════════
 
 def compute_stats(df: pd.DataFrame) -> dict:
-    gb_tr = df['F_star_train']  - df['F_baseline_train']
-    gc_tr = df['F_star_train']  - df['F_actual_train']
+    gb_tr = (df['F_star_train']  - df['F_baseline_train']).abs()
+    gc_tr = (df['F_star_train']  - df['F_actual_train']).abs()
     gd_tr = gb_tr - gc_tr                              # positive = ctrl better
 
-    gb_te = df['F_star_test']   - df['F_baseline_test']
-    gc_te = df['F_star_test']   - df['F_actual_test']
+    gb_te = (df['F_star_test']   - df['F_baseline_test']).abs()
+    gc_te = (df['F_star_test']   - df['F_actual_test']).abs()
     gd_te = gb_te - gc_te
 
     wins = (gc_tr.abs() < gb_tr.abs()).sum()
