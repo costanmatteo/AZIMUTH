@@ -113,7 +113,7 @@ CONTROLLER_CONFIG = {
 
     # Training parameters
     'training': {
-        'epochs': 100,  # Each epoch cycles through all training scenarios once
+        'epochs': 105,  # Each epoch cycles through all training scenarios once
         'batch_size': 3000,  # Total samples per epoch (split equally across scenarios)
         'learning_rate': 0.0019017383571692538,
         'weight_decay': 0.001,
