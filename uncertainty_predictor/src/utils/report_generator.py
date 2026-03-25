@@ -402,8 +402,9 @@ def _build_left(d):
     lr_str  = fmt_lr(tr_cfg.get('learning_rate', 0))
     chk_str = short_dir(tr_cfg.get('checkpoint_dir', ''))
 
+    _dash = "\u2014"
     train_rows = [
-        ("Epochs",           f"{tr_cfg.get('epochs','\u2014')} / {tr_cfg.get('max_epochs', tr_cfg.get('epochs','\u2014'))}"),
+        ("Epochs",           f"{tr_cfg.get('epochs', _dash)} / {tr_cfg.get('max_epochs', tr_cfg.get('epochs', _dash))}"),
         ("Batch size",       str(tr_cfg.get('batch_size', '\u2014'))),
         ("Learning rate",    lr_str),
         ("Weight decay",     str(tr_cfg.get('weight_decay', '\u2014'))),
