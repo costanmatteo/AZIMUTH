@@ -39,8 +39,8 @@ COMPLEXITY_SWEEP_CONFIG = {
     # LHS SAMPLING SETTINGS
     # =========================================================================
     'sampling': {
-        'n_lhs': 30,           # Number of Latin Hypercube configurations
-        'n_seeds': 5,          # Number of seed values per axis (total pairs = n_seeds^2)
+        'n_lhs': 60,           # Number of Latin Hypercube configurations
+        'n_seeds': 8,          # Number of seed values per axis (total pairs = n_seeds^2)
         'seed': 42,            # Random seed for LHS generation
     },
 
@@ -51,10 +51,10 @@ COMPLEXITY_SWEEP_CONFIG = {
     # LHS samples uniformly within these ranges.
     # Constraint: m <= n is enforced after sampling.
     'param_ranges': {
-        'n': (2, 8),               # ST input variables
-        'm': (1, 4),               # ST cascaded stages (must be <= n)
+        'n': (2, 15),              # ST input variables
+        'm': (1, 8),              # ST cascaded stages (must be <= n)
         'rho': (0.0, 0.5),         # ST noise intensity
-        'n_processes': (2, 5),     # Number of processes in sequence
+        'n_processes': (2, 15),    # Number of processes in sequence
     },
 
     # =========================================================================
