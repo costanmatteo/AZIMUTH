@@ -34,12 +34,12 @@ echo "GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader)"
 echo "Start time: $(date)"
 
 # Option 1: Generate data only
-# python -m causaliT.surrogate_training.train_surrogate --data_only --device cuda
+# python train_surrogate.py --data_only --device cuda
 
 # Option 2: Full training (generate data + train)
-python -m causaliT.surrogate_training.train_surrogate --generate_data --device cuda
+python train_surrogate.py --generate_data --device cuda
 
 # Option 3: Training with custom parameters
-# python -m causaliT.surrogate_training.train_surrogate --generate_data --epochs 1000 --batch_size 128 --device cuda
+# python train_surrogate.py --generate_data --epochs 1000 --batch_size 128 --device cuda
 
 echo "End time: $(date)"

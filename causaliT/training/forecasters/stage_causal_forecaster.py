@@ -636,7 +636,6 @@ class StageCausalForecaster(pl.LightningModule):
                 mode='min',
                 factor=0.5,
                 patience=10,
-                verbose=True
             )
             return {
                 "optimizer": optimizer,

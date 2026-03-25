@@ -123,7 +123,11 @@ def plot_training_history(history, save_path=None):
     ax_rel = axes[1]
 
     if 'F_values' in history:
-        ax_rel.plot(epochs, history['F_values'], label='F (Actual)', color='purple', linewidth=2)
+        ax_rel.plot(epochs, history['F_values'], label='F (Surrogate)', color='purple', linewidth=2)
+        if 'F_formula_values' in history and len(history['F_formula_values']) > 0:
+            f_formula_epochs = range(len(history['F_formula_values']))
+            ax_rel.plot(f_formula_epochs, history['F_formula_values'],
+                       label='F (Formula)', color='darkorange', linewidth=2, linestyle='-.')
         if 'F_star' in history:
             ax_rel.axhline(y=history['F_star'], color='gold', linestyle='--', linewidth=2, label='F* (Target)')
 
