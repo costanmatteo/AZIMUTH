@@ -163,6 +163,8 @@ def parse_args():
                         help='Number of ST processes in sequence (overrides n_processes)')
     parser.add_argument('--up_checkpoint_dir', type=str, default=None,
                         help='Override UP checkpoint base dir (reads UPs from here)')
+    parser.add_argument('--surrogate_checkpoint_dir', type=str, default=None,
+                        help='Override CasualiT surrogate checkpoint dir (reads model from here)')
 
     # Misc
     parser.add_argument('--no_pdf', action='store_true', default=False,
@@ -238,6 +240,16 @@ def apply_args_to_config(args, config):
         cfg['training']['curriculum_learning']['enabled'] = False
     elif args.curriculum_enabled is not None:
         cfg['training']['curriculum_learning']['enabled'] = args.curriculum_enabled
+
+    # Surrogate checkpoint override
+    if args.surrogate_checkpoint_dir is not None:
+        if 'surrogate' not in cfg:
+            cfg['surrogate'] = {}
+        if 'casualit' not in cfg['surrogate']:
+            cfg['surrogate']['casualit'] = {}
+        cfg['surrogate']['casualit']['checkpoint_path'] = str(
+            Path(args.surrogate_checkpoint_dir) / 'best_model.ckpt'
+        )
 
     # Report generation
     if args.no_pdf:
@@ -444,10 +456,21 @@ def main(config=None):
     )
 
     # For CasualiTSurrogate, connect to ProcessChain for format conversion
+    # and create a formula surrogate for comparison
+    formula_surrogate = None
     if isinstance(surrogate, CasualiTSurrogate):
         surrogate.set_process_chain(process_chain)
         print(f"  Surrogate type: CasualiT (TransformerForecaster)")
         print(f"  Checkpoint: {surrogate_config.get('casualit', {}).get('checkpoint_path')}")
+
+        # Create a ProTSurrogate (mathematical formula) for comparison
+        formula_surrogate = ProTSurrogate(
+            target_trajectory=target_trajectory,
+            device=device,
+            use_deterministic_sampling=use_deterministic_sampling,
+            process_configs=selected_processes,
+        )
+        print(f"  Formula surrogate created for comparison (F* formula = {formula_surrogate.F_star:.6f})")
     else:
         print(f"  Surrogate type: reliability_function (mathematical formula)")
 
@@ -483,9 +506,14 @@ def main(config=None):
         lr_scheduler_config=lr_scheduler_config
     )
 
+    # Set formula surrogate for comparison (when using CasualiT)
+    if formula_surrogate is not None:
+        trainer.set_formula_surrogate(formula_surrogate)
+
     # Enable gradient debugging for first epoch
     trainer._debug_gradients = True
     trainer._debug_bc_loss = True
+    trainer._debug_F_graph = True
 
     # Set up validation data for overfitting detection
     print("\n[5.3/9] Setting up validation data for overfitting detection...")
@@ -603,12 +631,18 @@ def main(config=None):
     F_actual_mean = eval_results['F_actual_mean']
     F_actual_std = eval_results['F_actual_std']
 
+    # Formula-based F (only available when using CasualiT surrogate)
+    F_formula_per_sample = eval_results.get('F_formula_per_sample')
+    F_formula_mean = eval_results.get('F_formula_mean')
+    F_formula_std = eval_results.get('F_formula_std')
+
     print(f"  Total samples evaluated: {len(F_actual_per_sample)}")
 
     # Compute baseline reliability for all scenarios (× samples if plotting all)
     mode_str = f"{n_scenarios} scenarios × {eval_batch_size} samples" if plot_all_samples else f"{n_scenarios} scenarios"
     print(f"  Computing baseline reliability for {mode_str}...")
     F_baseline_values = []
+    F_formula_baseline_values = []
 
     with torch.no_grad():
         for scenario_idx in range(n_scenarios):
@@ -627,15 +661,23 @@ def main(config=None):
             # Compute reliability for baseline
             F_baseline_i = surrogate.compute_reliability(baseline_scenario_tensor).item()
 
+            # Compute formula-based baseline (if using CasualiT)
+            F_formula_baseline_i = None
+            if formula_surrogate is not None:
+                F_formula_baseline_i = formula_surrogate.compute_reliability(baseline_scenario_tensor).item()
+
             # If plotting all samples, replicate for each sample in the batch
             # Otherwise, just add once per scenario
             n_replicas = eval_batch_size if plot_all_samples else 1
             for _ in range(n_replicas):
                 F_baseline_values.append(F_baseline_i)
+                if F_formula_baseline_i is not None:
+                    F_formula_baseline_values.append(F_formula_baseline_i)
 
     F_baseline_array = np.array(F_baseline_values)
     F_baseline_mean = np.mean(F_baseline_array)
     F_baseline_std = np.std(F_baseline_array)
+    F_formula_baseline_array = np.array(F_formula_baseline_values) if F_formula_baseline_values else None
 
     # F* is a single scalar (same for all scenarios) — replicate for plotting compatibility
     F_star_mean = F_star_value
@@ -662,6 +704,10 @@ def main(config=None):
     print(f"\nF  (actual, with controller):")
     print(f"  Mean:  {F_actual_mean:.6f} ± {F_actual_std:.6f}")
     print(f"  Range: [{F_actual_per_sample.min():.6f}, {F_actual_per_sample.max():.6f}]")
+    if F_formula_mean is not None:
+        print(f"\nF  (formula, mathematical):")
+        print(f"  Mean:  {F_formula_mean:.6f} ± {F_formula_std:.6f}")
+        print(f"  Range: [{F_formula_per_sample.min():.6f}, {F_formula_per_sample.max():.6f}]")
     print(f"\nImprovement over baseline:     {improvement:+.2f}%")
     print(f"Gap from optimal:              {target_gap:.2f}%")
     print(f"Robustness (std of F):         {F_actual_std:.6f}  (lower = more robust)")
@@ -696,6 +742,13 @@ def main(config=None):
     F_baseline_repr = surrogate.compute_reliability(baseline_repr_tensor).item()
     F_actual_repr = surrogate.compute_reliability(actual_trajectory_repr).item()
 
+    # Compute formula-based F for representative scenario (if using CasualiT)
+    F_formula_baseline_repr = None
+    F_formula_actual_repr = None
+    if formula_surrogate is not None:
+        F_formula_baseline_repr = formula_surrogate.compute_reliability(baseline_repr_tensor).item()
+        F_formula_actual_repr = formula_surrogate.compute_reliability(actual_trajectory_repr).item()
+
     # Prepare trajectory values dict for PDF report
     trajectory_values_for_report = {
         'target_trajectory': target_trajectory,
@@ -705,7 +758,9 @@ def main(config=None):
         'process_names': process_chain.process_names,
         'F_star': F_star_repr,
         'F_baseline': F_baseline_repr,
-        'F_actual': F_actual_repr
+        'F_actual': F_actual_repr,
+        'F_formula_baseline': F_formula_baseline_repr,
+        'F_formula_actual': F_formula_actual_repr,
     }
     print(f"  ✓ Trajectory values prepared (will be included in PDF report)")
 
@@ -731,6 +786,8 @@ def main(config=None):
     # Evaluate test scenarios
     F_baseline_test_values = []
     F_actual_test_values = []
+    F_formula_baseline_test_values = []
+    F_formula_actual_test_values = []
 
     print(f"  Evaluating on {n_test} test scenarios (never seen during training)...")
 
@@ -757,6 +814,13 @@ def main(config=None):
             F_actual_test_i = surrogate.compute_reliability(actual_test_trajectory).item()
             F_actual_test_values.append(F_actual_test_i)
 
+            # Compute formula-based F for test scenarios (if using CasualiT)
+            if formula_surrogate is not None:
+                F_formula_baseline_test_values.append(
+                    formula_surrogate.compute_reliability(baseline_test_tensor).item())
+                F_formula_actual_test_values.append(
+                    formula_surrogate.compute_reliability(actual_test_trajectory).item())
+
     # F* is the same for test scenarios (single scalar)
     F_star_test_array = np.full(n_test, F_star_value)
     F_baseline_test_array = np.array(F_baseline_test_values)
@@ -772,6 +836,11 @@ def main(config=None):
     print(f"  F* (test):        {F_star_value:.6f}")
     print(f"  F' (test):        {F_baseline_test_mean:.6f}")
     print(f"  F  (test):        {F_actual_test_mean:.6f}")
+    if formula_surrogate is not None and F_formula_actual_test_values:
+        F_formula_actual_test_mean = np.mean(F_formula_actual_test_values)
+        F_formula_baseline_test_mean = np.mean(F_formula_baseline_test_values)
+        print(f"  F  (formula test): {F_formula_actual_test_mean:.6f}")
+        print(f"  F' (formula test): {F_formula_baseline_test_mean:.6f}")
     print(f"  Improvement:      {improvement_test:+.2f}%")
 
     # 7c. Compute advanced metrics
@@ -830,6 +899,45 @@ def main(config=None):
         print(f"    → Controller performs BETTER on test (generalizes well)")
     else:
         print(f"    → Controller performs WORSE on test (overfitting concern)")
+
+    # Formula-based advanced metrics (only when using CasualiT surrogate)
+    formula_advanced_metrics = {}
+    if formula_surrogate is not None and F_formula_per_sample is not None:
+        print(f"\n  Computing formula-based advanced metrics...")
+
+        # Per-scenario formula F means (same reshaping as surrogate F)
+        if plot_all_samples:
+            F_formula_per_scenario_mean = F_formula_per_sample.reshape(n_scenarios, eval_batch_size).mean(axis=1)
+            F_formula_baseline_per_scenario_mean = F_formula_baseline_array.reshape(n_scenarios, eval_batch_size).mean(axis=1)
+        else:
+            F_formula_per_scenario_mean = F_formula_per_sample
+            F_formula_baseline_per_scenario_mean = F_formula_baseline_array
+
+        # Formula test arrays
+        F_formula_actual_test_array = np.array(F_formula_actual_test_values)
+        F_formula_baseline_test_array = np.array(F_formula_baseline_test_values)
+
+        # Use same F* for fair comparison (surrogate F*)
+        formula_advanced_metrics['formula_worst_case_gap_train'] = compute_worst_case_gap(
+            F_star_per_scenario_mean, F_formula_per_scenario_mean)
+        formula_advanced_metrics['formula_worst_case_gap_test'] = compute_worst_case_gap(
+            F_star_test_array, F_formula_actual_test_array)
+        formula_advanced_metrics['formula_success_rate_train'] = compute_success_rate(
+            F_star_per_scenario_mean, F_formula_per_scenario_mean, threshold=success_threshold)
+        formula_advanced_metrics['formula_success_rate_test'] = compute_success_rate(
+            F_star_test_array, F_formula_actual_test_array, threshold=success_threshold)
+        formula_advanced_metrics['formula_train_test_gap'] = compute_train_test_gap(
+            F_star_per_scenario_mean, F_formula_per_scenario_mean,
+            F_star_test_array, F_formula_actual_test_array)
+        formula_advanced_metrics['formula_gap_closure_train'] = compute_gap_closure(
+            F_star_per_scenario_mean, F_formula_baseline_per_scenario_mean, F_formula_per_scenario_mean)
+        formula_advanced_metrics['formula_gap_closure_test'] = compute_gap_closure(
+            F_star_test_array, F_formula_baseline_test_array, F_formula_actual_test_array)
+
+        print(f"    Success rate (formula) — train: {formula_advanced_metrics['formula_success_rate_train']['success_rate_pct']:.1f}%")
+        print(f"    Success rate (formula) — test:  {formula_advanced_metrics['formula_success_rate_test']['success_rate_pct']:.1f}%")
+        print(f"    Worst-case gap (formula) — train: {formula_advanced_metrics['formula_worst_case_gap_train']['worst_case_gap']:.6f}")
+        print(f"    Worst-case gap (formula) — test:  {formula_advanced_metrics['formula_worst_case_gap_test']['worst_case_gap']:.6f}")
 
     # Within-Scenario Overfitting Check (intra-scenario: train split vs val split)
     if (len(history.get('val_within_F_values', [])) > 0
@@ -1053,6 +1161,16 @@ def main(config=None):
             'max': float(F_actual_per_sample.max())
         }
 
+        # F_formula dict (only when using CasualiT surrogate)
+        F_formula_dict = None
+        if F_formula_mean is not None:
+            F_formula_dict = {
+                'mean': float(F_formula_mean),
+                'std': float(F_formula_std),
+                'min': float(F_formula_per_sample.min()),
+                'max': float(F_formula_per_sample.max())
+            }
+
         # Prepare final metrics for report
         report_final_metrics = {
             'improvement': improvement / 100,  # Convert back to fraction
@@ -1102,6 +1220,7 @@ def main(config=None):
             'within_scenario_gap': within_scenario_gap_metrics,
             'diversity_train': diversity_train,
             'diversity_test': diversity_test,
+            **formula_advanced_metrics,  # formula_* keys (empty dict if not using CasualiT)
         }
 
         # Generate embedding visualization plots (if scenario encoder is enabled)
@@ -1502,7 +1621,8 @@ def main(config=None):
                 n_scenarios=n_scenarios,
                 advanced_metrics=advanced_metrics_for_report,
                 trajectory_values=trajectory_values_for_report,
-                theoretical_data=theoretical_data
+                theoretical_data=theoretical_data,
+                F_formula=F_formula_dict,
             )
             print(f"  ✓ PDF report generated: {report_path}")
         except Exception as e:
@@ -1539,6 +1659,8 @@ def main(config=None):
             'F_baseline_std': float(F_baseline_std),
             'F_actual_mean': float(F_actual_mean),
             'F_actual_std': float(F_actual_std),
+            'F_formula_mean': float(F_formula_mean) if F_formula_mean is not None else None,
+            'F_formula_std': float(F_formula_std) if F_formula_std is not None else None,
             'improvement_pct': float(improvement),
             'target_gap_pct': float(target_gap),
             'robustness_std': float(F_actual_std),

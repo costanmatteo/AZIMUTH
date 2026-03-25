@@ -70,14 +70,53 @@ def load_run_results(run_dir: Path) -> dict:
 
 
 def aggregate_results(sweep_dir: Path) -> pd.DataFrame:
-    """Load all results from complexity sweep directory."""
+    """Load all results from complexity sweep directory.
+
+    Supports both directory layouts:
+
+    New (nested) structure:
+        sweep_dir/
+          n{X}_m{Y}_p{P}_r{Z}/          (config folder)
+            generate_dataset/
+            train_predictor/
+            train_surrogate/
+            cfg{I}_..._t{A}_b{B}/        (run results)
+
+    Legacy (flat) structure:
+        sweep_dir/
+          data_n{X}_m{Y}_p{P}_r{Z}/
+          up_n{X}_m{Y}_p{P}_r{Z}/
+          surrogate_n{X}_m{Y}_p{P}_r{Z}/
+          cfg{I}_..._t{A}_b{B}/          (run results)
+
+    Auto-detects which layout is present.
+    """
     results = []
-    for run_dir in sorted(sweep_dir.iterdir()):
-        if not run_dir.is_dir():
+    skip_prefixes = ('data_', 'up_', 'surrogate_')
+    skip_dirs = {'generate_dataset', 'train_predictor', 'train_surrogate',
+                 'complexity_plots'}
+
+    for entry in sorted(sweep_dir.iterdir()):
+        if not entry.is_dir():
             continue
-        run_results = load_run_results(run_dir)
-        if run_results is not None:
-            results.append(run_results)
+        # Skip shared resource dirs (legacy flat layout)
+        if entry.name.startswith(skip_prefixes) or entry.name in skip_dirs:
+            continue
+
+        # Check if this is a run dir (has final_results.json) -> flat layout
+        if (entry / "final_results.json").exists():
+            run_results = load_run_results(entry)
+            if run_results is not None:
+                results.append(run_results)
+            continue
+
+        # Otherwise treat as config dir (nested layout) and scan sub-dirs
+        for run_dir in sorted(entry.iterdir()):
+            if not run_dir.is_dir() or run_dir.name in skip_dirs:
+                continue
+            run_results = load_run_results(run_dir)
+            if run_results is not None:
+                results.append(run_results)
 
     if not results:
         print("No results found!")

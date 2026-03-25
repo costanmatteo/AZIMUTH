@@ -77,6 +77,7 @@ class ControllerTrainer:
             'reliability_loss': [],
             'bc_loss': [],
             'F_values': [],  # Reliability values durante training
+            'F_formula_values': [],  # F from mathematical formula (when using CasualiT surrogate)
             'lambda_bc': [],  # Track lambda_bc per epoch
             'reliability_weight': [],  # Track reliability_weight per epoch
             'learning_rate': [],  # Track learning rate per epoch
@@ -92,6 +93,9 @@ class ControllerTrainer:
             'val_within_F_values': [],
             'gap_closure': [],
         }
+
+        # Formula surrogate for comparison (set via set_formula_surrogate when using CasualiT)
+        self.formula_surrogate = None
 
         # Cross-scenario validation data (set externally via set_validation_data)
         self.validation_surrogate = None
@@ -487,6 +491,23 @@ class ControllerTrainer:
         # Scale prevents vanishing gradients when delta F is small (~0.1)
         F, quality_scores = self.surrogate.compute_reliability(trajectory, return_quality_scores=True)
 
+        # Debug: verify F is in the computation graph (first call only)
+        if hasattr(self, '_debug_F_graph') and self._debug_F_graph:
+            self._debug_F_graph = False
+            print(f"\n{'='*60}", flush=True)
+            print(f"SURROGATE GRADIENT DEBUG", flush=True)
+            print(f"{'='*60}", flush=True)
+            print(f"  F.requires_grad = {F.requires_grad}", flush=True)
+            print(f"  F.grad_fn       = {F.grad_fn}", flush=True)
+            print(f"  F.shape         = {F.shape}", flush=True)
+            print(f"  F.mean()        = {F.mean().item():.6f}", flush=True)
+            print(f"  F*              = {self.surrogate.F_star:.6f}", flush=True)
+            if F.requires_grad and F.grad_fn is not None:
+                print(f"  STATUS: OK - Gradients WILL flow to controller", flush=True)
+            else:
+                print(f"  STATUS: BROKEN - F is detached, reliability loss has NO gradient effect!", flush=True)
+            print(f"{'='*60}\n", flush=True)
+
         F_star_tensor = torch.tensor(self.surrogate.F_star, dtype=torch.float32, device=self.device)
         reliability_loss = self.reliability_loss_scale * (F - F_star_tensor) ** 2
 
@@ -575,6 +596,7 @@ class ControllerTrainer:
         epoch_reliability_loss = 0.0
         epoch_bc_loss = 0.0
         epoch_F_values = []
+        epoch_F_formula_values = []  # F from mathematical formula (for comparison)
         epoch_F_per_scenario = {}  # {scenario_idx: F_value} for gap closure
 
         # Within-scenario validation tracking
@@ -683,14 +705,27 @@ class ControllerTrainer:
                     else:
                         print(f"  WARNING: No gradients at all!")
 
-                # Check if trajectory inputs have gradients
+                # Check if trajectory inputs/outputs are in the computation graph
                 print(f"\nTrajectory Gradient Check:")
                 for proc_name, data in trajectory.items():
                     inputs = data['inputs']
                     outputs_mean = data['outputs_mean']
+                    outputs_sampled = data.get('outputs_sampled')
                     print(f"  {proc_name}:")
-                    print(f"    inputs.requires_grad: {inputs.requires_grad}, inputs.grad_fn: {inputs.grad_fn}")
-                    print(f"    outputs_mean.requires_grad: {outputs_mean.requires_grad}, outputs_mean.grad_fn: {outputs_mean.grad_fn}")
+                    print(f"    inputs:          requires_grad={inputs.requires_grad}, grad_fn={inputs.grad_fn}")
+                    print(f"    outputs_mean:    requires_grad={outputs_mean.requires_grad}, grad_fn={outputs_mean.grad_fn}")
+                    if outputs_sampled is not None:
+                        print(f"    outputs_sampled: requires_grad={outputs_sampled.requires_grad}, grad_fn={outputs_sampled.grad_fn}")
+
+                # Check F tensor properties
+                print(f"\nF Tensor Check:")
+                F_tensor = F if torch.is_tensor(F) else torch.tensor(F)
+                print(f"  F.requires_grad={F_tensor.requires_grad}, F.grad_fn={F_tensor.grad_fn}")
+                print(f"  F value={F_tensor.mean().item():.6f}, F*={self.surrogate.F_star:.6f}")
+                if F_tensor.requires_grad:
+                    print(f"  -> Reliability loss WILL produce gradients for controller")
+                else:
+                    print(f"  -> WARNING: F is detached! Reliability loss has NO gradient effect!")
 
                 print(f"{'='*60}\n")
 
@@ -701,6 +736,12 @@ class ControllerTrainer:
             epoch_F_values.append(F)
             epoch_F_per_scenario[int(scenario_idx)] = F
 
+            # Compute F from mathematical formula for comparison (if formula surrogate is set)
+            if self.formula_surrogate is not None:
+                with torch.no_grad():
+                    F_formula = self.formula_surrogate.compute_reliability(train_trajectory)
+                    epoch_F_formula_values.append(torch.mean(F_formula).item())
+
         # Single optimizer step after accumulating gradients from all scenarios
         self.optimizer.step()
 
@@ -709,6 +750,9 @@ class ControllerTrainer:
         avg_reliability_loss = epoch_reliability_loss / n_scenarios
         avg_bc_loss = epoch_bc_loss / n_scenarios
         avg_F = np.mean(epoch_F_values)
+
+        # Average F_formula (if computed)
+        self._epoch_avg_F_formula = np.mean(epoch_F_formula_values) if epoch_F_formula_values else None
 
         # Compute gap closure if baseline reliabilities are available
         if self.F_baseline_per_scenario is not None:
@@ -781,6 +825,19 @@ class ControllerTrainer:
         self.F_baseline_per_scenario = np.array(F_baseline_per_scenario)
         print(f"  Baseline reliabilities set for {len(self.F_baseline_per_scenario)} scenarios")
         print(f"    F' range: [{self.F_baseline_per_scenario.min():.6f}, {self.F_baseline_per_scenario.max():.6f}]")
+
+    def set_formula_surrogate(self, formula_surrogate):
+        """
+        Set a ProTSurrogate (mathematical formula) for comparison during training.
+
+        When the main surrogate is CasualiT, this allows tracking the formula-based F
+        alongside the surrogate F for comparison purposes.
+
+        Args:
+            formula_surrogate (ProTSurrogate): Formula-based surrogate for F computation
+        """
+        self.formula_surrogate = formula_surrogate
+        print(f"  Formula surrogate set for comparison (F* formula = {formula_surrogate.F_star:.6f})")
 
     def _split_trajectory(self, trajectory, train_size, val_size):
         """
@@ -968,6 +1025,7 @@ class ControllerTrainer:
                 ProcessChain.enable_debug(False)
                 self._debug_gradients = False  # Also disable gradient debug
                 self._debug_bc_loss = False  # Also disable BC loss debug
+                self._debug_F_graph = False  # Also disable F graph debug
 
             # Get dynamic loss weights for curriculum learning
             lambda_bc, reliability_weight, phase = self.get_loss_weights(epoch, epochs)
@@ -990,6 +1048,8 @@ class ControllerTrainer:
             if self._epoch_gap_closure is not None:
                 self.history['gap_closure'].append(self._epoch_gap_closure)
             self.history['learning_rate'].append(current_lr)
+            if self._epoch_avg_F_formula is not None:
+                self.history['F_formula_values'].append(self._epoch_avg_F_formula)
 
             # Compute cross-scenario validation loss (on test scenarios) if validation data is set
             if self.validation_surrogate is not None:
@@ -1036,6 +1096,8 @@ class ControllerTrainer:
                 print(f"  Reliability Loss: {avg_rel_loss:.6f} {'(ignored)' if reliability_weight == 0 else ''}")
                 print(f"  BC Loss:          {avg_bc_loss:.6f}")
                 print(f"  F (actual):       {avg_F:.6f}")
+                if self._epoch_avg_F_formula is not None:
+                    print(f"  F (formula):      {self._epoch_avg_F_formula:.6f}")
                 print(f"  F* (target):      {self.surrogate.F_star:.6f}")
                 if self._epoch_gap_closure is not None:
                     print(f"  Gap Closure:      {self._epoch_gap_closure:.4f}")
@@ -1206,13 +1268,17 @@ class ControllerTrainer:
                 'F_actual_std': float,
                 'F_star_mean': float,
                 'F_star_std': float,
-                'trajectories': list of trajectories (representative, one per scenario)
+                'trajectories': list of trajectories (representative, one per scenario),
+                'F_formula_per_sample': np.array (only when formula_surrogate is set),
+                'F_formula_mean': float (only when formula_surrogate is set),
+                'F_formula_std': float (only when formula_surrogate is set),
             }
         """
         self.process_chain.eval()
 
         n_scenarios = self.surrogate.n_scenarios
         F_actual_values = []
+        F_formula_values = []
         trajectories = []
 
         with torch.no_grad():
@@ -1238,18 +1304,29 @@ class ControllerTrainer:
                         # Compute reliability for this single sample
                         F_actual = self.surrogate.compute_reliability(sample_trajectory).item()
                         F_actual_values.append(F_actual)
+
+                        # Compute F from formula for comparison
+                        if self.formula_surrogate is not None:
+                            F_formula = self.formula_surrogate.compute_reliability(sample_trajectory).item()
+                            F_formula_values.append(F_formula)
                 else:
                     # Compute reliability for aggregated batch (take mean across batch)
                     F_actual_batch = self.surrogate.compute_reliability(trajectory)
                     F_actual = F_actual_batch.mean().item()
                     F_actual_values.append(F_actual)
 
+                    # Compute F from formula for comparison
+                    if self.formula_surrogate is not None:
+                        F_formula_batch = self.formula_surrogate.compute_reliability(trajectory)
+                        F_formula = F_formula_batch.mean().item()
+                        F_formula_values.append(F_formula)
+
                 # Save trajectory for each scenario (needed for representative trajectory selection)
                 trajectories.append(trajectory)
 
         F_actual_array = np.array(F_actual_values)
 
-        return {
+        result = {
             'F_actual_per_sample': F_actual_array,
             'F_actual_mean': np.mean(F_actual_array),
             'F_actual_std': np.std(F_actual_array),
@@ -1257,6 +1334,15 @@ class ControllerTrainer:
             'F_star_std': 0.0,
             'trajectories': trajectories
         }
+
+        # Add formula-based F if available
+        if F_formula_values:
+            F_formula_array = np.array(F_formula_values)
+            result['F_formula_per_sample'] = F_formula_array
+            result['F_formula_mean'] = np.mean(F_formula_array)
+            result['F_formula_std'] = np.std(F_formula_array)
+
+        return result
 
     def compute_correlation_matrix(self):
         """
