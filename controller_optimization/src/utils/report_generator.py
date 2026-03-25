@@ -42,16 +42,16 @@ C_BGRAY = colors.HexColor('#F7F7F7')
 C_TGRAY = colors.HexColor('#888888')
 
 # ── font sizes ────────────────────────────────────────────────────────────────
-FS_TITLE   = 12
-FS_SUB     = 8
-FS_SECTION = 8
-FS_BODY    = 8
-FS_KPI_LBL = 7
-FS_KPI_VAL = 13
-FS_KPI_SUB = 7
-FS_BLK     = 7
-FS_STATUS  = 7
-FS_NOTE    = 7
+FS_TITLE   = 11
+FS_SUB     = 7
+FS_SECTION = 7
+FS_BODY    = 7
+FS_KPI_LBL = 6.5
+FS_KPI_VAL = 11
+FS_KPI_SUB = 6.5
+FS_BLK     = 6.5
+FS_STATUS  = 6.5
+FS_NOTE    = 6.5
 
 # ── style factory ────────────────────────────────────────────────────────────
 def _s(name, size, bold=False, italic=False, color=C_BLACK, align=TA_LEFT):
@@ -85,6 +85,13 @@ ST_TRAJ_C   = _s('ct_tc',     FS_BODY)
 ST_TRAJ_G   = _s('ct_tg',     FS_BODY,    color=C_GREEN)
 ST_TRAJ_R   = _s('ct_tr',     FS_BODY,    color=C_RED)
 
+
+# Formula comparison styles (italic, muted — used when CasualiT surrogate is active)
+C_FORM     = colors.HexColor('#999999')  # Muted gray for formula sub-rows
+ST_KEY_FORM = _s('ct_key_f', FS_BODY, italic=True, color=C_FORM)
+ST_VAL_FORM = _s('ct_val_f', FS_BODY, italic=True, color=C_FORM, align=TA_RIGHT)
+ST_VAL_FORM_G = _s('ct_val_fg', FS_BODY, italic=True, color=C_GREEN, align=TA_RIGHT)
+ST_VAL_FORM_R = _s('ct_val_fr', FS_BODY, italic=True, color=C_RED, align=TA_RIGHT)
 
 def _dyn(c, align=TA_RIGHT):
     return ParagraphStyle(f'_d{id(c)}{align}', fontName='Courier',
@@ -185,7 +192,8 @@ def kv_table(rows, col_w, key_frac=0.52):
     for row in rows:
         key, val = row[0], row[1]
         vs  = row[2] if len(row) > 2 else ST_VAL
-        k   = Paragraph(key, ST_KEY)
+        ks  = row[3] if len(row) > 3 else ST_KEY
+        k   = Paragraph(key, ks)
         v   = Paragraph(val, vs) if isinstance(val, str) else val
         data.append([k, v])
     t = Table(data, colWidths=[kw, vw])
@@ -426,10 +434,12 @@ def _page1(d):
     F_star = d.get('F_star', 0.0)
     F_bl   = d.get('F_baseline', 0.0)
     F_act  = d.get('F_actual', 0.0)
+    F_form = d.get('F_formula')  # Formula-based F (only when using CasualiT)
 
     fstar_v, _       = _fval(F_star)
     fbl_v,   fbl_s   = _fval(F_bl)
     fact_v,  fact_s  = _fval(F_act)
+    fform_v, fform_s = _fval(F_form) if F_form is not None else (None, None)
 
     epochs     = tr_cfg.get('epochs', hist.get('epochs_trained', '\u2014'))
     max_epochs = tr_cfg.get('max_epochs', tr_cfg.get('epochs', '\u2014'))
@@ -443,6 +453,14 @@ def _page1(d):
 
     improv_pct = (fact_v - fbl_v) / abs(fbl_v) * 100 if fbl_v else 0.0
     gap_pct    = (1 - fact_v / fstar_v) * 100 if fstar_v else 0.0
+
+    # Formula-based metrics (only when CasualiT surrogate is used)
+    if fform_v is not None:
+        improv_form_pct = (fform_v - fbl_v) / abs(fbl_v) * 100 if fbl_v else 0.0
+        gap_form_pct    = (1 - fform_v / fstar_v) * 100 if fstar_v else 0.0
+    else:
+        improv_form_pct = 0.0
+        gap_form_pct = 0.0
     best_loss  = _last(hist.get('best_total_loss',  hist.get('best_loss',  0.0)))
     final_loss = _last(hist.get('final_total_loss', hist.get('total_loss', 0.0)))
     rob_std    = fact_s if fact_s is not None else _last(fm.get('robustness_std', 0.0))
@@ -471,24 +489,48 @@ def _page1(d):
     F.append(_rule_heavy())
 
     # ── KPI bar ───────────────────────────────────────────────────────────────
-    cw = TW / 4
-    kpi_data = [
-        [Paragraph("Controller F",  ST_KPI_LBL),
-         Paragraph("Target F*",     ST_KPI_LBL),
-         Paragraph("vs baseline",   ST_KPI_LBL),
-         Paragraph("Best loss",     ST_KPI_LBL)],
-        [Paragraph(f"{fact_v:.4f}",  ST_KPI_VAL),
-         Paragraph(f"{fstar_v:.4f}", ST_KPI_VAL),
-         Paragraph(f"{improv_pct:+.0f}%",
-                   _s('_kv_g', FS_KPI_VAL,
-                      color=C_GREEN if improv_pct >= 0 else C_RED)),
-         Paragraph(f"{best_loss:.4f}", ST_KPI_VAL)],
-        [Paragraph(f"\u00b1{rob_std:.4f} robustness", ST_KPI_SUB),
-         Paragraph(f"gap {gap_pct:.1f}%",             ST_KPI_SUB),
-         Paragraph(f"F\u2019 = {fbl_v:.4f}",          ST_KPI_SUB),
-         Paragraph(f"final {final_loss:.2f}",          ST_KPI_SUB)],
-    ]
-    kpi_tbl = Table(kpi_data, colWidths=[cw] * 4)
+    if fform_v is not None:
+        n_kpi = 5
+        cw = TW / n_kpi
+        kpi_data = [
+            [Paragraph("Controller F",  ST_KPI_LBL),
+             Paragraph("Formula F",     ST_KPI_LBL),
+             Paragraph("Target F*",     ST_KPI_LBL),
+             Paragraph("vs baseline",   ST_KPI_LBL),
+             Paragraph("Best loss",     ST_KPI_LBL)],
+            [Paragraph(f"{fact_v:.4f}",  ST_KPI_VAL),
+             Paragraph(f"{fform_v:.4f}", ST_KPI_VAL),
+             Paragraph(f"{fstar_v:.4f}", ST_KPI_VAL),
+             Paragraph(f"{improv_pct:+.0f}%",
+                       _s('_kv_g', FS_KPI_VAL,
+                          color=C_GREEN if improv_pct >= 0 else C_RED)),
+             Paragraph(f"{best_loss:.4f}", ST_KPI_VAL)],
+            [Paragraph(f"\u00b1{rob_std:.4f} robustness", ST_KPI_SUB),
+             Paragraph(f"\u00b1{fform_s:.4f}" if fform_s else "", ST_KPI_SUB),
+             Paragraph(f"gap {gap_pct:.1f}%",             ST_KPI_SUB),
+             Paragraph(f"F\u2019 = {fbl_v:.4f}",          ST_KPI_SUB),
+             Paragraph(f"final {final_loss:.2f}",          ST_KPI_SUB)],
+        ]
+    else:
+        n_kpi = 4
+        cw = TW / n_kpi
+        kpi_data = [
+            [Paragraph("Controller F",  ST_KPI_LBL),
+             Paragraph("Target F*",     ST_KPI_LBL),
+             Paragraph("vs baseline",   ST_KPI_LBL),
+             Paragraph("Best loss",     ST_KPI_LBL)],
+            [Paragraph(f"{fact_v:.4f}",  ST_KPI_VAL),
+             Paragraph(f"{fstar_v:.4f}", ST_KPI_VAL),
+             Paragraph(f"{improv_pct:+.0f}%",
+                       _s('_kv_g', FS_KPI_VAL,
+                          color=C_GREEN if improv_pct >= 0 else C_RED)),
+             Paragraph(f"{best_loss:.4f}", ST_KPI_VAL)],
+            [Paragraph(f"\u00b1{rob_std:.4f} robustness", ST_KPI_SUB),
+             Paragraph(f"gap {gap_pct:.1f}%",             ST_KPI_SUB),
+             Paragraph(f"F\u2019 = {fbl_v:.4f}",          ST_KPI_SUB),
+             Paragraph(f"final {final_loss:.2f}",          ST_KPI_SUB)],
+        ]
+    kpi_tbl = Table(kpi_data, colWidths=[cw] * n_kpi)
     kpi_tbl.setStyle(TableStyle([
         ('BOX',           (0, 0), (-1, -1), 0.5, C_MGRAY),
         ('INNERGRID',     (0, 0), (-1, -1), 0.5, C_MGRAY),
@@ -536,15 +578,32 @@ def _page1(d):
         [blk_title("Architecture")] + [kv_table(arch_rows,  cw4)],
         [blk_title("Training")]     + [kv_table(train_rows, cw4)],
         # col 3: reliability scores
-        [blk_title("Reliability scores")] + [kv_table([
-            ("F* (target)",             f"{fstar_v:.6f}"),
-            ("F\u2019 (baseline)",       _fstr(F_bl)),
-            ("F (controller)",           _fstr(F_act)),
-            ("Improvement vs baseline",  f"{improv_pct:+.2f}%",
-             ST_VAL_G if improv_pct >= 0 else ST_VAL_R),
-            ("Gap from target",          f"{gap_pct:.2f}%", ST_VAL_R),
-            ("Robustness (std)",         f"{rob_std:.6f}"),
-        ], cw4)],
+        [blk_title("Reliability scores")] + [kv_table(
+            [
+                ("F* (target)",             f"{fstar_v:.6f}"),
+                ("F\u2019 (baseline)",       _fstr(F_bl)),
+                ("F (controller)",           _fstr(F_act)),
+            ] + ([
+                ("F (formula)",              _fstr(F_form)),
+            ] if fform_v is not None else []) + [
+                ("Improvement vs baseline",  f"{improv_pct:+.2f}%",
+                 ST_VAL_G if improv_pct >= 0 else ST_VAL_R),
+            ] + ([
+                ("\u2514 formula",
+                 f"{improv_form_pct:+.2f}%",
+                 ST_VAL_FORM_G if improv_form_pct >= 0 else ST_VAL_FORM_R,
+                 ST_KEY_FORM),
+            ] if fform_v is not None else []) + [
+                ("Gap from target",          f"{gap_pct:.2f}%", ST_VAL_R),
+            ] + ([
+                ("\u2514 formula",
+                 f"{gap_form_pct:.2f}%",
+                 ST_VAL_FORM_R,
+                 ST_KEY_FORM),
+            ] if fform_v is not None else []) + [
+                ("Robustness (std)",         f"{rob_std:.6f}"),
+            ],
+        cw4)],
         # col 4: performance
         [blk_title("Performance")] + [kv_table(
             _perf_rows(adv, n_scenarios), cw4)],
@@ -612,6 +671,8 @@ def _page1(d):
     # overfitting data
     ttg  = adv.get('train_test_gap')       or adv.get('overfitting')    or {}
     wig  = adv.get('within_scenario_gap')  or adv.get('intra_scenario') or {}
+    # Formula-based train-test gap (only when CasualiT surrogate is used)
+    fttg = adv.get('formula_train_test_gap') or {}
 
     def _scalar(v):
         if v is None: return None
@@ -626,6 +687,10 @@ def _page1(d):
     mg_tr  = _scalar(ttg.get('mean_gap_train',  ttg.get('mean_F_train', None)))
     mg_te  = _scalar(ttg.get('mean_gap_test',   ttg.get('mean_F_test',  None)))
     diff   = _scalar(ttg.get('diff',            ttg.get('gap_train_minus_test', None)))
+    # Formula-based equivalents
+    fmg_tr = _scalar(fttg.get('mean_gap_train'))
+    fmg_te = _scalar(fttg.get('mean_gap_test'))
+    fdiff  = _scalar(fttg.get('train_test_gap'))
     cv_tr  = _scalar(ttg.get('dataset_cv_train', ttg.get('cv_train', None)))
     cv_te  = _scalar(ttg.get('dataset_cv_test',  ttg.get('cv_test',  None)))
     mf_tr  = wig.get('mean_f_train',  wig.get('mean_F_train_split', None))
@@ -670,10 +735,20 @@ def _page1(d):
     ]
     cross_rows = [
         ("Mean gap \u2014 train",         f"{float(mg_tr):.6f}"  if mg_tr  is not None else '\u2014'),
-        ("Mean gap \u2014 test",          f"{float(mg_te):.6f}"  if mg_te  is not None else '\u2014'),
+    ]
+    if fmg_tr is not None:
+        cross_rows.append(("\u2514 formula", f"{float(fmg_tr):.6f}", ST_VAL_FORM, ST_KEY_FORM))
+    cross_rows.append(
+        ("Mean gap \u2014 test",          f"{float(mg_te):.6f}"  if mg_te  is not None else '\u2014'))
+    if fmg_te is not None:
+        cross_rows.append(("\u2514 formula", f"{float(fmg_te):.6f}", ST_VAL_FORM, ST_KEY_FORM))
+    cross_rows.append(
         ("Diff (train \u2212 test)",
          f"{float(diff):.6f}{_ov_note(diff)}" if diff is not None else '\u2014',
-         ST_VAL_A if diff is not None and float(diff) < -0.005 else ST_VAL),
+         ST_VAL_A if diff is not None and float(diff) < -0.005 else ST_VAL))
+    if fdiff is not None:
+        cross_rows.append(("\u2514 formula", f"{float(fdiff):.6f}", ST_VAL_FORM, ST_KEY_FORM))
+    cross_rows += [
         ("Dataset CV \u2014 train",       f"{float(cv_tr):.4f}"  if cv_tr  is not None else '\u2014'),
         ("Dataset CV \u2014 test",        f"{float(cv_te):.4f}"  if cv_te  is not None else '\u2014'),
     ]
@@ -765,9 +840,13 @@ def _page1(d):
         tf_s  = traj.get('F_star',     fstar_v)
         tf_bl = traj.get('F_baseline', fbl_v)
         tf_ac = traj.get('F_actual',   fact_v)
-        foot_l = Paragraph(
-            f"F* {tf_s:.6f}  \u00b7  F\u2019 {tf_bl:.6f}  \u00b7  "
-            f"F {tf_ac:.6f}  \u00b7  scenario {sc_idx} only", ST_NOTE)
+        tf_form_ac = traj.get('F_formula_actual')
+        foot_text = (f"F* {tf_s:.6f}  \u00b7  F\u2019 {tf_bl:.6f}  \u00b7  "
+                     f"F {tf_ac:.6f}")
+        if tf_form_ac is not None:
+            foot_text += f"  \u00b7  F(formula) {tf_form_ac:.6f}"
+        foot_text += f"  \u00b7  scenario {sc_idx} only"
+        foot_l = Paragraph(foot_text, ST_NOTE)
         foot_r = Paragraph("\u2191 = closer to target than baseline", ST_NOTE_G)
         foot_t = Table([[foot_l, foot_r]], colWidths=[TW * 0.65, TW * 0.35])
         foot_t.setStyle(TableStyle([
@@ -809,21 +888,65 @@ def _perf_rows(adv, n_scenarios):
     wc_te_s = wce_d.get('worst_case_scenario_idx', wce_d.get('worst_case_scenario', ''))
     thresh  = adv.get('success_threshold_pct', 95) or 95
 
+    # Formula-based metrics (only when CasualiT surrogate is used)
+    fsr_tr = adv.get('formula_success_rate_train') or {}
+    fsr_te = adv.get('formula_success_rate_test')  or {}
+    fwc_tr = adv.get('formula_worst_case_gap_train') or {}
+    fwc_te = adv.get('formula_worst_case_gap_test')  or {}
+    has_formula = bool(fsr_tr)
+
     rows = [
         (f"Success rate \u2014 train",
          f"{ok_tr}/{n_sc_tr} ({pct_tr:.1f}%)",
          ST_VAL_G if pct_tr >= 80 else ST_VAL_R),
+    ]
+    if has_formula:
+        f_ok_tr = fsr_tr.get('n_successful', fsr_tr.get('n_success', fsr_tr.get('n_above_threshold', 0))) or 0
+        f_n_tr  = fsr_tr.get('n_scenarios', fsr_tr.get('n_total', _n_sc))
+        f_pct_tr = (float(fsr_tr.get('success_rate', f_ok_tr / f_n_tr if f_n_tr else 0)) or 0.0) * 100
+        rows.append(("\u2514 formula",
+                     f"{f_ok_tr}/{f_n_tr} ({f_pct_tr:.1f}%)",
+                     ST_VAL_FORM_G if f_pct_tr >= 80 else ST_VAL_FORM_R,
+                     ST_KEY_FORM))
+
+    rows.append(
         (f"Success rate \u2014 test",
          f"{ok_te}/{n_sc_te} ({pct_te:.1f}%)",
-         ST_VAL_G if pct_te >= 80 else ST_VAL_R),
+         ST_VAL_G if pct_te >= 80 else ST_VAL_R))
+    if has_formula:
+        f_ok_te = fsr_te.get('n_successful', fsr_te.get('n_success', fsr_te.get('n_above_threshold', 0))) or 0
+        f_n_te  = fsr_te.get('n_scenarios', fsr_te.get('n_total', _n_sc))
+        f_pct_te = (float(fsr_te.get('success_rate', f_ok_te / f_n_te if f_n_te else 0)) or 0.0) * 100
+        rows.append(("\u2514 formula",
+                     f"{f_ok_te}/{f_n_te} ({f_pct_te:.1f}%)",
+                     ST_VAL_FORM_G if f_pct_te >= 80 else ST_VAL_FORM_R,
+                     ST_KEY_FORM))
+
+    rows.append(
         (f"Worst-case gap \u2014 train",
          f"{float(wc_tr):.6f} at sc. {wc_tr_s}"
-         if isinstance(wc_tr, (int, float)) else '\u2014'),
+         if isinstance(wc_tr, (int, float)) else '\u2014'))
+    if has_formula:
+        fwc_tr_v = fwc_tr.get('worst_case_gap', None)
+        fwc_tr_s = fwc_tr.get('worst_case_scenario_idx', '')
+        rows.append(("\u2514 formula",
+                     f"{float(fwc_tr_v):.6f} at sc. {fwc_tr_s}"
+                     if isinstance(fwc_tr_v, (int, float)) else '\u2014',
+                     ST_VAL_FORM, ST_KEY_FORM))
+
+    rows.append(
         (f"Worst-case gap \u2014 test",
          f"{float(wc_te):.6f} at sc. {wc_te_s}"
-         if isinstance(wc_te, (int, float)) else '\u2014'),
-        (f"Threshold", f"{thresh}% \u00d7 F*"),
-    ]
+         if isinstance(wc_te, (int, float)) else '\u2014'))
+    if has_formula:
+        fwc_te_v = fwc_te.get('worst_case_gap', None)
+        fwc_te_s = fwc_te.get('worst_case_scenario_idx', '')
+        rows.append(("\u2514 formula",
+                     f"{float(fwc_te_v):.6f} at sc. {fwc_te_s}"
+                     if isinstance(fwc_te_v, (int, float)) else '\u2014',
+                     ST_VAL_FORM, ST_KEY_FORM))
+
+    rows.append((f"Threshold", f"{thresh}% \u00d7 F*"))
     return rows
 
 
@@ -1022,6 +1145,7 @@ def generate_controller_report(
     advanced_metrics=None,
     trajectory_values=None,
     theoretical_data=None,
+    F_formula=None,
 ):
     if timestamp is None:
         timestamp = datetime.now()
@@ -1042,6 +1166,7 @@ def generate_controller_report(
         trajectory_values=trajectory_values,
         theoretical_data=theoretical_data or {},
         checkpoint_dir=checkpoint_dir,
+        F_formula=F_formula,
     )
     _build_pdf(d, out)
     return str(out)
@@ -1056,7 +1181,7 @@ class ControllerReportGenerator:
     def generate(self, config, training_history, final_metrics, process_metrics,
                  F_star, F_baseline, F_actual, timestamp, n_scenarios=None,
                  advanced_metrics=None, trajectory_values=None,
-                 theoretical_data=None):
+                 theoretical_data=None, F_formula=None):
         if timestamp is None:
             timestamp = datetime.now()
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1074,6 +1199,7 @@ class ControllerReportGenerator:
             trajectory_values=trajectory_values,
             theoretical_data=theoretical_data or {},
             checkpoint_dir=self.output_path.parent,
+            F_formula=F_formula,
         )
         _build_pdf(d, self.output_path)
         return str(self.output_path)

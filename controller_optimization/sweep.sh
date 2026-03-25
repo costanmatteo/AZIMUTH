@@ -101,10 +101,10 @@ fi
 
 # Run training with parameters
 echo "Starting training..."
-echo "Command: python controller_optimization/train_controller.py --output_dir $OUTPUT_DIR --run_name $RUN_NAME $ARGS"
+echo "Command: python train_controller.py --output_dir $OUTPUT_DIR --run_name $RUN_NAME $ARGS"
 echo ""
 
-python controller_optimization/train_controller.py \
+python train_controller.py \
     --output_dir "$OUTPUT_DIR" \
     --run_name "$RUN_NAME" \
     $ARGS

@@ -424,7 +424,7 @@ def get_dataloader(config: dict, data_dir: str, cluster: bool, seed: int):
             data_dir=join(data_dir, config["data"]["dataset"]),
             input_file=config["data"]["filename_input"],  # Single .npz file with s, x, y
             batch_size=config["training"]["batch_size"],
-            num_workers=1 if cluster else 20,
+            num_workers=1 if cluster else min(config["data"].get("num_workers", 8), os.cpu_count() or 4),
             data_format="float32",
             max_data_size=config["data"]["max_data_size"],
             seed=seed,
@@ -438,14 +438,14 @@ def get_dataloader(config: dict, data_dir: str, cluster: bool, seed: int):
             input_file=config["data"]["filename_input"],
             target_file=config["data"]["filename_target"],
             batch_size=config["training"]["batch_size"],
-            num_workers=1 if cluster else 20,
+            num_workers=1 if cluster else min(config["data"].get("num_workers", 8), os.cpu_count() or 4),
             data_format="float32",
             max_data_size=config["data"]["max_data_size"],
             seed=seed,
             train_file=config["data"].get("train_file", None),
             test_file=config["data"].get("test_file", None),
         )
-    
+
     return dm
 
 

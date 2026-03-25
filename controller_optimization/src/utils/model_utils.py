@@ -67,13 +67,14 @@ def _infer_architecture_from_state_dict(state_dict):
             continue
         suffix = key[len(prefix):]
         if suffix.startswith('shared_network.') and suffix.endswith('.weight'):
-            # e.g. "shared_network.0.weight" → index 0
-            parts = suffix.split('.')
-            layer_idx = int(parts[1])
-            layer_weights[layer_idx] = tensor.shape
+            if tensor.dim() == 2:  # Only Linear layers (skip BatchNorm which is 1D)
+                # e.g. "shared_network.0.weight" → index 0
+                parts = suffix.split('.')
+                layer_idx = int(parts[1])
+                layer_weights[layer_idx] = tensor.shape
 
     if not layer_weights:
-        return None, None, None
+        return None, None, None, None
 
     # input_dim from first layer's in_features
     first_idx = min(layer_weights.keys())
@@ -86,7 +87,13 @@ def _infer_architecture_from_state_dict(state_dict):
     mean_head_key = f'{prefix}mean_head.weight'
     output_dim = state_dict[mean_head_key].shape[0] if mean_head_key in state_dict else None
 
-    return input_dim, output_dim, hidden_sizes
+    # Detect use_batchnorm from presence of running_mean in shared_network
+    use_batchnorm = any(
+        key.startswith(f'{prefix}shared_network.') and key.endswith('.running_mean')
+        for key in state_dict
+    )
+
+    return input_dim, output_dim, hidden_sizes, use_batchnorm
 
 
 def load_uncertainty_predictor(checkpoint_path, input_dim, output_dim, model_config, device='cpu'):
@@ -112,7 +119,7 @@ def load_uncertainty_predictor(checkpoint_path, input_dim, output_dim, model_con
     state_dict = torch.load(checkpoint_path, map_location=device)
 
     # Infer architecture from checkpoint to avoid config/checkpoint mismatches
-    ckpt_input_dim, ckpt_output_dim, ckpt_hidden_sizes = _infer_architecture_from_state_dict(state_dict)
+    ckpt_input_dim, ckpt_output_dim, ckpt_hidden_sizes, ckpt_use_batchnorm = _infer_architecture_from_state_dict(state_dict)
     if ckpt_input_dim is not None and ckpt_input_dim != input_dim:
         print(f"  ⚠ Checkpoint input_dim={ckpt_input_dim} differs from config input_dim={input_dim}, using checkpoint value")
         input_dim = ckpt_input_dim
@@ -122,6 +129,9 @@ def load_uncertainty_predictor(checkpoint_path, input_dim, output_dim, model_con
     if ckpt_hidden_sizes is not None and ckpt_hidden_sizes != model_config['hidden_sizes']:
         print(f"  ⚠ Checkpoint hidden_sizes={ckpt_hidden_sizes} differs from config {model_config['hidden_sizes']}, using checkpoint value")
         model_config = {**model_config, 'hidden_sizes': ckpt_hidden_sizes}
+    if ckpt_use_batchnorm is not None and ckpt_use_batchnorm != model_config.get('use_batchnorm', False):
+        print(f"  ⚠ Checkpoint use_batchnorm={ckpt_use_batchnorm} differs from config {model_config.get('use_batchnorm', False)}, using checkpoint value")
+        model_config = {**model_config, 'use_batchnorm': ckpt_use_batchnorm}
 
     # Detect model type from state_dict keys
     is_ensemble = any(key.startswith('models.') for key in state_dict.keys())

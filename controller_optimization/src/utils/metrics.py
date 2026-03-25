@@ -167,7 +167,7 @@ def create_metrics_summary(F_star, F_baseline, F_actual, trajectory_metrics):
     """
     # Compute improvements
     baseline_improvement = ((F_actual - F_baseline) / F_baseline) if F_baseline != 0 else 0
-    target_gap = ((F_star - F_actual) / F_star) if F_star != 0 else 0
+    target_gap = abs((F_star - F_actual) / F_star) if F_star != 0 else 0
 
     summary = {
         'reliability': {

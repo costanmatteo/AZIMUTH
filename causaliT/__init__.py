@@ -17,11 +17,24 @@ from causaliT.paths import (
     get_dirs,
 )
 
-# Export main components
+# Export core components (no pytorch_lightning dependency)
 from causaliT.core.model import ProT
 from causaliT.core.architectures.stage_causal import StageCausaliT
-from causaliT.training.forecasters import TransformerForecaster, StageCausalForecaster
-from causaliT.training.dataloader import ProcessDataModule
+
+
+def __getattr__(name):
+    """Lazy imports for training components that require pytorch_lightning."""
+    if name == 'TransformerForecaster':
+        from causaliT.training.forecasters import TransformerForecaster
+        return TransformerForecaster
+    if name == 'StageCausalForecaster':
+        from causaliT.training.forecasters import StageCausalForecaster
+        return StageCausalForecaster
+    if name == 'ProcessDataModule':
+        from causaliT.training.dataloader import ProcessDataModule
+        return ProcessDataModule
+    raise AttributeError(f"module 'causaliT' has no attribute {name!r}")
+
 
 __all__ = [
     # Paths
