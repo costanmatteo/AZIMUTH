@@ -265,7 +265,7 @@ def plot_marginals(win_df: pd.DataFrame) -> str:
     """Bar/scatter of win rate vs each complexity parameter (marginal effects)."""
     has_nproc = 'n_processes' in win_df.columns and win_df['n_processes'].notna().any()
     n_panels  = 4 if has_nproc else 3
-    fig, axes = plt.subplots(1, n_panels, figsize=(3.8 * n_panels, 3.0))
+    fig, axes = plt.subplots(1, n_panels, figsize=(4.0 * n_panels, 3.0))
     if n_panels == 1:
         axes = [axes]
 
@@ -393,7 +393,7 @@ def plot_3d_scatter(win_df: pd.DataFrame) -> str:
 
 def plot_winrate_distribution(win_df: pd.DataFrame) -> str:
     """Histogram of win-rate distribution across configurations."""
-    fig, axes = plt.subplots(1, 2, figsize=(7.6, 3.0))
+    fig, axes = plt.subplots(1, 2, figsize=(7.4, 3.0))
 
     # left: histogram
     ax = axes[0]
@@ -825,11 +825,11 @@ def build_page1_html(s: dict, now: datetime,
   <hr class="rule-thin">
 
   <div class="plot-grid" style="flex: 1;">
-    <div class="plot-cell" style="flex: 3;">
+    <div class="plot-cell" style="flex: 3.5;">
       <img class="plot-img" src="data:image/png;base64,{b64_marginals}">
       <div class="plot-cap">Win rate vs n, m, &#961; (marginal) &#8212; bars/points coloured green&#8594;red by win rate</div>
     </div>
-    <div class="plot-cell" style="flex: 2;">
+    <div class="plot-cell" style="flex: 1.5;">
       <img class="plot-img" src="data:image/png;base64,{b64_wr_dist}">
       <div class="plot-cap">Win-rate distribution across configs (left) &amp; sorted waterfall (right)</div>
     </div>
