@@ -303,22 +303,17 @@ def _build_row(cfg: dict, run_dir_name: str, result: dict) -> dict:
         F_star        = F_star,
         F_baseline    = F_base,
         F_actual      = F_actual,
-        win           = int(F_actual > F_base) if not (np.isnan(F_actual) or np.isnan(F_base)) else 0,
+        win           = 0,  # placeholder, set after gap_delta is computed
     )
     row["gap_baseline"] = abs(F_star - F_base)   if not np.isnan(F_star - F_base)  else np.nan
     row["gap_ctrl"]     = abs(F_star - F_actual) if not np.isnan(F_star - F_actual) else np.nan
     row["gap_delta"]    = row["gap_baseline"] - row["gap_ctrl"] if not np.isnan(row["gap_baseline"] - row["gap_ctrl"]) else np.nan
+    row["win"]          = int(row["gap_delta"] > 0) if not np.isnan(row["gap_delta"]) else 0
 
     # Test metrics
     row["F_star_test"]     = _to_float(result.get("F_star_test"))
     row["F_baseline_test"] = _to_float(result.get("F_baseline_test"))
     row["F_actual_test"]   = _to_float(result.get("F_actual_test"))
-    row["win_test"] = (
-        int(row["F_actual_test"] > row["F_baseline_test"])
-        if not (np.isnan(row["F_actual_test"]) or np.isnan(row["F_baseline_test"]))
-        else 0
-    )
-
     # Gap metrics (with abs, consistent with complexity sweep convention)
     row["gap_baseline_test"] = (
         abs(row["F_star_test"] - row["F_baseline_test"])
@@ -332,6 +327,7 @@ def _build_row(cfg: dict, run_dir_name: str, result: dict) -> dict:
         row["gap_baseline_test"] - row["gap_ctrl_test"]
         if not np.isnan(row["gap_baseline_test"] - row["gap_ctrl_test"]) else np.nan
     )
+    row["win_test"] = int(row["gap_delta_test"] > 0) if not np.isnan(row["gap_delta_test"]) else 0
 
     # Advanced metrics
     row["gap_closure_train"]     = _to_float(result.get("gap_closure_train"))
