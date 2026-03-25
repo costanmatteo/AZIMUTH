@@ -1,593 +1,871 @@
-#!/usr/bin/env python3
 """
-Generate report for dataset complexity sensitivity analysis.
+generate_complexity_sweep_report.py
+------------------------------------
+Generates a PDF report for the complexity sweep.
 
-Aggregates results from complexity sweep and shows how controller win rate
-varies with dataset complexity parameters (n, m, rho).
+Same design system as generate_sweep_report.py:
+  - Courier font throughout
+  - Colors: #1D9E75 green | #D85A30 red | #BA7517 amber
+  - No colored backgrounds
+  - A4 LANDSCAPE, multi-page
+  - 0.5 pt borders, 1.1 cm margins
 
-Usage:
-    python generate_complexity_sweep_report.py [--sweep_dir PATH] [--output FILE]
+Directory structure expected (auto-detected):
+  complexity_sweep/
+    config_001__n5_m2_rho0.30_P3/
+      seed_t11_b21/
+        results.json
+      seed_t11_b31/
+        results.json
+      ...
+    config_002__n3_m1_rho0.10_P4/
+      ...
+
+Each results.json must contain at least:
+  {
+    "F_star":     float,
+    "F_baseline": float,
+    "F_actual":   float,
+    "seed_target":   int,
+    "seed_baseline": int
+  }
+
+Public API (mirrors generate_sweep_report.py):
+  generate_complexity_sweep_report(sweep_dir, output_path)
+  aggregate_complexity_results(sweep_dir)  -> pd.DataFrame  (one row per run)
+  generate_config_stats(df)               -> pd.DataFrame  (one row per config)
 """
 
-import argparse
+from __future__ import annotations
+
 import json
-from pathlib import Path
+import os
+import re
+import sys
 from datetime import datetime
+from pathlib import Path
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec
-from matplotlib.backends.backend_pdf import PdfPages
-from mpl_toolkits.mplot3d import Axes3D
 
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import inch, cm
 from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.styles import ParagraphStyle
+from reportlab.lib.units import cm, mm
 from reportlab.platypus import (
-    SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle,
-    PageBreak, KeepTogether
+    HRFlowable,
+    Image,
+    KeepTogether,
+    PageBreak,
+    Paragraph,
+    SimpleDocTemplate,
+    Spacer,
+    Table,
+    TableStyle,
 )
-from reportlab.lib.enums import TA_LEFT, TA_CENTER
-from reportlab.platypus.flowables import HRFlowable
 
+# ─────────────────────────────────────────────
+#  CONSTANTS
+# ─────────────────────────────────────────────
 
-def load_run_results(run_dir: Path) -> dict:
-    """Load results from a single complexity sweep run."""
-    results_file = run_dir / "final_results.json"
-    if not results_file.exists():
+PW, PH = landscape(A4)        # 841.89 × 595.28 pt
+M      = 1.1 * cm
+FULL_W = PW - 2 * M
+
+C_GREEN = colors.HexColor("#1D9E75")
+C_RED   = colors.HexColor("#D85A30")
+C_AMBER = colors.HexColor("#BA7517")
+C_BLACK = colors.HexColor("#111111")
+C_MUTED = colors.HexColor("#777777")
+C_RULE  = colors.HexColor("#CCCCCC")
+C_ALT   = colors.HexColor("#F9F9F9")
+
+FONT    = "Courier"
+FONTB   = "Courier-Bold"
+
+# ─────────────────────────────────────────────
+#  PARAGRAPH STYLES
+# ─────────────────────────────────────────────
+
+def _S(name, font=FONT, size=8, leading=None, color=C_BLACK, bold=False):
+    return ParagraphStyle(
+        name,
+        fontName=FONTB if bold else font,
+        fontSize=size,
+        leading=leading or size + 2,
+        textColor=color,
+        spaceAfter=0,
+        spaceBefore=0,
+    )
+
+S_TITLE    = _S("title",   size=11, bold=True)
+S_SUB      = _S("sub",     size=8,  color=C_MUTED)
+S_SEC      = _S("sec",     size=7,  bold=True, color=C_BLACK)
+S_BODY     = _S("body",    size=8)
+S_MUTED    = _S("muted",   size=6.5, color=C_MUTED)
+S_CAP      = _S("cap",     size=7,  color=C_MUTED)
+S_KV_KEY   = _S("kv_key",  size=8)
+S_KV_VAL   = _S("kv_val",  size=8.5, bold=True)
+S_TH       = _S("th",      size=7.5, bold=True)
+S_TH_DEF   = _S("th_def",  size=6.5, color=C_MUTED)
+S_TD       = _S("td",      size=8.5)
+S_FOOT     = _S("foot",    size=7,  color=C_MUTED)
+
+def _P(text, style=S_BODY):
+    return Paragraph(text, style)
+
+def _HR(thickness=0.5, c=C_RULE):
+    return HRFlowable(width=FULL_W, thickness=thickness, color=c, spaceAfter=2, spaceBefore=2)
+
+# ─────────────────────────────────────────────
+#  DATA LOADING
+# ─────────────────────────────────────────────
+
+def _parse_config_dir(dirname: str) -> dict | None:
+    """
+    Extract (n_vars, n_stages, rho, n_processes) from a directory name such as:
+        config_001__n5_m2_rho0.30_P3
+        n5_m2_rho0.30_P3
+        config_042
+    Returns None if parsing fails.
+    """
+    m_n   = re.search(r'n(\d+)',      dirname)
+    m_m   = re.search(r'm(\d+)',      dirname)
+    m_rho = re.search(r'rho([0-9.]+)', dirname)
+    m_P   = re.search(r'[Pp](\d+)',   dirname)
+    config_id_m = re.search(r'config[_]?(\d+)', dirname)
+
+    n_vars     = int(m_n.group(1))   if m_n   else None
+    n_stages   = int(m_m.group(1))   if m_m   else None
+    rho        = float(m_rho.group(1)) if m_rho else None
+    n_proc     = int(m_P.group(1))   if m_P   else None
+    config_id  = int(config_id_m.group(1)) if config_id_m else None
+
+    if any(v is None for v in [n_vars, n_stages, rho, n_proc]):
         return None
 
-    try:
-        with open(results_file, 'r') as f:
-            data = json.load(f)
-
-        config = data.get('config', {})
-        scenarios_config = config.get('scenarios', {})
-        st_params = data.get('st_params', {})
-
-        return {
-            'run_name': run_dir.name,
-            'seed_target': scenarios_config.get('seed_target'),
-            'seed_baseline': scenarios_config.get('seed_baseline'),
-            # ST complexity parameters
-            'st_n': st_params.get('n') if st_params else None,
-            'st_m': st_params.get('m') if st_params else None,
-            'st_rho': st_params.get('rho') if st_params else None,
-            'n_processes': data.get('n_processes'),
-            # Train metrics
-            'F_star_train': data.get('train', {}).get('F_star'),
-            'F_baseline_train': data.get('train', {}).get('F_baseline_mean'),
-            'F_actual_train': data.get('train', {}).get('F_actual_mean'),
-            # Test metrics
-            'F_star_test': data.get('test', {}).get('F_star'),
-            'F_baseline_test': data.get('test', {}).get('F_baseline_mean'),
-            'F_actual_test': data.get('test', {}).get('F_actual_mean'),
-        }
-    except Exception as e:
-        print(f"  Warning: error loading {results_file}: {e}")
-        return None
+    return dict(
+        config_id=config_id,
+        config_name=dirname,
+        n_vars=n_vars,
+        n_stages=n_stages,
+        rho=rho,
+        n_processes=n_proc,
+    )
 
 
-def aggregate_results(sweep_dir: Path) -> pd.DataFrame:
-    """Load all results from complexity sweep directory."""
-    results = []
-    for run_dir in sorted(sweep_dir.iterdir()):
-        if not run_dir.is_dir():
+def _load_run_result(run_dir: Path) -> dict | None:
+    """Try to load results.json (or results.pkl) from a run directory."""
+    # try JSON first
+    for fname in ["results.json", "result.json", "eval_results.json"]:
+        p = run_dir / fname
+        if p.exists():
+            try:
+                with open(p) as f:
+                    return json.load(f)
+            except Exception:
+                pass
+    # try pickle
+    for fname in ["results.pkl", "result.pkl"]:
+        p = run_dir / fname
+        if p.exists():
+            try:
+                import pickle
+                with open(p, "rb") as f:
+                    return pickle.load(f)
+            except Exception:
+                pass
+    return None
+
+
+def aggregate_complexity_results(sweep_dir: str | Path) -> pd.DataFrame:
+    """
+    Walk sweep_dir and build a DataFrame with one row per run.
+
+    Expected structure:
+        sweep_dir/
+          <config_dir>/
+            <seed_dir>/
+              results.json
+    """
+    sweep_dir = Path(sweep_dir)
+    rows = []
+
+    for config_dir in sorted(sweep_dir.iterdir()):
+        if not config_dir.is_dir():
             continue
-        run_results = load_run_results(run_dir)
-        if run_results is not None:
-            results.append(run_results)
+        cfg = _parse_config_dir(config_dir.name)
+        if cfg is None:
+            continue
 
-    if not results:
-        print("No results found!")
-        return pd.DataFrame()
+        for seed_dir in sorted(config_dir.iterdir()):
+            if not seed_dir.is_dir():
+                continue
+            result = _load_run_result(seed_dir)
+            if result is None:
+                continue
 
-    print(f"Loaded {len(results)} runs")
-    return pd.DataFrame(results)
+            # parse seed from directory name
+            m_st = re.search(r't(\d+)', seed_dir.name)
+            m_sb = re.search(r'b(\d+)', seed_dir.name)
+            seed_t = int(m_st.group(1)) if m_st else result.get("seed_target", -1)
+            seed_b = int(m_sb.group(1)) if m_sb else result.get("seed_baseline", -1)
+
+            F_star    = float(result.get("F_star",     result.get("f_star",     np.nan)))
+            F_base    = float(result.get("F_baseline", result.get("f_baseline", np.nan)))
+            F_actual  = float(result.get("F_actual",   result.get("f_actual",   np.nan)))
+
+            row = dict(
+                config_name   = cfg["config_name"],
+                config_id     = cfg["config_id"],
+                n_vars        = cfg["n_vars"],
+                n_stages      = cfg["n_stages"],
+                rho           = cfg["rho"],
+                n_processes   = cfg["n_processes"],
+                seed_target   = seed_t,
+                seed_baseline = seed_b,
+                run_name      = f"{config_dir.name}__{seed_dir.name}",
+                F_star        = F_star,
+                F_baseline    = F_base,
+                F_actual      = F_actual,
+                win           = int(F_actual > F_base) if not (np.isnan(F_actual) or np.isnan(F_base)) else 0,
+            )
+            row["gap_baseline"] = F_star - F_base   if not np.isnan(F_star - F_base)  else np.nan
+            row["gap_ctrl"]     = F_star - F_actual if not np.isnan(F_star - F_actual) else np.nan
+            row["gap_delta"]    = F_actual - F_base if not np.isnan(F_actual - F_base) else np.nan
+            rows.append(row)
+
+    if not rows:
+        raise RuntimeError(f"No run results found in '{sweep_dir}'")
+
+    return pd.DataFrame(rows)
 
 
-def compute_win_rates(df: pd.DataFrame) -> pd.DataFrame:
+def generate_config_stats(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Group runs by (st_n, st_m, st_rho) configuration and compute win rate.
-
-    A "win" is when the controller gap (F* - F) is smaller than the baseline gap (F* - F').
-
-    Returns:
-        DataFrame with one row per configuration, including win_rate_pct and n_runs.
+    Aggregate per-config statistics. Returns a DataFrame with one row per config,
+    sorted by win_rate descending.
     """
-    # Controller wins when F_actual > F_baseline (closer to F*)
-    df = df.copy()
-    df['controller_wins'] = df['F_actual_train'] > df['F_baseline_train']
+    records = []
+    for config_name, g in df.groupby("config_name", sort=False):
+        n_runs      = len(g)
+        n_wins      = int(g["win"].sum())
+        win_rate    = n_wins / n_runs if n_runs > 0 else 0.0
 
-    # Group by complexity configuration
-    group_cols = ['st_n', 'st_m', 'st_rho']
-    if 'n_processes' in df.columns and df['n_processes'].notna().any():
-        group_cols.append('n_processes')
-    grouped = df.groupby(group_cols).agg(
-        n_runs=('controller_wins', 'count'),
-        n_wins=('controller_wins', 'sum'),
-        F_star_mean=('F_star_train', 'mean'),
-        F_baseline_mean=('F_baseline_train', 'mean'),
-        F_actual_mean=('F_actual_train', 'mean'),
-        gap_baseline_mean=('F_baseline_train', lambda x: (df.loc[x.index, 'F_star_train'] - x).mean()),
-        gap_controller_mean=('F_actual_train', lambda x: (df.loc[x.index, 'F_star_train'] - x).mean()),
-    ).reset_index()
+        records.append(dict(
+            config_name    = config_name,
+            config_id      = g["config_id"].iloc[0],
+            n_vars         = g["n_vars"].iloc[0],
+            n_stages       = g["n_stages"].iloc[0],
+            rho            = g["rho"].iloc[0],
+            n_processes    = g["n_processes"].iloc[0],
+            n_runs         = n_runs,
+            n_wins         = n_wins,
+            win_rate       = win_rate,
+            F_actual_mean  = g["F_actual"].mean(),
+            F_actual_std   = g["F_actual"].std(),
+            F_baseline_mean= g["F_baseline"].mean(),
+            gap_ctrl_mean  = g["gap_ctrl"].mean(),
+            gap_ctrl_min   = g["gap_ctrl"].min(),
+            gap_ctrl_max   = g["gap_ctrl"].max(),
+            gap_delta_mean = g["gap_delta"].mean(),
+            gap_delta_min  = g["gap_delta"].min(),
+            gap_delta_max  = g["gap_delta"].max(),
+        ))
 
-    grouped['win_rate_pct'] = 100.0 * grouped['n_wins'] / grouped['n_runs']
-    grouped['mean_improvement_pct'] = (
-        (grouped['F_actual_mean'] - grouped['F_baseline_mean'])
-        / grouped['F_baseline_mean'].abs().clip(lower=1e-10) * 100
-    )
-
-    return grouped
-
-
-def plot_win_rate_vs_param(win_df: pd.DataFrame, param: str, label: str,
-                           save_path: Path):
-    """Scatter plot of win rate vs a single complexity parameter."""
-    fig, ax = plt.subplots(figsize=(8, 5))
-
-    # Color by win rate
-    scatter = ax.scatter(
-        win_df[param], win_df['win_rate_pct'],
-        c=win_df['win_rate_pct'], cmap='RdYlGn', vmin=0, vmax=100,
-        s=80 + win_df['n_runs'] * 5,  # size ~ number of runs
-        edgecolors='black', linewidths=0.5, alpha=0.8,
-    )
-    plt.colorbar(scatter, ax=ax, label='Win Rate (%)')
-
-    # Trend line (LOWESS or polynomial)
-    if len(win_df) >= 5:
-        z = np.polyfit(win_df[param], win_df['win_rate_pct'], deg=2)
-        p = np.poly1d(z)
-        x_smooth = np.linspace(win_df[param].min(), win_df[param].max(), 100)
-        ax.plot(x_smooth, np.clip(p(x_smooth), 0, 100), 'b--', alpha=0.5,
-                linewidth=2, label='Quadratic trend')
-        ax.legend()
-
-    ax.set_xlabel(label, fontsize=12, fontweight='bold')
-    ax.set_ylabel('Controller Win Rate (%)', fontsize=12, fontweight='bold')
-    ax.set_title(f'Win Rate vs {label}', fontsize=14, fontweight='bold')
-    ax.set_ylim(-5, 105)
-    ax.axhline(50, color='gray', linestyle=':', alpha=0.5, label='50%')
-    ax.grid(True, alpha=0.3)
-
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches='tight')
-    plt.close()
-    return save_path
+    cfg_df = pd.DataFrame(records).sort_values("win_rate", ascending=False).reset_index(drop=True)
+    return cfg_df
 
 
-def plot_win_rate_heatmap_2d(win_df: pd.DataFrame, param_x: str, param_y: str,
-                              label_x: str, label_y: str, save_path: Path):
-    """2D heatmap of win rate for two parameters (averaging over the third)."""
-    fig, ax = plt.subplots(figsize=(9, 7))
+# ─────────────────────────────────────────────
+#  PLOTS
+# ─────────────────────────────────────────────
 
-    # Bin the continuous parameters for heatmap
-    n_bins = min(8, len(win_df[param_x].unique()))
-    win_df = win_df.copy()
-    win_df['x_bin'] = pd.cut(win_df[param_x], bins=n_bins, include_lowest=True)
-    win_df['y_bin'] = pd.cut(win_df[param_y], bins=n_bins, include_lowest=True)
-
-    pivot = win_df.pivot_table(
-        values='win_rate_pct', index='y_bin', columns='x_bin', aggfunc='mean'
-    )
-
-    if pivot.shape[0] < 2 or pivot.shape[1] < 2:
-        ax.text(0.5, 0.5, 'Not enough data for heatmap',
-                ha='center', va='center', fontsize=12, transform=ax.transAxes)
-        plt.savefig(save_path, dpi=150, bbox_inches='tight')
-        plt.close()
-        return save_path
-
-    im = ax.imshow(pivot.values, cmap='RdYlGn', aspect='auto', vmin=0, vmax=100,
-                   origin='lower')
-    plt.colorbar(im, ax=ax, label='Win Rate (%)')
-
-    ax.set_xticks(range(len(pivot.columns)))
-    ax.set_xticklabels([str(c) for c in pivot.columns], rotation=45, ha='right', fontsize=8)
-    ax.set_yticks(range(len(pivot.index)))
-    ax.set_yticklabels([str(i) for i in pivot.index], fontsize=8)
-
-    # Annotate values
-    for i in range(pivot.shape[0]):
-        for j in range(pivot.shape[1]):
-            val = pivot.values[i, j]
-            if not np.isnan(val):
-                color = 'white' if val < 30 or val > 70 else 'black'
-                ax.text(j, i, f'{val:.0f}%', ha='center', va='center',
-                        color=color, fontsize=9, fontweight='bold')
-
-    ax.set_xlabel(label_x, fontsize=12, fontweight='bold')
-    ax.set_ylabel(label_y, fontsize=12, fontweight='bold')
-    ax.set_title(f'Win Rate: {label_x} vs {label_y}', fontsize=14, fontweight='bold')
-
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches='tight')
-    plt.close()
-    return save_path
+_PLOT_W = 3.5 * cm
+_PLOT_H = 3.5 * cm
 
 
-def plot_3d_scatter(win_df: pd.DataFrame, save_path: Path):
-    """3D scatter plot of win rate colored by (n, m, rho)."""
-    fig = plt.figure(figsize=(10, 8))
-    ax = fig.add_subplot(111, projection='3d')
-
-    scatter = ax.scatter(
-        win_df['st_n'], win_df['st_m'], win_df['st_rho'],
-        c=win_df['win_rate_pct'], cmap='RdYlGn', vmin=0, vmax=100,
-        s=60 + win_df['n_runs'] * 3, alpha=0.8, edgecolors='black', linewidths=0.3,
-    )
-
-    fig.colorbar(scatter, ax=ax, label='Win Rate (%)', shrink=0.6)
-    ax.set_xlabel('n (inputs)', fontsize=10)
-    ax.set_ylabel('m (stages)', fontsize=10)
-    ax.set_zlabel('rho (noise)', fontsize=10)
-    ax.set_title('Win Rate in Complexity Space (n, m, rho)', fontsize=13, fontweight='bold')
-
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches='tight')
-    plt.close()
-    return save_path
+def _plot_win_rate_distribution(cfg_df: pd.DataFrame, path: Path):
+    """Histogram of per-config win rates."""
+    fig, ax = plt.subplots(figsize=(3.8, 2.8))
+    bins = np.linspace(0, 1, 11)
+    ax.hist(cfg_df["win_rate"], bins=bins, color="#111111", edgecolor="white", linewidth=0.4)
+    ax.axvline(cfg_df["win_rate"].median(), color="#D85A30", lw=1.2, ls="--", label=f"median={cfg_df['win_rate'].median():.2f}")
+    ax.set_xlabel("Win rate W(c)", fontsize=7, fontfamily="monospace")
+    ax.set_ylabel("# configs",    fontsize=7, fontfamily="monospace")
+    ax.set_title("Win Rate Distribution", fontsize=8, fontfamily="monospace", fontweight="bold")
+    ax.legend(fontsize=6, frameon=False)
+    ax.tick_params(labelsize=6)
+    ax.spines[["top","right"]].set_visible(False)
+    fig.tight_layout(pad=0.3)
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
 
 
-def plot_summary_panel(win_df: pd.DataFrame, save_path: Path):
-    """Summary panel with marginal win rate distributions for each parameter."""
-    has_nproc = 'n_processes' in win_df.columns and win_df['n_processes'].notna().any()
-    n_panels = 4 if has_nproc else 3
-    fig, axes = plt.subplots(1, n_panels, figsize=(5.5 * n_panels, 5))
+def _plot_win_rate_vs_rho(cfg_df: pd.DataFrame, path: Path):
+    """Scatter: win rate vs noise rho, coloured by n_vars."""
+    fig, ax = plt.subplots(figsize=(3.8, 2.8))
+    sc = ax.scatter(cfg_df["rho"], cfg_df["win_rate"],
+                    c=cfg_df["n_vars"], cmap="viridis",
+                    s=22, edgecolors="none", alpha=0.85)
+    # trend line
+    z = np.polyfit(cfg_df["rho"], cfg_df["win_rate"], 1)
+    x_fit = np.linspace(cfg_df["rho"].min(), cfg_df["rho"].max(), 100)
+    ax.plot(x_fit, np.poly1d(z)(x_fit), color="#D85A30", lw=1.0, ls="--")
+    cbar = fig.colorbar(sc, ax=ax, pad=0.02)
+    cbar.set_label("n_vars", fontsize=6, fontfamily="monospace")
+    cbar.ax.tick_params(labelsize=5)
+    ax.set_xlabel("Noise ρ",    fontsize=7, fontfamily="monospace")
+    ax.set_ylabel("Win rate",   fontsize=7, fontfamily="monospace")
+    ax.set_title("Win Rate vs ρ", fontsize=8, fontfamily="monospace", fontweight="bold")
+    ax.tick_params(labelsize=6)
+    ax.spines[["top","right"]].set_visible(False)
+    fig.tight_layout(pad=0.3)
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
 
-    params = [
-        ('st_n', 'n (input variables)', axes[0]),
-        ('st_m', 'm (cascaded stages)', axes[1]),
-        ('st_rho', 'rho (noise intensity)', axes[2]),
+
+def _plot_win_rate_vs_n_vars(cfg_df: pd.DataFrame, path: Path):
+    """Box plot of win rate grouped by n_vars."""
+    fig, ax = plt.subplots(figsize=(3.8, 2.8))
+    groups = sorted(cfg_df["n_vars"].unique())
+    data   = [cfg_df.loc[cfg_df["n_vars"] == g, "win_rate"].values for g in groups]
+    bp = ax.boxplot(data, positions=range(len(groups)), widths=0.5,
+                    patch_artist=True,
+                    medianprops=dict(color="#D85A30", lw=1.5),
+                    boxprops=dict(facecolor="#F0F0F0", linewidth=0.7),
+                    whiskerprops=dict(linewidth=0.7),
+                    capprops=dict(linewidth=0.7),
+                    flierprops=dict(marker=".", markersize=3, linestyle="none"))
+    ax.set_xticks(range(len(groups)))
+    ax.set_xticklabels([str(g) for g in groups], fontsize=6)
+    ax.set_xlabel("n_vars (n)", fontsize=7, fontfamily="monospace")
+    ax.set_ylabel("Win rate",   fontsize=7, fontfamily="monospace")
+    ax.set_title("Win Rate vs n_vars", fontsize=8, fontfamily="monospace", fontweight="bold")
+    ax.tick_params(labelsize=6)
+    ax.spines[["top","right"]].set_visible(False)
+    fig.tight_layout(pad=0.3)
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _plot_sensitivity_scatter(cfg_df: pd.DataFrame, path: Path):
+    """
+    2-panel scatter: win rate vs n_stages and win rate vs n_processes (P).
+    Both coloured by rho.
+    """
+    fig, axes = plt.subplots(1, 2, figsize=(5.0, 2.8), sharey=True)
+    norm = plt.Normalize(cfg_df["rho"].min(), cfg_df["rho"].max())
+    cmap = plt.cm.plasma
+
+    for ax, xkey, xlabel in zip(
+        axes,
+        ["n_stages", "n_processes"],
+        ["n_stages (m)", "n_processes (P)"]
+    ):
+        sc = ax.scatter(cfg_df[xkey], cfg_df["win_rate"],
+                        c=cfg_df["rho"], cmap=cmap, norm=norm,
+                        s=20, edgecolors="none", alpha=0.9)
+        ax.set_xlabel(xlabel, fontsize=7, fontfamily="monospace")
+        ax.tick_params(labelsize=6)
+        ax.spines[["top","right"]].set_visible(False)
+
+    axes[0].set_ylabel("Win rate", fontsize=7, fontfamily="monospace")
+    fig.suptitle("Win Rate vs Complexity Axes", fontsize=8,
+                 fontfamily="monospace", fontweight="bold", y=1.01)
+    cbar = fig.colorbar(sc, ax=axes, pad=0.02, fraction=0.03)
+    cbar.set_label("ρ", fontsize=6, fontfamily="monospace")
+    cbar.ax.tick_params(labelsize=5)
+    fig.tight_layout(pad=0.3)
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _make_plots(cfg_df: pd.DataFrame, tmp_dir: Path) -> list[Path]:
+    paths = [
+        tmp_dir / "p1_win_rate_dist.png",
+        tmp_dir / "p2_win_rate_rho.png",
+        tmp_dir / "p3_win_rate_nvars.png",
+        tmp_dir / "p4_sensitivity.png",
     ]
-    if has_nproc:
-        params.append(('n_processes', 'n_processes (chain length)', axes[3]))
-
-    for param, label, ax in params:
-        # Sort by parameter value
-        df_sorted = win_df.sort_values(param)
-
-        # Bar / scatter depending on parameter type
-        if param in ('st_n', 'st_m', 'n_processes'):
-            # Discrete: group and average
-            grouped = df_sorted.groupby(param)['win_rate_pct'].agg(['mean', 'std', 'count'])
-            x = grouped.index.values
-            y = grouped['mean'].values
-            yerr = grouped['std'].values / np.sqrt(grouped['count'].values)
-
-            bars = ax.bar(x, y, yerr=yerr, color='steelblue', edgecolor='black',
-                          alpha=0.7, capsize=3, width=0.6)
-
-            # Color bars by value
-            norm = plt.Normalize(0, 100)
-            cmap = plt.cm.RdYlGn
-            for bar, val in zip(bars, y):
-                bar.set_facecolor(cmap(norm(val)))
-        else:
-            # Continuous: scatter with trend
-            ax.scatter(df_sorted[param], df_sorted['win_rate_pct'],
-                       c=df_sorted['win_rate_pct'], cmap='RdYlGn', vmin=0, vmax=100,
-                       s=60, edgecolors='black', linewidths=0.5, alpha=0.8)
-            if len(df_sorted) >= 5:
-                z = np.polyfit(df_sorted[param], df_sorted['win_rate_pct'], deg=2)
-                p = np.poly1d(z)
-                x_smooth = np.linspace(df_sorted[param].min(), df_sorted[param].max(), 100)
-                ax.plot(x_smooth, np.clip(p(x_smooth), 0, 100), 'b--', alpha=0.6, linewidth=2)
-
-        ax.set_xlabel(label, fontsize=11, fontweight='bold')
-        ax.set_ylabel('Win Rate (%)', fontsize=11, fontweight='bold')
-        ax.set_ylim(-5, 105)
-        ax.axhline(50, color='gray', linestyle=':', alpha=0.5)
-        ax.grid(True, alpha=0.3)
-
-    fig.suptitle('Controller Win Rate vs Dataset Complexity Parameters',
-                 fontsize=14, fontweight='bold', y=1.02)
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches='tight')
-    plt.close()
-    return save_path
+    _plot_win_rate_distribution(cfg_df, paths[0])
+    _plot_win_rate_vs_rho(cfg_df, paths[1])
+    _plot_win_rate_vs_n_vars(cfg_df, paths[2])
+    _plot_sensitivity_scatter(cfg_df, paths[3])
+    return paths
 
 
-class ComplexitySweepReportGenerator:
-    """PDF report generator for complexity sweep results."""
+# ─────────────────────────────────────────────
+#  CELL HELPERS
+# ─────────────────────────────────────────────
 
-    def __init__(self, output_path: Path):
-        self.output_path = output_path
-        self.styles = getSampleStyleSheet()
-        self.story = []
+def _win_color(win_rate: float):
+    if win_rate >= 0.9:  return C_GREEN
+    if win_rate >= 0.6:  return C_AMBER
+    return C_RED
 
-        self.styles.add(ParagraphStyle(
-            name='ReportTitle', parent=self.styles['Heading1'],
-            fontSize=18, leading=22, alignment=TA_CENTER, spaceAfter=6))
-        self.styles.add(ParagraphStyle(
-            name='ReportSubtitle', parent=self.styles['Normal'],
-            fontSize=11, leading=14, alignment=TA_CENTER, spaceAfter=12))
-        self.styles.add(ParagraphStyle(
-            name='SectionTitle', parent=self.styles['Heading2'],
-            fontSize=12, leading=14, fontName='Helvetica-Bold',
-            spaceAfter=6, spaceBefore=12))
-        self.styles['BodyText'].fontSize = 9
-        self.styles['BodyText'].leading = 11
+def _gap_delta_color(v: float):
+    if v > 0.05: return C_GREEN
+    if v > 0:    return C_AMBER
+    return C_RED
 
-    def add_title(self, timestamp: datetime):
-        self.story.append(Paragraph(
-            "<b>Dataset Complexity Sensitivity Analysis</b>", self.styles['ReportTitle']))
-        self.story.append(Paragraph(
-            f"Generated: {timestamp.strftime('%Y-%m-%d %H:%M:%S')}", self.styles['ReportSubtitle']))
-        self.story.append(HRFlowable(
-            width="100%", thickness=2, color=colors.black, spaceAfter=12))
+def _quartile_color(v, q25, q75):
+    """Green = best (low gap = close to target), Red = worst."""
+    if v <= q25: return C_GREEN
+    if v >= q75: return C_RED
+    return C_BLACK
 
-    def add_section(self, title: str):
-        self.story.append(Paragraph(f"<b>{title}</b>", self.styles['SectionTitle']))
-        self.story.append(HRFlowable(
-            width="100%", thickness=1, color=colors.darkgray, spaceAfter=6))
+def _fmt(v, ndigits=4):
+    if v is None or (isinstance(v, float) and np.isnan(v)):
+        return "—"
+    return f"{v:.{ndigits}f}"
 
-    def add_image(self, image_path: Path, width: float = 6*inch, caption: str = None):
-        if image_path.exists():
-            img = Image(str(image_path), width=width, height=width*0.6)
-            self.story.append(img)
-            if caption:
-                self.story.append(Paragraph(f"<i>{caption}</i>", self.styles['BodyText']))
-            self.story.append(Spacer(1, 0.3*cm))
+def _pct(v):
+    if v is None or np.isnan(v):
+        return "—"
+    return f"{v*100:.1f}%"
 
-    def add_summary_table(self, df_all: pd.DataFrame, win_df: pd.DataFrame):
-        self.add_section("Summary Statistics")
 
-        overall_win_rate = 100 * (df_all['F_actual_train'] > df_all['F_baseline_train']).mean()
+# ─────────────────────────────────────────────
+#  PAGE 1 BUILDING BLOCKS
+# ─────────────────────────────────────────────
 
-        has_nproc = 'n_processes' in win_df.columns and win_df['n_processes'].notna().any()
+def _build_header(sweep_dir: str, df: pd.DataFrame, cfg_df: pd.DataFrame) -> list:
+    """Title + subtitle row."""
+    n_runs    = len(df)
+    n_configs = len(cfg_df)
+    ts        = datetime.now().strftime("%Y-%m-%d  %H:%M")
+    short_dir = str(Path(sweep_dir).name)
 
-        data = [
-            ['Metric', 'Value'],
-            ['Total Runs', f"{len(df_all)}"],
-            ['Unique Configurations', f"{len(win_df)}"],
-            ['Overall Win Rate', f"{overall_win_rate:.1f}%"],
-            ['', ''],
-            ['Parameter Ranges', ''],
-            ['  n (inputs)', f"[{win_df['st_n'].min()}, {win_df['st_n'].max()}]"],
-            ['  m (stages)', f"[{win_df['st_m'].min()}, {win_df['st_m'].max()}]"],
-            ['  rho (noise)', f"[{win_df['st_rho'].min():.3f}, {win_df['st_rho'].max():.3f}]"],
+    hdr_data = [[
+        _P("Controller Complexity Sweep — Report", S_TITLE),
+        _P(f"{ts}  ·  {short_dir}  ·  {n_configs} configs  ·  {n_runs} runs", S_SUB),
+    ]]
+    tbl = Table(hdr_data, colWidths=[FULL_W * 0.5, FULL_W * 0.5])
+    tbl.setStyle(TableStyle([
+        ("VALIGN",  (0,0), (-1,-1), "BOTTOM"),
+        ("LEFTPADDING",  (0,0), (-1,-1), 0),
+        ("RIGHTPADDING", (0,0), (-1,-1), 0),
+        ("TOPPADDING",   (0,0), (-1,-1), 0),
+        ("BOTTOMPADDING",(0,0), (-1,-1), 2),
+    ]))
+    return [tbl, HRFlowable(width=FULL_W, thickness=1, color=C_BLACK, spaceAfter=4, spaceBefore=2)]
+
+
+def _build_kpi_bar(df: pd.DataFrame, cfg_df: pd.DataFrame) -> list:
+    """4-cell KPI bar."""
+    n_runs    = len(df)
+    n_configs = len(cfg_df)
+    n_wins    = int(df["win"].sum())
+    win_rate  = n_wins / n_runs if n_runs > 0 else 0.0
+
+    median_wr      = cfg_df["win_rate"].median()
+    best_cfg       = cfg_df.iloc[0]
+    best_wr        = best_cfg["win_rate"]
+    best_name_raw  = best_cfg["config_name"]
+    # truncate long names
+    best_name = best_name_raw if len(best_name_raw) <= 30 else "…" + best_name_raw[-28:]
+
+    # KPI cell builders
+    def kpi(top_label, top_val, top_color, bot_label, bot_val=None):
+        val_str = _P(f'<font color="#{top_color.hexval()[2:]}">{top_val}</font>', S_KV_VAL)
+        rows = [
+            [_P(top_label, S_KV_KEY)],
+            [val_str],
+            [_P(bot_label, S_MUTED)],
         ]
-        if has_nproc:
-            data.append(['  n_processes', f"[{int(win_df['n_processes'].min())}, {int(win_df['n_processes'].max())}]"])
-        data += [
-            ['', ''],
-            ['Win Rate Range', f"[{win_df['win_rate_pct'].min():.1f}%, {win_df['win_rate_pct'].max():.1f}%]"],
-            ['Win Rate Median', f"{win_df['win_rate_pct'].median():.1f}%"],
-            ['', ''],
-            ['Best Config', ''],
+        if bot_val is not None:
+            rows.append([_P(bot_val, S_MUTED)])
+        return rows
+
+    wc = _win_color(win_rate)
+    mc = _win_color(median_wr)
+    bc = _win_color(best_wr)
+
+    cells = [
+        [
+            _P("Total runs", S_KV_KEY),
+            _P(str(n_runs), S_KV_VAL),
+            _P(f"{n_configs} LHS configurations", S_MUTED),
+        ],
+        [
+            _P("Overall win rate", S_KV_KEY),
+            Paragraph(f'<font color="#{wc.hexval()[2:]}">{n_wins}/{n_runs}  ({_pct(win_rate)})</font>', S_KV_VAL),
+            _P("runs where F > F' (baseline)", S_MUTED),
+        ],
+        [
+            _P("Median config win rate", S_KV_KEY),
+            Paragraph(f'<font color="#{mc.hexval()[2:]}">{_pct(median_wr)}</font>', S_KV_VAL),
+            _P("W(c) across all configs", S_MUTED),
+        ],
+        [
+            _P("Best config", S_KV_KEY),
+            Paragraph(f'<font color="#{bc.hexval()[2:]}">{_pct(best_wr)}</font>', S_KV_VAL),
+            _P(best_name, S_MUTED),
+        ],
+    ]
+
+    cw = FULL_W / 4
+    tbl = Table([cells], colWidths=[cw, cw, cw, cw], rowHeights=None)
+    tbl.setStyle(TableStyle([
+        ("BOX",        (0,0), (-1,-1), 0.5, C_BLACK),
+        ("INNERGRID",  (0,0), (-1,-1), 0.5, C_BLACK),
+        ("VALIGN",     (0,0), (-1,-1), "TOP"),
+        ("LEFTPADDING", (0,0),(-1,-1), 5),
+        ("RIGHTPADDING",(0,0),(-1,-1), 5),
+        ("TOPPADDING",  (0,0),(-1,-1), 4),
+        ("BOTTOMPADDING",(0,0),(-1,-1), 4),
+    ]))
+    return [tbl, Spacer(1, 6)]
+
+
+def _build_aggregate_stats(cfg_df: pd.DataFrame) -> list:
+    """Section 01 — aggregate statistics (3-column layout)."""
+    story = [
+        _P("01 — aggregate statistics", S_SEC),
+        _HR(),
+    ]
+
+    wr = cfg_df["win_rate"]
+    gc = cfg_df["gap_ctrl_mean"]
+    gd = cfg_df["gap_delta_mean"]
+
+    # ── Col 1: Win Rate stats ──
+    def stat_block(title, definition, series, color_fn=None):
+        q25, q75 = series.quantile(0.25), series.quantile(0.75)
+        rows = []
+        for label, val in [("Min", series.min()), ("Median", series.median()),
+                            ("Max", series.max()), ("Std dev", series.std())]:
+            if color_fn:
+                c = color_fn(val, q25, q75)
+                vs = Paragraph(f'<font color="#{c.hexval()[2:]}">{_fmt(val)}</font>', S_BODY)
+            else:
+                vs = _P(_fmt(val), S_BODY)
+            rows.append([_P(label, S_MUTED), vs])
+        inner = Table(rows, colWidths=[40, 50])
+        inner.setStyle(TableStyle([
+            ("LEFTPADDING",  (0,0),(-1,-1), 0),
+            ("RIGHTPADDING", (0,0),(-1,-1), 4),
+            ("TOPPADDING",   (0,0),(-1,-1), 1),
+            ("BOTTOMPADDING",(0,0),(-1,-1), 1),
+        ]))
+        return [
+            _P(f"<b>{title}</b>", _S("blk", size=7.5, bold=True)),
+            _P(definition, S_MUTED),
+            inner,
         ]
 
-        best = win_df.loc[win_df['win_rate_pct'].idxmax()]
-        worst = win_df.loc[win_df['win_rate_pct'].idxmin()]
-        nproc_best = f", n_proc={int(best['n_processes'])}" if has_nproc else ""
-        nproc_worst = f", n_proc={int(worst['n_processes'])}" if has_nproc else ""
-        data.append(['  Best', f"n={int(best['st_n'])}, m={int(best['st_m'])}, rho={best['st_rho']:.3f}{nproc_best} -> {best['win_rate_pct']:.1f}%"])
-        data.append(['  Worst', f"n={int(worst['st_n'])}, m={int(worst['st_m'])}, rho={worst['st_rho']:.3f}{nproc_worst} -> {worst['win_rate_pct']:.1f}%"])
+    col1 = stat_block("Win Rate  W(c)", "fraction of wins per config",
+                      wr, color_fn=lambda v, *_: _win_color(v))
+    col2 = stat_block("Gap ctrl  (mean)",  "F* − F  averaged over seeds",
+                      gc, color_fn=_quartile_color)
+    col3 = stat_block("Gap Δ  (mean)", "F − F'  averaged over seeds",
+                      gd, color_fn=lambda v, *_: _gap_delta_color(v))
 
-        table = Table(data, colWidths=[2.5*inch, 4*inch])
-        table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, -1), 9),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+    # ── Col 4: LHS parameter ranges ──
+    col4_rows = [
+        [_P("n_vars",    S_MUTED), _P(f"{int(cfg_df['n_vars'].min())}–{int(cfg_df['n_vars'].max())}",    S_BODY)],
+        [_P("n_stages",  S_MUTED), _P(f"{int(cfg_df['n_stages'].min())}–{int(cfg_df['n_stages'].max())}",  S_BODY)],
+        [_P("rho",       S_MUTED), _P(f"{cfg_df['rho'].min():.2f}–{cfg_df['rho'].max():.2f}",             S_BODY)],
+        [_P("n_proc.",   S_MUTED), _P(f"{int(cfg_df['n_processes'].min())}–{int(cfg_df['n_processes'].max())}",S_BODY)],
+        [_P("configs",   S_MUTED), _P(str(len(cfg_df)), S_BODY)],
+        [_P("runs/cfg",  S_MUTED), _P(str(int(cfg_df["n_runs"].median())), S_BODY)],
+    ]
+    col4_inner = Table(col4_rows, colWidths=[45, 50])
+    col4_inner.setStyle(TableStyle([
+        ("LEFTPADDING",  (0,0),(-1,-1), 0),
+        ("RIGHTPADDING", (0,0),(-1,-1), 4),
+        ("TOPPADDING",   (0,0),(-1,-1), 1),
+        ("BOTTOMPADDING",(0,0),(-1,-1), 1),
+    ]))
+    col4 = [_P("<b>LHS parameter ranges</b>", _S("blk2", size=7.5, bold=True)),
+            _P("complexity space θ = (n, m, ρ, P)", S_MUTED),
+            col4_inner]
+
+    def wrap_col(items):
+        return [[item] for item in items]
+
+    cw = FULL_W / 4
+    grid_data = [[col1, col2, col3, col4]]
+
+    # flatten each col to a single cell using a sub-Table
+    def col_cell(items):
+        t = Table([[i] for i in items], colWidths=[cw - 8])
+        t.setStyle(TableStyle([
+            ("LEFTPADDING",  (0,0),(-1,-1), 4),
+            ("RIGHTPADDING", (0,0),(-1,-1), 0),
+            ("TOPPADDING",   (0,0),(-1,-1), 2),
+            ("BOTTOMPADDING",(0,0),(-1,-1), 1),
         ]))
-        self.story.append(table)
-        self.story.append(Spacer(1, 0.5*cm))
+        return t
 
-    def add_configs_table(self, win_df: pd.DataFrame):
-        self.add_section("All Configurations (sorted by win rate)")
-        df_sorted = win_df.sort_values('win_rate_pct', ascending=False)
+    outer = Table(
+        [[col_cell(col1), col_cell(col2), col_cell(col3), col_cell(col4)]],
+        colWidths=[cw, cw, cw, cw],
+    )
+    outer.setStyle(TableStyle([
+        ("BOX",      (0,0), (-1,-1), 0.5, C_BLACK),
+        ("INNERGRID",(0,0), (-1,-1), 0.5, C_BLACK),
+        ("VALIGN",   (0,0), (-1,-1), "TOP"),
+        ("TOPPADDING",   (0,0),(-1,-1), 4),
+        ("BOTTOMPADDING",(0,0),(-1,-1), 4),
+        ("LEFTPADDING",  (0,0),(-1,-1), 0),
+        ("RIGHTPADDING", (0,0),(-1,-1), 0),
+    ]))
+    story.append(outer)
+    story.append(Spacer(1, 6))
+    return story
 
-        has_nproc = 'n_processes' in win_df.columns and win_df['n_processes'].notna().any()
 
-        header = ['n', 'm', 'rho']
-        if has_nproc:
-            header.append('nProc')
-        header += ['Runs', 'Win Rate', 'F* (mean)', 'F\' (mean)', 'F (mean)']
-        data = [header]
+def _build_plots_row(plot_paths: list[Path]) -> list:
+    """Section 02 — 4 plots in a grid row."""
+    story = [
+        _P("02 — visualizations", S_SEC),
+        _HR(),
+    ]
 
-        for _, row in df_sorted.iterrows():
-            row_data = [
-                int(row['st_n']),
-                int(row['st_m']),
-                f"{row['st_rho']:.3f}",
-            ]
-            if has_nproc:
-                row_data.append(int(row['n_processes']) if not np.isnan(row.get('n_processes', float('nan'))) else 'N/A')
-            row_data += [
-                int(row['n_runs']),
-                f"{row['win_rate_pct']:.1f}%",
-                f"{row['F_star_mean']:.4f}" if not np.isnan(row['F_star_mean']) else 'N/A',
-                f"{row['F_baseline_mean']:.4f}" if not np.isnan(row['F_baseline_mean']) else 'N/A',
-                f"{row['F_actual_mean']:.4f}" if not np.isnan(row['F_actual_mean']) else 'N/A',
-            ]
-            data.append(row_data)
+    captions = [
+        "Win rate histogram across all LHS configs",
+        "Win rate vs noise ρ  (colour = n_vars)",
+        "Win rate distribution grouped by n_vars",
+        "Win rate vs n_stages and P  (colour = ρ)",
+    ]
 
-        col_widths = [0.5*inch, 0.5*inch, 0.7*inch]
-        if has_nproc:
-            col_widths.append(0.5*inch)
-        col_widths += [0.5*inch, 0.8*inch, 0.9*inch, 0.9*inch, 0.9*inch]
-        table = Table(data, colWidths=col_widths)
-        table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, -1), 8),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.Color(0.95, 0.95, 0.95)]),
-        ]))
-        self.story.append(table)
+    plot_w = FULL_W / 4 - 4
+    plot_h = plot_w * 0.75
 
-    def build(self):
+    cells = []
+    for p, cap in zip(plot_paths, captions):
+        img = Image(str(p), width=plot_w, height=plot_h)
+        cells.append([img, _P(cap, S_CAP)])
+
+    tbl = Table([cells], colWidths=[FULL_W / 4] * 4)
+    tbl.setStyle(TableStyle([
+        ("VALIGN",       (0,0),(-1,-1), "TOP"),
+        ("LEFTPADDING",  (0,0),(-1,-1), 2),
+        ("RIGHTPADDING", (0,0),(-1,-1), 2),
+        ("TOPPADDING",   (0,0),(-1,-1), 0),
+        ("BOTTOMPADDING",(0,0),(-1,-1), 0),
+    ]))
+    story.append(tbl)
+    return story
+
+
+def _build_footer(sweep_dir: str, output_path: str) -> list:
+    out_name = Path(output_path).name
+    short    = Path(sweep_dir).name
+    data = [[
+        _P(f"auto-generated  ·  {short}  ·  {out_name}", S_FOOT),
+        _P("controller_optimization · generate_complexity_sweep_report.py", S_FOOT),
+    ]]
+    tbl = Table(data, colWidths=[FULL_W * 0.6, FULL_W * 0.4])
+    tbl.setStyle(TableStyle([
+        ("ALIGN",        (1,0), (1,0), "RIGHT"),
+        ("LEFTPADDING",  (0,0),(-1,-1), 0),
+        ("RIGHTPADDING", (0,0),(-1,-1), 0),
+        ("TOPPADDING",   (0,0),(-1,-1), 3),
+        ("BOTTOMPADDING",(0,0),(-1,-1), 0),
+    ]))
+    return [HRFlowable(width=FULL_W, thickness=1, color=C_BLACK, spaceBefore=4, spaceAfter=2), tbl]
+
+
+# ─────────────────────────────────────────────
+#  PAGE 2…N — CONFIGS TABLE
+# ─────────────────────────────────────────────
+
+def _th(text, definition=""):
+    """Two-line table header: bold label + muted definition."""
+    return [_P(f"<b>{text}</b>", S_TH), _P(definition, S_TH_DEF)]
+
+
+def _build_configs_table_header_compact(sweep_dir: str, page: int) -> list:
+    data = [[
+        _P("Controller Complexity Sweep — Configs Table", _S("ct", size=9, bold=True)),
+        _P(f"page {page}  ·  {Path(sweep_dir).name}", S_MUTED),
+    ]]
+    tbl = Table(data, colWidths=[FULL_W * 0.5, FULL_W * 0.5])
+    tbl.setStyle(TableStyle([
+        ("VALIGN",       (0,0),(-1,-1), "BOTTOM"),
+        ("LEFTPADDING",  (0,0),(-1,-1), 0),
+        ("RIGHTPADDING", (0,0),(-1,-1), 0),
+        ("TOPPADDING",   (0,0),(-1,-1), 0),
+        ("BOTTOMPADDING",(0,0),(-1,-1), 2),
+    ]))
+    return [tbl, HRFlowable(width=FULL_W, thickness=1, color=C_BLACK, spaceAfter=4, spaceBefore=2)]
+
+
+def _build_configs_table(cfg_df: pd.DataFrame) -> list:
+    """
+    Multi-page table of per-config results, sorted by win_rate desc.
+    Columns: rank, config, n_vars, n_stages, ρ, P, runs, wins,
+             win_rate, gap_ctrl_mean, gap_delta_mean, F_actual_mean ± std
+    """
+    # compute quartiles for gap_ctrl coloring
+    q25 = cfg_df["gap_ctrl_mean"].quantile(0.25)
+    q75 = cfg_df["gap_ctrl_mean"].quantile(0.75)
+
+    # Column widths (must sum to FULL_W)
+    col_w = [
+        20,  # rank
+        135, # config name
+        28,  # n
+        28,  # m
+        30,  # rho
+        28,  # P
+        28,  # runs
+        28,  # wins
+        48,  # win_rate
+        55,  # gap_ctrl_mean
+        55,  # gap_delta_mean
+        72,  # F_actual mean ± std
+    ]
+    assert abs(sum(col_w) - FULL_W) < 2, f"col widths sum={sum(col_w)} vs FULL_W={FULL_W:.1f}"
+
+    header = [
+        _th("#"),
+        _th("Config"),
+        _th("n"),
+        _th("m"),
+        _th("ρ"),
+        _th("P"),
+        _th("runs"),
+        _th("wins"),
+        _th("Win rate", "W(c)"),
+        _th("Gap ctrl", "F*−F  mean"),
+        _th("Gap Δ",    "F−F'  mean"),
+        _th("F actual", "mean ± std"),
+    ]
+
+    rows = [header]
+    ts   = []
+
+    for i, (_, row) in enumerate(cfg_df.iterrows()):
+        wr   = row["win_rate"]
+        gc   = row["gap_ctrl_mean"]
+        gd   = row["gap_delta_mean"]
+        fa   = row["F_actual_mean"]
+        fstd = row["F_actual_std"]
+
+        wc  = _win_color(wr)
+        gcc = _quartile_color(gc, q25, q75)
+        gdc = _gap_delta_color(gd)
+
+        name_raw  = row["config_name"]
+        name_disp = name_raw if len(name_raw) <= 32 else "…" + name_raw[-30:]
+
+        bg = C_ALT if i % 2 == 1 else colors.white
+
+        rows.append([
+            _P(str(i+1),                                                      S_TD),
+            _P(name_disp,                                                     S_TD),
+            _P(str(int(row["n_vars"])),                                       S_TD),
+            _P(str(int(row["n_stages"])),                                     S_TD),
+            _P(f"{row['rho']:.2f}",                                           S_TD),
+            _P(str(int(row["n_processes"])),                                  S_TD),
+            _P(str(int(row["n_runs"])),                                       S_TD),
+            _P(str(int(row["n_wins"])),                                       S_TD),
+            Paragraph(f'<font color="#{wc.hexval()[2:]}">{_pct(wr)}</font>',  S_TD),
+            Paragraph(f'<font color="#{gcc.hexval()[2:]}">{_fmt(gc)}</font>', S_TD),
+            Paragraph(f'<font color="#{gdc.hexval()[2:]}">{_fmt(gd)}</font>', S_TD),
+            _P(f"{_fmt(fa)} ± {_fmt(fstd, 4)}",                              S_TD),
+        ])
+        ts.append(("BACKGROUND", (0, i+1), (-1, i+1), bg))
+
+    base_style = [
+        ("BOX",            (0,0), (-1,-1), 0.5, C_BLACK),
+        ("INNERGRID",      (0,0), (-1,-1), 0.3, C_RULE),
+        ("LINEBELOW",      (0,0), (-1,0),  0.5, C_BLACK),
+        ("VALIGN",         (0,0), (-1,-1), "TOP"),
+        ("LEFTPADDING",    (0,0), (-1,-1), 3),
+        ("RIGHTPADDING",   (0,0), (-1,-1), 3),
+        ("TOPPADDING",     (0,0), (-1,-1), 2),
+        ("BOTTOMPADDING",  (0,0), (-1,-1), 2),
+    ] + ts
+
+    tbl = Table(rows, colWidths=col_w, repeatRows=1)
+    tbl.setStyle(TableStyle(base_style))
+
+    footer_note = _P(
+        "Win rate: W(c) = fraction of seed pairs where F > F'  ·  "
+        "Gap ctrl: F*−F (smaller = better)  ·  Gap Δ: F−F' (positive = controller beats baseline)  ·  "
+        "green = best quartile  ·  red = worst quartile",
+        S_MUTED,
+    )
+
+    return [tbl, Spacer(1, 4), footer_note]
+
+
+# ─────────────────────────────────────────────
+#  MAIN ENTRY POINT
+# ─────────────────────────────────────────────
+
+def generate_complexity_sweep_report(sweep_dir: str | Path, output_path: str | Path) -> None:
+    """
+    Generate the complexity sweep PDF report.
+
+    Parameters
+    ----------
+    sweep_dir   : path to the complexity sweep root directory
+    output_path : destination path for the output PDF
+    """
+    sweep_dir   = str(sweep_dir)
+    output_path = str(output_path)
+
+    print(f"[complexity_sweep_report] Loading results from '{sweep_dir}' …")
+    df     = aggregate_complexity_results(sweep_dir)
+    cfg_df = generate_config_stats(df)
+    print(f"  → {len(df)} runs across {len(cfg_df)} configs")
+
+    # generate plots in a temp dir
+    import tempfile, shutil
+    tmp_dir = Path(tempfile.mkdtemp(prefix="complexity_report_"))
+    try:
+        plot_paths = _make_plots(cfg_df, tmp_dir)
+
         doc = SimpleDocTemplate(
-            str(self.output_path), pagesize=A4,
-            rightMargin=1*cm, leftMargin=1*cm,
-            topMargin=1*cm, bottomMargin=1*cm)
-        doc.build(self.story)
+            output_path,
+            pagesize=landscape(A4),
+            leftMargin=M, rightMargin=M,
+            topMargin=M, bottomMargin=M,
+        )
+
+        story: list = []
+
+        # ── PAGE 1 ──
+        story += _build_header(sweep_dir, df, cfg_df)
+        story += _build_kpi_bar(df, cfg_df)
+        story += _build_aggregate_stats(cfg_df)
+        story += _build_plots_row(plot_paths)
+        story += _build_footer(sweep_dir, output_path)
+
+        # ── PAGE 2…N ──
+        story.append(PageBreak())
+        story += _build_configs_table_header_compact(sweep_dir, page=2)
+        story += _build_configs_table(cfg_df)
+        story += _build_footer(sweep_dir, output_path)
+
+        doc.build(story)
+        print(f"[complexity_sweep_report] Report saved → '{output_path}'")
+
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-def generate_complexity_sweep_report(sweep_dir: Path, output_path: Path = None):
-    """Main function to generate the complexity sweep report."""
-    print(f"Scanning complexity sweep directory: {sweep_dir}")
+# ─────────────────────────────────────────────
+#  CLI
+# ─────────────────────────────────────────────
 
-    df = aggregate_results(sweep_dir)
-    if df.empty:
-        print("No results found. Cannot generate report.")
-        return None
-
-    # Filter out runs with missing ST params
-    df = df.dropna(subset=['st_n', 'st_m', 'st_rho'])
-    if df.empty:
-        print("No runs with ST params found. Are these complexity sweep results?")
-        return None
-
-    print(f"Valid runs with ST params: {len(df)}")
-
-    # Compute win rates per configuration
-    win_df = compute_win_rates(df)
-    print(f"Unique configurations: {len(win_df)}")
-    print(f"Overall win rate: {100 * (df['F_actual_train'] > df['F_baseline_train']).mean():.1f}%")
-
-    # Create plots directory
-    plots_dir = sweep_dir / 'complexity_plots'
-    plots_dir.mkdir(exist_ok=True)
-
-    print("\nGenerating plots...")
-
-    # 1. Summary panel (marginals)
-    print("  - Summary panel (marginal effects)...")
-    summary_path = plot_summary_panel(win_df, plots_dir / 'summary_panel.png')
-
-    has_nproc = 'n_processes' in win_df.columns and win_df['n_processes'].notna().any()
-
-    # 2. Individual parameter plots
-    print("  - Win rate vs n...")
-    n_path = plot_win_rate_vs_param(win_df, 'st_n', 'n (input variables)',
-                                     plots_dir / 'winrate_vs_n.png')
-    print("  - Win rate vs m...")
-    m_path = plot_win_rate_vs_param(win_df, 'st_m', 'm (cascaded stages)',
-                                     plots_dir / 'winrate_vs_m.png')
-    print("  - Win rate vs rho...")
-    rho_path = plot_win_rate_vs_param(win_df, 'st_rho', 'rho (noise intensity)',
-                                       plots_dir / 'winrate_vs_rho.png')
-    nproc_path = None
-    if has_nproc:
-        print("  - Win rate vs n_processes...")
-        nproc_path = plot_win_rate_vs_param(win_df, 'n_processes', 'n_processes (chain length)',
-                                             plots_dir / 'winrate_vs_nproc.png')
-
-    # 3. 2D heatmaps
-    print("  - Heatmap: n vs rho...")
-    heatmap_n_rho = plot_win_rate_heatmap_2d(
-        win_df, 'st_n', 'st_rho', 'n (inputs)', 'rho (noise)',
-        plots_dir / 'heatmap_n_rho.png')
-    print("  - Heatmap: n vs m...")
-    heatmap_n_m = plot_win_rate_heatmap_2d(
-        win_df, 'st_n', 'st_m', 'n (inputs)', 'm (stages)',
-        plots_dir / 'heatmap_n_m.png')
-    print("  - Heatmap: m vs rho...")
-    heatmap_m_rho = plot_win_rate_heatmap_2d(
-        win_df, 'st_m', 'st_rho', 'm (stages)', 'rho (noise)',
-        plots_dir / 'heatmap_m_rho.png')
-
-    # 4. 3D scatter
-    print("  - 3D scatter...")
-    scatter_3d_path = plot_3d_scatter(win_df, plots_dir / 'scatter_3d.png')
-
-    # Generate PDF report
-    if output_path is None:
-        output_path = sweep_dir / 'complexity_sweep_report.pdf'
-
-    print(f"\nGenerating PDF report: {output_path}")
-
-    report = ComplexitySweepReportGenerator(output_path)
-    report.add_title(datetime.now())
-    report.add_summary_table(df, win_df)
-
-    # Summary panel
-    report.add_section("Marginal Effects")
-    report.add_image(summary_path, width=6.5*inch,
-                     caption="Win rate vs each complexity parameter (marginal). "
-                             "Bars/points colored by win rate (green=high, red=low).")
-
-    report.story.append(PageBreak())
-
-    # Individual plots
-    report.add_section("Win Rate vs Individual Parameters")
-    report.add_image(n_path, width=5*inch,
-                     caption="Win rate vs n (input variables). Larger n = more complex.")
-    report.add_image(rho_path, width=5*inch,
-                     caption="Win rate vs rho (noise intensity). Higher rho = noisier.")
-
-    report.story.append(PageBreak())
-    report.add_image(m_path, width=5*inch,
-                     caption="Win rate vs m (cascaded stages). More stages = deeper.")
-    if nproc_path:
-        report.add_image(nproc_path, width=5*inch,
-                         caption="Win rate vs n_processes (chain length). More processes = longer chain.")
-
-    # Heatmaps
-    report.add_section("2D Parameter Interactions")
-    report.add_image(heatmap_n_rho, width=5*inch,
-                     caption="Win rate heatmap: n vs rho (averaged over m).")
-    report.story.append(PageBreak())
-    report.add_image(heatmap_n_m, width=5*inch,
-                     caption="Win rate heatmap: n vs m (averaged over rho).")
-    report.add_image(heatmap_m_rho, width=5*inch,
-                     caption="Win rate heatmap: m vs rho (averaged over n).")
-
-    report.story.append(PageBreak())
-
-    # 3D scatter
-    report.add_section("3D Complexity Space")
-    report.add_image(scatter_3d_path, width=5.5*inch,
-                     caption="Win rate in (n, m, rho) space. Color = win rate, size = number of runs.")
-
-    report.story.append(PageBreak())
-
-    # Configurations table
-    report.add_configs_table(win_df)
-
-    report.build()
-
-    # Save CSV summaries
-    csv_all = sweep_dir / 'complexity_all_runs.csv'
-    df.to_csv(csv_all, index=False)
-
-    csv_configs = sweep_dir / 'complexity_configs_winrate.csv'
-    win_df.to_csv(csv_configs, index=False)
-
-    print(f"\nResults saved:")
-    print(f"  Report:     {output_path}")
-    print(f"  All runs:   {csv_all}")
-    print(f"  Win rates:  {csv_configs}")
-
-    return output_path
-
-
-def main():
-    parser = argparse.ArgumentParser(
-        description='Generate complexity sweep report PDF',
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument('--sweep_dir', type=str,
-                        default='controller_optimization/checkpoints/complexity_sweep',
-                        help='Directory containing complexity sweep results')
-    parser.add_argument('--output', type=str, default=None,
-                        help='Output PDF file path')
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Generate complexity sweep report PDF")
+    parser.add_argument("sweep_dir",   help="Path to the complexity sweep directory")
+    parser.add_argument("output_path", nargs="?",
+                        help="Output PDF path (default: <sweep_dir>/complexity_sweep_report.pdf)")
     args = parser.parse_args()
 
-    sweep_dir = Path(args.sweep_dir)
-    if not sweep_dir.exists():
-        print(f"Error: Sweep directory not found: {sweep_dir}")
-        return
-
-    output_path = Path(args.output) if args.output else None
-    generate_complexity_sweep_report(sweep_dir, output_path)
-
-
-if __name__ == '__main__':
-    main()
+    out = args.output_path or str(Path(args.sweep_dir) / "complexity_sweep_report.pdf")
+    generate_complexity_sweep_report(args.sweep_dir, out)
