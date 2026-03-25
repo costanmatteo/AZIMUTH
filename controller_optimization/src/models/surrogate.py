@@ -282,10 +282,14 @@ class ProTSurrogate:
         with torch.no_grad():
             scenario_traj = {}
             for process_name, data in self.target_trajectory_tensors.items():
+                # Use scenario 1 if available (scenario 0 is calibration row),
+                # fall back to scenario 0 when n_train=1
+                n_available = data['inputs'].shape[0]
+                idx = min(1, n_available - 1)
                 scenario_traj[process_name] = {
-                    'inputs': data['inputs'][1:2],  # Scenario 1 (seed-dependent)
-                    'outputs_mean': data['outputs'][1:2],
-                    'outputs_var': torch.zeros_like(data['outputs'][1:2])
+                    'inputs': data['inputs'][idx:idx+1],
+                    'outputs_mean': data['outputs'][idx:idx+1],
+                    'outputs_var': torch.zeros_like(data['outputs'][idx:idx+1])
                 }
 
             F_star = self.compute_reliability(scenario_traj, return_quality_scores=False)
@@ -746,11 +750,15 @@ class CasualiTSurrogate:
         with torch.no_grad():
             scenario_traj = {}
             for process_name, data in self.target_trajectory_tensors.items():
+                # Use scenario 1 if available (scenario 0 is calibration row),
+                # fall back to scenario 0 when n_train=1
+                n_available = data['inputs'].shape[0]
+                idx = min(1, n_available - 1)
                 scenario_traj[process_name] = {
-                    'inputs': data['inputs'][1:2],  # Scenario 1 (seed-dependent)
-                    'outputs_mean': data['outputs'][1:2],
-                    'outputs_var': torch.zeros_like(data['outputs'][1:2]),
-                    'outputs_sampled': data['outputs'][1:2],
+                    'inputs': data['inputs'][idx:idx+1],
+                    'outputs_mean': data['outputs'][idx:idx+1],
+                    'outputs_var': torch.zeros_like(data['outputs'][idx:idx+1]),
+                    'outputs_sampled': data['outputs'][idx:idx+1],
                 }
 
             F_star = self.compute_reliability(scenario_traj)
