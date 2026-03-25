@@ -475,9 +475,9 @@ def main(config=None):
         print(f"  Surrogate type: reliability_function (mathematical formula)")
 
     print(f"  Sampling mode: {'DETERMINISTIC (mean)' if use_deterministic_sampling else 'STOCHASTIC (reparameterization trick)'}")
-    F_star_value = surrogate.F_star  # Single scalar from scenario 0
+    F_star_value = surrogate.F_star  # Single scalar from scenario 0 (first sampled)
     print(f"  ✓ Surrogate initialized")
-    print(f"    F* = {F_star_value:.6f} (from scenario 0)")
+    print(f"    F* = {F_star_value:.6f} (from scenario 0, first sampled)")
 
     # 5. Create Trainer
     print("\n[5/9] Creating controller trainer...")

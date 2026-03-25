@@ -154,39 +154,23 @@ def generate_target_trajectory(process_configs, n_samples=50, seed=42):
             ds_scm.noise_model.singles = modified_singles
             ds_scm.noise_model.groups = []  # No grouped noise
 
-            # ── ST processes: calibration row as scenario 0 + sampled scenarios ──
+            # ── ST processes: sample all scenarios (calibration row NOT included) ──
+            # The calibration row is NOT used as a training scenario because:
+            # 1. It gives F*≈1 by construction (not representative)
+            # 2. It is unaffected by seed_target (always the same row)
+            # All n_samples scenarios are sampled from the SCM with the given seed,
+            # so changing seed_target produces different scenarios and different F*.
             if is_st and hasattr(ds_scm, 'cal_reference_row'):
-                ref = ds_scm.cal_reference_row
+                df = ds_scm.sample(n=n_samples, seed=seed)
+                inputs = df[scm_input_labels].values
+                outputs = df[scm_output_labels].values
 
-                # Row 0: calibration reference row (F* ≈ 1 by construction)
-                cal_inputs = np.array([[ref[lbl] for lbl in scm_input_labels]])
-                cal_outputs = np.array([[ref[lbl] for lbl in scm_output_labels]])
-                cal_structural = {}
+                structural_conditions = {}
                 for var in ds_scm.structural_noise_vars:
-                    if var in ref:
-                        cal_structural[var] = np.array([ref[var]])
+                    if var in df.columns:
+                        structural_conditions[var] = df[var].values
 
-                if n_samples > 1:
-                    # Rows 1..n_samples-1: sampled with diverse environmental factors
-                    df = ds_scm.sample(n=n_samples - 1, seed=seed)
-                    sampled_inputs = df[scm_input_labels].values
-                    sampled_outputs = df[scm_output_labels].values
-
-                    inputs = np.vstack([cal_inputs, sampled_inputs])
-                    outputs = np.vstack([cal_outputs, sampled_outputs])
-
-                    structural_conditions = {}
-                    for var in ds_scm.structural_noise_vars:
-                        if var in ref and var in df.columns:
-                            structural_conditions[var] = np.concatenate([
-                                cal_structural[var], df[var].values
-                            ])
-                else:
-                    inputs = cal_inputs
-                    outputs = cal_outputs
-                    structural_conditions = cal_structural
-
-                print(f"Generated target trajectory for {process_name} (ST: cal_row + {n_samples-1} sampled):")
+                print(f"Generated target trajectory for {process_name} (ST: {n_samples} sampled, no cal_row):")
 
             # ── Non-ST processes: sample all rows normally ──
             else:
