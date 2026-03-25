@@ -305,9 +305,9 @@ def _build_row(cfg: dict, run_dir_name: str, result: dict) -> dict:
         F_actual      = F_actual,
         win           = int(F_actual > F_base) if not (np.isnan(F_actual) or np.isnan(F_base)) else 0,
     )
-    row["gap_baseline"] = F_star - F_base   if not np.isnan(F_star - F_base)  else np.nan
-    row["gap_ctrl"]     = F_star - F_actual if not np.isnan(F_star - F_actual) else np.nan
-    row["gap_delta"]    = F_actual - F_base if not np.isnan(F_actual - F_base) else np.nan
+    row["gap_baseline"] = abs(F_star - F_base)   if not np.isnan(F_star - F_base)  else np.nan
+    row["gap_ctrl"]     = abs(F_star - F_actual) if not np.isnan(F_star - F_actual) else np.nan
+    row["gap_delta"]    = row["gap_baseline"] - row["gap_ctrl"] if not np.isnan(row["gap_baseline"] - row["gap_ctrl"]) else np.nan
 
     # Test metrics
     row["F_star_test"]     = _to_float(result.get("F_star_test"))
@@ -319,18 +319,18 @@ def _build_row(cfg: dict, run_dir_name: str, result: dict) -> dict:
         else 0
     )
 
-    # Gap metrics (same definitions as the standard sweep report)
+    # Gap metrics (with abs, consistent with complexity sweep convention)
     row["gap_baseline_test"] = (
-        row["F_star_test"] - row["F_baseline_test"]
+        abs(row["F_star_test"] - row["F_baseline_test"])
         if not np.isnan(row["F_star_test"] - row["F_baseline_test"]) else np.nan
     )
     row["gap_ctrl_test"] = (
-        row["F_star_test"] - row["F_actual_test"]
+        abs(row["F_star_test"] - row["F_actual_test"])
         if not np.isnan(row["F_star_test"] - row["F_actual_test"]) else np.nan
     )
     row["gap_delta_test"] = (
-        row["F_actual_test"] - row["F_baseline_test"]
-        if not np.isnan(row["F_actual_test"] - row["F_baseline_test"]) else np.nan
+        row["gap_baseline_test"] - row["gap_ctrl_test"]
+        if not np.isnan(row["gap_baseline_test"] - row["gap_ctrl_test"]) else np.nan
     )
 
     # Advanced metrics
@@ -1238,22 +1238,22 @@ def _build_all_runs_table(df: pd.DataFrame) -> list:
         _th("F*"),
         _th("F'", "baseline"),
         _th("F", "controller"),
-        _th("Gap base", "F*−F'"),
+        _th("Gap base", "|F*−F'|"),
     ]
 
     if has_test:
         col_w += [48, 48, 55, 55]
         header += [
-            _th("Gap ctrl", "train F*−F"),
-            _th("Gap ctrl", "test F*−F"),
-            _th("Gap Δ train", "(F*−F')−(F*−F)"),
-            _th("Gap Δ test", "(F*−F')−(F*−F)"),
+            _th("Gap ctrl", "train |F*−F|"),
+            _th("Gap ctrl", "test |F*−F|"),
+            _th("Gap Δ train", "|F*−F'|−|F*−F|"),
+            _th("Gap Δ test", "|F*−F'|−|F*−F|"),
         ]
     else:
         col_w += [48, 55]
         header += [
-            _th("Gap ctrl", "F*−F"),
-            _th("Gap Δ", "(F*−F')−(F*−F)"),
+            _th("Gap ctrl", "|F*−F|"),
+            _th("Gap Δ", "|F*−F'|−|F*−F|"),
         ]
 
     # Pad to fill FULL_W
@@ -1324,8 +1324,8 @@ def _build_all_runs_table(df: pd.DataFrame) -> list:
 
     footer_note = _P(
         f"{len(df_sorted)} runs  ·  "
-        "Gap base: F*−F'  ·  Gap ctrl: F*−F  ·  "
-        "Gap Δ: (F*−F')−(F*−F) positive = controller beats baseline  ·  "
+        "Gap base: |F*−F'|  ·  Gap ctrl: |F*−F|  ·  "
+        "Gap Δ: |F*−F'|−|F*−F| positive = controller beats baseline  ·  "
         "green = win  ·  red = loss",
         S_MUTED,
     )
