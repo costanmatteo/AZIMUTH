@@ -10,51 +10,39 @@
 #SBATCH --array=0-249
 
 # ============================================================================
-# Controller Seed Sweep - Euler HPC (ETH Zurich)
+# Controller Sweep - Euler HPC (auto-generated from configs/sweep_config.py)
 # ============================================================================
 #
-# This sweep tests 250 combinations of seed_target and seed_baseline
-# to evaluate controller robustness across different random initializations.
-#
-# Resources: CPU only, 1 core, 2GB RAM, 10 min per job
+# 250 runs = seed_target(25) x seed_baseline(10)
 #
 # Usage:
-#   1. Submit: sbatch euler/sweep/sweep.sh
-#   2. After completion, generate report: python euler/sweep/generate_sweep_report.py
-#
-# Monitor:
-#   squeue -u $USER                    # Check job status
-#   tail -f logs/sweep_<jobid>_<taskid>.out  # Follow output
-#
-# Results:
-#   - Individual runs: controller_optimization/checkpoints/sweep/<run_name>/
-#   - Aggregated report: controller_optimization/checkpoints/sweep/sweep_report.pdf
+#   1. Generate: python euler/sweep/generate_sweep_params.py
+#   2. Submit:   sbatch euler/sweep/sweep.sh
+#   3. Report:   python euler/sweep/generate_sweep_report.py
 # ============================================================================
 
-# Exit on error
 set -e
 
-# Load required modules (Euler 2024 stack)
 module load stack/2024-05 gcc/13.2.0 python/3.11.6_cuda
 
-# Navigate to project root
 cd $HOME/AZIMUTH
 
-# Create logs directory if it doesn't exist
 mkdir -p logs
+
+if [ -d "venv" ]; then
+    source venv/bin/activate
+elif [ -d ".venv" ]; then
+    source .venv/bin/activate
+fi
 
 # Read parameter combination for this array task
 PARAMS_FILE="euler/sweep/sweep_params.txt"
 
-# Check if params file exists
 if [ ! -f "$PARAMS_FILE" ]; then
     echo "ERROR: Parameter file not found: $PARAMS_FILE"
     exit 1
 fi
 
-# Get the line corresponding to this array task (0-indexed)
-# First strip comments and empty lines, THEN select by line number
-# This ensures task ID 0 maps to the first data line, not a comment
 LINE=$(grep -v '^#' "$PARAMS_FILE" | grep -v '^$' | sed -n "$((SLURM_ARRAY_TASK_ID + 1))p")
 
 if [ -z "$LINE" ]; then
@@ -62,11 +50,9 @@ if [ -z "$LINE" ]; then
     exit 1
 fi
 
-# Parse parameters from line (format: run_name param1=value1 param2=value2 ...)
 RUN_NAME=$(echo "$LINE" | awk '{print $1}')
 PARAMS=$(echo "$LINE" | cut -d' ' -f2-)
 
-# Convert param=value format to --param value format
 ARGS=""
 for PARAM in $PARAMS; do
     KEY=$(echo "$PARAM" | cut -d'=' -f1)
@@ -74,15 +60,12 @@ for PARAM in $PARAMS; do
     ARGS="$ARGS --$KEY $VALUE"
 done
 
-# Define output directory
 OUTPUT_DIR="controller_optimization/checkpoints/sweep"
 
-# Print job info
 echo "=============================================="
 echo "SLURM Job ID:     $SLURM_JOB_ID"
 echo "Array Task ID:    $SLURM_ARRAY_TASK_ID"
 echo "Node:             $SLURM_NODELIST"
-echo "GPU:              $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo 'N/A (CPU only)')"
 echo "=============================================="
 echo "Run name:         $RUN_NAME"
 echo "Parameters:       $PARAMS"
@@ -90,26 +73,16 @@ echo "Output directory: $OUTPUT_DIR/$RUN_NAME"
 echo "=============================================="
 echo ""
 
-# Activate virtual environment if it exists
-if [ -d "venv" ]; then
-    source venv/bin/activate
-    echo "Activated virtual environment: venv"
-elif [ -d ".venv" ]; then
-    source .venv/bin/activate
-    echo "Activated virtual environment: .venv"
-fi
-
-# Run training with parameters
 echo "Starting training..."
-echo "Command: python train_controller.py --output_dir $OUTPUT_DIR --run_name $RUN_NAME $ARGS"
+echo "Command: python train_controller.py --output_dir $OUTPUT_DIR --run_name $RUN_NAME --no_pdf --quiet $ARGS"
 echo ""
 
 python train_controller.py \
     --output_dir "$OUTPUT_DIR" \
     --run_name "$RUN_NAME" \
+    --no_pdf --quiet \
     $ARGS
 
-# Check exit status
 if [ $? -eq 0 ]; then
     echo ""
     echo "=============================================="
