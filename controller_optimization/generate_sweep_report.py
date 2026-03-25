@@ -704,14 +704,10 @@ def build_page1_html(s: dict, now: datetime,
 def build_page2_html(df: pd.DataFrame, now: datetime, sweep_dir: str) -> str:
     df = df.sort_values('gap_ctrl_train', ascending=True).reset_index(drop=True)
 
-    q25 = df['gap_ctrl_train'].quantile(0.25)
-    q75 = df['gap_ctrl_train'].quantile(0.75)
     ts  = now.strftime('%Y-%m-%d &nbsp;%H:%M:%S')
 
     rows_html = ''
     for _, r in df.iterrows():
-        gc_cls = _gap_ctrl_cls(r['gap_ctrl_train'], q25, q75)
-        gct_cls = _gap_ctrl_cls(r['gap_ctrl_test'],  q25, q75)
         dtr_cls = _delta_cls(r['gap_ctrl_train'], r['gap_baseline_train'])
         dte_cls = _delta_cls(r['gap_ctrl_test'],  r['gap_baseline_test'])
 
@@ -724,8 +720,8 @@ def build_page2_html(df: pd.DataFrame, now: datetime, sweep_dir: str) -> str:
         <td>{_fmt(r['F_baseline_train'])}</td>
         <td>{_fmt(r['F_actual_train'])}</td>
         <td>{_fmt(r['gap_baseline_train'])}</td>
-        <td class="{gc_cls}">{_fmt(r['gap_ctrl_train'])}</td>
-        <td class="{gct_cls}">{_fmt(r['gap_ctrl_test'])}</td>
+        <td>{_fmt(r['gap_ctrl_train'])}</td>
+        <td>{_fmt(r['gap_ctrl_test'])}</td>
         <td class="{dtr_cls}">{_sign(r['gap_delta_train'])}</td>
         <td class="{dte_cls}">{_sign(r['gap_delta_test'])}</td>
       </tr>"""
@@ -769,9 +765,6 @@ def build_page2_html(df: pd.DataFrame, now: datetime, sweep_dir: str) -> str:
   </table>
 
   <div class="legend">
-    Gap ctrl colored:
-    <span class="g">green = best quartile</span> &nbsp;&#183;&nbsp;
-    <span class="r">red = worst quartile</span> &nbsp;&#183;&nbsp;
     Gap &#916; colored:
     <span class="dg">green = ctrl better</span> &nbsp;&#183;&nbsp;
     <span class="da">amber = marginal (&lt;0.05)</span> &nbsp;&#183;&nbsp;
