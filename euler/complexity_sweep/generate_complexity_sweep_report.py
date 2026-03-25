@@ -95,7 +95,10 @@ def aggregate_results(sweep_dir: Path) -> pd.DataFrame:
 def compute_win_rates(df: pd.DataFrame) -> pd.DataFrame:
     """Group by (st_n, st_m, st_rho[, n_processes]) and compute win rate per config."""
     df = df.copy()
-    df['controller_wins'] = df['F_actual_train'] > df['F_baseline_train']
+    # win = controller closer to F* than baseline (gap-based, same as sweep.sh)
+    gap_baseline = (df['F_star_train'] - df['F_baseline_train']).abs()
+    gap_ctrl     = (df['F_star_train'] - df['F_actual_train']).abs()
+    df['controller_wins'] = gap_ctrl < gap_baseline
 
     group_cols = ['st_n', 'st_m', 'st_rho']
     if 'n_processes' in df.columns and df['n_processes'].notna().any():
@@ -121,7 +124,10 @@ def compute_stats(df: pd.DataFrame, win_df: pd.DataFrame) -> dict:
     """Compute aggregate KPI statistics for the report."""
     n_runs   = len(df)
     n_cfgs   = len(win_df)
-    overall_win_rate = float(100.0 * (df['F_actual_train'] > df['F_baseline_train']).mean())
+    # gap-based win rate (same as sweep.sh): |gap_ctrl| < |gap_baseline|
+    gb = (df['F_star_train'] - df['F_baseline_train']).abs()
+    gc = (df['F_star_train'] - df['F_actual_train']).abs()
+    overall_win_rate = float(100.0 * (gc < gb).mean())
     best_row = win_df.loc[win_df['win_rate_pct'].idxmax()]
     worst_row = win_df.loc[win_df['win_rate_pct'].idxmin()]
 
