@@ -265,7 +265,7 @@ def plot_marginals(win_df: pd.DataFrame) -> str:
     """Bar/scatter of win rate vs each complexity parameter (marginal effects)."""
     has_nproc = 'n_processes' in win_df.columns and win_df['n_processes'].notna().any()
     n_panels  = 4 if has_nproc else 3
-    fig, axes = plt.subplots(1, n_panels, figsize=(4.8 * n_panels, 3.6))
+    fig, axes = plt.subplots(1, n_panels, figsize=(3.8 * n_panels, 3.0))
     if n_panels == 1:
         axes = [axes]
 
@@ -393,7 +393,7 @@ def plot_3d_scatter(win_df: pd.DataFrame) -> str:
 
 def plot_winrate_distribution(win_df: pd.DataFrame) -> str:
     """Histogram of win-rate distribution across configurations."""
-    fig, axes = plt.subplots(1, 2, figsize=(4.2, 3.4))
+    fig, axes = plt.subplots(1, 2, figsize=(7.6, 3.0))
 
     # left: histogram
     ax = axes[0]
@@ -719,9 +719,9 @@ def build_page1_html(s: dict, now: datetime,
       <div class="kpi-s">{nc} unique configs</div>
     </div>
     <div class="kpi">
-      <div class="kpi-l">Overall win rate</div>
-      <div class="kpi-v {wr_cls}">{wr:.1f}%</div>
-      <div class="kpi-s">|gap ctrl| &lt; |gap baseline|</div>
+      <div class="kpi-l">Controller wins</div>
+      <div class="kpi-v g">{s['wins']}/{n}</div>
+      <div class="kpi-s">win rate {s['win_rate']:.1f}%</div>
     </div>
     <div class="kpi">
       <div class="kpi-l">Median config win rate</div>
@@ -766,7 +766,7 @@ def build_page1_html(s: dict, now: datetime,
         </div>
         <div class="sg-sub">
           <div class="stat-lbl">Gap &#916;</div>
-          <div class="stat-sublbl">|Gap bl.| &#8722; |Gap ctrl|</div>
+          <div class="stat-sublbl">(F*&#8722;F') &#8722; (F*&#8722;F)</div>
           <div class="row"><span class="rk">Min</span><span class="rv">{_sign(s['gd_tr_min'])}</span></div>
           <div class="row"><span class="rk">Median</span><span class="rv">{_sign(s['gd_tr_med'])}</span></div>
           <div class="row"><span class="rk">Max</span><span class="rv">{_sign(s['gd_tr_max'])}</span></div>
@@ -793,7 +793,7 @@ def build_page1_html(s: dict, now: datetime,
         </div>
         <div class="sg-sub">
           <div class="stat-lbl">Gap &#916;</div>
-          <div class="stat-sublbl">|Gap bl.| &#8722; |Gap ctrl|</div>
+          <div class="stat-sublbl">(F*&#8722;F') &#8722; (F*&#8722;F)</div>
           <div class="row"><span class="rk">Min</span><span class="rv">{_sign(s['gd_te_min'])}</span></div>
           <div class="row"><span class="rk">Median</span><span class="rv">{_sign(s['gd_te_med'])}</span></div>
           <div class="row"><span class="rk">Max</span><span class="rv">{_sign(s['gd_te_max'])}</span></div>
@@ -824,12 +824,12 @@ def build_page1_html(s: dict, now: datetime,
   <div class="sec-head">02 &#8212; marginal effects &nbsp;&#183;&nbsp; win rate vs each complexity parameter</div>
   <hr class="rule-thin">
 
-  <div class="plot-grid" style="flex: 2.2;">
-    <div class="plot-cell" style="flex: 3.5;">
+  <div class="plot-grid" style="flex: 1;">
+    <div class="plot-cell" style="flex: 3;">
       <img class="plot-img" src="data:image/png;base64,{b64_marginals}">
       <div class="plot-cap">Win rate vs n, m, &#961; (marginal) &#8212; bars/points coloured green&#8594;red by win rate</div>
     </div>
-    <div class="plot-cell" style="flex: 1.5;">
+    <div class="plot-cell" style="flex: 2;">
       <img class="plot-img" src="data:image/png;base64,{b64_wr_dist}">
       <div class="plot-cap">Win-rate distribution across configs (left) &amp; sorted waterfall (right)</div>
     </div>
