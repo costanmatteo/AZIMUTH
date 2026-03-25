@@ -133,10 +133,26 @@ def compute_stats(df: pd.DataFrame, win_df: pd.DataFrame) -> dict:
             s += f" p={int(row['n_processes'])}"
         return s
 
+    # ── gap-based statistics (same as sweep report) ──
+    gb_tr = (df['F_star_train']  - df['F_baseline_train']).abs()
+    gc_tr = (df['F_star_train']  - df['F_actual_train']).abs()
+    gd_tr = gb_tr - gc_tr                              # positive = ctrl better
+
+    gb_te = (df['F_star_test']   - df['F_baseline_test']).abs()
+    gc_te = (df['F_star_test']   - df['F_actual_test']).abs()
+    gd_te = gb_te - gc_te
+
+    wins = (gc_tr.abs() < gb_tr.abs()).sum()
+
+    best_idx  = gc_tr.abs().idxmin()
+    worst_idx = gc_tr.abs().idxmax()
+
     return {
         'n_runs':           n_runs,
         'n_cfgs':           n_cfgs,
         'overall_win_rate': overall_win_rate,
+        'wins':             int(wins),
+        'win_rate':         100.0 * wins / n_runs,
         'best_cfg':         _cfg_label(best_row),
         'best_wr':          float(best_row['win_rate_pct']),
         'worst_cfg':        _cfg_label(worst_row),
@@ -145,6 +161,25 @@ def compute_stats(df: pd.DataFrame, win_df: pd.DataFrame) -> dict:
         'has_nproc':        has_nproc,
         'df':               df,
         'win_df':           win_df,
+        # train gaps
+        'gb_tr_min':  gb_tr.min(),  'gb_tr_med':  gb_tr.median(),  'gb_tr_max':  gb_tr.max(),
+        'gc_tr_min':  gc_tr.min(),  'gc_tr_med':  gc_tr.median(),  'gc_tr_max':  gc_tr.max(),
+        'gd_tr_min':  gd_tr.min(),  'gd_tr_med':  gd_tr.median(),  'gd_tr_max':  gd_tr.max(),
+        # test gaps
+        'gb_te_min':  gb_te.min(),  'gb_te_med':  gb_te.median(),  'gb_te_max':  gb_te.max(),
+        'gc_te_min':  gc_te.min(),  'gc_te_med':  gc_te.median(),  'gc_te_max':  gc_te.max(),
+        'gd_te_min':  gd_te.min(),  'gd_te_med':  gd_te.median(),  'gd_te_max':  gd_te.max(),
+        # best / worst run
+        'best_run':   df.loc[best_idx,  'run_name'],
+        'best_gap':   gc_tr.loc[best_idx],
+        'worst_run':  df.loc[worst_idx, 'run_name'],
+        'worst_gap':  gc_tr.loc[worst_idx],
+        # generalisation
+        'degrad':     gc_te.median() - gc_tr.median(),
+        # F*
+        'fstar_min':  df['F_star_train'].min(),
+        'fstar_med':  df['F_star_train'].median(),
+        'fstar_max':  df['F_star_train'].max(),
     }
 
 
@@ -405,11 +440,24 @@ body {
              border-left: 2px solid #1a1a1a; padding-left: 4px; }
 
 /* ── stat rows ── */
+.stat-lbl    { font-size: 7.5px; font-weight: 500; color: #1a1a1a;
+               margin-bottom: 2px; margin-top: 4px; }
+.stat-sublbl { font-size: 7px; color: #888; }
 .row { display: flex; justify-content: space-between; padding: 1.5px 0;
        border-bottom: 0.5px solid #eee; font-size: 8px; gap: 6px; }
 .row:last-child { border-bottom: none; }
 .rk  { color: #888; }
 .rv  { font-weight: 500; }
+
+/* ── four-column stats grid ── */
+.stats-grid  { display: table; width: 100%; margin-bottom: 7px;
+               table-layout: fixed; }
+.sg-col      { display: table-cell; padding-right: 12px;
+               vertical-align: top; }
+.sg-col:last-child { padding-right: 0; }
+.sg-inner    { display: table; width: 100%; table-layout: fixed; }
+.sg-sub      { display: table-cell; padding-right: 5px; vertical-align: top; }
+.sg-sub:last-child { padding-right: 0; }
 
 /* ── plot grid ── */
 .plot-grid { display: flex; width: 100%; flex: 1; gap: 6px; }
@@ -449,6 +497,9 @@ def _pct(v) -> str:
     if v is None or (isinstance(v, float) and np.isnan(v)):
         return 'N/A'
     return f'{float(v):.1f}%'
+
+def _sign(v) -> str:
+    return f"+{v:.3f}" if v >= 0 else f"{v:.3f}"
 
 def _wr_cls(v: float) -> str:
     if v >= 70:   return 'dg'
@@ -501,7 +552,86 @@ def build_page1_html(s: dict, now: datetime,
     </div>
   </div>
 
-  <div class="sec-head">01 &#8212; marginal effects &nbsp;&#183;&nbsp; win rate vs each complexity parameter</div>
+  <div class="sec-head">01 &#8212; aggregate statistics</div>
+  <hr class="rule-thin">
+
+  <div class="stats-grid">
+    <!-- train -->
+    <div class="sg-col">
+      <div class="blk-title">Train split</div>
+      <div class="sg-inner">
+        <div class="sg-sub">
+          <div class="stat-lbl">Gap baseline</div>
+          <div class="stat-sublbl">F* &#8722; F'</div>
+          <div class="row"><span class="rk">Min</span><span class="rv">{_fmt(s['gb_tr_min'])}</span></div>
+          <div class="row"><span class="rk">Median</span><span class="rv">{_fmt(s['gb_tr_med'])}</span></div>
+          <div class="row"><span class="rk">Max</span><span class="rv">{_fmt(s['gb_tr_max'])}</span></div>
+        </div>
+        <div class="sg-sub">
+          <div class="stat-lbl">Gap ctrl</div>
+          <div class="stat-sublbl">F* &#8722; F</div>
+          <div class="row"><span class="rk">Min</span><span class="rv g">{_fmt(s['gc_tr_min'])}</span></div>
+          <div class="row"><span class="rk">Median</span><span class="rv">{_fmt(s['gc_tr_med'])}</span></div>
+          <div class="row"><span class="rk">Max</span><span class="rv r">{_fmt(s['gc_tr_max'])}</span></div>
+        </div>
+        <div class="sg-sub">
+          <div class="stat-lbl">Gap &#916;</div>
+          <div class="stat-sublbl">|Gap bl.| &#8722; |Gap ctrl|</div>
+          <div class="row"><span class="rk">Min</span><span class="rv">{_sign(s['gd_tr_min'])}</span></div>
+          <div class="row"><span class="rk">Median</span><span class="rv">{_sign(s['gd_tr_med'])}</span></div>
+          <div class="row"><span class="rk">Max</span><span class="rv">{_sign(s['gd_tr_max'])}</span></div>
+        </div>
+      </div>
+    </div>
+    <!-- test -->
+    <div class="sg-col">
+      <div class="blk-title">Test split</div>
+      <div class="sg-inner">
+        <div class="sg-sub">
+          <div class="stat-lbl">Gap baseline</div>
+          <div class="stat-sublbl">F* &#8722; F'</div>
+          <div class="row"><span class="rk">Min</span><span class="rv">{_fmt(s['gb_te_min'])}</span></div>
+          <div class="row"><span class="rk">Median</span><span class="rv">{_fmt(s['gb_te_med'])}</span></div>
+          <div class="row"><span class="rk">Max</span><span class="rv">{_fmt(s['gb_te_max'])}</span></div>
+        </div>
+        <div class="sg-sub">
+          <div class="stat-lbl">Gap ctrl</div>
+          <div class="stat-sublbl">F* &#8722; F</div>
+          <div class="row"><span class="rk">Min</span><span class="rv g">{_fmt(s['gc_te_min'])}</span></div>
+          <div class="row"><span class="rk">Median</span><span class="rv">{_fmt(s['gc_te_med'])}</span></div>
+          <div class="row"><span class="rk">Max</span><span class="rv r">{_fmt(s['gc_te_max'])}</span></div>
+        </div>
+        <div class="sg-sub">
+          <div class="stat-lbl">Gap &#916;</div>
+          <div class="stat-sublbl">|Gap bl.| &#8722; |Gap ctrl|</div>
+          <div class="row"><span class="rk">Min</span><span class="rv">{_sign(s['gd_te_min'])}</span></div>
+          <div class="row"><span class="rk">Median</span><span class="rv">{_sign(s['gd_te_med'])}</span></div>
+          <div class="row"><span class="rk">Max</span><span class="rv">{_sign(s['gd_te_max'])}</span></div>
+        </div>
+      </div>
+    </div>
+    <!-- best/worst + generalisation -->
+    <div class="sg-col">
+      <div class="blk-title">Best &amp; worst &middot; generalisation</div>
+      <div class="row"><span class="rk">Best run (min gap tr.)</span><span class="rv g">{s['best_run']} &#8212; {_fmt(s['best_gap'])}</span></div>
+      <div class="row"><span class="rk">Worst run (max gap tr.)</span><span class="rv r">{s['worst_run']} &#8212; {_fmt(s['worst_gap'])}</span></div>
+      <div style="margin-top:4px;border-top:0.5px solid #eee;padding-top:3px">
+        <div class="row"><span class="rk">Median gap ctrl train</span><span class="rv">{_fmt(s['gc_tr_med'])}</span></div>
+        <div class="row"><span class="rk">Median gap ctrl test</span><span class="rv">{_fmt(s['gc_te_med'])}</span></div>
+        <div class="row"><span class="rk">Degradation (tst&#8722;tr)</span><span class="rv a">{_sign(s['degrad'])}</span></div>
+      </div>
+    </div>
+    <!-- F* -->
+    <div class="sg-col" style="width:14%">
+      <div class="blk-title">F* (target)</div>
+      <div class="stat-sublbl" style="margin-top:3px;margin-bottom:4px">varies per run if seed_target differs</div>
+      <div class="row"><span class="rk">Min</span><span class="rv">{_fmt(s['fstar_min'])}</span></div>
+      <div class="row"><span class="rk">Median</span><span class="rv">{_fmt(s['fstar_med'])}</span></div>
+      <div class="row"><span class="rk">Max</span><span class="rv">{_fmt(s['fstar_max'])}</span></div>
+    </div>
+  </div>
+
+  <div class="sec-head">02 &#8212; marginal effects &nbsp;&#183;&nbsp; win rate vs each complexity parameter</div>
   <hr class="rule-thin">
 
   <div class="plot-grid" style="flex: 2.2;">
@@ -538,7 +668,7 @@ def build_page2_html(s: dict, now: datetime,
   </div>
   <hr class="rule-heavy">
 
-  <div class="sec-head">02 &#8212; 2D parameter interactions &nbsp;&#183;&nbsp; win-rate heatmaps (averaged over the third parameter)</div>
+  <div class="sec-head">03 &#8212; 2D parameter interactions &nbsp;&#183;&nbsp; win-rate heatmaps (averaged over the third parameter)</div>
   <hr class="rule-thin">
 
   <div class="plot-grid" style="flex: 1.4;">
@@ -556,7 +686,7 @@ def build_page2_html(s: dict, now: datetime,
     </div>
   </div>
 
-  <div class="sec-head" style="margin-top:6px;">03 &#8212; 3D complexity space &nbsp;&#183;&nbsp; colour = win rate &nbsp;&#183;&nbsp; size &#8733; n_runs per config</div>
+  <div class="sec-head" style="margin-top:6px;">04 &#8212; 3D complexity space &nbsp;&#183;&nbsp; colour = win rate &nbsp;&#183;&nbsp; size &#8733; n_runs per config</div>
   <hr class="rule-thin">
 
   <div class="plot-grid" style="flex: 1.4;">
@@ -620,7 +750,7 @@ def build_page3_html(win_df: pd.DataFrame, now: datetime, sweep_dir: str) -> str
   <hr class="rule-heavy">
 
   <div class="sec-head">
-    04 &#8212; all configurations
+    05 &#8212; all configurations
     <span style="font-size:7px;font-weight:400;text-transform:none;letter-spacing:0">
       sorted by win rate &middot; descending &nbsp;&#183;&nbsp; win = F &gt; F&prime; &nbsp;&#183;&nbsp; improvement = (F&#8722;F&prime;)/|F&prime;|
     </span>
