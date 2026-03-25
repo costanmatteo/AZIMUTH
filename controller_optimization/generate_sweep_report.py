@@ -117,7 +117,7 @@ def compute_stats(df: pd.DataFrame) -> dict:
     gc_te = df['F_star_test']   - df['F_actual_test']
     gd_te = gb_te - gc_te
 
-    wins = (gc_tr < gb_tr).sum()
+    wins = (gc_tr.abs() < gb_tr.abs()).sum()
 
     # derived columns stored back into df for plotting / table
     df = df.copy()
@@ -128,8 +128,8 @@ def compute_stats(df: pd.DataFrame) -> dict:
     df['gap_ctrl_test']      = gc_te
     df['gap_delta_test']     = gd_te
 
-    best_idx  = gc_tr.idxmin()
-    worst_idx = gc_tr.idxmax()
+    best_idx  = gc_tr.abs().idxmin()
+    worst_idx = gc_tr.abs().idxmax()
 
     return {
         'df': df,
@@ -146,9 +146,9 @@ def compute_stats(df: pd.DataFrame) -> dict:
         'gd_te_min':  gd_te.min(),  'gd_te_med':  gd_te.median(),  'gd_te_max':  gd_te.max(),
         # best / worst
         'best_run':   df.loc[best_idx,  'run_name'],
-        'best_gap':   gc_tr.min(),
+        'best_gap':   gc_tr.loc[best_idx],
         'worst_run':  df.loc[worst_idx, 'run_name'],
-        'worst_gap':  gc_tr.max(),
+        'worst_gap':  gc_tr.loc[worst_idx],
         # generalisation
         'degrad':     gc_te.median() - gc_tr.median(),
         # F*
@@ -238,12 +238,15 @@ def plot_improvement(df: pd.DataFrame) -> str:
 
     # right: delta distribution
     ax = axes[1]
-    deltas = df['gap_delta_train'].sort_values()
+    # Sort by improvement (|gap_baseline| - |gap_ctrl|); positive = ctrl better
+    improvement = df['gap_baseline_train'].abs() - df['gap_ctrl_train'].abs()
+    improvement = improvement.sort_values()
+    deltas = improvement
     colors_bar = [_GREEN if v >= 0 else _RED for v in deltas]
     ax.bar(range(len(deltas)), deltas, color=colors_bar, width=1.0, linewidth=0)
     ax.axhline(0, color='black', lw=0.6)
     ax.set_xlabel('Run (sorted)', fontsize=7, fontfamily=_MONO)
-    ax.set_ylabel('Gap Δ  (F − F\')', fontsize=7, fontfamily=_MONO)
+    ax.set_ylabel('|Gap baseline| − |Gap ctrl|', fontsize=7, fontfamily=_MONO)
     ax.set_title('Gap reduction per run', fontsize=7.5,
                  fontfamily=_MONO, fontweight='bold')
     ax.tick_params(labelsize=6)
@@ -257,10 +260,11 @@ def plot_heatmap(df: pd.DataFrame) -> str:
     df = df.copy()
     df['seed_t'] = pd.to_numeric(df['seed_target'],  errors='coerce')
     df['seed_b'] = pd.to_numeric(df['seed_baseline'], errors='coerce')
-    df = df.dropna(subset=['seed_t', 'seed_b', 'gap_delta_train'])
+    df['gap_improvement_train'] = df['gap_baseline_train'].abs() - df['gap_ctrl_train'].abs()
+    df = df.dropna(subset=['seed_t', 'seed_b', 'gap_improvement_train'])
 
     pivot = df.pivot_table(index='seed_t', columns='seed_b',
-                           values='gap_delta_train', aggfunc='mean')
+                           values='gap_improvement_train', aggfunc='mean')
 
     fig, ax = plt.subplots(figsize=(4.2, 3.4))
     vmax = max(abs(pivot.values[~np.isnan(pivot.values)]).max(), 0.01)
@@ -414,10 +418,12 @@ def _sign(v) -> str:
     return f"+{v:.3f}" if v >= 0 else f"{v:.3f}"
 
 
-def _delta_cls(v) -> str:
-    if v >= 0.05:  return 'dg'
-    if v >= 0:     return 'da'
-    return 'dr'
+def _delta_cls(gap_ctrl, gap_baseline) -> str:
+    """Color based on whether controller is closer to target (absolute gap)."""
+    improvement = abs(gap_baseline) - abs(gap_ctrl)
+    if improvement >= 0.05:  return 'dg'   # controller clearly better
+    if improvement >= 0:     return 'da'   # marginal
+    return 'dr'                             # baseline better
 
 
 def _gap_ctrl_cls(v, q25, q75) -> str:
@@ -604,9 +610,9 @@ def build_page1_html(s: dict, now: datetime,
         <div class="sg-sub">
           <div class="stat-lbl">Gap &#916;</div>
           <div class="stat-sublbl">F &#8722; F'</div>
-          <div class="row"><span class="rk">Min</span><span class="rv a">{_sign(s['gd_tr_min'])}</span></div>
-          <div class="row"><span class="rk">Median</span><span class="rv g">{_sign(s['gd_tr_med'])}</span></div>
-          <div class="row"><span class="rk">Max</span><span class="rv g">{_sign(s['gd_tr_max'])}</span></div>
+          <div class="row"><span class="rk">Min</span><span class="rv">{_sign(s['gd_tr_min'])}</span></div>
+          <div class="row"><span class="rk">Median</span><span class="rv">{_sign(s['gd_tr_med'])}</span></div>
+          <div class="row"><span class="rk">Max</span><span class="rv">{_sign(s['gd_tr_max'])}</span></div>
         </div>
       </div>
     </div>
@@ -631,9 +637,9 @@ def build_page1_html(s: dict, now: datetime,
         <div class="sg-sub">
           <div class="stat-lbl">Gap &#916;</div>
           <div class="stat-sublbl">F &#8722; F'</div>
-          <div class="row"><span class="rk">Min</span><span class="rv a">{_sign(s['gd_te_min'])}</span></div>
-          <div class="row"><span class="rk">Median</span><span class="rv g">{_sign(s['gd_te_med'])}</span></div>
-          <div class="row"><span class="rk">Max</span><span class="rv g">{_sign(s['gd_te_max'])}</span></div>
+          <div class="row"><span class="rk">Min</span><span class="rv">{_sign(s['gd_te_min'])}</span></div>
+          <div class="row"><span class="rk">Median</span><span class="rv">{_sign(s['gd_te_med'])}</span></div>
+          <div class="row"><span class="rk">Max</span><span class="rv">{_sign(s['gd_te_max'])}</span></div>
         </div>
       </div>
     </div>
@@ -698,8 +704,8 @@ def build_page2_html(df: pd.DataFrame, now: datetime, sweep_dir: str) -> str:
     for _, r in df.iterrows():
         gc_cls = _gap_ctrl_cls(r['gap_ctrl_train'], q25, q75)
         gct_cls = _gap_ctrl_cls(r['gap_ctrl_test'],  q25, q75)
-        dtr_cls = _delta_cls(r['gap_delta_train'])
-        dte_cls = _delta_cls(r['gap_delta_test'])
+        dtr_cls = _delta_cls(r['gap_ctrl_train'], r['gap_baseline_train'])
+        dte_cls = _delta_cls(r['gap_ctrl_test'],  r['gap_baseline_test'])
 
         rows_html += f"""
       <tr>
