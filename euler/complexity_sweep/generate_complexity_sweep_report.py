@@ -76,12 +76,16 @@ def load_run_results(run_dir: Path) -> dict | None:
 
 def aggregate_results(sweep_dir: Path) -> pd.DataFrame:
     results = []
-    for run_dir in sorted(sweep_dir.iterdir()):
-        if not run_dir.is_dir():
+    # Results are nested: sweep_dir/config_dir/run_dir/final_results.json
+    for config_dir in sorted(sweep_dir.iterdir()):
+        if not config_dir.is_dir():
             continue
-        r = load_run_results(run_dir)
-        if r is not None:
-            results.append(r)
+        for run_dir in sorted(config_dir.iterdir()):
+            if not run_dir.is_dir():
+                continue
+            r = load_run_results(run_dir)
+            if r is not None:
+                results.append(r)
     if not results:
         return pd.DataFrame()
     print(f"Loaded {len(results)} runs")
