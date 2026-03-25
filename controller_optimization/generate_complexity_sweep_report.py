@@ -131,15 +131,16 @@ def _parse_config_dir(dirname: str) -> dict | None:
         config_001__n5_m2_rho0.30_P3
         n5_m2_rho0.30_P3
         n5_m2_p3_r0.30          (actual pipeline format)
+        cfg00_n5_m2_p3_r0.30_t01_b21  (flat run dir from pipeline)
         config_042
     Returns None if parsing fails.
     """
     m_n   = re.search(r'n(\d+)',      dirname)
     m_m   = re.search(r'm(\d+)',      dirname)
-    # Match both 'rho0.30' and 'r0.30' formats
+    # Match both 'rho0.30' and '_r0.30' formats
     m_rho = re.search(r'(?:rho|_r)([0-9.]+)', dirname)
     m_P   = re.search(r'[Pp](\d+)',   dirname)
-    config_id_m = re.search(r'config[_]?(\d+)', dirname)
+    config_id_m = re.search(r'(?:config|cfg)[_]?(\d+)', dirname)
 
     n_vars     = int(m_n.group(1))   if m_n   else None
     n_stages   = int(m_m.group(1))   if m_m   else None
@@ -266,104 +267,130 @@ _SKIP_DIRS = {"generate_dataset", "train_predictor", "train_surrogate",
               "complexity_plots", "__pycache__"}
 
 
+def _build_row(cfg: dict, run_dir_name: str, result: dict) -> dict:
+    """Build a row dict from parsed config, directory name, and loaded result."""
+    # parse seed from directory name
+    m_st = re.search(r't(\d+)', run_dir_name)
+    m_sb = re.search(r'b(\d+)', run_dir_name)
+    seed_t = int(m_st.group(1)) if m_st else result.get("seed_target", -1)
+    seed_b = int(m_sb.group(1)) if m_sb else result.get("seed_baseline", -1)
+
+    F_star    = _to_float(result.get("F_star",     result.get("f_star")))
+    F_base    = _to_float(result.get("F_baseline", result.get("f_baseline")))
+    F_actual  = _to_float(result.get("F_actual",   result.get("f_actual")))
+
+    # Use ST params from result as fallback (nested format)
+    n_vars   = cfg["n_vars"]     or result.get("_st_n")
+    n_stages = cfg["n_stages"]   or result.get("_st_m")
+    rho      = cfg["rho"]        or result.get("_st_rho")
+    n_proc   = cfg["n_processes"] or result.get("_n_processes")
+
+    # Derive config_name without seed suffix for grouping
+    # e.g. cfg00_n5_m2_p3_r0.30_t01_b21 -> cfg00_n5_m2_p3_r0.30
+    config_name = cfg["config_name"]
+    config_stripped = re.sub(r'_t\d+_b\d+$', '', config_name)
+
+    row = dict(
+        config_name   = config_stripped,
+        config_id     = cfg["config_id"],
+        n_vars        = n_vars,
+        n_stages      = n_stages,
+        rho           = rho,
+        n_processes   = n_proc,
+        seed_target   = seed_t,
+        seed_baseline = seed_b,
+        run_name      = run_dir_name,
+        F_star        = F_star,
+        F_baseline    = F_base,
+        F_actual      = F_actual,
+        win           = int(F_actual > F_base) if not (np.isnan(F_actual) or np.isnan(F_base)) else 0,
+    )
+    row["gap_baseline"] = F_star - F_base   if not np.isnan(F_star - F_base)  else np.nan
+    row["gap_ctrl"]     = F_star - F_actual if not np.isnan(F_star - F_actual) else np.nan
+    row["gap_delta"]    = F_actual - F_base if not np.isnan(F_actual - F_base) else np.nan
+
+    # Test metrics
+    row["F_star_test"]     = _to_float(result.get("F_star_test"))
+    row["F_baseline_test"] = _to_float(result.get("F_baseline_test"))
+    row["F_actual_test"]   = _to_float(result.get("F_actual_test"))
+    row["win_test"] = (
+        int(row["F_actual_test"] > row["F_baseline_test"])
+        if not (np.isnan(row["F_actual_test"]) or np.isnan(row["F_baseline_test"]))
+        else 0
+    )
+
+    # Advanced metrics
+    row["gap_closure_train"]     = _to_float(result.get("gap_closure_train"))
+    row["gap_closure_test"]      = _to_float(result.get("gap_closure_test"))
+    row["success_rate_train"]    = _to_float(result.get("success_rate_train"))
+    row["success_rate_test"]     = _to_float(result.get("success_rate_test"))
+    row["worst_case_gap_train"]  = _to_float(result.get("worst_case_gap_train"))
+    row["worst_case_gap_test"]   = _to_float(result.get("worst_case_gap_test"))
+    row["train_test_gap"]        = _to_float(result.get("train_test_gap"))
+    row["improvement_pct"]       = _to_float(result.get("improvement_pct"))
+
+    return row
+
+
 def aggregate_complexity_results(sweep_dir: str | Path) -> pd.DataFrame:
     """
     Walk sweep_dir and build a DataFrame with one row per run.
 
-    Supports both directory layouts:
+    Auto-detects three directory layouts:
 
-    Nested (actual pipeline output):
+    Flat (current pipeline — all runs directly in sweep_dir):
+        sweep_dir/
+          cfg00_n5_m2_p3_r0.30_t01_b21/final_results.json
+          cfg00_n5_m2_p3_r0.30_t01_b31/final_results.json
+          up_n5_m2_p3_r0.30/           (skipped)
+
+    Nested (config dirs containing run sub-dirs):
         sweep_dir/
           n5_m2_p3_r0.30/
-            generate_dataset/   (skipped)
-            train_predictor/    (skipped)
-            train_surrogate/    (skipped)
-            cfg001_..._t11_b21/
-              final_results.json
+            generate_dataset/          (skipped)
+            cfg00_..._t01_b21/final_results.json
 
-    Flat seed-based:
+    Legacy (config dirs containing seed sub-dirs):
         sweep_dir/
-          <config_dir>/
-            seed_t11_b21/
-              results.json
+          config_001__n5_m2_rho0.30_P3/
+            seed_t11_b21/results.json
     """
     sweep_dir = Path(sweep_dir)
     rows = []
+    skip_prefixes = ('up_', 'data_', 'surrogate_')
 
-    for config_dir in sorted(sweep_dir.iterdir()):
-        if not config_dir.is_dir():
+    for entry in sorted(sweep_dir.iterdir()):
+        if not entry.is_dir():
             continue
-        if config_dir.name in _SKIP_DIRS:
+        if entry.name in _SKIP_DIRS:
             continue
-        cfg = _parse_config_dir(config_dir.name)
+        if entry.name.startswith(skip_prefixes):
+            continue
+
+        # --- Flat layout: run dir directly in sweep_dir ---
+        result = _load_run_result(entry)
+        if result is not None:
+            cfg = _parse_config_dir(entry.name)
+            if cfg is not None:
+                rows.append(_build_row(cfg, entry.name, result))
+            continue
+
+        # --- Nested layout: this is a config dir containing run sub-dirs ---
+        cfg = _parse_config_dir(entry.name)
         if cfg is None:
             continue
 
-        for seed_dir in sorted(config_dir.iterdir()):
-            if not seed_dir.is_dir():
+        for sub_dir in sorted(entry.iterdir()):
+            if not sub_dir.is_dir():
                 continue
-            if seed_dir.name in _SKIP_DIRS:
+            if sub_dir.name in _SKIP_DIRS:
                 continue
-            result = _load_run_result(seed_dir)
-            if result is None:
+            sub_result = _load_run_result(sub_dir)
+            if sub_result is None:
                 continue
-
-            # parse seed from directory name
-            m_st = re.search(r't(\d+)', seed_dir.name)
-            m_sb = re.search(r'b(\d+)', seed_dir.name)
-            seed_t = int(m_st.group(1)) if m_st else result.get("seed_target", -1)
-            seed_b = int(m_sb.group(1)) if m_sb else result.get("seed_baseline", -1)
-
-            F_star    = _to_float(result.get("F_star",     result.get("f_star")))
-            F_base    = _to_float(result.get("F_baseline", result.get("f_baseline")))
-            F_actual  = _to_float(result.get("F_actual",   result.get("f_actual")))
-
-            # Use ST params from result as fallback (nested format)
-            n_vars   = cfg["n_vars"]     or result.get("_st_n")
-            n_stages = cfg["n_stages"]   or result.get("_st_m")
-            rho      = cfg["rho"]        or result.get("_st_rho")
-            n_proc   = cfg["n_processes"] or result.get("_n_processes")
-
-            row = dict(
-                config_name   = cfg["config_name"],
-                config_id     = cfg["config_id"],
-                n_vars        = n_vars,
-                n_stages      = n_stages,
-                rho           = rho,
-                n_processes   = n_proc,
-                seed_target   = seed_t,
-                seed_baseline = seed_b,
-                run_name      = f"{config_dir.name}__{seed_dir.name}",
-                F_star        = F_star,
-                F_baseline    = F_base,
-                F_actual      = F_actual,
-                win           = int(F_actual > F_base) if not (np.isnan(F_actual) or np.isnan(F_base)) else 0,
-            )
-            row["gap_baseline"] = F_star - F_base   if not np.isnan(F_star - F_base)  else np.nan
-            row["gap_ctrl"]     = F_star - F_actual if not np.isnan(F_star - F_actual) else np.nan
-            row["gap_delta"]    = F_actual - F_base if not np.isnan(F_actual - F_base) else np.nan
-
-            # Test metrics
-            row["F_star_test"]     = _to_float(result.get("F_star_test"))
-            row["F_baseline_test"] = _to_float(result.get("F_baseline_test"))
-            row["F_actual_test"]   = _to_float(result.get("F_actual_test"))
-            row["win_test"] = (
-                int(row["F_actual_test"] > row["F_baseline_test"])
-                if not (np.isnan(row["F_actual_test"]) or np.isnan(row["F_baseline_test"]))
-                else 0
-            )
-
-            # Advanced metrics
-            row["gap_closure_train"]     = _to_float(result.get("gap_closure_train"))
-            row["gap_closure_test"]      = _to_float(result.get("gap_closure_test"))
-            row["success_rate_train"]    = _to_float(result.get("success_rate_train"))
-            row["success_rate_test"]     = _to_float(result.get("success_rate_test"))
-            row["worst_case_gap_train"]  = _to_float(result.get("worst_case_gap_train"))
-            row["worst_case_gap_test"]   = _to_float(result.get("worst_case_gap_test"))
-            row["train_test_gap"]        = _to_float(result.get("train_test_gap"))
-            row["improvement_pct"]       = _to_float(result.get("improvement_pct"))
-
-            rows.append(row)
+            # For nested layout, try to parse config from sub-dir or use parent
+            sub_cfg = _parse_config_dir(sub_dir.name) or cfg
+            rows.append(_build_row(sub_cfg, sub_dir.name, sub_result))
 
     if not rows:
         raise RuntimeError(f"No run results found in '{sweep_dir}'")
