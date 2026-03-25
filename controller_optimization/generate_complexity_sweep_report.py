@@ -319,6 +319,20 @@ def _build_row(cfg: dict, run_dir_name: str, result: dict) -> dict:
         else 0
     )
 
+    # Gap metrics (same definitions as the standard sweep report)
+    row["gap_baseline_test"] = (
+        row["F_star_test"] - row["F_baseline_test"]
+        if not np.isnan(row["F_star_test"] - row["F_baseline_test"]) else np.nan
+    )
+    row["gap_ctrl_test"] = (
+        row["F_star_test"] - row["F_actual_test"]
+        if not np.isnan(row["F_star_test"] - row["F_actual_test"]) else np.nan
+    )
+    row["gap_delta_test"] = (
+        row["F_actual_test"] - row["F_baseline_test"]
+        if not np.isnan(row["F_actual_test"] - row["F_baseline_test"]) else np.nan
+    )
+
     # Advanced metrics
     row["gap_closure_train"]     = _to_float(result.get("gap_closure_train"))
     row["gap_closure_test"]      = _to_float(result.get("gap_closure_test"))
@@ -683,6 +697,12 @@ def _fmt(v, ndigits=4):
     if v is None or (isinstance(v, float) and np.isnan(v)):
         return "—"
     return f"{v:.{ndigits}f}"
+
+def _sign(v, ndigits=3):
+    """Format a value with explicit +/- sign."""
+    if v is None or (isinstance(v, float) and np.isnan(v)):
+        return "—"
+    return f"+{v:.{ndigits}f}" if v >= 0 else f"{v:.{ndigits}f}"
 
 def _pct(v):
     if v is None or np.isnan(v):
@@ -1188,22 +1208,25 @@ def _build_all_runs_header(sweep_dir: str, page: int) -> list:
 def _build_all_runs_table(df: pd.DataFrame) -> list:
     """
     Multi-page table with one row per individual run, sorted by config then seeds.
+    Gap columns follow the same definitions as generate_sweep_report.py:
+      Gap baseline  = F* − F'
+      Gap ctrl      = F* − F   (train and test)
+      Gap Δ         = (F*−F') − (F*−F)  =  F − F'  (train and test)
     """
     has_test = "F_actual_test" in df.columns and df["F_actual_test"].notna().any()
-    has_gc   = "gap_closure_train" in df.columns and df["gap_closure_train"].notna().any()
 
     # Column widths
     col_w = [
-        28,  # n
-        28,  # m
+        26,  # n
+        26,  # m
         30,  # rho
-        28,  # P
-        28,  # s_t
-        28,  # s_b
-        50,  # F*
-        50,  # F'
-        50,  # F
-        28,  # win
+        26,  # P
+        26,  # s_t
+        26,  # s_b
+        48,  # F*
+        48,  # F' baseline
+        48,  # F controller
+        48,  # Gap baseline
     ]
     header = [
         _th("n"),
@@ -1212,27 +1235,26 @@ def _build_all_runs_table(df: pd.DataFrame) -> list:
         _th("P"),
         _th("s_t", "seed"),
         _th("s_b", "seed"),
-        _th("F*", "target"),
+        _th("F*"),
         _th("F'", "baseline"),
-        _th("F", "actual"),
-        _th("W", "win"),
+        _th("F", "controller"),
+        _th("Gap base", "F*−F'"),
     ]
 
     if has_test:
-        col_w += [50, 50, 28]
+        col_w += [48, 48, 55, 55]
         header += [
-            _th("F' test", "baseline"),
-            _th("F test", "actual"),
-            _th("W_t", "win"),
+            _th("Gap ctrl", "train F*−F"),
+            _th("Gap ctrl", "test F*−F"),
+            _th("Gap Δ train", "(F*−F')−(F*−F)"),
+            _th("Gap Δ test", "(F*−F')−(F*−F)"),
         ]
-    if has_gc:
-        col_w.append(42)
-        header.append(_th("GapCl", "closure"))
-
-    # Remaining space -> gap_delta column
-    gap_w = max(40, FULL_W - sum(col_w) - 50)
-    col_w.append(gap_w)
-    header.append(_th("Gap Δ", "F − F'"))
+    else:
+        col_w += [48, 55]
+        header += [
+            _th("Gap ctrl", "F*−F"),
+            _th("Gap Δ", "(F*−F')−(F*−F)"),
+        ]
 
     # Pad to fill FULL_W
     remaining = FULL_W - sum(col_w)
@@ -1248,10 +1270,10 @@ def _build_all_runs_table(df: pd.DataFrame) -> list:
     ts = []
 
     for i, (_, row) in enumerate(df_sorted.iterrows()):
-        w  = row["win"]
-        gd = row["gap_delta"]
-        wc = C_GREEN if w else C_RED
-        gdc = _gap_delta_color(gd) if not np.isnan(gd) else C_MUTED
+        gb   = row["gap_baseline"]
+        gc   = row["gap_ctrl"]
+        gd   = row["gap_delta"]
+        gdc  = _gap_delta_color(gd) if not np.isnan(gd) else C_MUTED
 
         bg = C_ALT if i % 2 == 1 else colors.white
 
@@ -1265,21 +1287,23 @@ def _build_all_runs_table(df: pd.DataFrame) -> list:
             _P(_fmt(row["F_star"]),          S_TD),
             _P(_fmt(row["F_baseline"]),      S_TD),
             _P(_fmt(row["F_actual"]),        S_TD),
-            Paragraph(f'<font color="#{wc.hexval()[2:]}">{"✓" if w else "✗"}</font>', S_TD),
+            _P(_fmt(gb),                     S_TD),
         ]
 
         if has_test:
-            wt = row.get("win_test", 0)
-            wtc = C_GREEN if wt else C_RED
+            gd_test = row.get("gap_delta_test", np.nan)
+            gdc_test = _gap_delta_color(gd_test) if not np.isnan(gd_test) else C_MUTED
             r += [
-                _P(_fmt(row.get("F_baseline_test", np.nan)), S_TD),
-                _P(_fmt(row.get("F_actual_test", np.nan)),   S_TD),
-                Paragraph(f'<font color="#{wtc.hexval()[2:]}">{"✓" if wt else "✗"}</font>', S_TD),
+                _P(_fmt(gc),  S_TD),
+                _P(_fmt(row.get("gap_ctrl_test", np.nan)), S_TD),
+                Paragraph(f'<font color="#{gdc.hexval()[2:]}">{_sign(gd)}</font>', S_TD),
+                Paragraph(f'<font color="#{gdc_test.hexval()[2:]}">{_sign(gd_test)}</font>', S_TD),
             ]
-        if has_gc:
-            r.append(_P(_fmt(row.get("gap_closure_train", np.nan), 3), S_TD))
-
-        r.append(Paragraph(f'<font color="#{gdc.hexval()[2:]}">{_fmt(gd)}</font>', S_TD))
+        else:
+            r += [
+                _P(_fmt(gc), S_TD),
+                Paragraph(f'<font color="#{gdc.hexval()[2:]}">{_sign(gd)}</font>', S_TD),
+            ]
 
         rows.append(r)
         ts.append(("BACKGROUND", (0, i+1), (-1, i+1), bg))
@@ -1299,8 +1323,9 @@ def _build_all_runs_table(df: pd.DataFrame) -> list:
     tbl.setStyle(TableStyle(base_style))
 
     footer_note = _P(
-        f"{len(df_sorted)} runs  ·  W: ✓ = F > F' (controller wins)  ·  "
-        "Gap Δ: F − F' (positive = beats baseline)  ·  "
+        f"{len(df_sorted)} runs  ·  "
+        "Gap base: F*−F'  ·  Gap ctrl: F*−F  ·  "
+        "Gap Δ: (F*−F')−(F*−F) positive = controller beats baseline  ·  "
         "green = win  ·  red = loss",
         S_MUTED,
     )
