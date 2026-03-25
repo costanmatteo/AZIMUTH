@@ -39,8 +39,8 @@ COMPLEXITY_SWEEP_CONFIG = {
     # LHS SAMPLING SETTINGS
     # =========================================================================
     'sampling': {
-        'n_lhs': 60,           # Number of Latin Hypercube configurations
-        'n_seeds': 8,          # Number of seed values per axis (total pairs = n_seeds^2)
+        'n_lhs': 30,           # Number of Latin Hypercube configurations
+        'n_seeds': 7,          # Number of seed values per axis (total pairs = n_seeds^2)
         'seed': 42,            # Random seed for LHS generation
     },
 
