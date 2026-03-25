@@ -38,9 +38,9 @@
 # Resources: CPU only, 1 core, 4GB RAM, 30 min per job
 #
 # Usage:
-#   1. Generate params: python controller_optimization/generate_complexity_sweep_params.py
-#   2. Submit: sbatch controller_optimization/complexity_sweep.sh
-#   3. After completion: python controller_optimization/generate_complexity_sweep_report.py
+#   1. Generate params: python euler/sweep/generate_complexity_sweep_params.py
+#   2. Submit: sbatch euler/sweep/complexity_sweep.sh
+#   3. After completion: python euler/sweep/generate_complexity_sweep_report.py
 #
 # Monitor:
 #   squeue -u $USER
@@ -58,11 +58,11 @@ cd $HOME/AZIMUTH
 mkdir -p logs
 
 # Read parameter combination for this array task
-PARAMS_FILE="controller_optimization/complexity_sweep_params.txt"
+PARAMS_FILE="euler/sweep/complexity_sweep_params.txt"
 
 if [ ! -f "$PARAMS_FILE" ]; then
     echo "ERROR: Parameter file not found: $PARAMS_FILE"
-    echo "Run: python controller_optimization/generate_complexity_sweep_params.py"
+    echo "Run: python euler/sweep/generate_complexity_sweep_params.py"
     exit 1
 fi
 

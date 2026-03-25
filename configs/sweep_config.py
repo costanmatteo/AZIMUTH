@@ -8,8 +8,8 @@ sweep_params.txt and submitted as a SLURM array job.
 
 Workflow:
     1. Edit this config to define the parameters you want to sweep
-    2. Run: python generate_sweep_params.py --from-config
-    3. Submit: sbatch controller_optimization/sweep.sh
+    2. Run: python euler/sweep/generate_sweep_params.py --from-config
+    3. Submit: sbatch euler/sweep/sweep.sh
 
 Every key in 'params' must match a CLI argument of train_controller.py
 (without the -- prefix). The values are lists of values to sweep over.
@@ -74,8 +74,8 @@ SWEEP_CONFIG = {
     # =========================================================================
     'output': {
         'output_dir': 'controller_optimization/checkpoints/sweep',
-        'params_file': 'controller_optimization/sweep_params.txt',
-        'sweep_script': 'controller_optimization/sweep.sh',
+        'params_file': 'euler/sweep/sweep_params.txt',
+        'sweep_script': 'euler/sweep/sweep.sh',
         # Run name template: use {param_name} placeholders
         # Available: any key from 'params' above
         'run_name_template': 'seed_t{seed_target:02d}_b{seed_baseline:02d}',

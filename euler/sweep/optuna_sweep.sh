@@ -31,7 +31,7 @@
 #      python optuna_tuning.py --create-study --study-name "controller_hpo"
 #
 #   2. Submit jobs:
-#      sbatch optuna_sweep.sh
+#      sbatch euler/sweep/optuna_sweep.sh
 #
 #   3. Monitor progress:
 #      python optuna_tuning.py --study-name "controller_hpo" --status

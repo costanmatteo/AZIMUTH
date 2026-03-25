@@ -47,8 +47,8 @@ exit
 LANCIARE OPTUNA SWEEP (50 trial in parallelo)
 --------------------------------------------------------------------------------
 cd ~/AZIMUTH
-sed -i 's/\r$//' controller_optimization/optuna_sweep.sh
-sbatch controller_optimization/optuna_sweep.sh
+sed -i 's/\r$//' euler/sweep/optuna_sweep.sh
+sbatch euler/sweep/optuna_sweep.sh
 
 --------------------------------------------------------------------------------
 CONTROLLARE LO STATO DEI JOB SLURM

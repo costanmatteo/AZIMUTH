@@ -19,8 +19,8 @@
 # Resources: CPU only, 1 core, 2GB RAM, 10 min per job
 #
 # Usage:
-#   1. Submit: sbatch sweep.sh
-#   2. After completion, generate report: python generate_sweep_report.py
+#   1. Submit: sbatch euler/sweep/sweep.sh
+#   2. After completion, generate report: python euler/sweep/generate_sweep_report.py
 #
 # Monitor:
 #   squeue -u $USER                    # Check job status
@@ -44,7 +44,7 @@ cd $HOME/AZIMUTH
 mkdir -p logs
 
 # Read parameter combination for this array task
-PARAMS_FILE="controller_optimization/sweep_params.txt"
+PARAMS_FILE="euler/sweep/sweep_params.txt"
 
 # Check if params file exists
 if [ ! -f "$PARAMS_FILE" ]; then
