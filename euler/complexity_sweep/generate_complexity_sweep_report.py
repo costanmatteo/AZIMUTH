@@ -265,7 +265,7 @@ def plot_marginals(win_df: pd.DataFrame) -> str:
     """Bar/scatter of win rate vs each complexity parameter (marginal effects)."""
     has_nproc = 'n_processes' in win_df.columns and win_df['n_processes'].notna().any()
     n_panels  = 4 if has_nproc else 3
-    fig, axes = plt.subplots(1, n_panels, figsize=(4.0 * n_panels, 3.0))
+    fig, axes = plt.subplots(1, n_panels, figsize=(4.8 * n_panels, 3.6))
     if n_panels == 1:
         axes = [axes]
 
@@ -393,7 +393,7 @@ def plot_3d_scatter(win_df: pd.DataFrame) -> str:
 
 def plot_winrate_distribution(win_df: pd.DataFrame) -> str:
     """Histogram of win-rate distribution across configurations."""
-    fig, axes = plt.subplots(1, 2, figsize=(7.4, 3.0))
+    fig, axes = plt.subplots(1, 2, figsize=(4.2, 3.4))
 
     # left: histogram
     ax = axes[0]
