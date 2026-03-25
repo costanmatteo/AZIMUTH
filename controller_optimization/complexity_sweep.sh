@@ -19,20 +19,19 @@
 # Default: 30 LHS configs x 25 seed pairs (5x5) = 750 runs
 #
 # Each job:
-#   1. Trains uncertainty predictors (UPs) for its ST config (skip if done)
-#   2. Trains controller with the given seed pair
+#   1. Generates dataset for the ST config (skip if done)
+#   2. Trains uncertainty predictors (UPs) for its ST config (skip if done)
+#   3. Trains controller with the given seed pair
 #
-# UPs are saved in a config-specific directory to avoid conflicts between
-# parallel jobs with different ST parameters:
-#   checkpoints/complexity_sweep/up_n{X}_m{Y}_p{P}_r{Z}/st_{i}/
+# Data and UPs are saved in config-specific directories to avoid conflicts
+# between parallel jobs with different ST parameters.
 #
 # Resources: CPU only, 1 core, 4GB RAM, 20 min per job
-# (UP training ~3 min + controller training ~10 min)
 #
 # Usage:
-#   1. Generate params: python generate_complexity_sweep_params.py
-#   2. Submit: sbatch complexity_sweep.sh
-#   3. After completion: python generate_complexity_sweep_report.py
+#   1. Generate params: python controller_optimization/generate_complexity_sweep_params.py
+#   2. Submit: sbatch controller_optimization/complexity_sweep.sh
+#   3. After completion: python controller_optimization/generate_complexity_sweep_report.py
 #
 # Monitor:
 #   squeue -u $USER
@@ -70,7 +69,7 @@ fi
 RUN_NAME=$(echo "$LINE" | awk '{print $1}')
 PARAMS=$(echo "$LINE" | cut -d' ' -f2-)
 
-# Extract individual parameter values for UP checkpoint dir
+# Extract individual parameter values
 ST_N=$(echo "$PARAMS" | grep -oP 'st_n=\K[^ ]+')
 ST_M=$(echo "$PARAMS" | grep -oP 'st_m=\K[^ ]+')
 ST_RHO=$(echo "$PARAMS" | grep -oP 'st_rho=\K[^ ]+')
@@ -78,9 +77,9 @@ ST_NPROC=$(echo "$PARAMS" | grep -oP 'st_n_processes=\K[^ ]+')
 SEED_T=$(echo "$PARAMS" | grep -oP 'seed_target=\K[^ ]+')
 SEED_B=$(echo "$PARAMS" | grep -oP 'seed_baseline=\K[^ ]+')
 
-# Config-specific UP checkpoint directory (shared across seed pairs with same ST config)
+# Config-specific directories (shared across seed pairs with same ST config)
+DATA_DIR="controller_optimization/checkpoints/complexity_sweep/data_n${ST_N}_m${ST_M}_p${ST_NPROC}_r${ST_RHO}"
 UP_DIR="controller_optimization/checkpoints/complexity_sweep/up_n${ST_N}_m${ST_M}_p${ST_NPROC}_r${ST_RHO}"
-
 OUTPUT_DIR="controller_optimization/checkpoints/complexity_sweep"
 
 echo "=============================================="
@@ -91,6 +90,7 @@ echo "=============================================="
 echo "Run name:         $RUN_NAME"
 echo "ST params:        n=$ST_N m=$ST_M rho=$ST_RHO n_processes=$ST_NPROC"
 echo "Seeds:            target=$SEED_T baseline=$SEED_B"
+echo "Data directory:   $DATA_DIR"
 echo "UP checkpoint:    $UP_DIR"
 echo "Output directory: $OUTPUT_DIR/$RUN_NAME"
 echo "=============================================="
@@ -103,27 +103,45 @@ elif [ -d ".venv" ]; then
     source .venv/bin/activate
 fi
 
-# ---- Step 1: Train uncertainty predictors (skip if already done) ----
-# Multiple jobs with the same ST config may race here, but --skip-existing
-# ensures only the first one actually trains; others reuse the checkpoint.
-echo "Step 1: Training uncertainty predictors..."
-echo "Command: python controller_optimization/train_processes.py --st_n $ST_N --st_m $ST_M --st_rho $ST_RHO --st_n_processes $ST_NPROC --checkpoint_base_dir $UP_DIR --skip-existing"
+# ---- Step 1: Generate dataset (skip if already done) ----
+# Multiple jobs with the same ST config may race here; generate_dataset.py
+# is idempotent so the first one generates and others find data already present.
+echo "Step 1: Generating dataset..."
+if [ -d "$DATA_DIR/per_process" ] && [ "$(ls -A $DATA_DIR/per_process/*.pt 2>/dev/null)" ]; then
+    echo "  Dataset already exists in $DATA_DIR. Skipping."
+else
+    echo "Command: python generate_dataset.py --st_n $ST_N --st_m $ST_M --st_rho $ST_RHO --st_n_processes $ST_NPROC --output_dir $DATA_DIR"
+    python generate_dataset.py \
+        --st_n "$ST_N" \
+        --st_m "$ST_M" \
+        --st_rho "$ST_RHO" \
+        --st_n_processes "$ST_NPROC" \
+        --output_dir "$DATA_DIR"
+fi
+echo ""
+echo "Step 1 completed."
 echo ""
 
-python controller_optimization/train_processes.py \
+# ---- Step 2: Train uncertainty predictors (skip if already done) ----
+echo "Step 2: Training uncertainty predictors..."
+echo "Command: python train_predictor.py --st_n $ST_N --st_m $ST_M --st_rho $ST_RHO --st_n_processes $ST_NPROC --checkpoint_base_dir $UP_DIR --data_dir $DATA_DIR --skip-existing"
+echo ""
+
+python train_predictor.py \
     --st_n "$ST_N" \
     --st_m "$ST_M" \
     --st_rho "$ST_RHO" \
     --st_n_processes "$ST_NPROC" \
     --checkpoint_base_dir "$UP_DIR" \
+    --data_dir "$DATA_DIR" \
     --skip-existing
 
 echo ""
-echo "Step 1 completed."
+echo "Step 2 completed."
 echo ""
 
-# ---- Step 2: Train controller with seed pair ----
-echo "Step 2: Training controller..."
+# ---- Step 3: Train controller with seed pair ----
+echo "Step 3: Training controller..."
 echo "Command: python train_controller.py --output_dir $OUTPUT_DIR --run_name $RUN_NAME --no_pdf --st_n $ST_N --st_m $ST_M --st_rho $ST_RHO --st_n_processes $ST_NPROC --up_checkpoint_dir $UP_DIR --seed_target $SEED_T --seed_baseline $SEED_B"
 echo ""
 
