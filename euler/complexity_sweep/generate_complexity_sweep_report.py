@@ -190,6 +190,59 @@ def compute_stats(df: pd.DataFrame, win_df: pd.DataFrame) -> dict:
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# 1b.  CONFIG LOADING  (controller params + process parameter ranges)
+# ════════════════════════════════════════════════════════════════════════════
+
+def load_sweep_config(sweep_dir: Path) -> dict | None:
+    """Load controller config from the first run and collect all ST param values."""
+    first_cfg = None
+    all_st = []
+
+    for config_dir in sorted(sweep_dir.iterdir()):
+        if not config_dir.is_dir():
+            continue
+        for run_dir in sorted(config_dir.iterdir()):
+            if not run_dir.is_dir():
+                continue
+            results_file = run_dir / "final_results.json"
+            if not results_file.exists():
+                continue
+            try:
+                with open(results_file) as f:
+                    data = json.load(f)
+                if first_cfg is None:
+                    first_cfg = {
+                        'config':       data.get('config', {}),
+                        'dataset_mode': data.get('dataset_mode', 'unknown'),
+                        'n_processes':  data.get('n_processes'),
+                    }
+                st = data.get('st_params')
+                if st:
+                    all_st.append(st)
+            except Exception:
+                continue
+
+    if first_cfg is None:
+        return None
+
+    first_cfg['all_st_params'] = all_st
+    return first_cfg
+
+
+def _range_str(values) -> str:
+    """Format a list of numeric values as 'min … max' or single value."""
+    vals = [v for v in values if v is not None]
+    if not vals:
+        return '?'
+    lo, hi = min(vals), max(vals)
+    if lo == hi:
+        return f"{lo}"
+    if isinstance(lo, int) and isinstance(hi, int):
+        return f"{lo} … {hi}"
+    return f"{lo:.3g} … {hi:.3g}"
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # 2.  PLOTS  (returns base64 PNG string)
 # ════════════════════════════════════════════════════════════════════════════
 
@@ -493,6 +546,18 @@ body {
 
 /* ── legend ── */
 .legend { font-size: 7px; color: #888; margin-top: 4px; }
+
+/* ── config section ── */
+.cfg-grid  { display: table; width: 100%; table-layout: fixed;
+             margin-bottom: 5px; }
+.cfg-col   { display: table-cell; vertical-align: top; padding-right: 12px; }
+.cfg-col:last-child { padding-right: 0; }
+.cfg-row   { display: flex; justify-content: space-between; padding: 1px 0;
+             border-bottom: 0.5px solid #eee; font-size: 7.5px; }
+.cfg-row:last-child { border-bottom: none; }
+.cfg-k     { color: #888; }
+.cfg-v     { font-weight: 500; }
+.cfg-sub   { font-size: 7px; color: #aaa; margin-left: 6px; }
 """
 
 
@@ -519,9 +584,120 @@ def _wr_cls(v: float) -> str:
     return 'dr'
 
 
+def _cfg_row(key: str, val, sub: str = '') -> str:
+    sub_html = f'<span class="cfg-sub">{sub}</span>' if sub else ''
+    return f'<div class="cfg-row"><span class="cfg-k">{key}{sub_html}</span><span class="cfg-v">{val}</span></div>'
+
+
+def build_config_html(sweep_cfg: dict | None) -> str:
+    """Build a compact HTML section showing controller config and process parameter ranges."""
+    if sweep_cfg is None:
+        return ''
+
+    cfg = sweep_cfg.get('config', {})
+    pg = cfg.get('policy_generator', {})
+    tr = cfg.get('training', {})
+    sc = cfg.get('scenarios', {})
+    cl = tr.get('curriculum_learning', {})
+    sr = cfg.get('surrogate', {})
+    val = cfg.get('validation', {})
+    dataset_mode = sweep_cfg.get('dataset_mode', '?')
+    n_procs = sweep_cfg.get('n_processes', '?')
+    all_st = sweep_cfg.get('all_st_params', [])
+
+    # ── Controller column ──
+    arch = pg.get('architecture', '?')
+    hidden = pg.get('hidden_sizes', '?')
+    if arch == 'custom' and hidden:
+        arch_str = f"custom {hidden}"
+    else:
+        arch_str = arch
+
+    sched = tr.get('lr_scheduler')
+    if isinstance(sched, dict):
+        sched_str = f"{sched.get('type', '?')}"
+        if sched.get('T_max'):
+            sched_str += f" T_max={sched['T_max']}"
+    else:
+        sched_str = 'none'
+
+    cl_str = 'off'
+    if cl.get('enabled'):
+        cl_str = (f"on &middot; warmup {cl.get('warmup_fraction', '?')} &middot; "
+                  f"&#955;bc {cl.get('lambda_bc_start', '?')}&#8594;{cl.get('lambda_bc_end', '?')} "
+                  f"&middot; {cl.get('reliability_weight_curve', '?')}")
+
+    ctrl_html = (
+        _cfg_row('Architecture', arch_str)
+        + _cfg_row('Dropout', pg.get('dropout', '?'))
+        + _cfg_row('BatchNorm', pg.get('use_batchnorm', '?'))
+        + _cfg_row('Scenario encoder', pg.get('use_scenario_encoder', '?'))
+        + _cfg_row('Epochs', tr.get('epochs', '?'))
+        + _cfg_row('Batch size', tr.get('batch_size', '?'))
+        + _cfg_row('Learning rate', tr.get('learning_rate', '?'))
+        + _cfg_row('Optimizer', tr.get('optimizer', '?'))
+        + _cfg_row('Weight decay', tr.get('weight_decay', '?'))
+        + _cfg_row('Grad clip norm', tr.get('gradient_clip_norm', 'none'))
+        + _cfg_row('LR scheduler', sched_str)
+    )
+
+    # ── Training details column ──
+    train_html = (
+        _cfg_row('&#955;bc', tr.get('lambda_bc', '?'))
+        + _cfg_row('Reliability scale', tr.get('reliability_loss_scale', '?'))
+        + _cfg_row('Patience', tr.get('patience', '?'))
+        + _cfg_row('Early stop metric', tr.get('early_stopping_metric', '?'))
+        + _cfg_row('Curriculum', cl_str)
+        + _cfg_row('Surrogate', sr.get('type', '?'))
+        + _cfg_row('Deterministic', sr.get('use_deterministic_sampling', '?'))
+        + _cfg_row('Validation', f"within={val.get('within_scenario_enabled', '?')} "
+                   f"split={val.get('within_scenario_split', '?')}")
+        + _cfg_row('n_train scenarios', sc.get('n_train', '?'))
+        + _cfg_row('n_test scenarios', sc.get('n_test', '?'))
+        + _cfg_row('seed_target', f"{sc.get('seed_target', '?')} (varies per run)")
+        + _cfg_row('seed_baseline', f"{sc.get('seed_baseline', '?')} (varies per run)")
+    )
+
+    # ── Process column (with ranges from all runs) ──
+    proc_html = _cfg_row('Dataset mode', dataset_mode)
+    proc_html += _cfg_row('N processes', n_procs)
+
+    if all_st and dataset_mode == 'st':
+        proc_html += (
+            _cfg_row('ST n', _range_str([s.get('n') for s in all_st]), 'input vars')
+            + _cfg_row('ST m', _range_str([s.get('m') for s in all_st]), 'stages')
+            + _cfg_row('ST p', _range_str([s.get('p') for s in all_st]), 'outputs')
+            + _cfg_row('ST me', _range_str([s.get('me') for s in all_st]), 'env vars')
+            + _cfg_row('ST &#945;', _range_str([s.get('alpha') for s in all_st]), 'shift')
+            + _cfg_row('ST &#947;', _range_str([s.get('gamma') for s in all_st]), 'mult')
+            + _cfg_row('ST &#961;', _range_str([s.get('rho') for s in all_st]), 'noise')
+            + _cfg_row('env_mode', _range_str([s.get('env_mode') for s in all_st]))
+            + _cfg_row('x_domain', all_st[0].get('x_domain', '?'))
+        )
+
+    return f"""
+  <div class="sec-head">00 &#8212; configuration</div>
+  <hr class="rule-thin">
+  <div class="cfg-grid">
+    <div class="cfg-col">
+      <div class="blk-title">Controller &middot; policy generator</div>
+      {ctrl_html}
+    </div>
+    <div class="cfg-col">
+      <div class="blk-title">Controller &middot; training</div>
+      {train_html}
+    </div>
+    <div class="cfg-col">
+      <div class="blk-title">Processes &middot; parameter ranges</div>
+      {proc_html}
+    </div>
+  </div>
+"""
+
+
 def build_page1_html(s: dict, now: datetime,
                      b64_marginals: str, b64_wr_dist: str,
-                     sweep_dir: str) -> str:
+                     sweep_dir: str, config_html: str = '') -> str:
     n     = s['n_runs']
     nc    = s['n_cfgs']
     ts    = now.strftime('%Y-%m-%d &nbsp;%H:%M:%S')
@@ -545,7 +721,7 @@ def build_page1_html(s: dict, now: datetime,
     <div class="kpi">
       <div class="kpi-l">Overall win rate</div>
       <div class="kpi-v {wr_cls}">{wr:.1f}%</div>
-      <div class="kpi-s">F&nbsp;&gt;&nbsp;F&prime; across all runs</div>
+      <div class="kpi-s">|gap ctrl| &lt; |gap baseline|</div>
     </div>
     <div class="kpi">
       <div class="kpi-l">Median config win rate</div>
@@ -563,6 +739,8 @@ def build_page1_html(s: dict, now: datetime,
       <div class="kpi-s">{s['worst_cfg']}</div>
     </div>
   </div>
+
+  {config_html}
 
   <div class="sec-head">01 &#8212; aggregate statistics</div>
   <hr class="rule-thin">
@@ -839,6 +1017,10 @@ def generate_complexity_sweep_report(sweep_dir: Path,
     # ── aggregate stats ───────────────────────────────────────────────────
     s = compute_stats(df_raw, win_df)
 
+    # ── configuration ─────────────────────────────────────────────────────
+    sweep_cfg = load_sweep_config(sweep_dir)
+    config_html = build_config_html(sweep_cfg)
+
     # ── plots ─────────────────────────────────────────────────────────────
     print("\nGenerating plots…")
     b64_marginals = plot_marginals(win_df)
@@ -854,7 +1036,7 @@ def generate_complexity_sweep_report(sweep_dir: Path,
     sd  = str(sweep_dir)
 
     html_body = (
-        build_page1_html(s, now, b64_marginals, b64_wr_dist, sd)
+        build_page1_html(s, now, b64_marginals, b64_wr_dist, sd, config_html)
         + build_page2_html(s, now, b64_hn_rho, b64_hn_m, b64_hm_rho, b64_3d, sd)
         + build_page3_html(win_df, now, sd)
     )
