@@ -70,14 +70,28 @@ def load_run_results(run_dir: Path) -> dict:
 
 
 def aggregate_results(sweep_dir: Path) -> pd.DataFrame:
-    """Load all results from complexity sweep directory."""
+    """Load all results from complexity sweep directory.
+
+    Expects nested structure:
+        sweep_dir/
+          n{X}_m{Y}_p{P}_r{Z}/          (config folder)
+            generate_dataset/
+            train_predictor/
+            train_surrogate/
+            cfg{I}_..._t{A}_b{B}/        (run results)
+    """
     results = []
-    for run_dir in sorted(sweep_dir.iterdir()):
-        if not run_dir.is_dir():
+    skip_dirs = {'generate_dataset', 'train_predictor', 'train_surrogate',
+                 'complexity_plots'}
+    for config_dir in sorted(sweep_dir.iterdir()):
+        if not config_dir.is_dir():
             continue
-        run_results = load_run_results(run_dir)
-        if run_results is not None:
-            results.append(run_results)
+        for run_dir in sorted(config_dir.iterdir()):
+            if not run_dir.is_dir() or run_dir.name in skip_dirs:
+                continue
+            run_results = load_run_results(run_dir)
+            if run_results is not None:
+                results.append(run_results)
 
     if not results:
         print("No results found!")

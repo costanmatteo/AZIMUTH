@@ -24,10 +24,12 @@
 #   Step 3: Train surrogate (train_surrogate.py) — only if casualit, skip if done
 #   Step 4: Train controller (train_controller.py) with the given seed pair
 #
-# Shared resources (per ST config, reused across seed pairs):
-#   Data:      checkpoints/complexity_sweep/data_n{X}_m{Y}_p{P}_r{Z}/
-#   UPs:       checkpoints/complexity_sweep/up_n{X}_m{Y}_p{P}_r{Z}/
-#   Surrogate: checkpoints/complexity_sweep/surrogate_n{X}_m{Y}_p{P}_r{Z}/
+# Directory structure (per ST config, reused across seed pairs):
+#   checkpoints/complexity_sweep/n{X}_m{Y}_p{P}_r{Z}/
+#     generate_dataset/    — generated data
+#     train_predictor/     — uncertainty predictor checkpoints
+#     train_surrogate/     — surrogate model (only if casualit)
+#     cfg{I}_..._t{A}_b{B}/ — individual controller run results
 #
 # The surrogate type is read from configs/controller_config.py:
 #   - 'reliability_function': mathematical formula (no surrogate training needed)
@@ -86,10 +88,11 @@ SEED_B=$(echo "$PARAMS" | grep -oP 'seed_baseline=\K[^ ]+')
 
 # Config-specific directories (shared across seed pairs with same ST config)
 CONFIG_SUFFIX="n${ST_N}_m${ST_M}_p${ST_NPROC}_r${ST_RHO}"
-DATA_DIR="controller_optimization/checkpoints/complexity_sweep/data_${CONFIG_SUFFIX}"
-UP_DIR="controller_optimization/checkpoints/complexity_sweep/up_${CONFIG_SUFFIX}"
-SURROGATE_DIR="controller_optimization/checkpoints/complexity_sweep/surrogate_${CONFIG_SUFFIX}"
-OUTPUT_DIR="controller_optimization/checkpoints/complexity_sweep"
+CONFIG_DIR="controller_optimization/checkpoints/complexity_sweep/${CONFIG_SUFFIX}"
+DATA_DIR="${CONFIG_DIR}/generate_dataset"
+UP_DIR="${CONFIG_DIR}/train_predictor"
+SURROGATE_DIR="${CONFIG_DIR}/train_surrogate"
+OUTPUT_DIR="${CONFIG_DIR}"
 
 # Detect surrogate type from controller config
 SURROGATE_TYPE=$(python -c "from configs.controller_config import CONTROLLER_CONFIG; print(CONTROLLER_CONFIG.get('surrogate', {}).get('type', 'reliability_function'))")
