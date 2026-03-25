@@ -130,12 +130,14 @@ def _parse_config_dir(dirname: str) -> dict | None:
     Extract (n_vars, n_stages, rho, n_processes) from a directory name such as:
         config_001__n5_m2_rho0.30_P3
         n5_m2_rho0.30_P3
+        n5_m2_p3_r0.30          (actual pipeline format)
         config_042
     Returns None if parsing fails.
     """
     m_n   = re.search(r'n(\d+)',      dirname)
     m_m   = re.search(r'm(\d+)',      dirname)
-    m_rho = re.search(r'rho([0-9.]+)', dirname)
+    # Match both 'rho0.30' and 'r0.30' formats
+    m_rho = re.search(r'(?:rho|_r)([0-9.]+)', dirname)
     m_P   = re.search(r'[Pp](\d+)',   dirname)
     config_id_m = re.search(r'config[_]?(\d+)', dirname)
 
@@ -159,14 +161,22 @@ def _parse_config_dir(dirname: str) -> dict | None:
 
 
 def _load_run_result(run_dir: Path) -> dict | None:
-    """Try to load results.json (or results.pkl) from a run directory."""
-    # try JSON first
-    for fname in ["results.json", "result.json", "eval_results.json"]:
+    """
+    Try to load results from a run directory.
+
+    Supports two formats:
+    1. Flat: results.json with top-level F_star, F_baseline, F_actual
+    2. Nested: final_results.json from train_controller.py with
+       train/test sub-dicts and advanced_metrics
+    """
+    # try JSON first (final_results.json is the pipeline's actual output)
+    for fname in ["final_results.json", "results.json", "result.json", "eval_results.json"]:
         p = run_dir / fname
         if p.exists():
             try:
                 with open(p) as f:
-                    return json.load(f)
+                    raw = json.load(f)
+                return _normalize_result(raw)
             except Exception:
                 pass
     # try pickle
@@ -176,20 +186,105 @@ def _load_run_result(run_dir: Path) -> dict | None:
             try:
                 import pickle
                 with open(p, "rb") as f:
-                    return pickle.load(f)
+                    raw = pickle.load(f)
+                return _normalize_result(raw)
             except Exception:
                 pass
     return None
+
+
+def _normalize_result(raw: dict) -> dict:
+    """
+    Normalize a result dict into a flat structure expected by aggregation.
+
+    Handles both flat format (F_star at top level) and nested format
+    (train/test sub-dicts from train_controller.py).
+    """
+    # Already flat format
+    if "F_star" in raw or "f_star" in raw:
+        return raw
+
+    # Nested format from train_controller.py
+    train = raw.get("train", {})
+    test = raw.get("test", {})
+    config = raw.get("config", {})
+    scenarios = config.get("scenarios", {})
+    advanced = raw.get("advanced_metrics", {})
+
+    result = {
+        # Core metrics (train)
+        "F_star":     train.get("F_star"),
+        "F_baseline": train.get("F_baseline_mean"),
+        "F_actual":   train.get("F_actual_mean"),
+        # Seeds
+        "seed_target":   scenarios.get("seed_target"),
+        "seed_baseline": scenarios.get("seed_baseline"),
+        # Train extras
+        "F_baseline_std":    train.get("F_baseline_std"),
+        "F_actual_std":      train.get("F_actual_std"),
+        "improvement_pct":   train.get("improvement_pct"),
+        "robustness_std":    train.get("robustness_std"),
+        # Test metrics
+        "F_star_test":       test.get("F_star"),
+        "F_baseline_test":   test.get("F_baseline_mean"),
+        "F_actual_test":     test.get("F_actual_mean"),
+        "improvement_pct_test": test.get("improvement_pct"),
+    }
+
+    # Advanced metrics
+    gc_train = advanced.get("gap_closure_train", {})
+    gc_test = advanced.get("gap_closure_test", {})
+    result["gap_closure_train"]     = gc_train.get("gap_closure_mean")
+    result["gap_closure_std_train"] = gc_train.get("gap_closure_std")
+    result["gap_closure_test"]      = gc_test.get("gap_closure_mean")
+
+    sr_train = advanced.get("success_rate_train", {})
+    sr_test = advanced.get("success_rate_test", {})
+    result["success_rate_train"] = sr_train.get("success_rate_pct")
+    result["success_rate_test"]  = sr_test.get("success_rate_pct")
+
+    wc_train = advanced.get("worst_case_gap_train", {})
+    wc_test = advanced.get("worst_case_gap_test", {})
+    result["worst_case_gap_train"] = wc_train.get("worst_case_gap")
+    result["worst_case_gap_test"]  = wc_test.get("worst_case_gap")
+
+    tt_gap = advanced.get("train_test_gap", {})
+    result["train_test_gap"] = tt_gap.get("train_test_gap")
+
+    # ST params (can also be used as fallback for config dir parsing)
+    st_params = raw.get("st_params", {})
+    if st_params:
+        result["_st_n"]     = st_params.get("n")
+        result["_st_m"]     = st_params.get("m")
+        result["_st_rho"]   = st_params.get("rho")
+    result["_n_processes"] = raw.get("n_processes")
+
+    return result
+
+
+_SKIP_DIRS = {"generate_dataset", "train_predictor", "train_surrogate",
+              "complexity_plots", "__pycache__"}
 
 
 def aggregate_complexity_results(sweep_dir: str | Path) -> pd.DataFrame:
     """
     Walk sweep_dir and build a DataFrame with one row per run.
 
-    Expected structure:
+    Supports both directory layouts:
+
+    Nested (actual pipeline output):
+        sweep_dir/
+          n5_m2_p3_r0.30/
+            generate_dataset/   (skipped)
+            train_predictor/    (skipped)
+            train_surrogate/    (skipped)
+            cfg001_..._t11_b21/
+              final_results.json
+
+    Flat seed-based:
         sweep_dir/
           <config_dir>/
-            <seed_dir>/
+            seed_t11_b21/
               results.json
     """
     sweep_dir = Path(sweep_dir)
@@ -198,12 +293,16 @@ def aggregate_complexity_results(sweep_dir: str | Path) -> pd.DataFrame:
     for config_dir in sorted(sweep_dir.iterdir()):
         if not config_dir.is_dir():
             continue
+        if config_dir.name in _SKIP_DIRS:
+            continue
         cfg = _parse_config_dir(config_dir.name)
         if cfg is None:
             continue
 
         for seed_dir in sorted(config_dir.iterdir()):
             if not seed_dir.is_dir():
+                continue
+            if seed_dir.name in _SKIP_DIRS:
                 continue
             result = _load_run_result(seed_dir)
             if result is None:
@@ -215,17 +314,23 @@ def aggregate_complexity_results(sweep_dir: str | Path) -> pd.DataFrame:
             seed_t = int(m_st.group(1)) if m_st else result.get("seed_target", -1)
             seed_b = int(m_sb.group(1)) if m_sb else result.get("seed_baseline", -1)
 
-            F_star    = float(result.get("F_star",     result.get("f_star",     np.nan)))
-            F_base    = float(result.get("F_baseline", result.get("f_baseline", np.nan)))
-            F_actual  = float(result.get("F_actual",   result.get("f_actual",   np.nan)))
+            F_star    = _to_float(result.get("F_star",     result.get("f_star")))
+            F_base    = _to_float(result.get("F_baseline", result.get("f_baseline")))
+            F_actual  = _to_float(result.get("F_actual",   result.get("f_actual")))
+
+            # Use ST params from result as fallback (nested format)
+            n_vars   = cfg["n_vars"]     or result.get("_st_n")
+            n_stages = cfg["n_stages"]   or result.get("_st_m")
+            rho      = cfg["rho"]        or result.get("_st_rho")
+            n_proc   = cfg["n_processes"] or result.get("_n_processes")
 
             row = dict(
                 config_name   = cfg["config_name"],
                 config_id     = cfg["config_id"],
-                n_vars        = cfg["n_vars"],
-                n_stages      = cfg["n_stages"],
-                rho           = cfg["rho"],
-                n_processes   = cfg["n_processes"],
+                n_vars        = n_vars,
+                n_stages      = n_stages,
+                rho           = rho,
+                n_processes   = n_proc,
                 seed_target   = seed_t,
                 seed_baseline = seed_b,
                 run_name      = f"{config_dir.name}__{seed_dir.name}",
@@ -237,6 +342,27 @@ def aggregate_complexity_results(sweep_dir: str | Path) -> pd.DataFrame:
             row["gap_baseline"] = F_star - F_base   if not np.isnan(F_star - F_base)  else np.nan
             row["gap_ctrl"]     = F_star - F_actual if not np.isnan(F_star - F_actual) else np.nan
             row["gap_delta"]    = F_actual - F_base if not np.isnan(F_actual - F_base) else np.nan
+
+            # Test metrics
+            row["F_star_test"]     = _to_float(result.get("F_star_test"))
+            row["F_baseline_test"] = _to_float(result.get("F_baseline_test"))
+            row["F_actual_test"]   = _to_float(result.get("F_actual_test"))
+            row["win_test"] = (
+                int(row["F_actual_test"] > row["F_baseline_test"])
+                if not (np.isnan(row["F_actual_test"]) or np.isnan(row["F_baseline_test"]))
+                else 0
+            )
+
+            # Advanced metrics
+            row["gap_closure_train"]     = _to_float(result.get("gap_closure_train"))
+            row["gap_closure_test"]      = _to_float(result.get("gap_closure_test"))
+            row["success_rate_train"]    = _to_float(result.get("success_rate_train"))
+            row["success_rate_test"]     = _to_float(result.get("success_rate_test"))
+            row["worst_case_gap_train"]  = _to_float(result.get("worst_case_gap_train"))
+            row["worst_case_gap_test"]   = _to_float(result.get("worst_case_gap_test"))
+            row["train_test_gap"]        = _to_float(result.get("train_test_gap"))
+            row["improvement_pct"]       = _to_float(result.get("improvement_pct"))
+
             rows.append(row)
 
     if not rows:
@@ -245,18 +371,33 @@ def aggregate_complexity_results(sweep_dir: str | Path) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _to_float(v) -> float:
+    """Safely convert a value to float, returning NaN for None."""
+    if v is None:
+        return np.nan
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return np.nan
+
+
 def generate_config_stats(df: pd.DataFrame) -> pd.DataFrame:
     """
     Aggregate per-config statistics. Returns a DataFrame with one row per config,
     sorted by win_rate descending.
     """
+    has_test = "win_test" in df.columns and df["F_actual_test"].notna().any()
+    has_gc   = "gap_closure_train" in df.columns and df["gap_closure_train"].notna().any()
+    has_sr   = "success_rate_train" in df.columns and df["success_rate_train"].notna().any()
+    has_wc   = "worst_case_gap_train" in df.columns and df["worst_case_gap_train"].notna().any()
+
     records = []
     for config_name, g in df.groupby("config_name", sort=False):
         n_runs      = len(g)
         n_wins      = int(g["win"].sum())
         win_rate    = n_wins / n_runs if n_runs > 0 else 0.0
 
-        records.append(dict(
+        rec = dict(
             config_name    = config_name,
             config_id      = g["config_id"].iloc[0],
             n_vars         = g["n_vars"].iloc[0],
@@ -275,7 +416,29 @@ def generate_config_stats(df: pd.DataFrame) -> pd.DataFrame:
             gap_delta_mean = g["gap_delta"].mean(),
             gap_delta_min  = g["gap_delta"].min(),
             gap_delta_max  = g["gap_delta"].max(),
-        ))
+        )
+
+        # Test metrics
+        if has_test:
+            n_wins_test = int(g["win_test"].sum())
+            rec["n_wins_test"]      = n_wins_test
+            rec["win_rate_test"]    = n_wins_test / n_runs if n_runs > 0 else 0.0
+            rec["F_actual_test_mean"]   = g["F_actual_test"].mean()
+            rec["F_baseline_test_mean"] = g["F_baseline_test"].mean()
+
+        # Advanced metrics
+        if has_gc:
+            rec["gap_closure_train_mean"] = g["gap_closure_train"].mean()
+            rec["gap_closure_test_mean"]  = g["gap_closure_test"].mean()
+        if has_sr:
+            rec["success_rate_train_mean"] = g["success_rate_train"].mean()
+            rec["success_rate_test_mean"]  = g["success_rate_test"].mean()
+        if has_wc:
+            rec["worst_case_gap_train_mean"] = g["worst_case_gap_train"].mean()
+        if "train_test_gap" in df.columns:
+            rec["train_test_gap_mean"] = g["train_test_gap"].mean()
+
+        records.append(rec)
 
     cfg_df = pd.DataFrame(records).sort_values("win_rate", ascending=False).reset_index(drop=True)
     return cfg_df
@@ -457,11 +620,13 @@ def _build_header(sweep_dir: str, df: pd.DataFrame, cfg_df: pd.DataFrame) -> lis
 
 
 def _build_kpi_bar(df: pd.DataFrame, cfg_df: pd.DataFrame) -> list:
-    """4-cell KPI bar."""
+    """KPI bar with train and test win rates."""
     n_runs    = len(df)
     n_configs = len(cfg_df)
     n_wins    = int(df["win"].sum())
     win_rate  = n_wins / n_runs if n_runs > 0 else 0.0
+
+    has_test  = "win_test" in df.columns and df["F_actual_test"].notna().any()
 
     median_wr      = cfg_df["win_rate"].median()
     best_cfg       = cfg_df.iloc[0]
@@ -469,18 +634,6 @@ def _build_kpi_bar(df: pd.DataFrame, cfg_df: pd.DataFrame) -> list:
     best_name_raw  = best_cfg["config_name"]
     # truncate long names
     best_name = best_name_raw if len(best_name_raw) <= 30 else "…" + best_name_raw[-28:]
-
-    # KPI cell builders
-    def kpi(top_label, top_val, top_color, bot_label, bot_val=None):
-        val_str = _P(f'<font color="#{top_color.hexval()[2:]}">{top_val}</font>', S_KV_VAL)
-        rows = [
-            [_P(top_label, S_KV_KEY)],
-            [val_str],
-            [_P(bot_label, S_MUTED)],
-        ]
-        if bot_val is not None:
-            rows.append([_P(bot_val, S_MUTED)])
-        return rows
 
     wc = _win_color(win_rate)
     mc = _win_color(median_wr)
@@ -493,21 +646,33 @@ def _build_kpi_bar(df: pd.DataFrame, cfg_df: pd.DataFrame) -> list:
             _P(f"{n_configs} LHS configurations", S_MUTED),
         ],
         [
-            _P("Overall win rate", S_KV_KEY),
+            _P("Win rate (train)", S_KV_KEY),
             Paragraph(f'<font color="#{wc.hexval()[2:]}">{n_wins}/{n_runs}  ({_pct(win_rate)})</font>', S_KV_VAL),
             _P("runs where F > F' (baseline)", S_MUTED),
         ],
-        [
+    ]
+
+    if has_test:
+        n_wins_test = int(df["win_test"].sum())
+        wr_test = n_wins_test / n_runs if n_runs > 0 else 0.0
+        tc = _win_color(wr_test)
+        cells.append([
+            _P("Win rate (test)", S_KV_KEY),
+            Paragraph(f'<font color="#{tc.hexval()[2:]}">{n_wins_test}/{n_runs}  ({_pct(wr_test)})</font>', S_KV_VAL),
+            _P("generalization on unseen scenarios", S_MUTED),
+        ])
+    else:
+        cells.append([
             _P("Median config win rate", S_KV_KEY),
             Paragraph(f'<font color="#{mc.hexval()[2:]}">{_pct(median_wr)}</font>', S_KV_VAL),
             _P("W(c) across all configs", S_MUTED),
-        ],
-        [
-            _P("Best config", S_KV_KEY),
-            Paragraph(f'<font color="#{bc.hexval()[2:]}">{_pct(best_wr)}</font>', S_KV_VAL),
-            _P(best_name, S_MUTED),
-        ],
-    ]
+        ])
+
+    cells.append([
+        _P("Best config", S_KV_KEY),
+        Paragraph(f'<font color="#{bc.hexval()[2:]}">{_pct(best_wr)}</font>', S_KV_VAL),
+        _P(best_name, S_MUTED),
+    ])
 
     cw = FULL_W / 4
     tbl = Table([cells], colWidths=[cw, cw, cw, cw], rowHeights=None)
@@ -566,7 +731,7 @@ def _build_aggregate_stats(cfg_df: pd.DataFrame) -> list:
     col3 = stat_block("Gap Δ  (mean)", "F − F'  averaged over seeds",
                       gd, color_fn=lambda v, *_: _gap_delta_color(v))
 
-    # ── Col 4: LHS parameter ranges ──
+    # ── Col 4: LHS parameter ranges + advanced metrics ──
     col4_rows = [
         [_P("n_vars",    S_MUTED), _P(f"{int(cfg_df['n_vars'].min())}–{int(cfg_df['n_vars'].max())}",    S_BODY)],
         [_P("n_stages",  S_MUTED), _P(f"{int(cfg_df['n_stages'].min())}–{int(cfg_df['n_stages'].max())}",  S_BODY)],
@@ -575,14 +740,22 @@ def _build_aggregate_stats(cfg_df: pd.DataFrame) -> list:
         [_P("configs",   S_MUTED), _P(str(len(cfg_df)), S_BODY)],
         [_P("runs/cfg",  S_MUTED), _P(str(int(cfg_df["n_runs"].median())), S_BODY)],
     ]
-    col4_inner = Table(col4_rows, colWidths=[45, 50])
+    # Add advanced metrics summary if available
+    if "gap_closure_train_mean" in cfg_df.columns and cfg_df["gap_closure_train_mean"].notna().any():
+        col4_rows.append([_P("gap clos.", S_MUTED), _P(_fmt(cfg_df["gap_closure_train_mean"].mean(), 3), S_BODY)])
+    if "success_rate_train_mean" in cfg_df.columns and cfg_df["success_rate_train_mean"].notna().any():
+        col4_rows.append([_P("succ. rate", S_MUTED), _P(f"{cfg_df['success_rate_train_mean'].mean():.1f}%", S_BODY)])
+    if "win_rate_test" in cfg_df.columns and cfg_df["win_rate_test"].notna().any():
+        col4_rows.append([_P("WR test", S_MUTED), _P(_pct(cfg_df["win_rate_test"].median()), S_BODY)])
+
+    col4_inner = Table(col4_rows, colWidths=[50, 50])
     col4_inner.setStyle(TableStyle([
         ("LEFTPADDING",  (0,0),(-1,-1), 0),
         ("RIGHTPADDING", (0,0),(-1,-1), 4),
         ("TOPPADDING",   (0,0),(-1,-1), 1),
         ("BOTTOMPADDING",(0,0),(-1,-1), 1),
     ]))
-    col4 = [_P("<b>LHS parameter ranges</b>", _S("blk2", size=7.5, bold=True)),
+    col4 = [_P("<b>LHS ranges &amp; metrics</b>", _S("blk2", size=7.5, bold=True)),
             _P("complexity space θ = (n, m, ρ, P)", S_MUTED),
             col4_inner]
 
@@ -701,17 +874,19 @@ def _build_configs_table_header_compact(sweep_dir: str, page: int) -> list:
 def _build_configs_table(cfg_df: pd.DataFrame) -> list:
     """
     Multi-page table of per-config results, sorted by win_rate desc.
-    Columns: rank, config, n_vars, n_stages, ρ, P, runs, wins,
-             win_rate, gap_ctrl_mean, gap_delta_mean, F_actual_mean ± std
+    Dynamically adds columns for test win rate and advanced metrics when available.
     """
     # compute quartiles for gap_ctrl coloring
     q25 = cfg_df["gap_ctrl_mean"].quantile(0.25)
     q75 = cfg_df["gap_ctrl_mean"].quantile(0.75)
 
-    # Column widths (must sum to FULL_W)
+    has_test = "win_rate_test" in cfg_df.columns and cfg_df["win_rate_test"].notna().any()
+    has_gc   = "gap_closure_train_mean" in cfg_df.columns and cfg_df["gap_closure_train_mean"].notna().any()
+    has_sr   = "success_rate_train_mean" in cfg_df.columns and cfg_df["success_rate_train_mean"].notna().any()
+
+    # Build column widths dynamically (must sum to FULL_W)
     col_w = [
         20,  # rank
-        135, # config name
         28,  # n
         28,  # m
         30,  # rho
@@ -719,26 +894,39 @@ def _build_configs_table(cfg_df: pd.DataFrame) -> list:
         28,  # runs
         28,  # wins
         48,  # win_rate
-        55,  # gap_ctrl_mean
-        55,  # gap_delta_mean
-        72,  # F_actual mean ± std
     ]
-    assert abs(sum(col_w) - FULL_W) < 2, f"col widths sum={sum(col_w)} vs FULL_W={FULL_W:.1f}"
-
     header = [
         _th("#"),
-        _th("Config"),
         _th("n"),
         _th("m"),
         _th("ρ"),
         _th("P"),
         _th("runs"),
         _th("wins"),
-        _th("Win rate", "W(c)"),
-        _th("Gap ctrl", "F*−F  mean"),
-        _th("Gap Δ",    "F−F'  mean"),
-        _th("F actual", "mean ± std"),
+        _th("WR train", "W(c)"),
     ]
+
+    if has_test:
+        col_w.append(48)
+        header.append(_th("WR test", "W(c) test"))
+    col_w.append(55)  # gap_ctrl
+    header.append(_th("Gap ctrl", "F*−F  mean"))
+    col_w.append(55)  # gap_delta
+    header.append(_th("Gap Δ", "F−F'  mean"))
+    col_w.append(72)  # F_actual
+    header.append(_th("F actual", "mean ± std"))
+
+    if has_gc:
+        col_w.append(42)
+        header.append(_th("GapCl", "closure"))
+    if has_sr:
+        col_w.append(38)
+        header.append(_th("SR%", "success"))
+
+    # Remaining space goes to config name (inserted at position 1)
+    name_w = FULL_W - sum(col_w)
+    col_w.insert(1, name_w)
+    header.insert(1, _th("Config"))
 
     rows = [header]
     ts   = []
@@ -755,11 +943,12 @@ def _build_configs_table(cfg_df: pd.DataFrame) -> list:
         gdc = _gap_delta_color(gd)
 
         name_raw  = row["config_name"]
-        name_disp = name_raw if len(name_raw) <= 32 else "…" + name_raw[-30:]
+        max_name  = max(20, int(name_w / 5))
+        name_disp = name_raw if len(name_raw) <= max_name else "…" + name_raw[-(max_name-1):]
 
         bg = C_ALT if i % 2 == 1 else colors.white
 
-        rows.append([
+        r = [
             _P(str(i+1),                                                      S_TD),
             _P(name_disp,                                                     S_TD),
             _P(str(int(row["n_vars"])),                                       S_TD),
@@ -769,10 +958,24 @@ def _build_configs_table(cfg_df: pd.DataFrame) -> list:
             _P(str(int(row["n_runs"])),                                       S_TD),
             _P(str(int(row["n_wins"])),                                       S_TD),
             Paragraph(f'<font color="#{wc.hexval()[2:]}">{_pct(wr)}</font>',  S_TD),
-            Paragraph(f'<font color="#{gcc.hexval()[2:]}">{_fmt(gc)}</font>', S_TD),
-            Paragraph(f'<font color="#{gdc.hexval()[2:]}">{_fmt(gd)}</font>', S_TD),
-            _P(f"{_fmt(fa)} ± {_fmt(fstd, 4)}",                              S_TD),
-        ])
+        ]
+
+        if has_test:
+            wrt = row.get("win_rate_test", np.nan)
+            wtc = _win_color(wrt) if not np.isnan(wrt) else C_MUTED
+            r.append(Paragraph(f'<font color="#{wtc.hexval()[2:]}">{_pct(wrt)}</font>', S_TD))
+
+        r.append(Paragraph(f'<font color="#{gcc.hexval()[2:]}">{_fmt(gc)}</font>', S_TD))
+        r.append(Paragraph(f'<font color="#{gdc.hexval()[2:]}">{_fmt(gd)}</font>', S_TD))
+        r.append(_P(f"{_fmt(fa)} ± {_fmt(fstd, 4)}",                              S_TD))
+
+        if has_gc:
+            r.append(_P(_fmt(row.get("gap_closure_train_mean", np.nan), 3), S_TD))
+        if has_sr:
+            sr_val = row.get("success_rate_train_mean", np.nan)
+            r.append(_P(f"{sr_val:.0f}%" if not np.isnan(sr_val) else "—", S_TD))
+
+        rows.append(r)
         ts.append(("BACKGROUND", (0, i+1), (-1, i+1), bg))
 
     base_style = [
@@ -789,10 +992,17 @@ def _build_configs_table(cfg_df: pd.DataFrame) -> list:
     tbl = Table(rows, colWidths=col_w, repeatRows=1)
     tbl.setStyle(TableStyle(base_style))
 
+    footer_parts = [
+        "WR: W(c) = fraction of seed pairs where F > F'",
+        "Gap ctrl: F*−F (smaller = better)",
+        "Gap Δ: F−F' (positive = controller beats baseline)",
+    ]
+    if has_gc:
+        footer_parts.append("GapCl: mean gap closure (higher = better)")
+    if has_sr:
+        footer_parts.append("SR%: success rate meeting target")
     footer_note = _P(
-        "Win rate: W(c) = fraction of seed pairs where F > F'  ·  "
-        "Gap ctrl: F*−F (smaller = better)  ·  Gap Δ: F−F' (positive = controller beats baseline)  ·  "
-        "green = best quartile  ·  red = worst quartile",
+        "  ·  ".join(footer_parts),
         S_MUTED,
     )
 
