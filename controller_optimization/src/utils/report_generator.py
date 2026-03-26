@@ -16,7 +16,7 @@ from reportlab.lib import colors
 from reportlab.lib.enums import TA_LEFT, TA_RIGHT, TA_CENTER
 from reportlab.platypus import (
     BaseDocTemplate, Frame, PageTemplate,
-    Paragraph, Spacer, Image, Table, TableStyle, PageBreak,
+    Paragraph, Spacer, Image, Table, TableStyle, PageBreak, KeepTogether,
 )
 from reportlab.platypus.flowables import HRFlowable
 
@@ -819,6 +819,9 @@ def _page1(d):
             sc_idx = traj_i.get('scenario_idx', traj_i_idx)
             ctrl_info = traj_i.get('controllable_info', {})
 
+            # Collect all elements for this scenario to keep together
+            sc_elements = []
+
             # Scenario sub-header with F values
             tf_s  = traj_i.get('F_star',     fstar_v)
             tf_bl = traj_i.get('F_baseline', fbl_v)
@@ -827,9 +830,9 @@ def _page1(d):
             sc_info = f"F* {tf_s:.4f}  \u00b7  F\u2019 {tf_bl:.4f}  \u00b7  F {tf_ac:.4f}"
             if tf_form_ac is not None:
                 sc_info += f"  \u00b7  F(formula) {tf_form_ac:.4f}"
-            F.append(Paragraph(
+            sc_elements.append(Paragraph(
                 f"<b>Scenario {sc_idx}</b> &mdash; {sc_info}", ST_NOTE))
-            F.append(Spacer(1, 2))
+            sc_elements.append(Spacer(1, 2))
 
             p_names = traj_i.get('process_names', [])
             t_traj  = traj_i.get('target_trajectory', {})
@@ -935,7 +938,7 @@ def _page1(d):
                     right_cell = Paragraph("", ST_NOTE)
 
                 # Process label + side-by-side layout
-                F.append(Paragraph(f"<b>{proc}</b>", ST_TRAJ_C))
+                sc_elements.append(Paragraph(f"<b>{proc}</b>", ST_TRAJ_C))
                 side_tbl = Table([[data_tbl, right_cell]],
                                  colWidths=[data_w, plot_w])
                 side_tbl.setStyle(TableStyle([
@@ -946,10 +949,11 @@ def _page1(d):
                     ('TOPPADDING',   (1, 0), (1,  0),  10),  # plot: push down ~10pt
                     ('BOTTOMPADDING',(0, 0), (-1, -1), 0),
                 ]))
-                F.append(side_tbl)
-                F.append(Spacer(1, 4))
+                sc_elements.append(side_tbl)
+                sc_elements.append(Spacer(1, 4))
 
-            F.append(Spacer(1, 4))
+            # Wrap entire scenario in KeepTogether so it doesn't split across pages
+            F.append(KeepTogether(sc_elements))
 
         # Footer legend
         foot_p = Paragraph(
