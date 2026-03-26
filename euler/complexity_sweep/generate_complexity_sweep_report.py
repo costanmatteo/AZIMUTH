@@ -999,8 +999,9 @@ def build_page2_html(s: dict, now: datetime,
 """
 
 
-def build_page3_html(win_df: pd.DataFrame, now: datetime, sweep_dir: str) -> str:
-    """All-configurations table, sorted by win rate descending."""
+def build_page3_html(win_df: pd.DataFrame, now: datetime, sweep_dir: str,
+                     df_raw: pd.DataFrame | None = None) -> str:
+    """All-configurations table with per-seed-pair detail rows, sorted by win rate descending."""
     win_df = win_df.sort_values('win_rate_pct', ascending=False).reset_index(drop=True)
     ts     = now.strftime('%Y-%m-%d &nbsp;%H:%M:%S')
 
@@ -1008,13 +1009,33 @@ def build_page3_html(win_df: pd.DataFrame, now: datetime, sweep_dir: str) -> str
 
     nproc_th = '<th>n_proc<span class="def">chain len</span></th>' if has_nproc else ''
 
+    # Build group key columns
+    group_cols = ['st_n', 'st_m', 'st_rho']
+    if has_nproc:
+        group_cols.append('n_processes')
+
+    # Pre-compute per-run win flag on df_raw
+    if df_raw is not None:
+        df_detail = df_raw.copy()
+        gb_run = (df_detail['F_star_test'] - df_detail['F_baseline_test']).abs()
+        gc_run = (df_detail['F_star_test'] - df_detail['F_actual_test']).abs()
+        df_detail['win'] = gc_run < gb_run
+        imp_denom = df_detail['F_baseline_test'].abs().clip(lower=1e-10)
+        df_detail['improvement_pct'] = (
+            (df_detail['F_actual_test'] - df_detail['F_baseline_test']) / imp_denom * 100
+        )
+    else:
+        df_detail = None
+
     rows_html = ''
     for _, r in win_df.iterrows():
         wr_cls = _wr_cls(r['win_rate_pct'])
         nproc_td = (f'<td>{int(r["n_processes"]) if pd.notna(r.get("n_processes")) else "N/A"}</td>'
                     if has_nproc else '')
+
+        # ── Summary row for this configuration ──
         rows_html += f"""
-      <tr>
+      <tr style="font-weight:bold; background:#f0f0f0;">
         <td>{int(r['st_n'])}</td>
         <td>{int(r['st_m'])}</td>
         <td>{r['st_rho']:.3f}</td>
@@ -1028,18 +1049,47 @@ def build_page3_html(win_df: pd.DataFrame, now: datetime, sweep_dir: str) -> str
         <td>{_pct(r['mean_improvement_pct'])}</td>
       </tr>"""
 
+        # ── Individual seed-pair rows ──
+        if df_detail is not None:
+            mask = (df_detail['st_n'] == r['st_n']) & \
+                   (df_detail['st_m'] == r['st_m']) & \
+                   (df_detail['st_rho'] == r['st_rho'])
+            if has_nproc and pd.notna(r.get('n_processes')):
+                mask &= (df_detail['n_processes'] == r['n_processes'])
+            cfg_runs = df_detail[mask].sort_values('improvement_pct', ascending=False)
+
+            for _, run in cfg_runs.iterrows():
+                win_str = '&#10003;' if run['win'] else '&#10007;'
+                win_cls = 'dg' if run['win'] else 'dr'
+                nproc_td_run = (f'<td></td>' if has_nproc else '')
+                seed_label = f"s<sub>t</sub>={int(run['seed_target'])}&nbsp;s<sub>b</sub>={int(run['seed_baseline'])}"
+                rows_html += f"""
+      <tr style="color:#666; font-size:6.5px;">
+        <td colspan="3" style="text-align:left; padding-left:12px;">{seed_label}</td>
+        {nproc_td_run}
+        <td></td>
+        <td></td>
+        <td class="{win_cls}">{win_str}</td>
+        <td>{_fmt(run['F_star_test'])}</td>
+        <td>{_fmt(run['F_baseline_test'])}</td>
+        <td>{_fmt(run['F_actual_test'])}</td>
+        <td>{_pct(run['improvement_pct'])}</td>
+      </tr>"""
+
+    n_total = len(df_detail) if df_detail is not None else 0
+
     return f"""
 <div class="page-flow">
   <div class="hdr-row">
-    <span class="title">Complexity Sweep Report &#8212; All Configurations</span>
-    <span class="meta">{ts} &nbsp;&#183;&nbsp; {len(win_df)} configurations &nbsp;&#183;&nbsp; page 3 / 3</span>
+    <span class="title">Complexity Sweep Report &#8212; All Configurations (detailed)</span>
+    <span class="meta">{ts} &nbsp;&#183;&nbsp; {len(win_df)} configurations &nbsp;&#183;&nbsp; {n_total} runs &nbsp;&#183;&nbsp; page 3+</span>
   </div>
   <hr class="rule-heavy">
 
   <div class="sec-head">
-    05 &#8212; all configurations
+    05 &#8212; all configurations &amp; seed pairs
     <span style="font-size:7px;font-weight:400;text-transform:none;letter-spacing:0">
-      sorted by win rate &middot; descending &nbsp;&#183;&nbsp; win = F &gt; F&prime; &nbsp;&#183;&nbsp; improvement = (F&#8722;F&prime;)/|F&prime;|
+      sorted by win rate &middot; descending &nbsp;&#183;&nbsp; bold rows = config summary &nbsp;&#183;&nbsp; detail rows = individual seed pairs &nbsp;&#183;&nbsp; improvement = (F&#8722;F&prime;)/|F&prime;|
     </span>
   </div>
   <hr class="rule-thin">
@@ -1054,7 +1104,7 @@ def build_page3_html(win_df: pd.DataFrame, now: datetime, sweep_dir: str) -> str
         <th>Runs</th>
         <th>Wins</th>
         <th>Win rate</th>
-        <th>F* mean</th>
+        <th>F*</th>
         <th>F&prime; baseline</th>
         <th>F controller</th>
         <th>Improvement<span class="def">(F&#8722;F&prime;)/|F&prime;|</span></th>
@@ -1070,6 +1120,7 @@ def build_page3_html(win_df: pd.DataFrame, now: datetime, sweep_dir: str) -> str
     <span class="dg">green &ge; 70%</span> &nbsp;&#183;&nbsp;
     <span class="da">amber 40&#8211;70%</span> &nbsp;&#183;&nbsp;
     <span class="dr">red &lt; 40%</span> &nbsp;&#183;&nbsp;
+    &#10003; = win &nbsp;&#183;&nbsp; &#10007; = loss &nbsp;&#183;&nbsp;
     improvement positive = controller beats baseline
   </div>
 
@@ -1135,7 +1186,7 @@ def generate_complexity_sweep_report(sweep_dir: Path,
     html_body = (
         build_page1_html(s, now, b64_marginals, b64_wr_dist, sd, config_html)
         + build_page2_html(s, now, b64_hn_rho, b64_hn_m, b64_hm_rho, b64_3d, sd)
-        + build_page3_html(win_df, now, sd)
+        + build_page3_html(win_df, now, sd, df_raw=df_raw)
     )
 
     full_html = f"""<!DOCTYPE html>
