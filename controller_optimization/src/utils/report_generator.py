@@ -781,52 +781,66 @@ def _page1(d):
     F.append(kv_table(intra_rows, TW * 0.5, key_frac=0.42))
     F.append(Spacer(1, 7))
 
-    # ── 04 — trajectory comparison (new page) ───────────────────────────────
-    if traj:
+    # ── 04 — trajectory comparison (one page per scenario, best run) ─────────
+    traj_list = d.get('trajectory_values_list', [])
+    if not traj_list and traj:
+        traj_list = [traj]  # Backward compatibility: wrap single dict in list
+
+    def _extract(tr_dict, proc, key='outputs'):
+        """Extract values from trajectory dict, preferring outputs_mean for controller."""
+        v = tr_dict.get(proc, {})
+        arr = v.get(key, v.get('outputs_mean', v.get('outputs', v.get('inputs', []))))
+        if hasattr(arr, 'detach'):
+            arr = arr.detach().cpu().numpy()
+        if hasattr(arr, '__len__') and len(arr) > 0:
+            return arr[0]
+        return [0.0]
+
+    for traj_i_idx, traj_i in enumerate(traj_list):
         F += _footer(d, 1, 3)
         F.append(PageBreak())
-        sc_idx  = traj.get('scenario_idx', 0)
-        F += section_header(f"04 \u2014 trajectory comparison \u2014 scenario {sc_idx}")
+        sc_idx = traj_i.get('scenario_idx', traj_i_idx)
+        F += section_header(
+            f"04 \u2014 trajectory comparison \u2014 scenario {sc_idx} (best run)")
 
-        p_names = traj.get('process_names', [])
-        t_traj  = traj.get('target_trajectory', {})
-        b_traj  = traj.get('baseline_trajectory', {})
-        a_traj  = traj.get('actual_trajectory', {})
+        p_names = traj_i.get('process_names', [])
+        t_traj  = traj_i.get('target_trajectory', {})
+        b_traj  = traj_i.get('baseline_trajectory', {})
+        a_traj  = traj_i.get('actual_trajectory', {})
 
         traj_hdr = [Paragraph(h, ST_TRAJ_H) for h in
-                    ["Step", "Target a*", "Baseline a\u2019",
-                     "Controller a", "\u0394 baseline", "\u0394 actual", "Note"]]
+                    ["Step", "Target Y*", "Baseline Y\u2019",
+                     "Controller Y", "\u0394 baseline", "\u0394 controller", "Note"]]
         cws_t = [r * TW for r in [0.07, 0.11, 0.12, 0.12, 0.11, 0.11, 0.36]]
         traj_rows = [traj_hdr]
 
-        def _extract(tr_dict, proc, key='inputs'):
-            v   = tr_dict.get(proc, {})
-            arr = v.get(key, v.get('inputs', []))
-            if hasattr(arr, 'detach'):
-                arr = arr.detach().cpu().numpy()
-            return arr[0] if len(arr) else [0.0]
-
         for proc in p_names:
-            t_inp = _extract(t_traj, proc)
-            b_inp = _extract(b_traj, proc)
-            a_inp = _extract(a_traj, proc)
-            t_v   = float(t_inp[0]) if len(t_inp) else 0.0
-            b_v   = float(b_inp[0]) if len(b_inp) else 0.0
-            a_v   = float(a_inp[0]) if len(a_inp) else 0.0
-            d_base   = a_v - b_v
+            # Use OUTPUTS for comparison (not inputs — inputs are identical for baseline/target)
+            t_out = _extract(t_traj, proc, 'outputs')
+            b_out = _extract(b_traj, proc, 'outputs')
+            a_out = _extract(a_traj, proc, 'outputs_mean')
+
+            t_v = float(t_out[0]) if hasattr(t_out, '__len__') and len(t_out) else float(t_out)
+            b_v = float(b_out[0]) if hasattr(b_out, '__len__') and len(b_out) else float(b_out)
+            a_v = float(a_out[0]) if hasattr(a_out, '__len__') and len(a_out) else float(a_out)
+
+            # Δ baseline = baseline_output - target_output (gap without controller)
+            d_base = b_v - t_v
+            # Δ controller = controller_output - target_output (remaining gap)
             d_actual = a_v - t_v
-            closer   = abs(a_v - t_v) < abs(b_v - t_v)
-            note     = "adjusted \u2191" if closer else "adjusted"
+            closer = abs(a_v - t_v) < abs(b_v - t_v)
+            note = "improved \u2191" if closer else "not improved"
             if abs(b_v - t_v) < 1e-6:
-                note = "identical inputs"
+                note = "baseline \u2248 target"
+
             traj_rows.append([
-                Paragraph(proc,           ST_TRAJ_C),
-                Paragraph(f"{t_v:+.4f}",  ST_TRAJ_C),
-                Paragraph(f"{b_v:+.4f}",  ST_TRAJ_C),
-                Paragraph(f"{a_v:+.4f}",  ST_TRAJ_C),
+                Paragraph(proc,              ST_TRAJ_C),
+                Paragraph(f"{t_v:.4f}",      ST_TRAJ_C),
+                Paragraph(f"{b_v:.4f}",      ST_TRAJ_C),
+                Paragraph(f"{a_v:.4f}",      ST_TRAJ_C),
                 Paragraph(f"{d_base:+.4f}",  ST_TRAJ_C),
                 Paragraph(f"{d_actual:+.4f}", ST_TRAJ_G if closer else ST_TRAJ_R),
-                Paragraph(note,           ST_NOTE),
+                Paragraph(note,              ST_NOTE),
             ])
 
         traj_tbl = Table(traj_rows, colWidths=cws_t)
@@ -841,15 +855,15 @@ def _page1(d):
         ]))
         F.append(traj_tbl)
 
-        tf_s  = traj.get('F_star',     fstar_v)
-        tf_bl = traj.get('F_baseline', fbl_v)
-        tf_ac = traj.get('F_actual',   fact_v)
-        tf_form_ac = traj.get('F_formula_actual')
+        tf_s  = traj_i.get('F_star',     fstar_v)
+        tf_bl = traj_i.get('F_baseline', fbl_v)
+        tf_ac = traj_i.get('F_actual',   fact_v)
+        tf_form_ac = traj_i.get('F_formula_actual')
         foot_text = (f"F* {tf_s:.6f}  \u00b7  F\u2019 {tf_bl:.6f}  \u00b7  "
                      f"F {tf_ac:.6f}")
         if tf_form_ac is not None:
             foot_text += f"  \u00b7  F(formula) {tf_form_ac:.6f}"
-        foot_text += f"  \u00b7  scenario {sc_idx} only"
+        foot_text += f"  \u00b7  scenario {sc_idx} \u00b7 best run"
         foot_l = Paragraph(foot_text, ST_NOTE)
         foot_r = Paragraph("\u2191 = closer to target than baseline", ST_NOTE_G)
         foot_t = Table([[foot_l, foot_r]], colWidths=[TW * 0.65, TW * 0.35])
@@ -1148,6 +1162,7 @@ def generate_controller_report(
     n_scenarios=None,
     advanced_metrics=None,
     trajectory_values=None,
+    trajectory_values_list=None,
     theoretical_data=None,
     F_formula=None,
 ):
@@ -1168,6 +1183,7 @@ def generate_controller_report(
         n_scenarios=n_scenarios,
         advanced_metrics=advanced_metrics or {},
         trajectory_values=trajectory_values,
+        trajectory_values_list=trajectory_values_list or [],
         theoretical_data=theoretical_data or {},
         checkpoint_dir=checkpoint_dir,
         F_formula=F_formula,
@@ -1185,6 +1201,7 @@ class ControllerReportGenerator:
     def generate(self, config, training_history, final_metrics, process_metrics,
                  F_star, F_baseline, F_actual, timestamp, n_scenarios=None,
                  advanced_metrics=None, trajectory_values=None,
+                 trajectory_values_list=None,
                  theoretical_data=None, F_formula=None):
         if timestamp is None:
             timestamp = datetime.now()

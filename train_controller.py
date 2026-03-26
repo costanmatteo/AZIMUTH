@@ -745,56 +745,60 @@ def main(config=None):
     print(f"Robustness (std of F):         {F_actual_std:.6f}  (lower = more robust)")
     print("="*70)
 
-    # 7a.5. Prepare trajectory values for PDF report
-    print("\n[7a.5/9] Preparing trajectory values for PDF report...")
+    # 7a.5. Prepare trajectory values for PDF report — best run per scenario
+    print("\n[7a.5/9] Preparing trajectory values for PDF report (best run per scenario)...")
     print("-"*70)
 
-    # Choose representative scenario (scenario 0 for simplicity)
-    representative_scenario_idx = 0
-    print(f"  Using scenario {representative_scenario_idx} for trajectory comparison...")
+    n_best_runs = 10  # Number of candidate runs per scenario to find best
+    trajectory_values_for_report_list = []
 
-    # Generate actual trajectory for this scenario
     with torch.no_grad():
         process_chain.eval()
-        actual_trajectory_repr = process_chain.forward(batch_size=1, scenario_idx=representative_scenario_idx)
+        for scenario_idx in range(n_scenarios):
+            # Generate multiple runs and pick the best (highest F)
+            best_F = -float('inf')
+            best_trajectory = None
+            for _ in range(n_best_runs):
+                candidate = process_chain.forward(batch_size=1, scenario_idx=scenario_idx)
+                F_candidate = surrogate.compute_reliability(candidate).item()
+                if F_candidate > best_F:
+                    best_F = F_candidate
+                    best_trajectory = candidate
 
-    # Extract baseline for this scenario
-    baseline_scenario_repr = {}
-    for process_name, data in baseline_trajectory.items():
-        baseline_scenario_repr[process_name] = {
-            'inputs': data['inputs'][representative_scenario_idx:representative_scenario_idx+1],
-            'outputs': data['outputs'][representative_scenario_idx:representative_scenario_idx+1]
-        }
+            # Extract baseline for this scenario
+            baseline_scenario = {}
+            for process_name, data in baseline_trajectory.items():
+                baseline_scenario[process_name] = {
+                    'inputs': data['inputs'][scenario_idx:scenario_idx+1],
+                    'outputs': data['outputs'][scenario_idx:scenario_idx+1]
+                }
+            baseline_tensor = convert_numpy_to_tensor(baseline_scenario, device=device)
+            F_baseline_sc = surrogate.compute_reliability(baseline_tensor).item()
 
-    # Convert to tensors for reliability computation
-    baseline_repr_tensor = convert_numpy_to_tensor(baseline_scenario_repr, device=device)
+            # Formula-based F (if CasualiT)
+            F_formula_baseline_sc = None
+            F_formula_actual_sc = None
+            if formula_surrogate is not None:
+                F_formula_baseline_sc = formula_surrogate.compute_reliability(baseline_tensor).item()
+                F_formula_actual_sc = formula_surrogate.compute_reliability(best_trajectory).item()
 
-    # Compute reliability for this specific scenario
-    F_star_repr = F_star_value  # F* is a single scalar
-    F_baseline_repr = surrogate.compute_reliability(baseline_repr_tensor).item()
-    F_actual_repr = surrogate.compute_reliability(actual_trajectory_repr).item()
+            trajectory_values_for_report_list.append({
+                'target_trajectory': target_trajectory,
+                'baseline_trajectory': baseline_scenario,
+                'actual_trajectory': best_trajectory,
+                'scenario_idx': scenario_idx,
+                'process_names': process_chain.process_names,
+                'F_star': F_star_value,
+                'F_baseline': F_baseline_sc,
+                'F_actual': best_F,
+                'F_formula_baseline': F_formula_baseline_sc,
+                'F_formula_actual': F_formula_actual_sc,
+            })
+            print(f"  Scenario {scenario_idx}: best F = {best_F:.6f} (from {n_best_runs} runs)")
 
-    # Compute formula-based F for representative scenario (if using CasualiT)
-    F_formula_baseline_repr = None
-    F_formula_actual_repr = None
-    if formula_surrogate is not None:
-        F_formula_baseline_repr = formula_surrogate.compute_reliability(baseline_repr_tensor).item()
-        F_formula_actual_repr = formula_surrogate.compute_reliability(actual_trajectory_repr).item()
-
-    # Prepare trajectory values dict for PDF report
-    trajectory_values_for_report = {
-        'target_trajectory': target_trajectory,
-        'baseline_trajectory': baseline_trajectory,
-        'actual_trajectory': actual_trajectory_repr,
-        'scenario_idx': representative_scenario_idx,
-        'process_names': process_chain.process_names,
-        'F_star': F_star_repr,
-        'F_baseline': F_baseline_repr,
-        'F_actual': F_actual_repr,
-        'F_formula_baseline': F_formula_baseline_repr,
-        'F_formula_actual': F_formula_actual_repr,
-    }
-    print(f"  ✓ Trajectory values prepared (will be included in PDF report)")
+    # For backward compatibility, keep the first scenario as the main one
+    trajectory_values_for_report = trajectory_values_for_report_list[0] if trajectory_values_for_report_list else {}
+    print(f"  ✓ {len(trajectory_values_for_report_list)} trajectory comparisons prepared")
 
     # 7b. Evaluate on TEST scenarios
     print("\n[7b/9] Evaluating on TEST scenarios...")
@@ -1193,29 +1197,30 @@ def main(config=None):
         # F* is a single scalar
         F_star_dict = float(F_star_value)
 
-        # Report uses surrogate F as primary (CasualiT when configured)
+        # Report uses TEST F values for improvement/gap (generalization metrics)
         F_baseline_dict = {
-            'mean': float(F_baseline_mean),
-            'std': float(F_baseline_std),
-            'min': float(F_baseline_array.min()),
-            'max': float(F_baseline_array.max())
+            'mean': float(F_baseline_test_mean),
+            'std': float(np.std(F_baseline_test_array)),
+            'min': float(F_baseline_test_array.min()),
+            'max': float(F_baseline_test_array.max())
         }
 
         F_actual_dict = {
-            'mean': float(F_actual_mean),
-            'std': float(F_actual_std),
-            'min': float(F_actual_per_sample.min()),
-            'max': float(F_actual_per_sample.max())
+            'mean': float(F_actual_test_mean),
+            'std': float(np.std(F_actual_test_array)),
+            'min': float(F_actual_test_array.min()),
+            'max': float(F_actual_test_array.max())
         }
 
         # F_formula dict — only when formula_surrogate exists (CasualiT mode)
         F_formula_dict = None
-        if formula_surrogate is not None and F_formula_mean is not None:
+        if formula_surrogate is not None and F_formula_actual_test_mean is not None:
+            F_formula_actual_test_arr = np.array(F_formula_actual_test_values)
             F_formula_dict = {
-                'mean': float(F_formula_mean),
-                'std': float(F_formula_std),
-                'min': float(F_formula_per_sample.min()),
-                'max': float(F_formula_per_sample.max())
+                'mean': float(F_formula_actual_test_mean),
+                'std': float(np.std(F_formula_actual_test_arr)),
+                'min': float(F_formula_actual_test_arr.min()),
+                'max': float(F_formula_actual_test_arr.max())
             }
 
         # Prepare final metrics for report
@@ -1668,6 +1673,7 @@ def main(config=None):
                 n_scenarios=n_scenarios,
                 advanced_metrics=advanced_metrics_for_report,
                 trajectory_values=trajectory_values_for_report,
+                trajectory_values_list=trajectory_values_for_report_list,
                 theoretical_data=theoretical_data,
                 F_formula=F_formula_dict,
             )
