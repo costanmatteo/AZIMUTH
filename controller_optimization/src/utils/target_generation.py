@@ -204,11 +204,14 @@ def generate_baseline_trajectories(process_configs, target_trajectory, n_baselin
     """
     Generate n_baselines baseline trajectories with different env params.
 
-    Each baseline:
-    - Copies CONTROLLABLE inputs from target (fixed)
-    - Has DIFFERENT environmental parameters (sampled with seed_env)
-    - Has ACTIVE process noise (sampled with seed_noise)
-    - Non-controllable, non-structural inputs are copied from target
+    Baseline 0 uses the SAME environmental parameters as the target trajectory,
+    so the first scenario isolates the effect of process noise alone.
+    Baselines 1..n_baselines-1 have DIFFERENT env params (sampled with seed_env).
+
+    All baselines:
+    - Copy CONTROLLABLE inputs from target (fixed)
+    - Have ACTIVE process noise (sampled with seed_noise)
+    - Copy non-controllable, non-structural inputs from target
 
     By separating seed_env and seed_noise, test baselines can reuse the
     same noise realization (seed_noise) while having different env params
@@ -218,7 +221,7 @@ def generate_baseline_trajectories(process_configs, target_trajectory, n_baselin
         process_configs (list): Process configuration list
         target_trajectory (dict): Output from generate_target_trajectory() (1 sample)
         n_baselines (int): Number of baselines to generate
-        seed_env (int): Seed for environmental parameters (structural noise)
+        seed_env (int): Seed for environmental parameters (baselines 1..n-1)
         seed_noise (int): Seed for process noise
 
     Returns:
@@ -243,18 +246,40 @@ def generate_baseline_trajectories(process_configs, target_trajectory, n_baselin
 
         # Target inputs (1 sample)
         target_inputs = target_trajectory[process_name]['inputs']  # (1, input_dim)
+        target_structural = target_trajectory[process_name].get('structural_conditions', {})
 
         # Determine which SCM labels are controllable
         controllable_scm = _get_controllable_scm_labels(process_config)
 
-        # Step 1: Sample env params independently with seed_env
-        # Use a dedicated RNG to sample structural noise variables
-        rng_env = np.random.RandomState(seed_env + proc_idx)
+        # Step 1: Build env params array for all baselines
+        # Baseline 0: SAME env params as target
+        # Baselines 1..n-1: sampled with seed_env
         env_values = {}
         for var in ds_scm.structural_noise_vars:
             if var in ds_scm.noise_model.singles:
-                noise_fn = ds_scm.noise_model.singles[var]
-                env_values[var] = noise_fn(rng_env, n_baselines)
+                # Target's env param value (baseline 0)
+                target_env_val = target_structural.get(var, None)
+                if target_env_val is not None:
+                    target_val_0 = float(target_env_val[0])
+                else:
+                    # Fallback: extract from target inputs if var is an input label
+                    var_idx = None
+                    for i, scm_label in enumerate(scm_input_labels):
+                        if scm_label == var:
+                            var_idx = i
+                            break
+                    target_val_0 = float(target_inputs[0, var_idx]) if var_idx is not None else 0.0
+
+                if n_baselines == 1:
+                    # Only baseline 0: use target env params
+                    env_values[var] = np.array([target_val_0])
+                else:
+                    # Sample n_baselines-1 new env params for baselines 1..n-1
+                    rng_env = np.random.RandomState(seed_env + proc_idx)
+                    noise_fn = ds_scm.noise_model.singles[var]
+                    sampled_env = noise_fn(rng_env, n_baselines - 1)
+                    # Prepend target env value as baseline 0
+                    env_values[var] = np.concatenate([[target_val_0], sampled_env])
 
         # Step 2: Fix controllable inputs + env params, sample with process noise
         original_singles = ds_scm.noise_model.singles.copy()
@@ -281,7 +306,7 @@ def generate_baseline_trajectories(process_configs, target_trajectory, n_baselin
 
                     modified_singles[scm_label] = make_const_sampler(target_val)
 
-            # Fix env params from step 1 (pre-sampled with seed_env)
+            # Fix env params (baseline 0 = target, 1..n-1 = sampled)
             for var, vals in env_values.items():
                 def make_env_sampler(values):
                     return lambda rng, n: values[:n]
@@ -316,10 +341,11 @@ def generate_baseline_trajectories(process_configs, target_trajectory, n_baselin
         print(f"Generated {n_baselines} baseline trajectories for {process_name}:")
         print(f"  - Shape: {inputs.shape}")
         print(f"  - Controllable inputs: FIXED to target values")
-        if structural_conditions:
-            print(f"  - Env params (structural): DIFFERENT per baseline")
+        print(f"  - Baseline 0: SAME env params as target")
+        if n_baselines > 1 and structural_conditions:
+            print(f"  - Baselines 1..{n_baselines-1}: DIFFERENT env params")
             for var, vals in structural_conditions.items():
-                print(f"    {var}: [{vals.min():.2f}, {vals.max():.2f}] (range)")
+                print(f"    {var}: target={vals[0]:.4f}, range=[{vals[1:].min():.4f}, {vals[1:].max():.4f}]")
 
     return trajectory
 
@@ -437,7 +463,7 @@ if __name__ == '__main__':
         seed_noise=134           # same noise seed
     )
 
-    # Verify controllable inputs match target
+    # Verify controllable inputs match target and baseline 0 env = target env
     print("\n" + "=" * 70)
     print("VERIFICATION")
     print("=" * 70)
@@ -458,8 +484,10 @@ if __name__ == '__main__':
                 print(f"  {label} [controllable]: target={target_val:.4f}, "
                       f"baseline max_diff={max_diff:.10f} (should be ~0)")
             else:
+                bl0_diff = abs(baseline_vals[0] - target_val)
                 print(f"  {label} [env param]: target={target_val:.4f}, "
-                      f"baselines=[{baseline_vals.min():.4f}, {baseline_vals.max():.4f}]")
+                      f"baseline_0={baseline_vals[0]:.4f} (diff={bl0_diff:.10f}, should be ~0), "
+                      f"others=[{baseline_vals[1:].min():.4f}, {baseline_vals[1:].max():.4f}]")
 
     print("\n" + "=" * 70)
     print("TEST COMPLETE")
