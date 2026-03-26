@@ -75,7 +75,8 @@ from controller_optimization.src.utils.visualization import (
     plot_target_vs_actual_scatter,
     plot_gap_distribution,
     plot_training_progression,
-    plot_loss_chart
+    plot_loss_chart,
+    generate_process_evolution_plots
 )
 from controller_optimization.src.utils.report_generator import generate_controller_report
 from controller_optimization.src.utils.model_utils import convert_numpy_to_tensor
@@ -1672,6 +1673,23 @@ def main(config=None):
             print("  Set 'theoretical_analysis': {'enabled': True} in your config.")
             print("  This will add L_min plots and Bellman lines to the PDF report.")
 
+        # Generate per-process evolution plots (X/Y across epochs)
+        evolution_plot_paths = {}
+        if hasattr(trainer, 'training_progression') and trainer.training_progression:
+            print("\n  Generating per-process evolution plots...")
+            try:
+                evolution_plot_paths = generate_process_evolution_plots(
+                    training_progression=trainer.training_progression,
+                    controllable_info=controllable_info_for_report,
+                    checkpoint_dir=checkpoint_dir,
+                    n_scenarios=n_scenarios
+                )
+                print(f"  ✓ Generated {len(evolution_plot_paths)} evolution plots")
+            except Exception as e:
+                print(f"  ✗ Warning: Evolution plots failed: {e}")
+                import traceback
+                traceback.print_exc()
+
         # Generate PDF report
         try:
             report_path = generate_controller_report(
@@ -1688,6 +1706,7 @@ def main(config=None):
                 advanced_metrics=advanced_metrics_for_report,
                 trajectory_values=trajectory_values_for_report,
                 trajectory_values_list=trajectory_values_for_report_list,
+                evolution_plot_paths=evolution_plot_paths,
                 theoretical_data=theoretical_data,
                 F_formula=F_formula_dict,
             )

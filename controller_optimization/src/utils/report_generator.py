@@ -5,6 +5,7 @@ landscape and more compact (less vertical whitespace).
 """
 
 import math
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -794,10 +795,16 @@ def _page1(d):
             return arr[0]
         return arr
 
+    evo_paths = d.get('evolution_plot_paths', {})
+
     if traj_list:
         F += _footer(d, 1, 3)
         F.append(PageBreak())
         F += section_header("04 \u2014 trajectory comparison (best run per scenario)")
+
+        # Width split: data table ~55%, plot ~45%
+        data_w = TW * 0.55
+        plot_w = TW * 0.45
 
         for traj_i_idx, traj_i in enumerate(traj_list):
             sc_idx = traj_i.get('scenario_idx', traj_i_idx)
@@ -820,21 +827,13 @@ def _page1(d):
             b_traj  = traj_i.get('baseline_trajectory', {})
             a_traj  = traj_i.get('actual_trajectory', {})
 
-            # Table: Process | Variable | Target | Controller | Δ
-            traj_hdr = [Paragraph(h, ST_TRAJ_H) for h in
-                        ["Process", "Variable", "Target", "Controller",
-                         "\u0394", ""]]
-            cws_t = [r * TW for r in [0.10, 0.18, 0.14, 0.14, 0.14, 0.30]]
-            traj_rows = [traj_hdr]
-
+            # Build one row per process: [data_subtable | evolution_plot]
             for proc_idx, proc in enumerate(p_names):
                 p_info = ctrl_info.get(proc, {})
                 input_labels = p_info.get('input_labels', [])
                 output_labels = p_info.get('output_labels', [])
-                ctrl_labels = set(p_info.get('controllable_labels', []))
                 ctrl_indices = p_info.get('controllable_indices', [])
 
-                # Get raw arrays
                 t_inputs = _to_np(t_traj.get(proc, {}).get('inputs', []))
                 a_inputs = _to_np(a_traj.get(proc, {}).get('inputs', []))
                 t_outputs = _to_np(t_traj.get(proc, {}).get('outputs', []))
@@ -843,15 +842,20 @@ def _page1(d):
                 a_outputs = _to_np(a_outputs_raw.get('outputs_mean',
                                    a_outputs_raw.get('outputs', [])))
 
-                # Controllable input rows (skip process 0 — inputs fixed from target)
+                # Build data rows for this process
+                proc_hdr = [Paragraph(h, ST_TRAJ_H) for h in
+                            ["Variable", "Target", "Controller", "\u0394", ""]]
+                data_cws = [r * data_w for r in [0.22, 0.18, 0.18, 0.18, 0.24]]
+                proc_rows = [proc_hdr]
+
+                # Controllable input rows (skip process 0)
                 if proc_idx > 0 and ctrl_indices:
                     for ci in ctrl_indices:
                         lbl = input_labels[ci] if ci < len(input_labels) else f"input_{ci}"
                         t_v = float(t_inputs[ci]) if hasattr(t_inputs, '__len__') and ci < len(t_inputs) else 0.0
                         a_v = float(a_inputs[ci]) if hasattr(a_inputs, '__len__') and ci < len(a_inputs) else 0.0
                         delta = a_v - t_v
-                        traj_rows.append([
-                            Paragraph(proc if ci == ctrl_indices[0] else "",  ST_TRAJ_C),
+                        proc_rows.append([
                             Paragraph(lbl,              ST_TRAJ_C),
                             Paragraph(f"{t_v:.4f}",     ST_TRAJ_C),
                             Paragraph(f"{a_v:.4f}",     ST_TRAJ_C),
@@ -859,16 +863,14 @@ def _page1(d):
                             Paragraph("input",          ST_NOTE),
                         ])
 
-                # Output row (always show — this is what F depends on)
+                # Output row
                 for oi, olbl in enumerate(output_labels):
                     t_v = float(t_outputs[oi]) if hasattr(t_outputs, '__len__') and oi < len(t_outputs) else 0.0
                     b_v = float(b_outputs[oi]) if hasattr(b_outputs, '__len__') and oi < len(b_outputs) else 0.0
                     a_v = float(a_outputs[oi]) if hasattr(a_outputs, '__len__') and oi < len(a_outputs) else 0.0
                     d_bl = b_v - t_v
                     d_ctrl = a_v - t_v
-                    show_proc = proc if (proc_idx == 0 or not ctrl_indices) else ""
-                    traj_rows.append([
-                        Paragraph(show_proc,         ST_TRAJ_C),
+                    proc_rows.append([
                         Paragraph(olbl,              ST_TRAJ_C),
                         Paragraph(f"{t_v:.4f}",      ST_TRAJ_C),
                         Paragraph(f"{a_v:.4f}",      ST_TRAJ_C),
@@ -876,29 +878,54 @@ def _page1(d):
                         Paragraph(f"output (\u0394bl {d_bl:+.4f})", ST_NOTE),
                     ])
 
-            traj_tbl = Table(traj_rows, colWidths=cws_t)
-            # Style: line after header, light lines between rows, thicker between processes
-            style_cmds = [
-                ('LINEBELOW',     (0, 0), (-1,  0), 0.5, C_BLACK),
-                ('TOPPADDING',    (0, 0), (-1, -1), 1.5),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 1.5),
-                ('LEFTPADDING',   (0, 0), (-1, -1), 3),
-                ('RIGHTPADDING',  (0, 0), (-1, -1), 3),
-                ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
-            ]
-            # Add light lines between data rows
-            for row_idx in range(1, len(traj_rows)):
-                style_cmds.append(
-                    ('LINEBELOW', (0, row_idx), (-1, row_idx), 0.3, C_LGRAY))
-            traj_tbl.setStyle(TableStyle(style_cmds))
-            F.append(traj_tbl)
-            F.append(Spacer(1, 6))
+                data_tbl = Table(proc_rows, colWidths=data_cws)
+                data_tbl.setStyle(TableStyle([
+                    ('LINEBELOW',     (0, 0), (-1,  0), 0.5, C_BLACK),
+                    ('LINEBELOW',     (0, 1), (-1, -1), 0.3, C_LGRAY),
+                    ('TOPPADDING',    (0, 0), (-1, -1), 1.5),
+                    ('BOTTOMPADDING', (0, 0), (-1, -1), 1.5),
+                    ('LEFTPADDING',   (0, 0), (-1, -1), 2),
+                    ('RIGHTPADDING',  (0, 0), (-1, -1), 2),
+                    ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
+                ]))
+
+                # Evolution plot for this process (if available)
+                evo_key = (sc_idx, proc)
+                evo_path = evo_paths.get(evo_key)
+
+                # Calculate plot height to match data rows
+                n_data_rows = len(proc_rows) - 1  # minus header
+                row_h = max(n_data_rows * 12, 40)  # ~12pt per row, min 40pt
+
+                if evo_path and os.path.exists(evo_path):
+                    from reportlab.platypus import Image as RLImage
+                    evo_img = RLImage(evo_path, width=plot_w - 6, height=row_h)
+                    right_cell = evo_img
+                else:
+                    right_cell = Paragraph("", ST_NOTE)
+
+                # Process label + side-by-side layout
+                F.append(Paragraph(f"<b>{proc}</b>", ST_TRAJ_C))
+                side_tbl = Table([[data_tbl, right_cell]],
+                                 colWidths=[data_w, plot_w])
+                side_tbl.setStyle(TableStyle([
+                    ('VALIGN',       (0, 0), (-1, -1), 'TOP'),
+                    ('LEFTPADDING',  (0, 0), (-1, -1), 0),
+                    ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+                    ('TOPPADDING',   (0, 0), (-1, -1), 0),
+                    ('BOTTOMPADDING',(0, 0), (-1, -1), 0),
+                ]))
+                F.append(side_tbl)
+                F.append(Spacer(1, 4))
+
+            F.append(Spacer(1, 4))
 
         # Footer legend
         foot_p = Paragraph(
             "\u0394 = controller \u2212 target  \u00b7  "
             "\u0394bl = baseline output \u2212 target output  \u00b7  "
-            "best of 10 runs per scenario", ST_NOTE)
+            "best of 10 runs per scenario  \u00b7  "
+            "plots show X/Y evolution across training epochs", ST_NOTE)
         F.append(foot_p)
         F += _footer(d, 2, 3)
     else:
@@ -1188,6 +1215,7 @@ def generate_controller_report(
     advanced_metrics=None,
     trajectory_values=None,
     trajectory_values_list=None,
+    evolution_plot_paths=None,
     theoretical_data=None,
     F_formula=None,
 ):
@@ -1209,6 +1237,7 @@ def generate_controller_report(
         advanced_metrics=advanced_metrics or {},
         trajectory_values=trajectory_values,
         trajectory_values_list=trajectory_values_list or [],
+        evolution_plot_paths=evolution_plot_paths or {},
         theoretical_data=theoretical_data or {},
         checkpoint_dir=checkpoint_dir,
         F_formula=F_formula,

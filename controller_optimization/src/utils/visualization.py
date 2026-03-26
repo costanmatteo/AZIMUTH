@@ -981,3 +981,112 @@ def plot_loss_chart(history, save_path=None):
         plt.show()
 
     plt.close()
+
+
+def generate_process_evolution_plots(training_progression, controllable_info,
+                                     checkpoint_dir, n_scenarios=1):
+    """
+    Generate per-process evolution plots showing controllable inputs and outputs
+    across training epochs, for each scenario.
+
+    Args:
+        training_progression (list): List of epoch snapshots from trainer.
+            Each snapshot has 'per_scenario' -> {scenario_idx: {proc: {inputs, outputs_mean}}}
+        controllable_info (dict): {process_name: {input_labels, controllable_labels,
+                                   controllable_indices, output_labels}}
+        checkpoint_dir (Path): Directory to save plots
+        n_scenarios (int): Number of scenarios
+
+    Returns:
+        dict: {(scenario_idx, process_name): plot_path} mapping
+    """
+    apply_plot_style()
+    checkpoint_dir = Path(checkpoint_dir)
+    plot_paths = {}
+
+    if not training_progression:
+        return plot_paths
+
+    # Extract process names from first snapshot
+    first_snap = training_progression[0]
+    per_sc = first_snap.get('per_scenario', {})
+    if not per_sc:
+        return plot_paths
+    proc_names = list(per_sc[0].keys()) if 0 in per_sc else []
+    if not proc_names:
+        return plot_paths
+
+    epochs = [s['epoch'] for s in training_progression]
+
+    for scenario_idx in range(n_scenarios):
+        for proc_idx, proc_name in enumerate(proc_names):
+            p_info = controllable_info.get(proc_name, {})
+            ctrl_indices = p_info.get('controllable_indices', [])
+            input_labels = p_info.get('input_labels', [])
+            output_labels = p_info.get('output_labels', [])
+
+            # Skip first process (no policy generator, inputs fixed)
+            if proc_idx == 0 and not ctrl_indices:
+                # Still plot output evolution
+                pass
+
+            # Collect per-epoch values
+            ctrl_series = {ci: [] for ci in ctrl_indices}
+            out_series = {oi: [] for oi in range(len(output_labels))}
+
+            for snap in training_progression:
+                sc_data = snap.get('per_scenario', {}).get(scenario_idx)
+                if sc_data is None:
+                    for ci in ctrl_indices:
+                        ctrl_series[ci].append(np.nan)
+                    for oi in range(len(output_labels)):
+                        out_series[oi].append(np.nan)
+                    continue
+
+                proc_data = sc_data.get(proc_name, {})
+                inputs = proc_data.get('inputs', np.array([[]]))
+                outputs = proc_data.get('outputs_mean', proc_data.get('outputs', np.array([[]])))
+
+                # inputs shape: (1, input_dim) or (input_dim,)
+                inp = inputs.flatten()
+                out = outputs.flatten()
+
+                for ci in ctrl_indices:
+                    ctrl_series[ci].append(float(inp[ci]) if ci < len(inp) else np.nan)
+                for oi in range(len(output_labels)):
+                    out_series[oi].append(float(out[oi]) if oi < len(out) else np.nan)
+
+            # Count lines to plot
+            n_lines = len(ctrl_indices) + len(output_labels)
+            if n_lines == 0:
+                continue
+
+            # Determine plot height based on number of lines
+            fig_h = max(1.2, 0.5 * n_lines + 0.4)
+            fig, ax = plt.subplots(figsize=(3.2, fig_h))
+
+            # Plot controllable inputs
+            for ci in ctrl_indices:
+                lbl = input_labels[ci] if ci < len(input_labels) else f"X_{ci}"
+                ax.plot(epochs, ctrl_series[ci], label=lbl, linewidth=1.0)
+
+            # Plot outputs (dashed)
+            for oi in range(len(output_labels)):
+                lbl = output_labels[oi]
+                ax.plot(epochs, out_series[oi], label=lbl, linewidth=1.0,
+                        linestyle='--')
+
+            ax.set_xlabel('epoch')
+            ax.legend(loc='best', fontsize=6, ncol=max(1, n_lines // 3))
+            ax.set_title(f'{proc_name} — sc. {scenario_idx}', fontsize=7)
+
+            plt.tight_layout(pad=0.3)
+
+            fname = f'evolution_sc{scenario_idx}_{proc_name}.png'
+            fpath = checkpoint_dir / fname
+            plt.savefig(str(fpath), dpi=150, bbox_inches='tight')
+            plt.close()
+
+            plot_paths[(scenario_idx, proc_name)] = str(fpath)
+
+    return plot_paths
