@@ -928,7 +928,8 @@ def _page1(d):
                     ('VALIGN',       (0, 0), (-1, -1), 'TOP'),
                     ('LEFTPADDING',  (0, 0), (-1, -1), 0),
                     ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-                    ('TOPPADDING',   (0, 0), (-1, -1), 0),
+                    ('TOPPADDING',   (0, 0), (0,  0),  0),   # data table: no offset
+                    ('TOPPADDING',   (1, 0), (1,  0),  10),  # plot: push down ~10pt
                     ('BOTTOMPADDING',(0, 0), (-1, -1), 0),
                 ]))
                 F.append(side_tbl)
