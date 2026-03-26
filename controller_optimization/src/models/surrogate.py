@@ -30,7 +30,7 @@ class ProTSurrogate:
     Placeholder per surrogate model ProT.
 
     Valuta reliability di una trajectory completa.
-    F_star è un singolo scalare calcolato dalla target trajectory dello scenario 0.
+    F_star è un singolo scalare calcolato come media su tutti gli scenari della target trajectory.
     """
 
     # Configuration for process-specific targets and quality scales
@@ -112,9 +112,9 @@ class ProTSurrogate:
             if self.n_scenarios is None:
                 self.n_scenarios = data['inputs'].shape[0]
 
-        # Compute F_star from scenario 0 (single scalar, same for all scenarios)
-        self.F_star = self._compute_F_star_from_scenario_0()
-        print(f"  F* = {self.F_star:.6f} (from scenario 0)")
+        # Compute F_star from target trajectory (mean across all scenarios)
+        self.F_star = self._compute_F_star_from_target()
+        print(f"  F* = {self.F_star:.6f} (mean across {self.n_scenarios} target scenarios)")
 
     def compute_reliability(self, trajectory, return_quality_scores=False):
         """
@@ -268,27 +268,31 @@ class ProTSurrogate:
             return F, quality_scores
         return F
 
-    def _compute_F_star_from_scenario_0(self):
+    def _compute_F_star_from_target(self):
         """
-        Calcola F* (reliability target) dalla target trajectory dello scenario 0.
+        Calcola F* (reliability target) come media della reliability
+        deterministica (var=0) su tutti gli scenari della target trajectory.
 
-        F* è un singolo scalare: la reliability deterministica (var=0) della
-        target trajectory dello scenario 0 (calibration row, sempre presente).
+        F* non è necessariamente 1 — dipende dalle condizioni campionate.
+        La calibrazione fissa i base_target separatamente.
 
         Returns:
-            float: F_star value
+            float: F_star value (mean across scenarios)
         """
         with torch.no_grad():
-            scenario_traj = {}
-            for process_name, data in self.target_trajectory_tensors.items():
-                scenario_traj[process_name] = {
-                    'inputs': data['inputs'][0:1],  # Scenario 0 (always present)
-                    'outputs_mean': data['outputs'][0:1],
-                    'outputs_var': torch.zeros_like(data['outputs'][0:1])
-                }
+            F_values = []
+            for scenario_idx in range(self.n_scenarios):
+                scenario_traj = {}
+                for process_name, data in self.target_trajectory_tensors.items():
+                    scenario_traj[process_name] = {
+                        'inputs': data['inputs'][scenario_idx:scenario_idx+1],
+                        'outputs_mean': data['outputs'][scenario_idx:scenario_idx+1],
+                        'outputs_var': torch.zeros_like(data['outputs'][scenario_idx:scenario_idx+1])
+                    }
+                F_i = self.compute_reliability(scenario_traj, return_quality_scores=False)
+                F_values.append(F_i.item())
 
-            F_star = self.compute_reliability(scenario_traj, return_quality_scores=False)
-            return F_star.item()
+            return float(np.mean(F_values))
 
     def compute_target_reliability(self):
         """
@@ -497,14 +501,14 @@ class CasualiTSurrogate:
         Set the ProcessChain reference for format conversion.
 
         Must be called before compute_reliability() can be used.
-        After setting, computes F_star from scenario 0.
+        After setting, computes F_star as mean across all target scenarios.
 
         Args:
             process_chain: ProcessChain instance
         """
         self.process_chain = process_chain
-        # Compute F_star from scenario 0 (single scalar)
-        self.F_star = self._compute_F_star_from_scenario_0()
+        # Compute F_star as mean across all target scenarios
+        self.F_star = self._compute_F_star_from_target()
 
     def _load_model(self, checkpoint_path: str, device: str):
         """
@@ -732,31 +736,33 @@ class CasualiTSurrogate:
             # SingleCausalLayer predicts X, not Y directly - return mean as proxy
             return pred_x.mean(dim=(1, 2))
 
-    def _compute_F_star_from_scenario_0(self) -> float:
+    def _compute_F_star_from_target(self) -> float:
         """
-        Compute F* from scenario 0 using the CausalIT model.
+        Compute F* as mean reliability across all target trajectory scenarios.
 
         Returns:
-            float: F_star value (single scalar)
+            float: F_star value (mean across scenarios)
         """
         if self.process_chain is None:
             return 1.0  # Placeholder - will be recomputed when process_chain is set
 
         with torch.no_grad():
-            scenario_traj = {}
-            for process_name, data in self.target_trajectory_tensors.items():
-                scenario_traj[process_name] = {
-                    'inputs': data['inputs'][0:1],  # Scenario 0 (always present)
-                    'outputs_mean': data['outputs'][0:1],
-                    'outputs_var': torch.zeros_like(data['outputs'][0:1]),
-                    'outputs_sampled': data['outputs'][0:1],
-                }
+            F_values = []
+            for scenario_idx in range(self.n_scenarios):
+                scenario_traj = {}
+                for process_name, data in self.target_trajectory_tensors.items():
+                    scenario_traj[process_name] = {
+                        'inputs': data['inputs'][scenario_idx:scenario_idx+1],
+                        'outputs_mean': data['outputs'][scenario_idx:scenario_idx+1],
+                        'outputs_var': torch.zeros_like(data['outputs'][scenario_idx:scenario_idx+1]),
+                        'outputs_sampled': data['outputs'][scenario_idx:scenario_idx+1],
+                    }
+                F_i = self.compute_reliability(scenario_traj)
+                if isinstance(F_i, torch.Tensor):
+                    F_i = F_i.item()
+                F_values.append(F_i)
 
-            F_star = self.compute_reliability(scenario_traj)
-            if isinstance(F_star, torch.Tensor):
-                F_star = F_star.item()
-
-        return F_star
+        return float(np.mean(F_values))
 
     def compute_target_reliability(self) -> float:
         """Return F* (single scalar)."""

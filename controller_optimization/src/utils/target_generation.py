@@ -4,16 +4,25 @@ Multi-scenario target and baseline trajectory generation.
 Key Concepts:
 - Structural Noise: Environmental conditions that create scenario diversity (ACTIVE in target)
 - Process Noise: Measurement/actuator imperfections (ZERO in target, ACTIVE in baseline)
+- Calibration: Separate step that fixes base_target values for Q computation.
+  NOT injected into the target trajectory.
 
 Target Trajectory (a*):
-- Diverse structural conditions (50 scenarios with different temperatures, etc.)
+- seed_target selects BOTH environmental params AND controllable inputs
 - Zero process noise (ideal deterministic behavior)
+- Output NOT necessarily = 1 (depends on sampled conditions)
 - Represents: "Best achievable performance under varying conditions"
 
-Baseline Trajectory (a'):
-- SAME structural conditions as target (fair comparison)
-- Active process noise (realistic equipment variability)
+Baseline Trajectory (a') - TRAIN:
+- SAME structural conditions AND inputs as target (fair comparison)
+- Active process noise via seed_baseline (realistic equipment variability)
 - Represents: "Actual performance WITHOUT controller"
+
+Baseline Trajectory (a') - TEST:
+- SAME inputs as train baseline
+- DIFFERENT environmental params (via seed offset)
+- Active process noise (realistic equipment variability)
+- Controller test: copies env params from test baseline, inputs from controller
 """
 
 import sys
@@ -154,52 +163,20 @@ def generate_target_trajectory(process_configs, n_samples=50, seed=42):
             ds_scm.noise_model.singles = modified_singles
             ds_scm.noise_model.groups = []  # No grouped noise
 
-            # ── ST processes: calibration row as scenario 0 + sampled scenarios ──
-            if is_st and hasattr(ds_scm, 'cal_reference_row'):
-                ref = ds_scm.cal_reference_row
+            # ── All processes: sample n_samples from SCM with seed ──
+            # seed_target determines both environmental params and input values.
+            # No calibration row injection — calibration is a separate concern
+            # that fixes base_target values for Q computation.
+            df = ds_scm.sample(n=n_samples, seed=seed)
+            inputs = df[scm_input_labels].values
+            outputs = df[scm_output_labels].values
 
-                # Row 0: calibration reference row (F* ≈ 1 by construction)
-                cal_inputs = np.array([[ref[lbl] for lbl in scm_input_labels]])
-                cal_outputs = np.array([[ref[lbl] for lbl in scm_output_labels]])
-                cal_structural = {}
-                for var in ds_scm.structural_noise_vars:
-                    if var in ref:
-                        cal_structural[var] = np.array([ref[var]])
+            structural_conditions = {}
+            for var in ds_scm.structural_noise_vars:
+                if var in df.columns:
+                    structural_conditions[var] = df[var].values
 
-                if n_samples > 1:
-                    # Rows 1..n_samples-1: sampled with diverse environmental factors
-                    df = ds_scm.sample(n=n_samples - 1, seed=seed)
-                    sampled_inputs = df[scm_input_labels].values
-                    sampled_outputs = df[scm_output_labels].values
-
-                    inputs = np.vstack([cal_inputs, sampled_inputs])
-                    outputs = np.vstack([cal_outputs, sampled_outputs])
-
-                    structural_conditions = {}
-                    for var in ds_scm.structural_noise_vars:
-                        if var in ref and var in df.columns:
-                            structural_conditions[var] = np.concatenate([
-                                cal_structural[var], df[var].values
-                            ])
-                else:
-                    inputs = cal_inputs
-                    outputs = cal_outputs
-                    structural_conditions = cal_structural
-
-                print(f"Generated target trajectory for {process_name} (ST: cal_row + {n_samples-1} sampled):")
-
-            # ── Non-ST processes: sample all rows normally ──
-            else:
-                df = ds_scm.sample(n=n_samples, seed=seed)
-                inputs = df[scm_input_labels].values
-                outputs = df[scm_output_labels].values
-
-                structural_conditions = {}
-                for var in ds_scm.structural_noise_vars:
-                    if var in df.columns:
-                        structural_conditions[var] = df[var].values
-
-                print(f"Generated target trajectory for {process_name}:")
+            print(f"Generated target trajectory for {process_name}:")
 
             trajectory[process_name] = {
                 'inputs': inputs,
@@ -322,6 +299,235 @@ def generate_baseline_trajectory(process_configs, target_trajectory, n_samples=5
         print(f"  - All inputs FIXED to target values")
         if target_structural:
             print(f"  - Aligned structural vars: {list(target_structural.keys())}")
+
+    return trajectory
+
+
+def generate_test_baseline_trajectory(process_configs, train_baseline_trajectory,
+                                      n_test, seed_env, seed_noise):
+    """
+    Generate test baseline trajectories.
+
+    For each test scenario:
+    - SAME controllable inputs as train baseline
+    - DIFFERENT environmental params (sampled via seed_env)
+    - Active process noise (via seed_noise)
+
+    The controller test will then copy these environmental params
+    but use its own inputs.
+
+    Args:
+        process_configs (list): Process configuration list
+        train_baseline_trajectory (dict): Output from generate_baseline_trajectory() for train
+        n_test (int): Number of test scenarios
+        seed_env (int): Seed for sampling new environmental parameters
+        seed_noise (int): Seed for process noise
+
+    Returns:
+        dict: {
+            process_name: {
+                'inputs': np.array (n_test, input_dim),
+                'outputs': np.array (n_test, output_dim),
+                'structural_conditions': dict of structural variable values per test scenario
+            }
+        }
+    """
+    trajectory = {}
+
+    for proc_idx, process_config in enumerate(process_configs):
+        process_name = process_config['name']
+
+        is_st = process_config['scm_dataset_type'] == 'st'
+        if is_st:
+            scm_input_labels = process_config['_st_base_input_labels']
+            scm_output_labels = process_config['_st_base_output_labels']
+        else:
+            scm_input_labels = process_config['input_labels']
+            scm_output_labels = process_config['output_labels']
+
+        ds_scm = get_scm_dataset(process_config)
+
+        # Get train baseline inputs (to be reused in test)
+        train_inputs = train_baseline_trajectory[process_name]['inputs']
+        # Use the first row's inputs for all test scenarios (same controllable inputs)
+        # If train had n_train>1, use the first scenario's inputs as reference
+        reference_inputs = train_inputs[0]  # Shape: (input_dim,)
+
+        # Step 1: Sample new environmental params using seed_env
+        # with zero process noise (to get clean structural conditions)
+        original_singles = ds_scm.noise_model.singles.copy()
+        original_groups = ds_scm.noise_model.groups.copy() if ds_scm.noise_model.groups else []
+
+        try:
+            # Zero out process noise, keep structural noise active
+            modified_singles = {}
+            for var_name, noise_fn in original_singles.items():
+                if var_name in ds_scm.structural_noise_vars:
+                    modified_singles[var_name] = noise_fn
+                elif var_name in ds_scm.process_noise_vars:
+                    if var_name.startswith("Z_ln"):
+                        modified_singles[var_name] = lambda rng, n: np.ones(n)
+                    else:
+                        modified_singles[var_name] = lambda rng, n: np.zeros(n)
+                else:
+                    modified_singles[var_name] = noise_fn
+
+            ds_scm.noise_model.singles = modified_singles
+            ds_scm.noise_model.groups = []
+
+            env_df = ds_scm.sample(n=n_test, seed=seed_env)
+
+            # Extract structural conditions from this sample
+            structural_conditions = {}
+            for var in ds_scm.structural_noise_vars:
+                if var in env_df.columns:
+                    structural_conditions[var] = env_df[var].values
+
+        finally:
+            ds_scm.noise_model.singles = original_singles
+            ds_scm.noise_model.groups = original_groups
+
+        # Step 2: Now generate the actual test baseline with:
+        #   - fixed inputs from train baseline
+        #   - fixed structural conditions from step 1
+        #   - active process noise via seed_noise
+        original_singles = ds_scm.noise_model.singles.copy()
+
+        try:
+            modified_singles = original_singles.copy()
+
+            # Fix all input variables to train baseline values
+            for i, scm_label in enumerate(scm_input_labels):
+                ref_val = reference_inputs[i]
+                def make_const_sampler(val):
+                    return lambda rng, n: np.full(n, val)
+                modified_singles[scm_label] = make_const_sampler(ref_val)
+
+            # Fix structural variables to test env params
+            for var_name, var_values in structural_conditions.items():
+                if var_name not in scm_input_labels:
+                    def make_structural_sampler(values):
+                        return lambda rng, n: values[:n]
+                    modified_singles[var_name] = make_structural_sampler(var_values)
+
+            ds_scm.noise_model.singles = modified_singles
+
+            process_seed = seed_noise + proc_idx
+            df = ds_scm.sample(n=n_test, seed=process_seed)
+
+        finally:
+            ds_scm.noise_model.singles = original_singles
+
+        inputs = df[scm_input_labels].values
+        outputs = df[scm_output_labels].values
+
+        trajectory[process_name] = {
+            'inputs': inputs,
+            'outputs': outputs,
+            'structural_conditions': structural_conditions
+        }
+
+        print(f"Generated test baseline trajectory for {process_name}:")
+        print(f"  - Shape: {inputs.shape}")
+        print(f"  - Inputs FIXED to train baseline values")
+        print(f"  - Environmental params: NEW (seed_env={seed_env})")
+        if structural_conditions:
+            for var, vals in structural_conditions.items():
+                print(f"    {var}: [{vals.min():.2f}, {vals.max():.2f}] (range)")
+
+    return trajectory
+
+
+def generate_test_target_trajectory(process_configs, test_baseline_trajectory, n_test, seed):
+    """
+    Generate test target trajectory that shares environmental params with test baseline.
+
+    For test, the controller needs to know:
+    - Environmental params (from test baseline — same conditions)
+    - Initial controllable inputs (sampled from seed, not from train)
+
+    The target trajectory for test serves as the "reference" for non-controllable
+    inputs that the controller will observe.
+
+    Args:
+        process_configs (list): Process configuration list
+        test_baseline_trajectory (dict): Output from generate_test_baseline_trajectory()
+        n_test (int): Number of test scenarios
+        seed (int): Seed for reproducibility
+
+    Returns:
+        dict: Same format as generate_target_trajectory()
+    """
+    trajectory = {}
+
+    for process_config in process_configs:
+        process_name = process_config['name']
+
+        is_st = process_config['scm_dataset_type'] == 'st'
+        if is_st:
+            scm_input_labels = process_config['_st_base_input_labels']
+            scm_output_labels = process_config['_st_base_output_labels']
+        else:
+            scm_input_labels = process_config['input_labels']
+            scm_output_labels = process_config['output_labels']
+
+        ds_scm = get_scm_dataset(process_config)
+
+        # Get structural conditions from test baseline
+        test_structural = test_baseline_trajectory[process_name]['structural_conditions']
+
+        original_singles = ds_scm.noise_model.singles.copy()
+        original_groups = ds_scm.noise_model.groups.copy() if ds_scm.noise_model.groups else []
+
+        try:
+            modified_singles = {}
+            for var_name, noise_fn in original_singles.items():
+                if var_name in ds_scm.structural_noise_vars:
+                    # Keep structural noise but we'll override with test baseline values
+                    modified_singles[var_name] = noise_fn
+                elif var_name in ds_scm.process_noise_vars:
+                    # Zero process noise for target (ideal behavior)
+                    if var_name.startswith("Z_ln"):
+                        modified_singles[var_name] = lambda rng, n: np.ones(n)
+                    else:
+                        modified_singles[var_name] = lambda rng, n: np.zeros(n)
+                else:
+                    modified_singles[var_name] = noise_fn
+
+            # Fix structural variables to test baseline values
+            for var_name, var_values in test_structural.items():
+                def make_structural_sampler(values):
+                    return lambda rng, n: values[:n]
+                modified_singles[var_name] = make_structural_sampler(var_values)
+
+            ds_scm.noise_model.singles = modified_singles
+            ds_scm.noise_model.groups = []
+
+            df = ds_scm.sample(n=n_test, seed=seed)
+
+        finally:
+            ds_scm.noise_model.singles = original_singles
+            ds_scm.noise_model.groups = original_groups
+
+        inputs = df[scm_input_labels].values
+        outputs = df[scm_output_labels].values
+
+        structural_conditions = {}
+        for var in ds_scm.structural_noise_vars:
+            if var in test_structural:
+                structural_conditions[var] = test_structural[var]
+            elif var in df.columns:
+                structural_conditions[var] = df[var].values
+
+        trajectory[process_name] = {
+            'inputs': inputs,
+            'outputs': outputs,
+            'structural_conditions': structural_conditions
+        }
+
+        print(f"Generated test target trajectory for {process_name}:")
+        print(f"  - Shape: {inputs.shape}")
+        print(f"  - Environmental params: SAME as test baseline")
 
     return trajectory
 

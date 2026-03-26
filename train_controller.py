@@ -51,7 +51,9 @@ from configs.processes_config import (
 from configs.controller_config import CONTROLLER_CONFIG
 from controller_optimization.src.utils.target_generation import (
     generate_target_trajectory,
-    generate_baseline_trajectory
+    generate_baseline_trajectory,
+    generate_test_baseline_trajectory,
+    generate_test_target_trajectory
 )
 from controller_optimization.src.utils.process_chain import ProcessChain
 from controller_optimization.src.models.surrogate import ProTSurrogate, CasualiTSurrogate, create_surrogate
@@ -372,27 +374,39 @@ def main(config=None):
     test_seed_offset = cfg['scenarios']['test_seed_offset']
 
     print(f"  Test seed offset: {test_seed_offset}")
-    print(f"  Generating TEST target trajectory (a*)...")
-    target_trajectory_test = generate_target_trajectory(
+
+    # TEST baseline: same inputs as train baseline, same noise type,
+    # but DIFFERENT environmental params (via seed_baseline + n_train offset)
+    print(f"  Generating TEST baseline trajectory (a')...")
+    print(f"    - Inputs: SAME as train baseline")
+    print(f"    - Env params: NEW (seed_env={cfg['scenarios']['seed_baseline'] + test_seed_offset})")
+    print(f"    - Noise: ACTIVE (seed_noise={cfg['scenarios']['seed_baseline'] + test_seed_offset})")
+    baseline_trajectory_test = generate_test_baseline_trajectory(
         process_configs=selected_processes,
-        n_samples=n_test,
+        train_baseline_trajectory=baseline_trajectory_train,
+        n_test=n_test,
+        seed_env=cfg['scenarios']['seed_baseline'] + test_seed_offset,
+        seed_noise=cfg['scenarios']['seed_baseline'] + test_seed_offset
+    )
+
+    print("  Test baseline trajectory generated:")
+    for process_name, data in baseline_trajectory_test.items():
+        print(f"    {process_name}: inputs={data['inputs'].shape}, outputs={data['outputs'].shape}")
+
+    # TEST target trajectory: shares env params from test baseline,
+    # used by the controller to observe non-controllable inputs
+    print(f"  Generating TEST target trajectory (a*)...")
+    print(f"    - Env params: SAME as test baseline")
+    print(f"    - Process noise: ZERO (ideal)")
+    target_trajectory_test = generate_test_target_trajectory(
+        process_configs=selected_processes,
+        test_baseline_trajectory=baseline_trajectory_test,
+        n_test=n_test,
         seed=cfg['scenarios']['seed_target'] + test_seed_offset
     )
 
     print("  Test target trajectory generated:")
     for process_name, data in target_trajectory_test.items():
-        print(f"    {process_name}: inputs={data['inputs'].shape}, outputs={data['outputs'].shape}")
-
-    print(f"  Generating TEST baseline trajectory (a')...")
-    baseline_trajectory_test = generate_baseline_trajectory(
-        process_configs=selected_processes,
-        target_trajectory=target_trajectory_test,
-        n_samples=n_test,
-        seed=cfg['scenarios']['seed_baseline'] + test_seed_offset
-    )
-
-    print("  Test baseline trajectory generated:")
-    for process_name, data in baseline_trajectory_test.items():
         print(f"    {process_name}: inputs={data['inputs'].shape}, outputs={data['outputs'].shape}")
 
     # Use ONLY training trajectories for now
@@ -475,9 +489,9 @@ def main(config=None):
         print(f"  Surrogate type: reliability_function (mathematical formula)")
 
     print(f"  Sampling mode: {'DETERMINISTIC (mean)' if use_deterministic_sampling else 'STOCHASTIC (reparameterization trick)'}")
-    F_star_value = surrogate.F_star  # Single scalar from scenario 0
+    F_star_value = surrogate.F_star  # Single scalar, mean across target scenarios
     print(f"  ✓ Surrogate initialized")
-    print(f"    F* = {F_star_value:.6f} (from scenario 0)")
+    print(f"    F* = {F_star_value:.6f} (mean across target scenarios)")
 
     # 5. Create Trainer
     print("\n[5/9] Creating controller trainer...")
