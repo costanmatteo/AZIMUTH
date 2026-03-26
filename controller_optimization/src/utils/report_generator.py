@@ -1,6 +1,6 @@
 """
 PDF Report Generator for Controller Optimization — 2 pages A4 landscape.
-Style: Courier, monospace, same colors/sections as portrait version but
+Style: Helvetica, same colors/sections as portrait version but
 landscape and more compact (less vertical whitespace).
 """
 
@@ -56,7 +56,7 @@ FS_NOTE    = 6.5
 
 # ── style factory ────────────────────────────────────────────────────────────
 def _s(name, size, bold=False, italic=False, color=C_BLACK, align=TA_LEFT):
-    font = 'Courier-Bold' if bold else ('Courier-Oblique' if italic else 'Courier')
+    font = 'Helvetica-Bold' if bold else ('Helvetica-Oblique' if italic else 'Helvetica')
     return ParagraphStyle(name, fontName=font, fontSize=size,
                           leading=size * 1.35, textColor=color, alignment=align)
 
@@ -95,7 +95,7 @@ ST_VAL_FORM_G = _s('ct_val_fg', FS_BODY, italic=True, color=C_GREEN, align=TA_RI
 ST_VAL_FORM_R = _s('ct_val_fr', FS_BODY, italic=True, color=C_RED, align=TA_RIGHT)
 
 def _dyn(c, align=TA_RIGHT):
-    return ParagraphStyle(f'_d{id(c)}{align}', fontName='Courier',
+    return ParagraphStyle(f'_d{id(c)}{align}', fontName='Helvetica',
                           fontSize=FS_BODY, leading=FS_BODY * 1.35,
                           textColor=c, alignment=align)
 
@@ -159,7 +159,7 @@ def scale_img(path, max_w, max_h):
     return img
 
 def _placeholder(name, w, h):
-    st = ParagraphStyle('_ph', fontName='Courier', fontSize=FS_NOTE,
+    st = ParagraphStyle('_ph', fontName='Helvetica', fontSize=FS_NOTE,
                         alignment=TA_CENTER, textColor=colors.HexColor('#AAAAAA'))
     t  = Table([[Paragraph(name, st)]], colWidths=[w], rowHeights=[h])
     t.setStyle(TableStyle([
