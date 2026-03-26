@@ -888,10 +888,16 @@ def _page1(d):
                         Paragraph(f"output (\u0394bl {d_bl:+.4f})", ST_NOTE),
                     ])
 
+                # Pad with empty rows to match max_data_rows (uniform table height)
+                n_data_rows = len(proc_rows) - 1  # minus header
+                empty_cell = Paragraph("", ST_TRAJ_C)
+                for _ in range(max_data_rows - n_data_rows):
+                    proc_rows.append([empty_cell] * len(proc_hdr))
+
                 data_tbl = Table(proc_rows, colWidths=data_cws)
                 data_tbl.setStyle(TableStyle([
                     ('LINEBELOW',     (0, 0), (-1,  0), 0.5, C_BLACK),
-                    ('LINEBELOW',     (0, 1), (-1, -1), 0.3, C_LGRAY),
+                    ('LINEBELOW',     (0, 1), (-1, n_data_rows), 0.3, C_LGRAY),
                     ('TOPPADDING',    (0, 0), (-1, -1), 1.5),
                     ('BOTTOMPADDING', (0, 0), (-1, -1), 1.5),
                     ('LEFTPADDING',   (0, 0), (-1, -1), 2),
