@@ -53,7 +53,7 @@ def plot_loss_vs_L_min(
     theoretical_L_min: List[float],
     save_path: Optional[str] = None,
     title: str = "Loss vs Theoretical Minimum",
-    figsize: Tuple[int, int] = (10, 6),
+    figsize: Tuple[int, int] = (10, 3),
     bellman_lmin: Optional[Dict[str, Any]] = None,
 ) -> plt.Figure:
     """
@@ -141,7 +141,7 @@ def plot_efficiency_over_time(
     efficiency: List[float],
     save_path: Optional[str] = None,
     title: str = "Training Efficiency (L_min / Loss)",
-    figsize: Tuple[int, int] = (10, 5),
+    figsize: Tuple[int, int] = (10, 3),
     bellman_lmin: Optional[Dict[str, Any]] = None,
     observed_loss: Optional[List[float]] = None,
 ) -> plt.Figure:
@@ -248,7 +248,7 @@ def plot_loss_decomposition(
     loss_scale: float = 100.0,
     save_path: Optional[str] = None,
     title: str = "Loss Decomposition",
-    figsize: Tuple[int, int] = (8, 6)
+    figsize: Tuple[int, int] = (10, 3)
 ) -> plt.Figure:
     """
     Bar chart showing decomposition of loss into components.
@@ -344,7 +344,7 @@ def plot_loss_scatter(
     epochs: Optional[List[int]] = None,
     save_path: Optional[str] = None,
     title: str = "Observed Loss vs Theoretical L_min",
-    figsize: Tuple[int, int] = (8, 8)
+    figsize: Tuple[int, int] = (10, 3)
 ) -> plt.Figure:
     """
     Scatter plot of observed loss vs theoretical L_min.

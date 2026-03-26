@@ -383,7 +383,7 @@ def plot_target_vs_actual_scatter(F_star_per_scenario, F_baseline_per_scenario, 
     F_baseline_arr = np.atleast_1d(F_baseline_per_scenario)
     F_actual_arr = np.atleast_1d(F_actual_per_scenario)
 
-    fig, ax = plt.subplots(figsize=(12, 8))
+    fig, ax = plt.subplots(figsize=(8, 10))
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
 
@@ -497,7 +497,7 @@ def plot_gap_distribution(F_star_per_scenario, F_actual_per_scenario, save_path=
     # Compute gaps
     gaps = F_star_arr - F_actual_arr
 
-    fig, ax = plt.subplots(figsize=(12, 7))
+    fig, ax = plt.subplots(figsize=(8, 10))
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
 
