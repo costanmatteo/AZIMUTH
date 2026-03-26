@@ -472,15 +472,14 @@ def main(config=None):
     # Ensure surrogate.n_scenarios is correct (guard against fallback to target shape=1)
     surrogate.n_scenarios = n_train
 
-    # For CasualiTSurrogate, connect to ProcessChain for format conversion
-    # Always create a formula_surrogate (ProTSurrogate) for report metrics.
-    # When main surrogate is already ProTSurrogate, they're the same object.
+    # For CasualiTSurrogate, connect to ProcessChain and create formula surrogate
+    formula_surrogate = None
     if isinstance(surrogate, CasualiTSurrogate):
         surrogate.set_process_chain(process_chain)
         print(f"  Surrogate type: CasualiT (TransformerForecaster)")
         print(f"  Checkpoint: {surrogate_config.get('casualit', {}).get('checkpoint_path')}")
 
-        # Create a ProTSurrogate (mathematical formula) for report metrics
+        # Create a separate ProTSurrogate for formula-based comparison
         formula_surrogate = ProTSurrogate(
             target_trajectory=target_trajectory,
             device=device,
@@ -488,11 +487,9 @@ def main(config=None):
             process_configs=selected_processes,
             n_scenarios=n_train,
         )
-        print(f"  Formula surrogate created for report (F* formula = {formula_surrogate.F_star:.6f})")
+        print(f"  Formula surrogate created (F* formula = {formula_surrogate.F_star:.6f})")
     else:
         print(f"  Surrogate type: reliability_function (mathematical formula)")
-        # Main surrogate IS the formula — alias it
-        formula_surrogate = surrogate
 
     print(f"  Sampling mode: {'DETERMINISTIC (mean)' if use_deterministic_sampling else 'STOCHASTIC (reparameterization trick)'}")
     F_star_value = surrogate.F_star  # Single scalar from scenario 0
@@ -942,7 +939,7 @@ def main(config=None):
     else:
         print(f"    → Controller performs WORSE on test (overfitting concern)")
 
-    # Formula-based advanced metrics (always computed — used as primary report metrics)
+    # Formula-based advanced metrics (only when formula_surrogate exists, i.e. CasualiT)
     formula_advanced_metrics = {}
     if formula_surrogate is not None and F_formula_per_sample is not None:
         print(f"\n  Computing formula-based advanced metrics...")
@@ -1142,22 +1139,23 @@ def main(config=None):
         print("\n  Generating advanced plots...")
 
         # Scatter plot: Baseline vs Controller (train)
-        # Solid blue = surrogate F, hollow blue = ProT formula F
+        # When CasualiT: solid blue = surrogate, hollow blue = ProT formula
+        # When ProTSurrogate: only solid blue (no formula_surrogate)
         plot_target_vs_actual_scatter(
             F_star_per_scenario=F_star_array,
             F_baseline_per_scenario=F_baseline_array,
             F_actual_per_scenario=F_actual_per_sample,
-            F_formula_per_scenario=F_formula_per_sample,
+            F_formula_per_scenario=F_formula_per_sample,  # None when no formula_surrogate
             save_path=str(checkpoint_dir / 'baseline_vs_controller_train.png')
         )
 
         # Scatter plot: Baseline vs Controller (test)
-        F_formula_actual_test_arr = np.array(F_formula_actual_test_values) if F_formula_actual_test_values else None
+        _formula_test = np.array(F_formula_actual_test_values) if F_formula_actual_test_values else None
         plot_target_vs_actual_scatter(
             F_star_per_scenario=F_star_test_array,
             F_baseline_per_scenario=F_baseline_test_array,
             F_actual_per_scenario=F_actual_test_array,
-            F_formula_per_scenario=F_formula_actual_test_arr,
+            F_formula_per_scenario=_formula_test,
             save_path=str(checkpoint_dir / 'baseline_vs_controller_test.png')
         )
 
@@ -1210,9 +1208,9 @@ def main(config=None):
             'max': float(F_actual_per_sample.max())
         }
 
-        # F_formula dict (only when using CasualiT surrogate)
+        # F_formula dict — only when formula_surrogate exists (CasualiT mode)
         F_formula_dict = None
-        if F_formula_mean is not None:
+        if formula_surrogate is not None and F_formula_mean is not None:
             F_formula_dict = {
                 'mean': float(F_formula_mean),
                 'std': float(F_formula_std),
