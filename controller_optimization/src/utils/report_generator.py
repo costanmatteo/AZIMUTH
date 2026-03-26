@@ -934,11 +934,13 @@ def _page1(d):
                 F.append(Paragraph(f"<b>{proc}</b>", ST_TRAJ_C))
                 side_tbl = Table([[data_tbl, right_cell]],
                                  colWidths=[data_w, plot_w])
+                plot_top = 15 if proc_idx == 0 else 0
                 side_tbl.setStyle(TableStyle([
                     ('VALIGN',       (0, 0), (-1, -1), 'TOP'),
                     ('LEFTPADDING',  (0, 0), (-1, -1), 0),
                     ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-                    ('TOPPADDING',   (0, 0), (-1, -1), 0),
+                    ('TOPPADDING',   (0, 0), (0,  0),  0),
+                    ('TOPPADDING',   (1, 0), (1,  0),  plot_top),
                     ('BOTTOMPADDING',(0, 0), (-1, -1), 0),
                 ]))
                 F.append(side_tbl)
