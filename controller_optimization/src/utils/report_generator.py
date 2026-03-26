@@ -893,17 +893,15 @@ def _page1(d):
                 evo_key = (sc_idx, proc)
                 evo_path = evo_paths.get(evo_key)
 
-                # Scale plot to match data table height
-                # Each data row ~11pt, header ~13pt, padding ~3pt per row
+                # Image width = right column width, height = table height
+                # Must match the formula used in generate_process_evolution_plots
                 n_data_rows = len(proc_rows) - 1  # minus header
-                tbl_h = 13 + n_data_rows * 14  # approximate table height in pt
+                tbl_h = 13 + n_data_rows * 14  # same as plot generation
                 img_w = plot_w - 4
-                # Keep aspect ratio close to original (3.5:1.8 ≈ 1.94)
-                img_h = max(tbl_h, img_w / 1.94)
 
                 if evo_path and os.path.exists(evo_path):
                     from reportlab.platypus import Image as RLImage
-                    evo_img = RLImage(evo_path, width=img_w, height=img_h)
+                    evo_img = RLImage(evo_path, width=img_w, height=tbl_h)
                     right_cell = evo_img
                 else:
                     right_cell = Paragraph("", ST_NOTE)

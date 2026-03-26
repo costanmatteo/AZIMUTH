@@ -984,18 +984,23 @@ def plot_loss_chart(history, save_path=None):
 
 
 def generate_process_evolution_plots(training_progression, controllable_info,
-                                     checkpoint_dir, n_scenarios=1):
+                                     checkpoint_dir, n_scenarios=1,
+                                     row_height_pt=14, plot_width_in=3.5):
     """
     Generate per-process evolution plots showing controllable inputs and outputs
     across training epochs, for each scenario.
 
+    The plot height adapts to the number of data rows (controllable inputs + output)
+    so it matches the table height in the PDF report.
+
     Args:
         training_progression (list): List of epoch snapshots from trainer.
-            Each snapshot has 'per_scenario' -> {scenario_idx: {proc: {inputs, outputs_mean}}}
         controllable_info (dict): {process_name: {input_labels, controllable_labels,
                                    controllable_indices, output_labels}}
         checkpoint_dir (Path): Directory to save plots
         n_scenarios (int): Number of scenarios
+        row_height_pt (float): Height per data row in points (must match PDF table)
+        plot_width_in (float): Fixed plot width in inches
 
     Returns:
         dict: {(scenario_idx, process_name): plot_path} mapping
@@ -1056,13 +1061,17 @@ def generate_process_evolution_plots(training_progression, controllable_info,
                 for oi in range(len(output_labels)):
                     out_series[oi].append(float(out[oi]) if oi < len(out) else np.nan)
 
-            # Count lines to plot
+            # Count data rows (controllable inputs + outputs)
+            n_rows = (len(ctrl_indices) if proc_idx > 0 else 0) + len(output_labels)
             n_lines = len(ctrl_indices) + len(output_labels)
             if n_lines == 0:
                 continue
 
-            # Fixed figsize — consistent aspect ratio for all processes
-            fig, ax = plt.subplots(figsize=(3.5, 1.8))
+            # Height matches the table: header (13pt) + n_rows * row_height_pt
+            tbl_h_pt = 13 + n_rows * row_height_pt
+            fig_h_in = tbl_h_pt / 72.0  # convert pt to inches
+            fig_h_in = max(fig_h_in, 0.8)  # minimum height
+            fig, ax = plt.subplots(figsize=(plot_width_in, fig_h_in))
 
             # Plot controllable inputs (solid)
             for ci in ctrl_indices:
