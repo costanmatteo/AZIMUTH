@@ -605,12 +605,12 @@ body {
 
 def _fmt(v) -> str:
     if v is None or (isinstance(v, float) and np.isnan(v)):
-        return 'N/A'
+        return '-'
     return f'{float(v):.4f}'
 
 def _pct(v) -> str:
     if v is None or (isinstance(v, float) and np.isnan(v)):
-        return 'N/A'
+        return '-'
     return f'{float(v):.1f}%'
 
 def _sign(v) -> str:
