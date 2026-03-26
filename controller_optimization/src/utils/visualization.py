@@ -1017,23 +1017,26 @@ def generate_process_evolution_plots(training_progression, controllable_info,
             Derived from process config domains (e.g. x_domain, output range).
 
     Returns:
-        dict: {(scenario_idx, process_name): plot_path} mapping
+        tuple: (plot_paths, color_maps) where
+            plot_paths: {(scenario_idx, process_name): plot_path}
+            color_maps: {process_name: {variable_label: hex_color}}
     """
     apply_plot_style()
     checkpoint_dir = Path(checkpoint_dir)
     plot_paths = {}
+    color_maps = {}  # {process_name: {var_label: hex_color}}
 
     if not training_progression:
-        return plot_paths
+        return plot_paths, color_maps
 
     # Extract process names from first snapshot
     first_snap = training_progression[0]
     per_sc = first_snap.get('per_scenario', {})
     if not per_sc:
-        return plot_paths
+        return plot_paths, color_maps
     proc_names = list(per_sc[0].keys()) if 0 in per_sc else []
     if not proc_names:
-        return plot_paths
+        return plot_paths, color_maps
 
     epochs = [s['epoch'] for s in training_progression]
 
@@ -1098,44 +1101,51 @@ def generate_process_evolution_plots(training_progression, controllable_info,
             fig_h_in = max(fig_h_in, 0.8)
             fig, ax = plt.subplots(figsize=(plot_width_in, fig_h_in))
 
-            # Plot controllable inputs (solid, thin)
+            # Get default color cycle
+            prop_cycle = plt.rcParams['axes.prop_cycle']
+            cycle_colors = [c['color'] for c in prop_cycle]
+
+            # Track colors for this process
+            proc_colors = {}
+            color_idx = 0
+
+            # Plot controllable inputs (solid)
             for ci in ctrl_indices:
                 lbl = input_labels[ci] if ci < len(input_labels) else f"X_{ci}"
-                ax.plot(epochs, ctrl_series[ci], label=lbl, linewidth=0.8)
+                c = cycle_colors[color_idx % len(cycle_colors)]
+                ax.plot(epochs, ctrl_series[ci], color=c, linewidth=0.8)
+                proc_colors[lbl] = c
+                color_idx += 1
 
             # Plot outputs (dashed)
             for oi in range(len(output_labels)):
                 lbl = output_labels[oi]
-                ax.plot(epochs, out_series[oi], label=lbl, linewidth=0.9,
+                c = cycle_colors[color_idx % len(cycle_colors)]
+                ax.plot(epochs, out_series[oi], color=c, linewidth=0.9,
                         linestyle='--')
+                proc_colors[lbl] = c
+                color_idx += 1
 
-            # Y-axis: shared range, ticks at min, 0, max only
+            color_maps[proc_name] = proc_colors
+
+            # Y-axis: shared range
             if y_range is not None:
                 y_lo, y_hi = y_range
                 ax.set_ylim(y_lo, y_hi)
-                ax.set_yticks([y_lo, 0, y_hi])
-                ax.yaxis.set_major_formatter(plt.FuncFormatter(
-                    lambda v, _: f'{v:.1f}'))
 
-            # Minimal grid: only horizontal lines at yticks
-            ax.grid(True, axis='y', linewidth=0.3, alpha=0.5)
-            ax.grid(False, axis='x')
+            # Minimal horizontal grid at 0 only
+            ax.axhline(y=0, color='#CCCCCC', linewidth=0.3)
+            ax.grid(False)
 
-            # Thin axes, small fonts
-            ax.spines['left'].set_linewidth(0.3)
-            ax.spines['bottom'].set_linewidth(0.3)
-            ax.tick_params(axis='both', labelsize=5, width=0.3, length=2)
-            ax.set_xlabel('epoch', fontsize=5)
+            # Remove all axes, ticks, labels, legend
+            ax.set_xticks([])
+            ax.set_yticks([])
+            ax.set_xlabel('')
+            ax.set_ylabel('')
+            for spine in ax.spines.values():
+                spine.set_visible(False)
 
-            # Legend: small squares, compact
-            ax.legend(loc='upper right', fontsize=4.5,
-                      ncol=min(n_lines, 3),
-                      handlelength=0.8, handleheight=0.8,
-                      columnspacing=0.5, borderpad=0.2,
-                      labelspacing=0.3,
-                      handler_map={plt.Line2D: _SquareHandler()})
-
-            plt.tight_layout(pad=0.3)
+            plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
 
             fname = f'evolution_sc{scenario_idx}_{proc_name}.png'
             fpath = checkpoint_dir / fname
@@ -1144,4 +1154,4 @@ def generate_process_evolution_plots(training_progression, controllable_info,
 
             plot_paths[(scenario_idx, proc_name)] = str(fpath)
 
-    return plot_paths
+    return plot_paths, color_maps

@@ -1675,17 +1675,16 @@ def main(config=None):
 
         # Generate per-process evolution plots (X/Y across epochs)
         evolution_plot_paths = {}
+        evolution_color_maps = {}
         if hasattr(trainer, 'training_progression') and trainer.training_progression:
             print("\n  Generating per-process evolution plots...")
             try:
-                # Compute y_range from process config domains
-                # Use x_domain as the main range (inputs live there, outputs typically within)
-                _y_lo, _y_hi = -5.0, 5.0  # defaults
+                _y_lo, _y_hi = -5.0, 5.0
                 if selected_processes and 'st_params' in selected_processes[0]:
                     _x_dom = selected_processes[0]['st_params'].get('x_domain', (-5.0, 5.0))
                     _y_lo, _y_hi = _x_dom
 
-                evolution_plot_paths = generate_process_evolution_plots(
+                evolution_plot_paths, evolution_color_maps = generate_process_evolution_plots(
                     training_progression=trainer.training_progression,
                     controllable_info=controllable_info_for_report,
                     checkpoint_dir=checkpoint_dir,
@@ -1715,6 +1714,7 @@ def main(config=None):
                 trajectory_values=trajectory_values_for_report,
                 trajectory_values_list=trajectory_values_for_report_list,
                 evolution_plot_paths=evolution_plot_paths,
+                evolution_color_maps=evolution_color_maps,
                 theoretical_data=theoretical_data,
                 F_formula=F_formula_dict,
             )

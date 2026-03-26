@@ -796,6 +796,11 @@ def _page1(d):
         return arr
 
     evo_paths = d.get('evolution_plot_paths', {})
+    evo_colors = d.get('evolution_color_maps', {})  # {proc_name: {var_label: hex_color}}
+
+    def _color_dot(hex_color):
+        """Inline HTML for a small colored square."""
+        return (f'<font color="{hex_color}">\u25a0</font> ')
 
     if traj_list:
         F += _footer(d, 1, 3)
@@ -858,15 +863,19 @@ def _page1(d):
                 data_cws = [r * data_w for r in [0.22, 0.18, 0.18, 0.18, 0.24]]
                 proc_rows = [proc_hdr]
 
+                # Color map for this process (from evolution plots)
+                proc_cm = evo_colors.get(proc, {})
+
                 # Controllable input rows (skip process 0)
                 if proc_idx > 0 and ctrl_indices:
                     for ci in ctrl_indices:
                         lbl = input_labels[ci] if ci < len(input_labels) else f"input_{ci}"
+                        dot = _color_dot(proc_cm[lbl]) if lbl in proc_cm else ''
                         t_v = float(t_inputs[ci]) if hasattr(t_inputs, '__len__') and ci < len(t_inputs) else 0.0
                         a_v = float(a_inputs[ci]) if hasattr(a_inputs, '__len__') and ci < len(a_inputs) else 0.0
                         delta = a_v - t_v
                         proc_rows.append([
-                            Paragraph(lbl,              ST_TRAJ_C),
+                            Paragraph(f"{dot}{lbl}",    ST_TRAJ_C),
                             Paragraph(f"{t_v:.4f}",     ST_TRAJ_C),
                             Paragraph(f"{a_v:.4f}",     ST_TRAJ_C),
                             Paragraph(f"{delta:+.4f}",  ST_TRAJ_C),
@@ -875,13 +884,14 @@ def _page1(d):
 
                 # Output row
                 for oi, olbl in enumerate(output_labels):
+                    dot = _color_dot(proc_cm[olbl]) if olbl in proc_cm else ''
                     t_v = float(t_outputs[oi]) if hasattr(t_outputs, '__len__') and oi < len(t_outputs) else 0.0
                     b_v = float(b_outputs[oi]) if hasattr(b_outputs, '__len__') and oi < len(b_outputs) else 0.0
                     a_v = float(a_outputs[oi]) if hasattr(a_outputs, '__len__') and oi < len(a_outputs) else 0.0
                     d_bl = b_v - t_v
                     d_ctrl = a_v - t_v
                     proc_rows.append([
-                        Paragraph(olbl,              ST_TRAJ_C),
+                        Paragraph(f"{dot}{olbl}",    ST_TRAJ_C),
                         Paragraph(f"{t_v:.4f}",      ST_TRAJ_C),
                         Paragraph(f"{a_v:.4f}",      ST_TRAJ_C),
                         Paragraph(f"{d_ctrl:+.4f}",  ST_TRAJ_C),
@@ -1233,6 +1243,7 @@ def generate_controller_report(
     trajectory_values=None,
     trajectory_values_list=None,
     evolution_plot_paths=None,
+    evolution_color_maps=None,
     theoretical_data=None,
     F_formula=None,
 ):
@@ -1255,6 +1266,7 @@ def generate_controller_report(
         trajectory_values=trajectory_values,
         trajectory_values_list=trajectory_values_list or [],
         evolution_plot_paths=evolution_plot_paths or {},
+        evolution_color_maps=evolution_color_maps or {},
         theoretical_data=theoretical_data or {},
         checkpoint_dir=checkpoint_dir,
         F_formula=F_formula,
