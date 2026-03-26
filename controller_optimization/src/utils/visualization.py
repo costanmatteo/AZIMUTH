@@ -417,7 +417,7 @@ def plot_target_vs_actual_scatter(F_star_per_scenario, F_baseline_per_scenario, 
     # Axis labels and title
     ax.set_xlabel('F (Reliability)')
     ax.set_ylabel('F_star (Target Reliability)')
-    ax.set_title('Target vs Baseline & Controller Reliability')
+    ax.set_title('Baseline vs Controller Reliability')
 
     # Grid and legend
     ax.grid(True, alpha=0.3)

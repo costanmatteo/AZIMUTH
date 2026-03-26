@@ -1034,13 +1034,13 @@ def _page2(d):
         return Table([[t1, t2]], colWidths=[pair_w, pair_w])
 
     r1 = _img_row(
-        chk / 'target_vs_actual_scatter_train.png',
+        chk / 'baseline_vs_controller_train.png',
         chk / 'gap_distribution_train.png',
-        "Target vs actual \u2014 train", "Gap distribution \u2014 train", rh)
+        "Baseline vs controller \u2014 train", "Gap distribution \u2014 train", rh)
     r2 = _img_row(
-        chk / 'target_vs_actual_scatter_test.png',
+        chk / 'baseline_vs_controller_test.png',
         chk / 'gap_distribution_test.png',
-        "Target vs actual \u2014 test", "Gap distribution \u2014 test", rh)
+        "Baseline vs controller \u2014 test", "Gap distribution \u2014 test", rh)
     r3 = _img_row(
         chk / 'loss_vs_L_min.png',
         chk / 'training_efficiency.png',
