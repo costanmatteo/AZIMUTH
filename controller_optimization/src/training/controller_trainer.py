@@ -523,7 +523,11 @@ class ControllerTrainer:
                 continue
 
             actual_inputs = trajectory[process_name]['inputs'][..., ctrl_idx]
-            target_inputs_scenario = self.surrogate.target_trajectory_tensors[process_name]['inputs'][scenario_idx:scenario_idx+1][..., ctrl_idx]
+            # Target trajectory may have only 1 sample (adaptive calibration targets).
+            # Always use sample 0 for BC reference; clamp scenario_idx for legacy cases.
+            target_all = self.surrogate.target_trajectory_tensors[process_name]['inputs']
+            target_idx = min(scenario_idx, target_all.shape[0] - 1)
+            target_inputs_scenario = target_all[target_idx:target_idx+1][..., ctrl_idx]
 
             # Normalize inputs using precomputed stats
             # Non-constant dims: normalized by actual range → [0,1]
@@ -932,7 +936,9 @@ class ControllerTrainer:
                         continue
 
                     actual_inputs = trajectory[process_name]['inputs'][..., ctrl_idx]
-                    target_inputs = self.validation_surrogate.target_trajectory_tensors[process_name]['inputs'][scenario_idx:scenario_idx+1][..., ctrl_idx]
+                    val_target_all = self.validation_surrogate.target_trajectory_tensors[process_name]['inputs']
+                    val_target_idx = min(scenario_idx, val_target_all.shape[0] - 1)
+                    target_inputs = val_target_all[val_target_idx:val_target_idx+1][..., ctrl_idx]
 
                     # Use same normalization stats as training (with fallback scale for constant dims)
                     stats = self.input_stats[process_name]

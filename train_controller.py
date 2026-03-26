@@ -51,6 +51,7 @@ from configs.processes_config import (
 from configs.controller_config import CONTROLLER_CONFIG
 from controller_optimization.src.utils.target_generation import (
     generate_target_trajectory,
+    generate_baseline_trajectories,
     generate_baseline_trajectory
 )
 from controller_optimization.src.utils.process_chain import ProcessChain
@@ -330,72 +331,83 @@ def main(config=None):
     checkpoint_dir = Path(cfg['training']['checkpoint_dir'])
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Generate TRAINING scenarios (diverse structural + zero process noise)
-    print("\n[1/9] Generating training scenarios...")
+    # =========================================================================
+    # 1. ADAPTIVE CALIBRATION TARGETS — TARGET & BASELINE GENERATION
+    # =========================================================================
+    # Target trajectory: SINGLE sample (1 row). seed_target determines both
+    # environmental parameters and controllable inputs. F* is NOT necessarily 1.
+    #
+    # Train baselines: n_train baselines, each with:
+    #   - Target controllable inputs (copied)
+    #   - DIFFERENT env params (seed_env = seed_baseline)
+    #   - Active process noise (seed_noise = seed_baseline)
+    #
+    # Test baselines: n_test baselines, each with:
+    #   - Same controllable inputs as target
+    #   - SAME noise realization as train (seed_noise = seed_baseline)
+    #   - DIFFERENT env params (seed_env = seed_baseline + n_train)
+    # =========================================================================
+
+    print("\n[1/9] Generating target trajectory (single sample)...")
     n_train = cfg['scenarios']['n_train']
     n_test = cfg['scenarios']['n_test']
-    print(f"  Training scenarios: {n_train}")
-    print(f"  Test scenarios: {n_test} (for future evaluation)")
+    seed_target = cfg['scenarios']['seed_target']
+    seed_baseline = cfg['scenarios']['seed_baseline']
+    print(f"  n_train: {n_train} baselines (different env params)")
+    print(f"  n_test:  {n_test} baselines (different env params, same noise)")
+    print(f"  seed_target:  {seed_target}")
+    print(f"  seed_baseline: {seed_baseline}")
 
-    # Generate TRAIN target trajectory
-    print("\n  Generating TRAIN target trajectory (a*)...")
+    # Generate SINGLE target trajectory (seed determines env + inputs)
     target_trajectory_train = generate_target_trajectory(
         process_configs=selected_processes,
-        n_samples=n_train,
-        seed=cfg['scenarios']['seed_target']
+        n_samples=1,  # Always 1 — single target trajectory
+        seed=seed_target
     )
 
-    print("  Train target trajectory generated:")
+    print("  Target trajectory (1 sample):")
     for process_name, data in target_trajectory_train.items():
-        print(f"    {process_name}: inputs={data['inputs'].shape}, outputs={data['outputs'].shape}")
+        print(f"    {process_name}: inputs={data['inputs'][0]}, output={data['outputs'][0]}")
         if 'structural_conditions' in data and data['structural_conditions']:
             for var, vals in data['structural_conditions'].items():
-                print(f"      {var}: [{vals.min():.2f}, {vals.max():.2f}] (range)")
+                print(f"      {var}: {vals[0]:.4f}")
 
-    # Generate TRAIN baseline trajectory
-    print("\n  Generating TRAIN baseline trajectory (a')...")
-    baseline_trajectory_train = generate_baseline_trajectory(
+    # Generate TRAIN baselines (n_train, different env params)
+    print(f"\n  Generating {n_train} TRAIN baselines...")
+    baseline_trajectory_train = generate_baseline_trajectories(
         process_configs=selected_processes,
         target_trajectory=target_trajectory_train,
-        n_samples=n_train,
-        seed=cfg['scenarios']['seed_baseline']
+        n_baselines=n_train,
+        seed_env=seed_baseline,
+        seed_noise=seed_baseline
     )
 
-    print("  Train baseline trajectory generated:")
+    print("  Train baselines generated:")
     for process_name, data in baseline_trajectory_train.items():
         print(f"    {process_name}: inputs={data['inputs'].shape}, outputs={data['outputs'].shape}")
 
-    # 2. Generate TEST scenarios (for future evaluation, not used yet)
-    print("\n[2/9] Generating test scenarios (not used in training)...")
+    # 2. Generate TEST baselines (same noise, different env params)
+    print("\n[2/9] Generating test baselines...")
 
-    # Use seed offset from config to ensure test scenarios are truly unseen
-    test_seed_offset = cfg['scenarios']['test_seed_offset']
-
-    print(f"  Test seed offset: {test_seed_offset}")
-    print(f"  Generating TEST target trajectory (a*)...")
-    target_trajectory_test = generate_target_trajectory(
+    # Test baselines: same noise seed (identical process noise) but different env
+    # seed_env offset by n_train to get non-overlapping env params
+    baseline_trajectory_test = generate_baseline_trajectories(
         process_configs=selected_processes,
-        n_samples=n_test,
-        seed=cfg['scenarios']['seed_target'] + test_seed_offset
+        target_trajectory=target_trajectory_train,
+        n_baselines=n_test,
+        seed_env=seed_baseline + n_train,  # different env params
+        seed_noise=seed_baseline            # same noise realization
     )
 
-    print("  Test target trajectory generated:")
-    for process_name, data in target_trajectory_test.items():
-        print(f"    {process_name}: inputs={data['inputs'].shape}, outputs={data['outputs'].shape}")
-
-    print(f"  Generating TEST baseline trajectory (a')...")
-    baseline_trajectory_test = generate_baseline_trajectory(
-        process_configs=selected_processes,
-        target_trajectory=target_trajectory_test,
-        n_samples=n_test,
-        seed=cfg['scenarios']['seed_baseline'] + test_seed_offset
-    )
-
-    print("  Test baseline trajectory generated:")
+    print("  Test baselines generated:")
     for process_name, data in baseline_trajectory_test.items():
         print(f"    {process_name}: inputs={data['inputs'].shape}, outputs={data['outputs'].shape}")
 
-    # Use ONLY training trajectories for now
+    # Target trajectory is the SAME for train and test (single sample)
+    # Test uses the same target as reference for F* and BC
+    target_trajectory_test = target_trajectory_train
+
+    # Assign working variables
     target_trajectory = target_trajectory_train
     baseline_trajectory = baseline_trajectory_train
     n_scenarios = n_train
@@ -414,14 +426,15 @@ def main(config=None):
     print(f"\n  Using {n_scenarios} TRAIN scenarios for controller training")
     print(f"  Test scenarios saved: {test_scenarios_path}")
 
-    # 3. Create ProcessChain (uses multi-scenario trajectory)
+    # 3. Create ProcessChain (target + baseline trajectories for env params)
     print("\n[3/9] Building process chain...")
     try:
         process_chain = ProcessChain(
             processes_config=selected_processes,
             target_trajectory=target_trajectory,
             policy_config=cfg['policy_generator'],
-            device=device
+            device=device,
+            baseline_trajectories=baseline_trajectory
         )
         print(f"  ✓ Process chain created")
         print(f"    Uncertainty predictors: {len(process_chain.uncertainty_predictors)} (frozen)")
@@ -448,11 +461,13 @@ def main(config=None):
     use_deterministic_sampling = surrogate_config.get('use_deterministic_sampling', True)
 
     # Use factory function to create appropriate surrogate
+    # n_scenarios = n_train (from baselines), even though target has 1 sample
     surrogate = create_surrogate(
         config=surrogate_config,
         target_trajectory=target_trajectory,
         device=device,
         process_configs=selected_processes,
+        n_scenarios=n_train,
     )
 
     # For CasualiTSurrogate, connect to ProcessChain for format conversion
@@ -469,6 +484,7 @@ def main(config=None):
             device=device,
             use_deterministic_sampling=use_deterministic_sampling,
             process_configs=selected_processes,
+            n_scenarios=n_train,
         )
         print(f"  Formula surrogate created for comparison (F* formula = {formula_surrogate.F_star:.6f})")
     else:
@@ -531,12 +547,14 @@ def main(config=None):
             processes_config=selected_processes,
             target_trajectory=target_trajectory_test,
             policy_config=cfg['policy_generator'],
-            device=device
+            device=device,
+            baseline_trajectories=baseline_trajectory_test
         )
         validation_surrogate = create_surrogate(
             config=surrogate_config,
             target_trajectory=target_trajectory_test,
-            device=device
+            device=device,
+            n_scenarios=n_test,
         )
         # For CasualiTSurrogate, connect to validation ProcessChain
         if isinstance(validation_surrogate, CasualiTSurrogate):
@@ -769,12 +787,14 @@ def main(config=None):
     print("-"*70)
 
     # Create temporary ProcessChain for test scenarios
+    # Uses test baselines for env params, same target for controllable inputs
     print(f"  Creating process chain for test scenarios...")
     process_chain_test = ProcessChain(
         processes_config=selected_processes,
         target_trajectory=target_trajectory_test,
         policy_config=cfg['policy_generator'],
-        device=device
+        device=device,
+        baseline_trajectories=baseline_trajectory_test
     )
 
     # Load trained policy generators into test chain
@@ -980,8 +1000,8 @@ def main(config=None):
     train_structural_conditions = {}
     test_structural_conditions = {}
 
-    # Extract structural conditions from train scenarios
-    for process_name, data in target_trajectory_train.items():
+    # Extract structural conditions from train baselines (env diversity)
+    for process_name, data in baseline_trajectory_train.items():
         if 'structural_conditions' in data and data['structural_conditions']:
             for var, vals in data['structural_conditions'].items():
                 if var not in train_structural_conditions:
@@ -989,8 +1009,8 @@ def main(config=None):
                 else:
                     train_structural_conditions[var] = np.concatenate([train_structural_conditions[var], vals])
 
-    # Extract structural conditions from test scenarios
-    for process_name, data in target_trajectory_test.items():
+    # Extract structural conditions from test baselines (env diversity)
+    for process_name, data in baseline_trajectory_test.items():
         if 'structural_conditions' in data and data['structural_conditions']:
             for var, vals in data['structural_conditions'].items():
                 if var not in test_structural_conditions:
@@ -1060,12 +1080,14 @@ def main(config=None):
         print(f"    Using scenario {representative_idx} (F_mean={F_actual_per_scenario_mean[representative_idx]:.6f}, close to global mean {F_actual_mean:.6f})")
 
         # Extract representative scenario from target and baseline trajectories
+        # Target always has 1 sample; use index 0. Baseline uses representative_idx.
         target_scenario = {}
         baseline_scenario = {}
         for process_name, data in target_trajectory.items():
+            target_idx = min(representative_idx, data['inputs'].shape[0] - 1)
             target_scenario[process_name] = {
-                'inputs': data['inputs'][representative_idx:representative_idx+1],
-                'outputs': data['outputs'][representative_idx:representative_idx+1]
+                'inputs': data['inputs'][target_idx:target_idx+1],
+                'outputs': data['outputs'][target_idx:target_idx+1]
             }
 
         for process_name, data in baseline_trajectory.items():

@@ -63,6 +63,7 @@ from controller_optimization.configs.processes_config import PROCESSES, get_filt
 from controller_optimization.configs.controller_config import CONTROLLER_CONFIG
 from controller_optimization.src.utils.target_generation import (
     generate_target_trajectory,
+    generate_baseline_trajectories,
     generate_baseline_trajectory
 )
 from controller_optimization.src.utils.process_chain import ProcessChain
@@ -216,27 +217,33 @@ def create_objective(base_config: dict, device: str = 'auto',
             process_names = cfg.get('process_names', None)
             selected_processes = get_filtered_processes(process_names)
 
-            # Generate trajectories
+            # Generate trajectories (adaptive calibration targets)
             n_train = cfg['scenarios']['n_train']
+            seed_baseline = cfg['scenarios']['seed_baseline']
+
+            # Single target trajectory
             target_trajectory = generate_target_trajectory(
                 process_configs=selected_processes,
-                n_samples=n_train,
+                n_samples=1,
                 seed=cfg['scenarios']['seed_target']
             )
 
-            baseline_trajectory = generate_baseline_trajectory(
+            # n_train baselines with different env params
+            baseline_trajectory = generate_baseline_trajectories(
                 process_configs=selected_processes,
                 target_trajectory=target_trajectory,
-                n_samples=n_train,
-                seed=cfg['scenarios']['seed_baseline']
+                n_baselines=n_train,
+                seed_env=seed_baseline,
+                seed_noise=seed_baseline
             )
 
-            # Create ProcessChain
+            # Create ProcessChain with baseline env params
             process_chain = ProcessChain(
                 processes_config=selected_processes,
                 target_trajectory=target_trajectory,
                 policy_config=cfg['policy_generator'],
-                device=actual_device
+                device=actual_device,
+                baseline_trajectories=baseline_trajectory
             )
 
             # Create Surrogate (supports both reliability_function and casualit)
@@ -244,7 +251,8 @@ def create_objective(base_config: dict, device: str = 'auto',
             surrogate = create_surrogate(
                 config=surrogate_config,
                 target_trajectory=target_trajectory,
-                device=actual_device
+                device=actual_device,
+                n_scenarios=n_train,
             )
             # For CasualiTSurrogate, connect to ProcessChain for format conversion
             if isinstance(surrogate, CasualiTSurrogate):
