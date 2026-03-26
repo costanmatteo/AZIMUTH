@@ -1109,13 +1109,13 @@ def _page2(d):
     cap_h  = 12          # caption row height allowance
 
     # ── Full-width: training_history + loss_chart stacked ────────────────
-    # 2 images + 2 captions, no gap between them
-    h_each = int((avail - 2 * cap_h) / 2)
+    # 2 images + 2 captions + 1 gap spacer
+    h_each = int((avail - 2 * cap_h - 4) / 2)
     charts = img_stack(
         [chk / 'training_history.png',  chk / 'loss_chart.png'],
         ["Training losses & weights \u00b7 reliability evolution",
          "Train vs validation \u2014 overfitting detection"],
-        TW, h_each, gap=0)
+        TW, h_each, gap=4)
 
     F.append(charts)
     return F
