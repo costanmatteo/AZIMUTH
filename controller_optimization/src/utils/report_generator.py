@@ -803,7 +803,7 @@ def _page1(d):
         return (f'<font color="{hex_color}">\u25a0</font> ')
 
     if traj_list:
-        F += _footer(d, 1, 3)
+        F += _footer(d, 1, 4)
         F.append(PageBreak())
         F += section_header("04 \u2014 trajectory comparison (best run per scenario)")
 
@@ -958,9 +958,9 @@ def _page1(d):
             "best of 10 runs per scenario  \u00b7  "
             "plots show X/Y evolution across training epochs", ST_NOTE)
         F.append(foot_p)
-        F += _footer(d, 2, 3)
+        F += _footer(d, 2, 4)
     else:
-        F += _footer(d, 1, 2)
+        F += _footer(d, 1, 3)
 
     return F
 
@@ -1052,16 +1052,15 @@ def _perf_rows(adv, n_scenarios):
 
 
 # ════════════════════════════════════════════════════════════════════════════
-#  PAGE 2 — charts
+#  PAGE 2 — training charts (full width)
 # ════════════════════════════════════════════════════════════════════════════
 
-def _page2(d):
-    """Single charts page: left column (training + overfitting), right column
-    (scatter/gap 2x2 top + theoretical 2x2 bottom)."""
+
+def _mini_header(d):
+    """Reusable mini-header block for chart pages."""
     cfg    = d['config']
     ts     = d.get('timestamp', datetime.now())
     ts_str = ts.strftime('%Y-%m-%d %H:%M:%S') if isinstance(ts, datetime) else str(ts)
-    chk    = Path(d.get('checkpoint_dir') or cfg.get('training', {}).get('checkpoint_dir', '.'))
     hist   = d.get('training_history', {})
     seed   = cfg.get('misc', {}).get('random_seed', '\u2014')
     epochs = cfg.get('training', {}).get('epochs',
@@ -1074,8 +1073,6 @@ def _page2(d):
     status_col = C_GREEN     if completed else C_AMBER
 
     F = []
-
-    # mini header
     title_p = Paragraph("Controller Optimization \u2014 Training Report", ST_TITLE)
     meta_p  = Paragraph(
         f"{ts_str}  \u00b7  seed {seed}  \u00b7  epochs {epochs} / {max_ep}", ST_SUB)
@@ -1095,28 +1092,56 @@ def _page2(d):
     F.append(Spacer(1, 1))
     F.append(meta_p)
     F.append(_rule_heavy())
+    return F
+
+
+def _page2(d):
+    """Training charts page: training_history + loss_chart stacked, full width."""
+    cfg    = d['config']
+    chk    = Path(d.get('checkpoint_dir') or cfg.get('training', {}).get('checkpoint_dir', '.'))
+
+    F = _mini_header(d)
 
     # Available height for plots
     hdr_h  = 1.8 * cm   # mini-header + rule (generous)
     ftr_h  = 1.5 * cm   # footer (rule + table + spacing)
     avail  = PH - 2 * M - hdr_h - ftr_h
-    col_gap = 10
-    col_w  = (TW - col_gap) / 2
     cap_h  = 12          # caption row height allowance
 
-    # ── LEFT COLUMN: training_history + loss_chart stacked ────────────────
+    # ── Full-width: training_history + loss_chart stacked ────────────────
     # 2 images + 2 captions + 1 gap spacer
-    h_left = int((avail - 2 * cap_h - 4) / 2)
-    left = img_stack(
+    h_each = int((avail - 2 * cap_h - 4) / 2)
+    charts = img_stack(
         [chk / 'training_history.png',  chk / 'loss_chart.png'],
         ["Training losses & weights \u00b7 reliability evolution",
          "Train vs validation \u2014 overfitting detection"],
-        col_w, h_left, gap=4)
+        TW, h_each, gap=4)
 
-    # ── RIGHT COLUMN: 4 rows of paired images ────────────────────────────
+    F.append(charts)
+    return F
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  PAGE 3 — comparison charts (full width)
+# ════════════════════════════════════════════════════════════════════════════
+
+def _page3(d):
+    """Paired comparison charts page: 4 rows of paired images, full width."""
+    cfg    = d['config']
+    chk    = Path(d.get('checkpoint_dir') or cfg.get('training', {}).get('checkpoint_dir', '.'))
+
+    F = _mini_header(d)
+
+    # Available height for plots
+    hdr_h  = 1.8 * cm   # mini-header + rule (generous)
+    ftr_h  = 1.5 * cm   # footer (rule + table + spacing)
+    avail  = PH - 2 * M - hdr_h - ftr_h
+    cap_h  = 12          # caption row height allowance
+
+    # ── 4 rows of paired images, full width ─────────────────────────────
     # 4 image rows + 4 captions + 3 gap spacers
     rh = int((avail - 4 * cap_h - 3 * 3) / 4)
-    pair_w = col_w / 2
+    pair_w = TW / 2
 
     def _img_row(p1, p2, c1, c2, row_h):
         i1 = scale_img(p1, pair_w, row_h)
@@ -1152,13 +1177,13 @@ def _page2(d):
         "Loss decomposition", "Loss vs L_min scatter", rh)
 
     spc = 3
-    right = Table(
+    grid = Table(
         [[r1], [Spacer(1, spc)],
          [r2], [Spacer(1, spc)],
          [r3], [Spacer(1, spc)],
          [r4]],
-        colWidths=[col_w])
-    right.setStyle(TableStyle([
+        colWidths=[TW])
+    grid.setStyle(TableStyle([
         ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
         ('LEFTPADDING',   (0, 0), (-1, -1), 0),
         ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
@@ -1166,18 +1191,7 @@ def _page2(d):
         ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
     ]))
 
-    # ── Assemble two-column layout ───────────────────────────────────────
-    layout = Table([[left, Spacer(col_gap, 1), right]],
-                   colWidths=[col_w, col_gap, col_w])
-    layout.setStyle(TableStyle([
-        ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
-        ('LEFTPADDING',   (0, 0), (-1, -1), 0),
-        ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
-        ('TOPPADDING',    (0, 0), (-1, -1), 0),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
-    ]))
-    F.append(layout)
-
+    F.append(grid)
     return F
 
 
@@ -1218,12 +1232,14 @@ def _build_pdf(d, out_path):
         pageTemplates=[pt])
 
     traj = d.get('trajectory_values') or {}
-    total_pages = 3 if traj else 2
+    total_pages = 4 if traj else 3
     last_page = total_pages
     story = (
         _page1(d) +
         [PageBreak()] +
-        _page2(d) + _footer(d, last_page, total_pages)
+        _page2(d) + _footer(d, last_page - 1, total_pages) +
+        [PageBreak()] +
+        _page3(d) + _footer(d, last_page, total_pages)
     )
     doc.build(story)
 
