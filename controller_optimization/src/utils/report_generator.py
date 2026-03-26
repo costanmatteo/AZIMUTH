@@ -802,9 +802,9 @@ def _page1(d):
         F.append(PageBreak())
         F += section_header("04 \u2014 trajectory comparison (best run per scenario)")
 
-        # Width split: data table ~55%, plot ~45%
-        data_w = TW * 0.55
-        plot_w = TW * 0.45
+        # Width split: data table ~58%, plot ~42%
+        data_w = TW * 0.58
+        plot_w = TW * 0.42
 
         for traj_i_idx, traj_i in enumerate(traj_list):
             sc_idx = traj_i.get('scenario_idx', traj_i_idx)
@@ -893,13 +893,17 @@ def _page1(d):
                 evo_key = (sc_idx, proc)
                 evo_path = evo_paths.get(evo_key)
 
-                # Calculate plot height to match data rows
+                # Scale plot to match data table height
+                # Each data row ~11pt, header ~13pt, padding ~3pt per row
                 n_data_rows = len(proc_rows) - 1  # minus header
-                row_h = max(n_data_rows * 12, 40)  # ~12pt per row, min 40pt
+                tbl_h = 13 + n_data_rows * 14  # approximate table height in pt
+                img_w = plot_w - 4
+                # Keep aspect ratio close to original (3.5:1.8 ≈ 1.94)
+                img_h = max(tbl_h, img_w / 1.94)
 
                 if evo_path and os.path.exists(evo_path):
                     from reportlab.platypus import Image as RLImage
-                    evo_img = RLImage(evo_path, width=plot_w - 6, height=row_h)
+                    evo_img = RLImage(evo_path, width=img_w, height=img_h)
                     right_cell = evo_img
                 else:
                     right_cell = Paragraph("", ST_NOTE)

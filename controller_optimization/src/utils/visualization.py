@@ -1061,30 +1061,31 @@ def generate_process_evolution_plots(training_progression, controllable_info,
             if n_lines == 0:
                 continue
 
-            # Determine plot height based on number of lines
-            fig_h = max(1.2, 0.5 * n_lines + 0.4)
-            fig, ax = plt.subplots(figsize=(3.2, fig_h))
+            # Fixed figsize — consistent aspect ratio for all processes
+            fig, ax = plt.subplots(figsize=(3.5, 1.8))
 
-            # Plot controllable inputs
+            # Plot controllable inputs (solid)
             for ci in ctrl_indices:
                 lbl = input_labels[ci] if ci < len(input_labels) else f"X_{ci}"
                 ax.plot(epochs, ctrl_series[ci], label=lbl, linewidth=1.0)
 
-            # Plot outputs (dashed)
+            # Plot outputs (dashed, thicker)
             for oi in range(len(output_labels)):
                 lbl = output_labels[oi]
-                ax.plot(epochs, out_series[oi], label=lbl, linewidth=1.0,
+                ax.plot(epochs, out_series[oi], label=lbl, linewidth=1.2,
                         linestyle='--')
 
-            ax.set_xlabel('epoch')
-            ax.legend(loc='best', fontsize=6, ncol=max(1, n_lines // 3))
-            ax.set_title(f'{proc_name} — sc. {scenario_idx}', fontsize=7)
+            ax.set_xlabel('epoch', fontsize=6)
+            ax.tick_params(axis='both', labelsize=6)
+            ax.legend(loc='upper right', fontsize=5.5,
+                      ncol=min(n_lines, 3), handlelength=1.2,
+                      columnspacing=0.8, borderpad=0.3)
 
-            plt.tight_layout(pad=0.3)
+            plt.tight_layout(pad=0.4)
 
             fname = f'evolution_sc{scenario_idx}_{proc_name}.png'
             fpath = checkpoint_dir / fname
-            plt.savefig(str(fpath), dpi=150, bbox_inches='tight')
+            plt.savefig(str(fpath), dpi=180, bbox_inches='tight')
             plt.close()
 
             plot_paths[(scenario_idx, proc_name)] = str(fpath)
