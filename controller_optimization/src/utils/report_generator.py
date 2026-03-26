@@ -812,6 +812,10 @@ def _page1(d):
         plot_w = TW * 0.42
 
         for traj_i_idx, traj_i in enumerate(traj_list):
+            # Each scenario starts on a new page
+            if traj_i_idx > 0:
+                F.append(PageBreak())
+
             sc_idx = traj_i.get('scenario_idx', traj_i_idx)
             ctrl_info = traj_i.get('controllable_info', {})
 
