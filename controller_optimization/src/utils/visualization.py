@@ -437,12 +437,13 @@ def plot_target_vs_actual_scatter(F_star_per_scenario, F_baseline_per_scenario, 
             [min_val - margin, max_val + margin],
             'k--', linewidth=2, label='Perfect Match (y = x)', alpha=0.5)
 
-    ax.set_xlabel('F (Reliability)')
-    ax.set_ylabel('F_star (Target Reliability)')
-    ax.set_title('Baseline vs Controller Reliability')
+    ax.set_xlabel('F (Reliability)', fontsize=14)
+    ax.set_ylabel('F_star (Target Reliability)', fontsize=14)
+    ax.set_title('Baseline vs Controller Reliability', fontsize=15)
+    ax.tick_params(labelsize=12)
 
     ax.grid(True, alpha=0.3)
-    ax.legend(loc='lower right', fontsize=11, framealpha=0.9)
+    ax.legend(loc='lower right', fontsize=16, framealpha=0.9)
 
     ax.set_xlim(min_val - margin, max_val + margin)
     ax.set_ylim(min_val - margin, max_val + margin)
@@ -460,7 +461,7 @@ def plot_target_vs_actual_scatter(F_star_per_scenario, F_baseline_per_scenario, 
 
     ax.text(0.02, 0.98, stats_text,
             transform=ax.transAxes,
-            fontsize=10,
+            fontsize=15,
             verticalalignment='top',
             bbox=dict(boxstyle='square,pad=0.3', facecolor='white',
                       edgecolor='#CCCCCC', linewidth=0.5, alpha=0.9))
@@ -563,10 +564,11 @@ def plot_gap_distribution(F_star_per_scenario, F_actual_per_scenario, save_path=
                label=f'Worst: {worst_gap:.6f}')
 
     # Labels and title
-    ax.set_xlabel('Gap (F_star - F_actual)')
-    ax.set_ylabel('Number of Scenarios')
-    ax.set_title('Distribution of Target-Actual Gap')
-    ax.legend(loc='upper right', fontsize=11)
+    ax.set_xlabel('Gap (F_star - F_actual)', fontsize=14)
+    ax.set_ylabel('Number of Scenarios', fontsize=14)
+    ax.set_title('Distribution of Target-Actual Gap', fontsize=15)
+    ax.tick_params(labelsize=12)
+    ax.legend(loc='upper right', fontsize=16)
     ax.grid(True, axis='y', alpha=0.3)
 
     # Add statistics box
@@ -579,7 +581,7 @@ def plot_gap_distribution(F_star_per_scenario, F_actual_per_scenario, save_path=
 
     ax.text(0.98, 0.98, stats_text,
             transform=ax.transAxes,
-            fontsize=10,
+            fontsize=15,
             verticalalignment='top',
             horizontalalignment='right',
             bbox=dict(boxstyle='square,pad=0.3', facecolor='white',

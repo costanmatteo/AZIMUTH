@@ -13,7 +13,8 @@ from typing import Dict, List, Optional, Any, Tuple
 
 def apply_plot_style():
     plt.rcParams.update({
-        'font.family':           'monospace',
+        'font.family':           'sans-serif',
+        'font.sans-serif':       ['Helvetica', 'Arial', 'DejaVu Sans'],
         'font.size':             8,
         'axes.titlesize':        9,
         'axes.titleweight':      'normal',
