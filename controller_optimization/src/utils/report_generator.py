@@ -870,8 +870,8 @@ def _page1(d):
                 # Color map for this process (from evolution plots)
                 proc_cm = evo_colors.get(proc, {})
 
-                # Controllable input rows (skip process 0)
-                if proc_idx > 0 and ctrl_indices:
+                # Controllable input rows
+                if ctrl_indices:
                     for ci in ctrl_indices:
                         lbl = input_labels[ci] if ci < len(input_labels) else f"input_{ci}"
                         dot = _color_dot(proc_cm[lbl]) if lbl in proc_cm else ''
