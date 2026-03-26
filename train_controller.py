@@ -469,6 +469,8 @@ def main(config=None):
         process_configs=selected_processes,
         n_scenarios=n_train,
     )
+    # Ensure surrogate.n_scenarios is correct (guard against fallback to target shape=1)
+    surrogate.n_scenarios = n_train
 
     # For CasualiTSurrogate, connect to ProcessChain for format conversion
     # and create a formula surrogate for comparison
@@ -494,6 +496,11 @@ def main(config=None):
     F_star_value = surrogate.F_star  # Single scalar from scenario 0
     print(f"  ✓ Surrogate initialized")
     print(f"    F* = {F_star_value:.6f} (from scenario 0)")
+    print(f"    n_scenarios = {surrogate.n_scenarios} (should match n_train={n_train})")
+    assert surrogate.n_scenarios == n_train, (
+        f"Surrogate n_scenarios={surrogate.n_scenarios} != n_train={n_train}. "
+        f"Target has {list(target_trajectory.values())[0]['inputs'].shape[0]} sample(s)."
+    )
 
     # 5. Create Trainer
     print("\n[5/9] Creating controller trainer...")
@@ -554,8 +561,10 @@ def main(config=None):
             config=surrogate_config,
             target_trajectory=target_trajectory_test,
             device=device,
+            process_configs=selected_processes,
             n_scenarios=n_test,
         )
+        validation_surrogate.n_scenarios = n_test  # Ensure correct
         # For CasualiTSurrogate, connect to validation ProcessChain
         if isinstance(validation_surrogate, CasualiTSurrogate):
             validation_surrogate.set_process_chain(validation_process_chain)

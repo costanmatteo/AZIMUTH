@@ -252,8 +252,10 @@ def create_objective(base_config: dict, device: str = 'auto',
                 config=surrogate_config,
                 target_trajectory=target_trajectory,
                 device=actual_device,
+                process_configs=selected_processes,
                 n_scenarios=n_train,
             )
+            surrogate.n_scenarios = n_train
             # For CasualiTSurrogate, connect to ProcessChain for format conversion
             if isinstance(surrogate, CasualiTSurrogate):
                 surrogate.set_process_chain(process_chain)
