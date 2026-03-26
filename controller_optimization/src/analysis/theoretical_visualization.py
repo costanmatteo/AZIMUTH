@@ -130,7 +130,7 @@ def plot_loss_vs_L_min(
     plt.tight_layout()
 
     if save_path:
-        fig.savefig(save_path, dpi=150, bbox_inches='tight')
+        fig.savefig(save_path, dpi=150)
         print(f"  Saved: {save_path}")
 
     return fig
@@ -235,7 +235,7 @@ def plot_efficiency_over_time(
     plt.tight_layout()
 
     if save_path:
-        fig.savefig(save_path, dpi=150, bbox_inches='tight')
+        fig.savefig(save_path, dpi=150)
         print(f"  Saved: {save_path}")
 
     return fig
@@ -332,7 +332,7 @@ def plot_loss_decomposition(
     plt.tight_layout()
 
     if save_path:
-        fig.savefig(save_path, dpi=150, bbox_inches='tight')
+        fig.savefig(save_path, dpi=150)
         print(f"  Saved: {save_path}")
 
     return fig
