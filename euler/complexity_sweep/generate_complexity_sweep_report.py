@@ -1065,12 +1065,12 @@ def build_page3_html(win_df: pd.DataFrame, now: datetime, sweep_dir: str,
         <td>{int(r['n_runs'])}</td>
         <td>{int(r['n_wins'])}</td>
         <td class="{wr_cls}">{r['win_rate_pct']:.1f}%</td>
+        <td></td><td></td><td></td><td></td>
         <td>{_fmt(gap_bl_mean)}</td>
         <td>{_fmt(gap_ct_tr_mean)}</td>
         <td>{_fmt(gap_ct_te_mean)}</td>
         <td>{_fmt(gap_d_tr_mean)}</td>
         <td>{_fmt(gap_d_te_mean)}</td>
-        <td></td><td></td><td></td><td></td>
       </tr>"""
 
         # ── Individual seed-pair rows ──
@@ -1081,6 +1081,17 @@ def build_page3_html(win_df: pd.DataFrame, now: datetime, sweep_dir: str,
                 nproc_td_run = (f'<td></td>' if has_nproc else '')
                 seed_label = f"s<sub>t</sub>={int(run['seed_target'])}&nbsp;s<sub>b</sub>={int(run['seed_baseline'])}"
                 f_formula_test = run.get('F_formula_test')
+                # If F_formula_test is available → CasualiT mode:
+                #   F_actual = surrogate, F_formula = formula
+                # Otherwise → formula mode:
+                #   F_actual IS the formula, surrogate = N/A
+                has_casualit = f_formula_test is not None and not (isinstance(f_formula_test, float) and np.isnan(f_formula_test))
+                if has_casualit:
+                    f_surr_val = run['F_actual_test']
+                    f_form_val = f_formula_test
+                else:
+                    f_surr_val = None
+                    f_form_val = run['F_actual_test']
                 rows_html += f"""
       <tr style="color:#666; font-size:6.5px;">
         <td colspan="3" style="text-align:left; padding-left:12px;">{seed_label}</td>
@@ -1088,15 +1099,15 @@ def build_page3_html(win_df: pd.DataFrame, now: datetime, sweep_dir: str,
         <td></td>
         <td></td>
         <td class="{win_cls}">{win_str}</td>
+        <td>{_fmt(run['F_star_test'])}</td>
+        <td>{_fmt(run['F_baseline_test'])}</td>
+        <td>{_fmt(f_surr_val)}</td>
+        <td>{_fmt(f_form_val)}</td>
         <td>{_fmt(run['gap_baseline'])}</td>
         <td>{_fmt(run['gap_ctrl_train'])}</td>
         <td>{_fmt(run['gap_ctrl_test'])}</td>
         <td>{_fmt(run['gap_delta_train'])}</td>
         <td>{_fmt(run['gap_delta_test'])}</td>
-        <td>{_fmt(run['F_star_test'])}</td>
-        <td>{_fmt(run['F_baseline_test'])}</td>
-        <td>{_fmt(run['F_actual_test'])}</td>
-        <td>{_fmt(f_formula_test)}</td>
       </tr>"""
 
     n_total = len(df_detail) if df_detail is not None else 0
@@ -1127,15 +1138,15 @@ def build_page3_html(win_df: pd.DataFrame, now: datetime, sweep_dir: str,
         <th>Runs</th>
         <th>Wins</th>
         <th>Win rate</th>
+        <th>F*</th>
+        <th>F&prime;<span class="def">baseline</span></th>
+        <th>F<span class="def">surrogate</span></th>
+        <th>F<span class="def">formula</span></th>
         <th>Gap baseline<span class="def">|F*&#8722;F&prime;|</span></th>
         <th>Gap ctrl train<span class="def">|F*&#8722;F|</span></th>
         <th>Gap ctrl test<span class="def">|F*&#8722;F|</span></th>
         <th>Gap &#916; train<span class="def">g<sub>bl</sub>&#8722;g<sub>ctrl</sub></span></th>
         <th>Gap &#916; test<span class="def">g<sub>bl</sub>&#8722;g<sub>ctrl</sub></span></th>
-        <th>F*</th>
-        <th>F&prime;<span class="def">baseline</span></th>
-        <th>F<span class="def">surrogate</span></th>
-        <th>F<span class="def">formula</span></th>
       </tr>
     </thead>
     <tbody>
