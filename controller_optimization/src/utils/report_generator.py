@@ -1133,13 +1133,23 @@ def _page3(d):
     ftr_h  = 1.5 * cm   # footer (rule + table + spacing)
     avail  = PH - 2 * M - hdr_h - ftr_h
     cap_h  = 12          # caption row height allowance
+    col_gap = 10
+    col_w  = (TW - col_gap) / 2
 
-    # ── 4 rows of paired images, full width ─────────────────────────────
-    # 4 image rows + 4 captions + 3 gap spacers
-    rh = int((avail - 4 * cap_h - 3 * 3) / 4)
-    pair_w = TW / 2
+    no_pad = TableStyle([
+        ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
+        ('LEFTPADDING',   (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
+        ('TOPPADDING',    (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+    ])
 
-    def _img_row(p1, p2, c1, c2, row_h):
+    # ── LEFT COLUMN: baseline/gap paired (train on top, test below) ────
+    # 2 rows, each row = 2 images side by side + caption
+    pair_w = col_w / 2
+    lh = int((avail - 2 * cap_h) / 2)
+
+    def _img_pair(p1, p2, c1, c2, row_h):
         i1 = scale_img(p1, pair_w, row_h)
         i2 = scale_img(p2, pair_w, row_h)
         t1 = Table([[i1], [Paragraph(c1, ST_CAPTION)]], colWidths=[pair_w])
@@ -1153,41 +1163,41 @@ def _page3(d):
                 ('TOPPADDING',    (0, 0), (-1, -1), 0),
                 ('BOTTOMPADDING', (0, 0), (-1, -1), 1),
             ]))
-        return Table([[t1, t2]], colWidths=[pair_w, pair_w])
+        row = Table([[t1, t2]], colWidths=[pair_w, pair_w])
+        row.setStyle(no_pad)
+        return row
 
-    r1 = _img_row(
+    row_train = _img_pair(
         chk / 'baseline_vs_controller_train.png',
         chk / 'gap_distribution_train.png',
-        "Baseline vs controller \u2014 train", "Gap distribution \u2014 train", rh)
-    r2 = _img_row(
+        "Baseline vs controller \u2014 train", "Gap distribution \u2014 train", lh)
+    row_test = _img_pair(
         chk / 'baseline_vs_controller_test.png',
         chk / 'gap_distribution_test.png',
-        "Baseline vs controller \u2014 test", "Gap distribution \u2014 test", rh)
-    r3 = _img_row(
-        chk / 'loss_vs_L_min.png',
-        chk / 'training_efficiency.png',
-        "Loss vs L_min Bellman", "Training efficiency", rh)
-    r4 = _img_row(
-        chk / 'loss_decomposition.png',
-        chk / 'loss_scatter.png',
-        "Loss decomposition", "Loss vs L_min scatter", rh)
+        "Baseline vs controller \u2014 test", "Gap distribution \u2014 test", lh)
 
-    spc = 3
-    grid = Table(
-        [[r1], [Spacer(1, spc)],
-         [r2], [Spacer(1, spc)],
-         [r3], [Spacer(1, spc)],
-         [r4]],
-        colWidths=[TW])
-    grid.setStyle(TableStyle([
-        ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
-        ('LEFTPADDING',   (0, 0), (-1, -1), 0),
-        ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
-        ('TOPPADDING',    (0, 0), (-1, -1), 0),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
-    ]))
+    left = Table([[row_train], [row_test]], colWidths=[col_w])
+    left.setStyle(no_pad)
 
-    F.append(grid)
+    # ── RIGHT COLUMN: other charts stacked ─────────────────────────────
+    right_charts = [
+        (chk / 'loss_vs_L_min.png',       "Loss vs L_min Bellman"),
+        (chk / 'training_efficiency.png',  "Training efficiency"),
+        (chk / 'loss_decomposition.png',   "Loss decomposition"),
+        (chk / 'loss_scatter.png',         "Loss vs L_min scatter"),
+    ]
+    rh = int((avail - len(right_charts) * cap_h) / len(right_charts))
+    right = img_stack(
+        [p for p, _ in right_charts],
+        [c for _, c in right_charts],
+        col_w, rh, gap=0)
+
+    # ── Assemble two-column layout ─────────────────────────────────────
+    layout = Table([[left, Spacer(col_gap, 1), right]],
+                   colWidths=[col_w, col_gap, col_w])
+    layout.setStyle(no_pad)
+
+    F.append(layout)
     return F
 
 
