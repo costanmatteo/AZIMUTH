@@ -61,7 +61,7 @@ def plot_training_history(history, save_path=None):
     has_curriculum_weights = 'lambda_bc' in history and 'reliability_weight' in history
 
     # Create figure with 2 rows: combined losses/weights on top, reliability on bottom
-    fig, axes = plt.subplots(2, 1, figsize=(14, 10))
+    fig, axes = plt.subplots(2, 1, figsize=(20, 5))
 
     for _ax in axes.flatten():
         _ax.spines['top'].set_visible(False)
@@ -851,7 +851,7 @@ def plot_loss_chart(history, save_path=None):
     # Determine number of plots
     n_plots = 2  # Total loss and Reliability loss
 
-    fig, axes = plt.subplots(n_plots, 1, figsize=(12, 5 * n_plots))
+    fig, axes = plt.subplots(n_plots, 1, figsize=(20, 5))
 
     for _ax in (axes.flatten() if hasattr(axes, 'flatten') else [axes]):
         _ax.spines['top'].set_visible(False)
