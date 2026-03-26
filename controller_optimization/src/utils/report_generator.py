@@ -866,18 +866,14 @@ def _page1(d):
                     a_v = float(a_outputs[oi]) if hasattr(a_outputs, '__len__') and oi < len(a_outputs) else 0.0
                     d_bl = b_v - t_v
                     d_ctrl = a_v - t_v
-                    closer = abs(a_v - t_v) < abs(b_v - t_v)
-                    # Show process name only if no controllable input rows above
                     show_proc = proc if (proc_idx == 0 or not ctrl_indices) else ""
                     traj_rows.append([
                         Paragraph(show_proc,         ST_TRAJ_C),
                         Paragraph(olbl,              ST_TRAJ_C),
                         Paragraph(f"{t_v:.4f}",      ST_TRAJ_C),
                         Paragraph(f"{a_v:.4f}",      ST_TRAJ_C),
-                        Paragraph(f"{d_ctrl:+.4f}",  ST_TRAJ_G if closer else ST_TRAJ_R),
-                        Paragraph(f"output (\u0394bl {d_bl:+.4f})"
-                                  + (" \u2191" if closer else ""),
-                                  ST_NOTE_G if closer else ST_NOTE),
+                        Paragraph(f"{d_ctrl:+.4f}",  ST_TRAJ_C),
+                        Paragraph(f"output (\u0394bl {d_bl:+.4f})", ST_NOTE),
                     ])
 
             traj_tbl = Table(traj_rows, colWidths=cws_t)
@@ -899,20 +895,11 @@ def _page1(d):
             F.append(Spacer(1, 6))
 
         # Footer legend
-        foot_l = Paragraph(
+        foot_p = Paragraph(
             "\u0394 = controller \u2212 target  \u00b7  "
             "\u0394bl = baseline output \u2212 target output  \u00b7  "
             "best of 10 runs per scenario", ST_NOTE)
-        foot_r = Paragraph("\u2191 = controller closer to target than baseline", ST_NOTE_G)
-        foot_t = Table([[foot_l, foot_r]], colWidths=[TW * 0.65, TW * 0.35])
-        foot_t.setStyle(TableStyle([
-            ('LEFTPADDING',   (0, 0), (-1, -1), 0),
-            ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
-            ('TOPPADDING',    (0, 0), (-1, -1), 3),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
-            ('ALIGN',         (1, 0), (1,  0),  'RIGHT'),
-        ]))
-        F.append(foot_t)
+        F.append(foot_p)
         F += _footer(d, 2, 3)
     else:
         F += _footer(d, 1, 2)
