@@ -1678,11 +1678,19 @@ def main(config=None):
         if hasattr(trainer, 'training_progression') and trainer.training_progression:
             print("\n  Generating per-process evolution plots...")
             try:
+                # Compute y_range from process config domains
+                # Use x_domain as the main range (inputs live there, outputs typically within)
+                _y_lo, _y_hi = -5.0, 5.0  # defaults
+                if selected_processes and 'st_params' in selected_processes[0]:
+                    _x_dom = selected_processes[0]['st_params'].get('x_domain', (-5.0, 5.0))
+                    _y_lo, _y_hi = _x_dom
+
                 evolution_plot_paths = generate_process_evolution_plots(
                     training_progression=trainer.training_progression,
                     controllable_info=controllable_info_for_report,
                     checkpoint_dir=checkpoint_dir,
-                    n_scenarios=n_scenarios
+                    n_scenarios=n_scenarios,
+                    y_range=(_y_lo, _y_hi),
                 )
                 print(f"  ✓ Generated {len(evolution_plot_paths)} evolution plots")
             except Exception as e:

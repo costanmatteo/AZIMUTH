@@ -983,25 +983,38 @@ def plot_loss_chart(history, save_path=None):
     plt.close()
 
 
+class _SquareHandler:
+    """Legend handler that draws a small filled square instead of a line."""
+    def legend_artist(self, legend, orig_handle, fontsize, handlebox):
+        from matplotlib.patches import Rectangle
+        x0, y0 = handlebox.xdescent, handlebox.ydescent
+        w, h = handlebox.width * 0.5, handlebox.height * 0.7
+        patch = Rectangle((x0, y0 + h * 0.15), w, h,
+                           facecolor=orig_handle.get_color(),
+                           edgecolor='none', transform=handlebox.get_transform())
+        handlebox.add_artist(patch)
+        return patch
+
+
 def generate_process_evolution_plots(training_progression, controllable_info,
                                      checkpoint_dir, n_scenarios=1,
                                      row_height_pt=14, plot_width_in=3.5,
-                                     uniform_height=True):
+                                     uniform_height=True,
+                                     y_range=None):
     """
     Generate per-process evolution plots showing controllable inputs and outputs
     across training epochs, for each scenario.
 
-    The plot height adapts to the number of data rows (controllable inputs + output)
-    so it matches the table height in the PDF report.
-
     Args:
         training_progression (list): List of epoch snapshots from trainer.
-        controllable_info (dict): {process_name: {input_labels, controllable_labels,
-                                   controllable_indices, output_labels}}
+        controllable_info (dict): per-process info (input_labels, controllable_indices, etc.)
         checkpoint_dir (Path): Directory to save plots
         n_scenarios (int): Number of scenarios
         row_height_pt (float): Height per data row in points (must match PDF table)
         plot_width_in (float): Fixed plot width in inches
+        uniform_height (bool): If True, all plots have same height (max across processes)
+        y_range (tuple, optional): (y_min, y_max) for Y-axis limits (shared across all plots).
+            Derived from process config domains (e.g. x_domain, output range).
 
     Returns:
         dict: {(scenario_idx, process_name): plot_path} mapping
@@ -1081,28 +1094,48 @@ def generate_process_evolution_plots(training_progression, controllable_info,
             # Height: use max_n_rows for uniform height, or n_rows for adaptive
             h_rows = max_n_rows if uniform_height else n_rows
             tbl_h_pt = 13 + h_rows * row_height_pt
-            fig_h_in = tbl_h_pt / 72.0  # convert pt to inches
-            fig_h_in = max(fig_h_in, 0.8)  # minimum height
+            fig_h_in = tbl_h_pt / 72.0
+            fig_h_in = max(fig_h_in, 0.8)
             fig, ax = plt.subplots(figsize=(plot_width_in, fig_h_in))
 
-            # Plot controllable inputs (solid)
+            # Plot controllable inputs (solid, thin)
             for ci in ctrl_indices:
                 lbl = input_labels[ci] if ci < len(input_labels) else f"X_{ci}"
-                ax.plot(epochs, ctrl_series[ci], label=lbl, linewidth=1.0)
+                ax.plot(epochs, ctrl_series[ci], label=lbl, linewidth=0.8)
 
-            # Plot outputs (dashed, thicker)
+            # Plot outputs (dashed)
             for oi in range(len(output_labels)):
                 lbl = output_labels[oi]
-                ax.plot(epochs, out_series[oi], label=lbl, linewidth=1.2,
+                ax.plot(epochs, out_series[oi], label=lbl, linewidth=0.9,
                         linestyle='--')
 
-            ax.set_xlabel('epoch', fontsize=6)
-            ax.tick_params(axis='both', labelsize=6)
-            ax.legend(loc='upper right', fontsize=5.5,
-                      ncol=min(n_lines, 3), handlelength=1.2,
-                      columnspacing=0.8, borderpad=0.3)
+            # Y-axis: shared range, ticks at min, 0, max only
+            if y_range is not None:
+                y_lo, y_hi = y_range
+                ax.set_ylim(y_lo, y_hi)
+                ax.set_yticks([y_lo, 0, y_hi])
+                ax.yaxis.set_major_formatter(plt.FuncFormatter(
+                    lambda v, _: f'{v:.1f}'))
 
-            plt.tight_layout(pad=0.4)
+            # Minimal grid: only horizontal lines at yticks
+            ax.grid(True, axis='y', linewidth=0.3, alpha=0.5)
+            ax.grid(False, axis='x')
+
+            # Thin axes, small fonts
+            ax.spines['left'].set_linewidth(0.3)
+            ax.spines['bottom'].set_linewidth(0.3)
+            ax.tick_params(axis='both', labelsize=5, width=0.3, length=2)
+            ax.set_xlabel('epoch', fontsize=5)
+
+            # Legend: small squares, compact
+            ax.legend(loc='upper right', fontsize=4.5,
+                      ncol=min(n_lines, 3),
+                      handlelength=0.8, handleheight=0.8,
+                      columnspacing=0.5, borderpad=0.2,
+                      labelspacing=0.3,
+                      handler_map={plt.Line2D: _SquareHandler()})
+
+            plt.tight_layout(pad=0.3)
 
             fname = f'evolution_sc{scenario_idx}_{proc_name}.png'
             fpath = checkpoint_dir / fname
