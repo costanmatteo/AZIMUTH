@@ -902,11 +902,7 @@ def _page1(d):
                         Paragraph(f"output (\u0394bl {d_bl:+.4f})", ST_NOTE),
                     ])
 
-                # Pad with empty rows to match max_data_rows (uniform table height)
                 n_data_rows = len(proc_rows) - 1  # minus header
-                empty_cell = Paragraph("", ST_TRAJ_C)
-                for _ in range(max_data_rows - n_data_rows):
-                    proc_rows.append([empty_cell] * len(proc_hdr))
 
                 data_tbl = Table(proc_rows, colWidths=data_cws)
                 data_tbl.setStyle(TableStyle([
@@ -947,9 +943,8 @@ def _page1(d):
                     ('BOTTOMPADDING',(0, 0), (-1, -1), 0),
                 ]))
                 F.append(side_tbl)
-                F.append(Spacer(1, 4))
 
-            F.append(Spacer(1, 4))
+            F.append(Spacer(1, 2))
 
         # Footer legend
         foot_p = Paragraph(
