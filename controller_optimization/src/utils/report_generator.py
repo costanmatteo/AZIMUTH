@@ -947,9 +947,6 @@ def _page1(d):
                     ('BOTTOMPADDING',(0, 0), (-1, -1), 0),
                 ]))
                 F.append(side_tbl)
-                F.append(Spacer(1, 4))
-
-            F.append(Spacer(1, 4))
 
         # Footer legend
         foot_p = Paragraph(
