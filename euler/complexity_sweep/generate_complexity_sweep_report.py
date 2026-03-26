@@ -64,10 +64,12 @@ def load_run_results(run_dir: Path) -> dict | None:
             'F_star_train':      data.get('train', {}).get('F_star'),
             'F_baseline_train':  data.get('train', {}).get('F_baseline_mean'),
             'F_actual_train':    data.get('train', {}).get('F_actual_mean'),
+            'F_formula_train':   data.get('train', {}).get('F_formula_mean'),
             # test
             'F_star_test':       data.get('test', {}).get('F_star'),
             'F_baseline_test':   data.get('test', {}).get('F_baseline_mean'),
             'F_actual_test':     data.get('test', {}).get('F_actual_mean'),
+            'F_formula_test':    data.get('test', {}).get('F_formula_mean'),
         }
     except Exception as e:
         print(f"  Warning: could not load {results_file}: {e}")
@@ -1068,6 +1070,7 @@ def build_page3_html(win_df: pd.DataFrame, now: datetime, sweep_dir: str,
         <td>{_fmt(gap_ct_te_mean)}</td>
         <td>{_fmt(gap_d_tr_mean)}</td>
         <td>{_fmt(gap_d_te_mean)}</td>
+        <td></td><td></td><td></td><td></td>
       </tr>"""
 
         # ── Individual seed-pair rows ──
@@ -1077,6 +1080,7 @@ def build_page3_html(win_df: pd.DataFrame, now: datetime, sweep_dir: str,
                 win_cls = 'dg' if run['win'] else 'dr'
                 nproc_td_run = (f'<td></td>' if has_nproc else '')
                 seed_label = f"s<sub>t</sub>={int(run['seed_target'])}&nbsp;s<sub>b</sub>={int(run['seed_baseline'])}"
+                f_formula_test = run.get('F_formula_test')
                 rows_html += f"""
       <tr style="color:#666; font-size:6.5px;">
         <td colspan="3" style="text-align:left; padding-left:12px;">{seed_label}</td>
@@ -1089,6 +1093,10 @@ def build_page3_html(win_df: pd.DataFrame, now: datetime, sweep_dir: str,
         <td>{_fmt(run['gap_ctrl_test'])}</td>
         <td>{_fmt(run['gap_delta_train'])}</td>
         <td>{_fmt(run['gap_delta_test'])}</td>
+        <td>{_fmt(run['F_star_test'])}</td>
+        <td>{_fmt(run['F_baseline_test'])}</td>
+        <td>{_fmt(run['F_actual_test'])}</td>
+        <td>{_fmt(f_formula_test)}</td>
       </tr>"""
 
     n_total = len(df_detail) if df_detail is not None else 0
@@ -1124,6 +1132,10 @@ def build_page3_html(win_df: pd.DataFrame, now: datetime, sweep_dir: str,
         <th>Gap ctrl test<span class="def">|F*&#8722;F|</span></th>
         <th>Gap &#916; train<span class="def">g<sub>bl</sub>&#8722;g<sub>ctrl</sub></span></th>
         <th>Gap &#916; test<span class="def">g<sub>bl</sub>&#8722;g<sub>ctrl</sub></span></th>
+        <th>F*</th>
+        <th>F&prime;<span class="def">baseline</span></th>
+        <th>F<span class="def">surrogate</span></th>
+        <th>F<span class="def">formula</span></th>
       </tr>
     </thead>
     <tbody>
