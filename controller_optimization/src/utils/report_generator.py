@@ -451,16 +451,20 @@ def _page1(d):
     status_st  = ST_STATUS_G if completed else ST_STATUS_A
     status_col = C_GREEN     if completed else C_AMBER
 
-    improv_pct = (fact_v - fbl_v) / abs(fbl_v) * 100 if fbl_v else 0.0
-    gap_pct    = (1 - fact_v / fstar_v) * 100 if fstar_v else 0.0
-
-    # Formula-based metrics (only when CasualiT surrogate is used)
+    # When formula is available (CasualiT mode): primary metrics use formula F,
+    # sub-rows "■ surrogate" show the CasualiT values.
+    # When formula is NOT available: primary metrics use surrogate F directly.
     if fform_v is not None:
-        improv_form_pct = (fform_v - fbl_v) / abs(fbl_v) * 100 if fbl_v else 0.0
-        gap_form_pct    = (1 - fform_v / fstar_v) * 100 if fstar_v else 0.0
+        # Primary = formula, secondary = surrogate (CasualiT)
+        improv_pct = (fform_v - fbl_v) / abs(fbl_v) * 100 if fbl_v else 0.0
+        gap_pct    = (1 - fform_v / fstar_v) * 100 if fstar_v else 0.0
+        improv_surr_pct = (fact_v - fbl_v) / abs(fbl_v) * 100 if fbl_v else 0.0
+        gap_surr_pct    = (1 - fact_v / fstar_v) * 100 if fstar_v else 0.0
     else:
-        improv_form_pct = 0.0
-        gap_form_pct = 0.0
+        improv_pct = (fact_v - fbl_v) / abs(fbl_v) * 100 if fbl_v else 0.0
+        gap_pct    = (1 - fact_v / fstar_v) * 100 if fstar_v else 0.0
+        improv_surr_pct = 0.0
+        gap_surr_pct = 0.0
     best_loss  = _last(hist.get('best_total_loss',  hist.get('best_loss',  0.0)))
     final_loss = _last(hist.get('final_total_loss', hist.get('total_loss', 0.0)))
     rob_std    = fact_s if fact_s is not None else _last(fm.get('robustness_std', 0.0))
@@ -589,15 +593,15 @@ def _page1(d):
                 ("Improvement vs baseline",  f"{improv_pct:+.2f}%",
                  ST_VAL_G if improv_pct >= 0 else ST_VAL_R),
             ] + ([
-                ("\u2514 formula",
-                 f"{improv_form_pct:+.2f}%",
-                 ST_VAL_FORM_G if improv_form_pct >= 0 else ST_VAL_FORM_R,
+                ("\u2514 surrogate",
+                 f"{improv_surr_pct:+.2f}%",
+                 ST_VAL_FORM_G if improv_surr_pct >= 0 else ST_VAL_FORM_R,
                  ST_KEY_FORM),
             ] if fform_v is not None else []) + [
                 ("Gap from target",          f"{gap_pct:.2f}%", ST_VAL_R),
             ] + ([
-                ("\u2514 formula",
-                 f"{gap_form_pct:.2f}%",
+                ("\u2514 surrogate",
+                 f"{gap_surr_pct:.2f}%",
                  ST_VAL_FORM_R,
                  ST_KEY_FORM),
             ] if fform_v is not None else []) + [
