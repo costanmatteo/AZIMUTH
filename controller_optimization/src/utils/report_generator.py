@@ -781,20 +781,18 @@ def _page1(d):
     F.append(kv_table(intra_rows, TW * 0.5, key_frac=0.42))
     F.append(Spacer(1, 7))
 
-    # ── 04 — trajectory comparison (all scenarios on same page, best run) ───
+    # ── 04 — trajectory comparison (all scenarios, best run, controllable inputs) ──
     traj_list = d.get('trajectory_values_list', [])
     if not traj_list and traj:
-        traj_list = [traj]  # Backward compatibility: wrap single dict in list
+        traj_list = [traj]
 
-    def _extract(tr_dict, proc, key='outputs'):
-        """Extract values from trajectory dict, preferring outputs_mean for controller."""
-        v = tr_dict.get(proc, {})
-        arr = v.get(key, v.get('outputs_mean', v.get('outputs', v.get('inputs', []))))
+    def _to_np(arr):
+        """Convert tensor or array to numpy, return first sample."""
         if hasattr(arr, 'detach'):
             arr = arr.detach().cpu().numpy()
         if hasattr(arr, '__len__') and len(arr) > 0:
             return arr[0]
-        return [0.0]
+        return arr
 
     if traj_list:
         F += _footer(d, 1, 3)
@@ -803,6 +801,7 @@ def _page1(d):
 
         for traj_i_idx, traj_i in enumerate(traj_list):
             sc_idx = traj_i.get('scenario_idx', traj_i_idx)
+            ctrl_info = traj_i.get('controllable_info', {})
 
             # Scenario sub-header with F values
             tf_s  = traj_i.get('F_star',     fstar_v)
@@ -821,59 +820,90 @@ def _page1(d):
             b_traj  = traj_i.get('baseline_trajectory', {})
             a_traj  = traj_i.get('actual_trajectory', {})
 
+            # Table: Process | Variable | Target | Controller | Δ
             traj_hdr = [Paragraph(h, ST_TRAJ_H) for h in
-                        ["Step", "Target Y*", "Baseline Y\u2019",
-                         "Controller Y", "\u0394 baseline", "\u0394 controller", "Note"]]
-            cws_t = [r * TW for r in [0.07, 0.11, 0.12, 0.12, 0.11, 0.11, 0.36]]
+                        ["Process", "Variable", "Target", "Controller",
+                         "\u0394", ""]]
+            cws_t = [r * TW for r in [0.10, 0.18, 0.14, 0.14, 0.14, 0.30]]
             traj_rows = [traj_hdr]
 
-            for proc in p_names:
-                t_out = _extract(t_traj, proc, 'outputs')
-                b_out = _extract(b_traj, proc, 'outputs')
-                a_out = _extract(a_traj, proc, 'outputs_mean')
+            for proc_idx, proc in enumerate(p_names):
+                p_info = ctrl_info.get(proc, {})
+                input_labels = p_info.get('input_labels', [])
+                output_labels = p_info.get('output_labels', [])
+                ctrl_labels = set(p_info.get('controllable_labels', []))
+                ctrl_indices = p_info.get('controllable_indices', [])
 
-                t_v = float(t_out[0]) if hasattr(t_out, '__len__') and len(t_out) else float(t_out)
-                b_v = float(b_out[0]) if hasattr(b_out, '__len__') and len(b_out) else float(b_out)
-                a_v = float(a_out[0]) if hasattr(a_out, '__len__') and len(a_out) else float(a_out)
+                # Get raw arrays
+                t_inputs = _to_np(t_traj.get(proc, {}).get('inputs', []))
+                a_inputs = _to_np(a_traj.get(proc, {}).get('inputs', []))
+                t_outputs = _to_np(t_traj.get(proc, {}).get('outputs', []))
+                b_outputs = _to_np(b_traj.get(proc, {}).get('outputs', []))
+                a_outputs_raw = a_traj.get(proc, {})
+                a_outputs = _to_np(a_outputs_raw.get('outputs_mean',
+                                   a_outputs_raw.get('outputs', [])))
 
-                # Δ baseline = baseline_output - target_output (gap without controller)
-                d_base = b_v - t_v
-                # Δ controller = controller_output - target_output (remaining gap)
-                d_actual = a_v - t_v
-                closer = abs(a_v - t_v) < abs(b_v - t_v)
-                note = "improved \u2191" if closer else "not improved"
-                if abs(b_v - t_v) < 1e-6:
-                    note = "baseline \u2248 target"
+                # Controllable input rows (skip process 0 — inputs fixed from target)
+                if proc_idx > 0 and ctrl_indices:
+                    for ci in ctrl_indices:
+                        lbl = input_labels[ci] if ci < len(input_labels) else f"input_{ci}"
+                        t_v = float(t_inputs[ci]) if hasattr(t_inputs, '__len__') and ci < len(t_inputs) else 0.0
+                        a_v = float(a_inputs[ci]) if hasattr(a_inputs, '__len__') and ci < len(a_inputs) else 0.0
+                        delta = a_v - t_v
+                        traj_rows.append([
+                            Paragraph(proc if ci == ctrl_indices[0] else "",  ST_TRAJ_C),
+                            Paragraph(lbl,              ST_TRAJ_C),
+                            Paragraph(f"{t_v:.4f}",     ST_TRAJ_C),
+                            Paragraph(f"{a_v:.4f}",     ST_TRAJ_C),
+                            Paragraph(f"{delta:+.4f}",  ST_TRAJ_C),
+                            Paragraph("input",          ST_NOTE),
+                        ])
 
-                traj_rows.append([
-                    Paragraph(proc,              ST_TRAJ_C),
-                    Paragraph(f"{t_v:.4f}",      ST_TRAJ_C),
-                    Paragraph(f"{b_v:.4f}",      ST_TRAJ_C),
-                    Paragraph(f"{a_v:.4f}",      ST_TRAJ_C),
-                    Paragraph(f"{d_base:+.4f}",  ST_TRAJ_C),
-                    Paragraph(f"{d_actual:+.4f}", ST_TRAJ_G if closer else ST_TRAJ_R),
-                    Paragraph(note,              ST_NOTE),
-                ])
+                # Output row (always show — this is what F depends on)
+                for oi, olbl in enumerate(output_labels):
+                    t_v = float(t_outputs[oi]) if hasattr(t_outputs, '__len__') and oi < len(t_outputs) else 0.0
+                    b_v = float(b_outputs[oi]) if hasattr(b_outputs, '__len__') and oi < len(b_outputs) else 0.0
+                    a_v = float(a_outputs[oi]) if hasattr(a_outputs, '__len__') and oi < len(a_outputs) else 0.0
+                    d_bl = b_v - t_v
+                    d_ctrl = a_v - t_v
+                    closer = abs(a_v - t_v) < abs(b_v - t_v)
+                    # Show process name only if no controllable input rows above
+                    show_proc = proc if (proc_idx == 0 or not ctrl_indices) else ""
+                    traj_rows.append([
+                        Paragraph(show_proc,         ST_TRAJ_C),
+                        Paragraph(olbl,              ST_TRAJ_C),
+                        Paragraph(f"{t_v:.4f}",      ST_TRAJ_C),
+                        Paragraph(f"{a_v:.4f}",      ST_TRAJ_C),
+                        Paragraph(f"{d_ctrl:+.4f}",  ST_TRAJ_G if closer else ST_TRAJ_R),
+                        Paragraph(f"output (\u0394bl {d_bl:+.4f})"
+                                  + (" \u2191" if closer else ""),
+                                  ST_NOTE_G if closer else ST_NOTE),
+                    ])
 
             traj_tbl = Table(traj_rows, colWidths=cws_t)
-            traj_tbl.setStyle(TableStyle([
+            # Style: line after header, light lines between rows, thicker between processes
+            style_cmds = [
                 ('LINEBELOW',     (0, 0), (-1,  0), 0.5, C_BLACK),
-                ('LINEBELOW',     (0, 1), (-1, -1), 0.4, C_LGRAY),
                 ('TOPPADDING',    (0, 0), (-1, -1), 1.5),
                 ('BOTTOMPADDING', (0, 0), (-1, -1), 1.5),
                 ('LEFTPADDING',   (0, 0), (-1, -1), 3),
                 ('RIGHTPADDING',  (0, 0), (-1, -1), 3),
                 ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
-            ]))
+            ]
+            # Add light lines between data rows
+            for row_idx in range(1, len(traj_rows)):
+                style_cmds.append(
+                    ('LINEBELOW', (0, row_idx), (-1, row_idx), 0.3, C_LGRAY))
+            traj_tbl.setStyle(TableStyle(style_cmds))
             F.append(traj_tbl)
             F.append(Spacer(1, 6))
 
-        # Footer legend (once, after all scenarios)
+        # Footer legend
         foot_l = Paragraph(
-            "\u0394 baseline = Y\u2019 \u2212 Y*  \u00b7  "
-            "\u0394 controller = Y \u2212 Y*  \u00b7  "
-            "best run from 10 candidates per scenario", ST_NOTE)
-        foot_r = Paragraph("\u2191 = closer to target than baseline", ST_NOTE_G)
+            "\u0394 = controller \u2212 target  \u00b7  "
+            "\u0394bl = baseline output \u2212 target output  \u00b7  "
+            "best of 10 runs per scenario", ST_NOTE)
+        foot_r = Paragraph("\u2191 = controller closer to target than baseline", ST_NOTE_G)
         foot_t = Table([[foot_l, foot_r]], colWidths=[TW * 0.65, TW * 0.35])
         foot_t.setStyle(TableStyle([
             ('LEFTPADDING',   (0, 0), (-1, -1), 0),

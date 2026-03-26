@@ -749,6 +749,19 @@ def main(config=None):
     print("\n[7a.5/9] Preparing trajectory values for PDF report (best run per scenario)...")
     print("-"*70)
 
+    # Build controllable info for report
+    from configs.processes_config import get_controllable_inputs
+    controllable_info_for_report = {}
+    for proc_cfg in selected_processes:
+        pname = proc_cfg['name']
+        ctrl = get_controllable_inputs(proc_cfg)
+        controllable_info_for_report[pname] = {
+            'input_labels': proc_cfg['input_labels'],
+            'output_labels': proc_cfg['output_labels'],
+            'controllable_labels': ctrl,
+            'controllable_indices': [i for i, l in enumerate(proc_cfg['input_labels']) if l in ctrl],
+        }
+
     n_best_runs = 10  # Number of candidate runs per scenario to find best
     trajectory_values_for_report_list = []
 
@@ -788,6 +801,7 @@ def main(config=None):
                 'actual_trajectory': best_trajectory,
                 'scenario_idx': scenario_idx,
                 'process_names': process_chain.process_names,
+                'controllable_info': controllable_info_for_report,
                 'F_star': F_star_value,
                 'F_baseline': F_baseline_sc,
                 'F_actual': best_F,
