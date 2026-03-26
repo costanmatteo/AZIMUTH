@@ -358,20 +358,23 @@ def plot_process_improvements(process_metrics, save_path=None):
     plt.close()
 
 
-def plot_target_vs_actual_scatter(F_star_per_scenario, F_baseline_per_scenario, F_actual_per_scenario, save_path=None):
+def plot_target_vs_actual_scatter(F_star_per_scenario, F_baseline_per_scenario, F_actual_per_scenario,
+                                  F_formula_per_scenario=None, save_path=None):
     """
-    Scatter plot: F_star (target) vs F_baseline and F_actual.
+    Scatter plot: Baseline vs Controller reliability.
 
     Y-axis: F_star (target reliability)
-    X-axis: F_baseline (red) and F_actual (blue)
-    Shows how well both baseline and controller match the target.
+    X-axis: F values (baseline red, controller blue)
 
-    Works with both single and multiple scenarios.
+    When F_formula_per_scenario is provided, adds hollow blue circles
+    showing the ProT formula-based F estimate alongside the solid
+    surrogate-based controller dots.
 
     Args:
         F_star_per_scenario (array-like): Target reliability for each scenario
         F_baseline_per_scenario (array-like): Baseline reliability for each scenario
-        F_actual_per_scenario (array-like): Actual reliability for each scenario
+        F_actual_per_scenario (array-like): Controller reliability (surrogate) for each scenario
+        F_formula_per_scenario (array-like, optional): Controller reliability (ProT formula)
         save_path (str): Path to save figure
     """
     apply_plot_style()
@@ -383,8 +386,7 @@ def plot_target_vs_actual_scatter(F_star_per_scenario, F_baseline_per_scenario, 
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
 
-    # Scatter plots
-    # Baseline points (red)
+    # Baseline points (red squares)
     ax.scatter(F_baseline_arr, F_star_arr,
                c='red',
                s=120,
@@ -392,20 +394,40 @@ def plot_target_vs_actual_scatter(F_star_per_scenario, F_baseline_per_scenario, 
                edgecolors='darkred',
                linewidths=2,
                label='Baseline (no controller)',
-               marker='s')  # square
+               marker='s')
 
-    # Actual points (blue)
+    # Controller points — surrogate F (solid blue circles)
     ax.scatter(F_actual_arr, F_star_arr,
                c='blue',
                s=120,
                alpha=0.6,
                edgecolors='darkblue',
                linewidths=2,
-               label='Controller',
-               marker='o')  # circle
+               label='Controller (surrogate)',
+               marker='o')
+
+    # Controller points — ProT formula F (hollow blue circles)
+    if F_formula_per_scenario is not None:
+        F_formula_arr = np.atleast_1d(F_formula_per_scenario)
+        # Match F_star length to F_formula length (may differ if per_sample)
+        if len(F_formula_arr) == len(F_star_arr):
+            F_star_for_formula = F_star_arr
+        else:
+            F_star_for_formula = np.full_like(F_formula_arr, F_star_arr[0])
+        ax.scatter(F_formula_arr, F_star_for_formula,
+                   facecolors='none',
+                   s=100,
+                   alpha=0.7,
+                   edgecolors='blue',
+                   linewidths=1.5,
+                   label='Controller (ProT formula)',
+                   marker='o')
 
     # Diagonal line (perfect match)
-    all_values = np.concatenate([F_star_arr, F_baseline_arr, F_actual_arr])
+    all_values_list = [F_star_arr, F_baseline_arr, F_actual_arr]
+    if F_formula_per_scenario is not None:
+        all_values_list.append(np.atleast_1d(F_formula_per_scenario))
+    all_values = np.concatenate(all_values_list)
     min_val = all_values.min()
     max_val = all_values.max()
     margin = (max_val - min_val) * 0.1
@@ -414,20 +436,17 @@ def plot_target_vs_actual_scatter(F_star_per_scenario, F_baseline_per_scenario, 
             [min_val - margin, max_val + margin],
             'k--', linewidth=2, label='Perfect Match (y = x)', alpha=0.5)
 
-    # Axis labels and title
     ax.set_xlabel('F (Reliability)')
     ax.set_ylabel('F_star (Target Reliability)')
     ax.set_title('Baseline vs Controller Reliability')
 
-    # Grid and legend
     ax.grid(True, alpha=0.3)
     ax.legend(loc='lower right', fontsize=11, framealpha=0.9)
 
-    # Set limits with margin
     ax.set_xlim(min_val - margin, max_val + margin)
     ax.set_ylim(min_val - margin, max_val + margin)
 
-    # Add statistics annotation
+    # Statistics annotation (uses surrogate F)
     n_scenarios = len(F_star_arr)
     gap_baseline = np.mean(F_star_arr - F_baseline_arr)
     gap_actual = np.mean(F_star_arr - F_actual_arr)

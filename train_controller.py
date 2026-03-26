@@ -715,41 +715,37 @@ def main(config=None):
 
     print(f"  Total baseline samples: {len(F_baseline_array)}")
 
-    # Aggregate final metrics — use FORMULA-based F for report
-    # (analytical formula is the ground truth for reliability)
-    F_formula_baseline_mean = np.mean(F_formula_baseline_array) if F_formula_baseline_array is not None else F_baseline_mean
-    F_formula_baseline_std = np.std(F_formula_baseline_array) if F_formula_baseline_array is not None else F_baseline_std
+    # Aggregate final metrics — surrogate F is primary (CasualiT when used)
+    # Formula (ProT) F is shown as secondary reference
+    F_formula_baseline_mean = np.mean(F_formula_baseline_array) if F_formula_baseline_array is not None else None
+    F_formula_baseline_std = np.std(F_formula_baseline_array) if F_formula_baseline_array is not None else None
 
-    # Report uses formula F as primary
-    report_F_actual_mean = F_formula_mean if F_formula_mean is not None else F_actual_mean
-    report_F_actual_std = F_formula_std if F_formula_std is not None else F_actual_std
-    report_F_baseline_mean = F_formula_baseline_mean
-    report_F_baseline_std = F_formula_baseline_std
-
-    improvement = (report_F_actual_mean - report_F_baseline_mean) / abs(report_F_baseline_mean) * 100 if report_F_baseline_mean != 0 else 0
-    target_gap = abs(F_star_mean - report_F_actual_mean) / F_star_mean * 100 if F_star_mean != 0 else 0
+    improvement = (F_actual_mean - F_baseline_mean) / abs(F_baseline_mean) * 100 if F_baseline_mean != 0 else 0
+    target_gap = abs(F_star_mean - F_actual_mean) / F_star_mean * 100 if F_star_mean != 0 else 0
 
     # Print summary
     print("\n" + "="*70)
-    print("FINAL RESULTS - FORMULA F (ANALYTICAL)")
+    print("FINAL RESULTS")
     print("="*70)
     print(f"Number of scenarios:           {n_scenarios}")
     print(f"Samples per scenario:          {eval_batch_size}")
     print(f"Total samples:                 {len(F_actual_per_sample)}")
     print(f"\nF* (target, optimal):          {F_star_value:.6f}")
     print(f"\nF' (baseline, no controller):")
-    print(f"  Mean:  {report_F_baseline_mean:.6f} ± {report_F_baseline_std:.6f}")
-    print(f"\nF  (controller, formula):")
-    print(f"  Mean:  {report_F_actual_mean:.6f} ± {report_F_actual_std:.6f}")
-    if F_formula_per_sample is not None:
+    print(f"  Mean:  {F_baseline_mean:.6f} ± {F_baseline_std:.6f}")
+    print(f"\nF  (controller, surrogate):")
+    print(f"  Mean:  {F_actual_mean:.6f} ± {F_actual_std:.6f}")
+    print(f"  Range: [{F_actual_per_sample.min():.6f}, {F_actual_per_sample.max():.6f}]")
+    if F_formula_mean is not None:
+        print(f"\nF  (controller, ProT formula):")
+        print(f"  Mean:  {F_formula_mean:.6f} ± {F_formula_std:.6f}")
         print(f"  Range: [{F_formula_per_sample.min():.6f}, {F_formula_per_sample.max():.6f}]")
-    if isinstance(surrogate, CasualiTSurrogate):
-        print(f"\nF  (surrogate, CasualiT):")
-        print(f"  Mean:  {F_actual_mean:.6f} ± {F_actual_std:.6f}")
-        print(f"  Range: [{F_actual_per_sample.min():.6f}, {F_actual_per_sample.max():.6f}]")
+    if F_formula_baseline_mean is not None:
+        print(f"\nF' (baseline, ProT formula):")
+        print(f"  Mean:  {F_formula_baseline_mean:.6f} ± {F_formula_baseline_std:.6f}")
     print(f"\nImprovement over baseline:     {improvement:+.2f}%")
     print(f"Gap from optimal:              {target_gap:.2f}%")
-    print(f"Robustness (std of F):         {report_F_actual_std:.6f}  (lower = more robust)")
+    print(f"Robustness (std of F):         {F_actual_std:.6f}  (lower = more robust)")
     print("="*70)
 
     # 7a.5. Prepare trajectory values for PDF report
@@ -871,24 +867,22 @@ def main(config=None):
     F_baseline_test_mean = np.mean(F_baseline_test_array)
     F_actual_test_mean = np.mean(F_actual_test_array)
 
-    # Use formula F for test metrics (if available)
+    improvement_test = (F_actual_test_mean - F_baseline_test_mean) / abs(F_baseline_test_mean) * 100 if F_baseline_test_mean != 0 else 0
+
+    # Formula test means (always available since formula_surrogate is always set)
     F_formula_actual_test_mean = None
     F_formula_baseline_test_mean = None
     if formula_surrogate is not None and F_formula_actual_test_values:
         F_formula_actual_test_mean = float(np.mean(F_formula_actual_test_values))
         F_formula_baseline_test_mean = float(np.mean(F_formula_baseline_test_values))
 
-    report_test_actual = F_formula_actual_test_mean if F_formula_actual_test_mean is not None else F_actual_test_mean
-    report_test_baseline = F_formula_baseline_test_mean if F_formula_baseline_test_mean is not None else F_baseline_test_mean
-    improvement_test = (report_test_actual - report_test_baseline) / abs(report_test_baseline) * 100 if report_test_baseline != 0 else 0
-
-    print(f"\nTest Results (formula F):")
+    print(f"\nTest Results:")
     print(f"  F* (test):        {F_star_value:.6f}")
-    print(f"  F' (test):        {report_test_baseline:.6f}")
-    print(f"  F  (test):        {report_test_actual:.6f}")
-    if isinstance(surrogate, CasualiTSurrogate):
-        print(f"  F  (surrogate test): {F_actual_test_mean:.6f}")
-        print(f"  F' (surrogate test): {F_baseline_test_mean:.6f}")
+    print(f"  F' (test):        {F_baseline_test_mean:.6f}")
+    print(f"  F  (test):        {F_actual_test_mean:.6f}")
+    if F_formula_actual_test_mean is not None:
+        print(f"  F  (ProT test):   {F_formula_actual_test_mean:.6f}")
+        print(f"  F' (ProT test):   {F_formula_baseline_test_mean:.6f}")
     print(f"  Improvement:      {improvement_test:+.2f}%")
 
     # 7c. Compute advanced metrics
@@ -1147,19 +1141,23 @@ def main(config=None):
         # 8a. Generate NEW advanced plots
         print("\n  Generating advanced plots...")
 
-        # Scatter plot: Baseline vs Controller (train) - uses formula F
+        # Scatter plot: Baseline vs Controller (train)
+        # Solid blue = surrogate F, hollow blue = ProT formula F
         plot_target_vs_actual_scatter(
             F_star_per_scenario=F_star_array,
-            F_baseline_per_scenario=F_formula_baseline_array if F_formula_baseline_array is not None else F_baseline_array,
-            F_actual_per_scenario=F_formula_per_sample if F_formula_per_sample is not None else F_actual_per_sample,
+            F_baseline_per_scenario=F_baseline_array,
+            F_actual_per_scenario=F_actual_per_sample,
+            F_formula_per_scenario=F_formula_per_sample,
             save_path=str(checkpoint_dir / 'baseline_vs_controller_train.png')
         )
 
-        # Scatter plot: Baseline vs Controller (test) - uses formula F
+        # Scatter plot: Baseline vs Controller (test)
+        F_formula_actual_test_arr = np.array(F_formula_actual_test_values) if F_formula_actual_test_values else None
         plot_target_vs_actual_scatter(
             F_star_per_scenario=F_star_test_array,
-            F_baseline_per_scenario=F_formula_baseline_test_array if F_formula_baseline_test_values else F_baseline_test_array,
-            F_actual_per_scenario=F_formula_actual_test_array if F_formula_actual_test_values else F_actual_test_array,
+            F_baseline_per_scenario=F_baseline_test_array,
+            F_actual_per_scenario=F_actual_test_array,
+            F_formula_per_scenario=F_formula_actual_test_arr,
             save_path=str(checkpoint_dir / 'baseline_vs_controller_test.png')
         )
 
@@ -1197,19 +1195,19 @@ def main(config=None):
         # F* is a single scalar
         F_star_dict = float(F_star_value)
 
-        # Report uses formula F (analytical) as primary metrics
+        # Report uses surrogate F as primary (CasualiT when configured)
         F_baseline_dict = {
-            'mean': float(report_F_baseline_mean),
-            'std': float(report_F_baseline_std),
-            'min': float(F_formula_baseline_array.min()) if F_formula_baseline_array is not None else float(F_baseline_array.min()),
-            'max': float(F_formula_baseline_array.max()) if F_formula_baseline_array is not None else float(F_baseline_array.max())
+            'mean': float(F_baseline_mean),
+            'std': float(F_baseline_std),
+            'min': float(F_baseline_array.min()),
+            'max': float(F_baseline_array.max())
         }
 
         F_actual_dict = {
-            'mean': float(report_F_actual_mean),
-            'std': float(report_F_actual_std),
-            'min': float(F_formula_per_sample.min()) if F_formula_per_sample is not None else float(F_actual_per_sample.min()),
-            'max': float(F_formula_per_sample.max()) if F_formula_per_sample is not None else float(F_actual_per_sample.max())
+            'mean': float(F_actual_mean),
+            'std': float(F_actual_std),
+            'min': float(F_actual_per_sample.min()),
+            'max': float(F_actual_per_sample.max())
         }
 
         # F_formula dict (only when using CasualiT surrogate)
