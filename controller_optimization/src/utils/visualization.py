@@ -985,7 +985,8 @@ def plot_loss_chart(history, save_path=None):
 
 def generate_process_evolution_plots(training_progression, controllable_info,
                                      checkpoint_dir, n_scenarios=1,
-                                     row_height_pt=14, plot_width_in=3.5):
+                                     row_height_pt=14, plot_width_in=3.5,
+                                     uniform_height=True):
     """
     Generate per-process evolution plots showing controllable inputs and outputs
     across training epochs, for each scenario.
@@ -1022,6 +1023,16 @@ def generate_process_evolution_plots(training_progression, controllable_info,
         return plot_paths
 
     epochs = [s['epoch'] for s in training_progression]
+
+    # Pre-compute max n_rows across all processes for uniform height
+    max_n_rows = 0
+    if uniform_height:
+        for proc_idx, proc_name in enumerate(proc_names):
+            p_info = controllable_info.get(proc_name, {})
+            ctrl_idx = p_info.get('controllable_indices', [])
+            out_lbls = p_info.get('output_labels', [])
+            nr = (len(ctrl_idx) if proc_idx > 0 else 0) + len(out_lbls)
+            max_n_rows = max(max_n_rows, nr)
 
     for scenario_idx in range(n_scenarios):
         for proc_idx, proc_name in enumerate(proc_names):
@@ -1067,8 +1078,9 @@ def generate_process_evolution_plots(training_progression, controllable_info,
             if n_lines == 0:
                 continue
 
-            # Height matches the table: header (13pt) + n_rows * row_height_pt
-            tbl_h_pt = 13 + n_rows * row_height_pt
+            # Height: use max_n_rows for uniform height, or n_rows for adaptive
+            h_rows = max_n_rows if uniform_height else n_rows
+            tbl_h_pt = 13 + h_rows * row_height_pt
             fig_h_in = tbl_h_pt / 72.0  # convert pt to inches
             fig_h_in = max(fig_h_in, 0.8)  # minimum height
             fig, ax = plt.subplots(figsize=(plot_width_in, fig_h_in))

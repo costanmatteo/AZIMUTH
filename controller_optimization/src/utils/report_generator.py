@@ -827,6 +827,16 @@ def _page1(d):
             b_traj  = traj_i.get('baseline_trajectory', {})
             a_traj  = traj_i.get('actual_trajectory', {})
 
+            # Pre-compute max data rows across processes for uniform plot height
+            max_data_rows = 0
+            for pi, pn in enumerate(p_names):
+                pi_info = ctrl_info.get(pn, {})
+                ci = pi_info.get('controllable_indices', [])
+                ol = pi_info.get('output_labels', [])
+                nr = (len(ci) if pi > 0 else 0) + len(ol)
+                max_data_rows = max(max_data_rows, nr)
+            uniform_tbl_h = 13 + max_data_rows * 14
+
             # Build one row per process: [data_subtable | evolution_plot]
             for proc_idx, proc in enumerate(p_names):
                 p_info = ctrl_info.get(proc, {})
@@ -893,11 +903,9 @@ def _page1(d):
                 evo_key = (sc_idx, proc)
                 evo_path = evo_paths.get(evo_key)
 
-                # Image width = right column width, height = table height
-                # Must match the formula used in generate_process_evolution_plots
-                n_data_rows = len(proc_rows) - 1  # minus header
-                tbl_h = 13 + n_data_rows * 14  # same as plot generation
+                # Image width = right column, height = uniform across all processes
                 img_w = plot_w - 4
+                tbl_h = uniform_tbl_h
 
                 if evo_path and os.path.exists(evo_path):
                     from reportlab.platypus import Image as RLImage
