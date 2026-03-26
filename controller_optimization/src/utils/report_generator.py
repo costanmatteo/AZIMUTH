@@ -781,7 +781,7 @@ def _page1(d):
     F.append(kv_table(intra_rows, TW * 0.5, key_frac=0.42))
     F.append(Spacer(1, 7))
 
-    # ── 04 — trajectory comparison (one page per scenario, best run) ─────────
+    # ── 04 — trajectory comparison (all scenarios on same page, best run) ───
     traj_list = d.get('trajectory_values_list', [])
     if not traj_list and traj:
         traj_list = [traj]  # Backward compatibility: wrap single dict in list
@@ -796,75 +796,83 @@ def _page1(d):
             return arr[0]
         return [0.0]
 
-    for traj_i_idx, traj_i in enumerate(traj_list):
+    if traj_list:
         F += _footer(d, 1, 3)
         F.append(PageBreak())
-        sc_idx = traj_i.get('scenario_idx', traj_i_idx)
-        F += section_header(
-            f"04 \u2014 trajectory comparison \u2014 scenario {sc_idx} (best run)")
+        F += section_header("04 \u2014 trajectory comparison (best run per scenario)")
 
-        p_names = traj_i.get('process_names', [])
-        t_traj  = traj_i.get('target_trajectory', {})
-        b_traj  = traj_i.get('baseline_trajectory', {})
-        a_traj  = traj_i.get('actual_trajectory', {})
+        for traj_i_idx, traj_i in enumerate(traj_list):
+            sc_idx = traj_i.get('scenario_idx', traj_i_idx)
 
-        traj_hdr = [Paragraph(h, ST_TRAJ_H) for h in
-                    ["Step", "Target Y*", "Baseline Y\u2019",
-                     "Controller Y", "\u0394 baseline", "\u0394 controller", "Note"]]
-        cws_t = [r * TW for r in [0.07, 0.11, 0.12, 0.12, 0.11, 0.11, 0.36]]
-        traj_rows = [traj_hdr]
+            # Scenario sub-header with F values
+            tf_s  = traj_i.get('F_star',     fstar_v)
+            tf_bl = traj_i.get('F_baseline', fbl_v)
+            tf_ac = traj_i.get('F_actual',   fact_v)
+            tf_form_ac = traj_i.get('F_formula_actual')
+            sc_info = f"F* {tf_s:.4f}  \u00b7  F\u2019 {tf_bl:.4f}  \u00b7  F {tf_ac:.4f}"
+            if tf_form_ac is not None:
+                sc_info += f"  \u00b7  F(formula) {tf_form_ac:.4f}"
+            F.append(Paragraph(
+                f"<b>Scenario {sc_idx}</b> &mdash; {sc_info}", ST_NOTE))
+            F.append(Spacer(1, 2))
 
-        for proc in p_names:
-            # Use OUTPUTS for comparison (not inputs — inputs are identical for baseline/target)
-            t_out = _extract(t_traj, proc, 'outputs')
-            b_out = _extract(b_traj, proc, 'outputs')
-            a_out = _extract(a_traj, proc, 'outputs_mean')
+            p_names = traj_i.get('process_names', [])
+            t_traj  = traj_i.get('target_trajectory', {})
+            b_traj  = traj_i.get('baseline_trajectory', {})
+            a_traj  = traj_i.get('actual_trajectory', {})
 
-            t_v = float(t_out[0]) if hasattr(t_out, '__len__') and len(t_out) else float(t_out)
-            b_v = float(b_out[0]) if hasattr(b_out, '__len__') and len(b_out) else float(b_out)
-            a_v = float(a_out[0]) if hasattr(a_out, '__len__') and len(a_out) else float(a_out)
+            traj_hdr = [Paragraph(h, ST_TRAJ_H) for h in
+                        ["Step", "Target Y*", "Baseline Y\u2019",
+                         "Controller Y", "\u0394 baseline", "\u0394 controller", "Note"]]
+            cws_t = [r * TW for r in [0.07, 0.11, 0.12, 0.12, 0.11, 0.11, 0.36]]
+            traj_rows = [traj_hdr]
 
-            # Δ baseline = baseline_output - target_output (gap without controller)
-            d_base = b_v - t_v
-            # Δ controller = controller_output - target_output (remaining gap)
-            d_actual = a_v - t_v
-            closer = abs(a_v - t_v) < abs(b_v - t_v)
-            note = "improved \u2191" if closer else "not improved"
-            if abs(b_v - t_v) < 1e-6:
-                note = "baseline \u2248 target"
+            for proc in p_names:
+                t_out = _extract(t_traj, proc, 'outputs')
+                b_out = _extract(b_traj, proc, 'outputs')
+                a_out = _extract(a_traj, proc, 'outputs_mean')
 
-            traj_rows.append([
-                Paragraph(proc,              ST_TRAJ_C),
-                Paragraph(f"{t_v:.4f}",      ST_TRAJ_C),
-                Paragraph(f"{b_v:.4f}",      ST_TRAJ_C),
-                Paragraph(f"{a_v:.4f}",      ST_TRAJ_C),
-                Paragraph(f"{d_base:+.4f}",  ST_TRAJ_C),
-                Paragraph(f"{d_actual:+.4f}", ST_TRAJ_G if closer else ST_TRAJ_R),
-                Paragraph(note,              ST_NOTE),
-            ])
+                t_v = float(t_out[0]) if hasattr(t_out, '__len__') and len(t_out) else float(t_out)
+                b_v = float(b_out[0]) if hasattr(b_out, '__len__') and len(b_out) else float(b_out)
+                a_v = float(a_out[0]) if hasattr(a_out, '__len__') and len(a_out) else float(a_out)
 
-        traj_tbl = Table(traj_rows, colWidths=cws_t)
-        traj_tbl.setStyle(TableStyle([
-            ('LINEBELOW',     (0, 0), (-1,  0), 0.5, C_BLACK),
-            ('LINEBELOW',     (0, 1), (-1, -1), 0.4, C_LGRAY),
-            ('TOPPADDING',    (0, 0), (-1, -1), 1.5),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 1.5),
-            ('LEFTPADDING',   (0, 0), (-1, -1), 3),
-            ('RIGHTPADDING',  (0, 0), (-1, -1), 3),
-            ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
-        ]))
-        F.append(traj_tbl)
+                # Δ baseline = baseline_output - target_output (gap without controller)
+                d_base = b_v - t_v
+                # Δ controller = controller_output - target_output (remaining gap)
+                d_actual = a_v - t_v
+                closer = abs(a_v - t_v) < abs(b_v - t_v)
+                note = "improved \u2191" if closer else "not improved"
+                if abs(b_v - t_v) < 1e-6:
+                    note = "baseline \u2248 target"
 
-        tf_s  = traj_i.get('F_star',     fstar_v)
-        tf_bl = traj_i.get('F_baseline', fbl_v)
-        tf_ac = traj_i.get('F_actual',   fact_v)
-        tf_form_ac = traj_i.get('F_formula_actual')
-        foot_text = (f"F* {tf_s:.6f}  \u00b7  F\u2019 {tf_bl:.6f}  \u00b7  "
-                     f"F {tf_ac:.6f}")
-        if tf_form_ac is not None:
-            foot_text += f"  \u00b7  F(formula) {tf_form_ac:.6f}"
-        foot_text += f"  \u00b7  scenario {sc_idx} \u00b7 best run"
-        foot_l = Paragraph(foot_text, ST_NOTE)
+                traj_rows.append([
+                    Paragraph(proc,              ST_TRAJ_C),
+                    Paragraph(f"{t_v:.4f}",      ST_TRAJ_C),
+                    Paragraph(f"{b_v:.4f}",      ST_TRAJ_C),
+                    Paragraph(f"{a_v:.4f}",      ST_TRAJ_C),
+                    Paragraph(f"{d_base:+.4f}",  ST_TRAJ_C),
+                    Paragraph(f"{d_actual:+.4f}", ST_TRAJ_G if closer else ST_TRAJ_R),
+                    Paragraph(note,              ST_NOTE),
+                ])
+
+            traj_tbl = Table(traj_rows, colWidths=cws_t)
+            traj_tbl.setStyle(TableStyle([
+                ('LINEBELOW',     (0, 0), (-1,  0), 0.5, C_BLACK),
+                ('LINEBELOW',     (0, 1), (-1, -1), 0.4, C_LGRAY),
+                ('TOPPADDING',    (0, 0), (-1, -1), 1.5),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 1.5),
+                ('LEFTPADDING',   (0, 0), (-1, -1), 3),
+                ('RIGHTPADDING',  (0, 0), (-1, -1), 3),
+                ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
+            ]))
+            F.append(traj_tbl)
+            F.append(Spacer(1, 6))
+
+        # Footer legend (once, after all scenarios)
+        foot_l = Paragraph(
+            "\u0394 baseline = Y\u2019 \u2212 Y*  \u00b7  "
+            "\u0394 controller = Y \u2212 Y*  \u00b7  "
+            "best run from 10 candidates per scenario", ST_NOTE)
         foot_r = Paragraph("\u2191 = closer to target than baseline", ST_NOTE_G)
         foot_t = Table([[foot_l, foot_r]], colWidths=[TW * 0.65, TW * 0.35])
         foot_t.setStyle(TableStyle([
