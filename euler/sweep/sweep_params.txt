@@ -1,12 +1,10 @@
-# Controller Seed Sweep Configuration
+# Controller Sweep Configuration (auto-generated)
 # ====================================
 #
-# 250 combinations of seed_target and seed_baseline
-# Grid: 25x10 (seed_target: 25 values, seed_baseline: 10 values)
+# 250 combinations from: seed_target(25) x seed_baseline(10)
 #
-# Format: run_name seed_target=X seed_baseline=Y
+# Format: run_name seed_target=X seed_baseline=X
 #
-# Update sweep.sh: --array=0-249
 # ====================================
 
 seed_t01_b01 seed_target=1 seed_baseline=1
