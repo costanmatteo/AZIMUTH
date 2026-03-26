@@ -1179,12 +1179,11 @@ def _page3(d):
     left = Table([[row_train], [row_test]], colWidths=[col_w])
     left.setStyle(no_pad)
 
-    # ── RIGHT COLUMN: other charts stacked ─────────────────────────────
+    # ── RIGHT COLUMN: 3 charts stacked ─────────────────────────────────
     right_charts = [
         (chk / 'loss_vs_L_min.png',       "Loss vs L_min Bellman"),
         (chk / 'training_efficiency.png',  "Training efficiency"),
         (chk / 'loss_decomposition.png',   "Loss decomposition"),
-        (chk / 'loss_scatter.png',         "Loss vs L_min scatter"),
     ]
     rh = int((avail - len(right_charts) * cap_h) / len(right_charts))
     right = img_stack(
