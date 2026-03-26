@@ -230,12 +230,16 @@ def load_sweep_config(sweep_dir: Path) -> dict | None:
     # ── Load uncertainty predictor config ──
     try:
         import sys
-        project_root = sweep_dir
-        # Walk up to find project root (contains configs/)
-        for _ in range(6):
-            if (project_root / 'configs').is_dir():
-                break
-            project_root = project_root.parent
+        # Project root = two levels up from this script (euler/complexity_sweep/ → root)
+        script_dir = Path(__file__).resolve().parent
+        project_root = script_dir.parent.parent
+        if not (project_root / 'configs').is_dir():
+            # Fallback: walk up from sweep_dir
+            project_root = sweep_dir.resolve()
+            for _ in range(8):
+                if (project_root / 'configs').is_dir():
+                    break
+                project_root = project_root.parent
         if str(project_root) not in sys.path:
             sys.path.insert(0, str(project_root))
         from configs.uncertainty_config import (
