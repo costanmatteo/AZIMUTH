@@ -96,8 +96,8 @@ def compute_win_rates(df: pd.DataFrame) -> pd.DataFrame:
     """Group by (st_n, st_m, st_rho[, n_processes]) and compute win rate per config."""
     df = df.copy()
     # win = controller closer to F* than baseline (gap-based, same as sweep.sh)
-    gap_baseline = (df['F_star_train'] - df['F_baseline_train']).abs()
-    gap_ctrl     = (df['F_star_train'] - df['F_actual_train']).abs()
+    gap_baseline = (df['F_star_test'] - df['F_baseline_test']).abs()
+    gap_ctrl     = (df['F_star_test'] - df['F_actual_test']).abs()
     df['controller_wins'] = gap_ctrl < gap_baseline
 
     group_cols = ['st_n', 'st_m', 'st_rho']
@@ -107,9 +107,9 @@ def compute_win_rates(df: pd.DataFrame) -> pd.DataFrame:
     grouped = df.groupby(group_cols).agg(
         n_runs=('controller_wins', 'count'),
         n_wins=('controller_wins', 'sum'),
-        F_star_mean=('F_star_train', 'mean'),
-        F_baseline_mean=('F_baseline_train', 'mean'),
-        F_actual_mean=('F_actual_train', 'mean'),
+        F_star_mean=('F_star_test', 'mean'),
+        F_baseline_mean=('F_baseline_test', 'mean'),
+        F_actual_mean=('F_actual_test', 'mean'),
     ).reset_index()
 
     grouped['win_rate_pct'] = 100.0 * grouped['n_wins'] / grouped['n_runs']
@@ -125,8 +125,8 @@ def compute_stats(df: pd.DataFrame, win_df: pd.DataFrame) -> dict:
     n_runs   = len(df)
     n_cfgs   = len(win_df)
     # gap-based win rate (same as sweep.sh): |gap_ctrl| < |gap_baseline|
-    gb = (df['F_star_train'] - df['F_baseline_train']).abs()
-    gc = (df['F_star_train'] - df['F_actual_train']).abs()
+    gb = (df['F_star_test'] - df['F_baseline_test']).abs()
+    gc = (df['F_star_test'] - df['F_actual_test']).abs()
     overall_win_rate = float(100.0 * (gc < gb).mean())
     best_row = win_df.loc[win_df['win_rate_pct'].idxmax()]
     worst_row = win_df.loc[win_df['win_rate_pct'].idxmin()]
@@ -148,10 +148,10 @@ def compute_stats(df: pd.DataFrame, win_df: pd.DataFrame) -> dict:
     gc_te = (df['F_star_test']   - df['F_actual_test']).abs()
     gd_te = gb_te - gc_te
 
-    wins = (gc_tr.abs() < gb_tr.abs()).sum()
+    wins = (gc_te.abs() < gb_te.abs()).sum()
 
-    best_idx  = gc_tr.abs().idxmin()
-    worst_idx = gc_tr.abs().idxmax()
+    best_idx  = gc_te.abs().idxmin()
+    worst_idx = gc_te.abs().idxmax()
 
     return {
         'n_runs':           n_runs,
@@ -177,15 +177,15 @@ def compute_stats(df: pd.DataFrame, win_df: pd.DataFrame) -> dict:
         'gd_te_min':  gd_te.min(),  'gd_te_med':  gd_te.median(),  'gd_te_max':  gd_te.max(),
         # best / worst run
         'best_run':   df.loc[best_idx,  'run_name'],
-        'best_gap':   gc_tr.loc[best_idx],
+        'best_gap':   gc_te.loc[best_idx],
         'worst_run':  df.loc[worst_idx, 'run_name'],
-        'worst_gap':  gc_tr.loc[worst_idx],
+        'worst_gap':  gc_te.loc[worst_idx],
         # generalisation
         'degrad':     gc_te.median() - gc_tr.median(),
         # F*
-        'fstar_min':  df['F_star_train'].min(),
-        'fstar_med':  df['F_star_train'].median(),
-        'fstar_max':  df['F_star_train'].max(),
+        'fstar_min':  df['F_star_test'].min(),
+        'fstar_med':  df['F_star_test'].median(),
+        'fstar_max':  df['F_star_test'].max(),
     }
 
 
@@ -1094,7 +1094,7 @@ def generate_complexity_sweep_report(sweep_dir: Path,
         print("No results found.  Cannot generate report.")
         return None
 
-    core = ['st_n', 'st_m', 'st_rho', 'F_star_train', 'F_baseline_train', 'F_actual_train']
+    core = ['st_n', 'st_m', 'st_rho', 'F_star_test', 'F_baseline_test', 'F_actual_test']
     before = len(df_raw)
     df_raw = df_raw.dropna(subset=core).reset_index(drop=True)
     if len(df_raw) < before:
