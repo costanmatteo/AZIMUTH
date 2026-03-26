@@ -64,10 +64,12 @@ def load_run_results(run_dir: Path) -> dict | None:
             'F_star_train':      data.get('train', {}).get('F_star'),
             'F_baseline_train':  data.get('train', {}).get('F_baseline_mean'),
             'F_actual_train':    data.get('train', {}).get('F_actual_mean'),
+            'F_formula_train':   data.get('train', {}).get('F_formula_mean'),
             # test
             'F_star_test':       data.get('test', {}).get('F_star'),
             'F_baseline_test':   data.get('test', {}).get('F_baseline_mean'),
             'F_actual_test':     data.get('test', {}).get('F_actual_mean'),
+            'F_formula_test':    data.get('test', {}).get('F_formula_mean'),
         }
     except Exception as e:
         print(f"  Warning: could not load {results_file}: {e}")
@@ -96,8 +98,8 @@ def compute_win_rates(df: pd.DataFrame) -> pd.DataFrame:
     """Group by (st_n, st_m, st_rho[, n_processes]) and compute win rate per config."""
     df = df.copy()
     # win = controller closer to F* than baseline (gap-based, same as sweep.sh)
-    gap_baseline = (df['F_star_train'] - df['F_baseline_train']).abs()
-    gap_ctrl     = (df['F_star_train'] - df['F_actual_train']).abs()
+    gap_baseline = (df['F_star_test'] - df['F_baseline_test']).abs()
+    gap_ctrl     = (df['F_star_test'] - df['F_actual_test']).abs()
     df['controller_wins'] = gap_ctrl < gap_baseline
 
     group_cols = ['st_n', 'st_m', 'st_rho']
@@ -107,9 +109,9 @@ def compute_win_rates(df: pd.DataFrame) -> pd.DataFrame:
     grouped = df.groupby(group_cols).agg(
         n_runs=('controller_wins', 'count'),
         n_wins=('controller_wins', 'sum'),
-        F_star_mean=('F_star_train', 'mean'),
-        F_baseline_mean=('F_baseline_train', 'mean'),
-        F_actual_mean=('F_actual_train', 'mean'),
+        F_star_mean=('F_star_test', 'mean'),
+        F_baseline_mean=('F_baseline_test', 'mean'),
+        F_actual_mean=('F_actual_test', 'mean'),
     ).reset_index()
 
     grouped['win_rate_pct'] = 100.0 * grouped['n_wins'] / grouped['n_runs']
@@ -125,8 +127,8 @@ def compute_stats(df: pd.DataFrame, win_df: pd.DataFrame) -> dict:
     n_runs   = len(df)
     n_cfgs   = len(win_df)
     # gap-based win rate (same as sweep.sh): |gap_ctrl| < |gap_baseline|
-    gb = (df['F_star_train'] - df['F_baseline_train']).abs()
-    gc = (df['F_star_train'] - df['F_actual_train']).abs()
+    gb = (df['F_star_test'] - df['F_baseline_test']).abs()
+    gc = (df['F_star_test'] - df['F_actual_test']).abs()
     overall_win_rate = float(100.0 * (gc < gb).mean())
     best_row = win_df.loc[win_df['win_rate_pct'].idxmax()]
     worst_row = win_df.loc[win_df['win_rate_pct'].idxmin()]
@@ -148,10 +150,10 @@ def compute_stats(df: pd.DataFrame, win_df: pd.DataFrame) -> dict:
     gc_te = (df['F_star_test']   - df['F_actual_test']).abs()
     gd_te = gb_te - gc_te
 
-    wins = (gc_tr.abs() < gb_tr.abs()).sum()
+    wins = (gc_te.abs() < gb_te.abs()).sum()
 
-    best_idx  = gc_tr.abs().idxmin()
-    worst_idx = gc_tr.abs().idxmax()
+    best_idx  = gc_te.abs().idxmin()
+    worst_idx = gc_te.abs().idxmax()
 
     return {
         'n_runs':           n_runs,
@@ -177,15 +179,15 @@ def compute_stats(df: pd.DataFrame, win_df: pd.DataFrame) -> dict:
         'gd_te_min':  gd_te.min(),  'gd_te_med':  gd_te.median(),  'gd_te_max':  gd_te.max(),
         # best / worst run
         'best_run':   df.loc[best_idx,  'run_name'],
-        'best_gap':   gc_tr.loc[best_idx],
+        'best_gap':   gc_te.loc[best_idx],
         'worst_run':  df.loc[worst_idx, 'run_name'],
-        'worst_gap':  gc_tr.loc[worst_idx],
+        'worst_gap':  gc_te.loc[worst_idx],
         # generalisation
         'degrad':     gc_te.median() - gc_tr.median(),
         # F*
-        'fstar_min':  df['F_star_train'].min(),
-        'fstar_med':  df['F_star_train'].median(),
-        'fstar_max':  df['F_star_train'].max(),
+        'fstar_min':  df['F_star_test'].min(),
+        'fstar_med':  df['F_star_test'].median(),
+        'fstar_max':  df['F_star_test'].max(),
     }
 
 
@@ -603,12 +605,12 @@ body {
 
 def _fmt(v) -> str:
     if v is None or (isinstance(v, float) and np.isnan(v)):
-        return 'N/A'
+        return '-'
     return f'{float(v):.4f}'
 
 def _pct(v) -> str:
     if v is None or (isinstance(v, float) and np.isnan(v)):
-        return 'N/A'
+        return '-'
     return f'{float(v):.1f}%'
 
 def _sign(v) -> str:
@@ -999,8 +1001,9 @@ def build_page2_html(s: dict, now: datetime,
 """
 
 
-def build_page3_html(win_df: pd.DataFrame, now: datetime, sweep_dir: str) -> str:
-    """All-configurations table, sorted by win rate descending."""
+def build_page3_html(win_df: pd.DataFrame, now: datetime, sweep_dir: str,
+                     df_raw: pd.DataFrame | None = None) -> str:
+    """All-configurations table with per-seed-pair detail rows, sorted by win rate descending."""
     win_df = win_df.sort_values('win_rate_pct', ascending=False).reset_index(drop=True)
     ts     = now.strftime('%Y-%m-%d &nbsp;%H:%M:%S')
 
@@ -1008,13 +1011,53 @@ def build_page3_html(win_df: pd.DataFrame, now: datetime, sweep_dir: str) -> str
 
     nproc_th = '<th>n_proc<span class="def">chain len</span></th>' if has_nproc else ''
 
+    # Build group key columns
+    group_cols = ['st_n', 'st_m', 'st_rho']
+    if has_nproc:
+        group_cols.append('n_processes')
+
+    # Pre-compute per-run gaps and win flag on df_raw
+    if df_raw is not None:
+        df_detail = df_raw.copy()
+        df_detail['gap_baseline'] = (df_detail['F_star_test'] - df_detail['F_baseline_test']).abs()
+        df_detail['gap_ctrl_train'] = (df_detail['F_star_train'] - df_detail['F_actual_train']).abs()
+        df_detail['gap_ctrl_test'] = (df_detail['F_star_test'] - df_detail['F_actual_test']).abs()
+        df_detail['gap_delta_train'] = df_detail['gap_baseline'] - df_detail['gap_ctrl_train']
+        df_detail['gap_delta_test'] = df_detail['gap_baseline'] - df_detail['gap_ctrl_test']
+        df_detail['win'] = df_detail['gap_ctrl_test'] < df_detail['gap_baseline']
+        imp_denom = df_detail['F_baseline_test'].abs().clip(lower=1e-10)
+        df_detail['improvement_pct'] = (
+            (df_detail['F_actual_test'] - df_detail['F_baseline_test']) / imp_denom * 100
+        )
+    else:
+        df_detail = None
+
     rows_html = ''
     for _, r in win_df.iterrows():
         wr_cls = _wr_cls(r['win_rate_pct'])
         nproc_td = (f'<td>{int(r["n_processes"]) if pd.notna(r.get("n_processes")) else "N/A"}</td>'
                     if has_nproc else '')
+
+        # ── Compute per-config gap averages from detail rows ──
+        gap_bl_mean = gap_ct_tr_mean = gap_ct_te_mean = gap_d_tr_mean = gap_d_te_mean = float('nan')
+        if df_detail is not None:
+            mask = (df_detail['st_n'] == r['st_n']) & \
+                   (df_detail['st_m'] == r['st_m']) & \
+                   (df_detail['st_rho'] == r['st_rho'])
+            if has_nproc and pd.notna(r.get('n_processes')):
+                mask &= (df_detail['n_processes'] == r['n_processes'])
+            cfg_runs = df_detail[mask].sort_values('improvement_pct', ascending=False)
+            gap_bl_mean = cfg_runs['gap_baseline'].mean()
+            gap_ct_tr_mean = cfg_runs['gap_ctrl_train'].mean()
+            gap_ct_te_mean = cfg_runs['gap_ctrl_test'].mean()
+            gap_d_tr_mean = cfg_runs['gap_delta_train'].mean()
+            gap_d_te_mean = cfg_runs['gap_delta_test'].mean()
+        else:
+            cfg_runs = pd.DataFrame()
+
+        # ── Summary row for this configuration ──
         rows_html += f"""
-      <tr>
+      <tr style="font-weight:bold; background:#f0f0f0;">
         <td>{int(r['st_n'])}</td>
         <td>{int(r['st_m'])}</td>
         <td>{r['st_rho']:.3f}</td>
@@ -1022,24 +1065,65 @@ def build_page3_html(win_df: pd.DataFrame, now: datetime, sweep_dir: str) -> str
         <td>{int(r['n_runs'])}</td>
         <td>{int(r['n_wins'])}</td>
         <td class="{wr_cls}">{r['win_rate_pct']:.1f}%</td>
-        <td>{_fmt(r['F_star_mean'])}</td>
-        <td>{_fmt(r['F_baseline_mean'])}</td>
-        <td>{_fmt(r['F_actual_mean'])}</td>
-        <td>{_pct(r['mean_improvement_pct'])}</td>
+        <td></td><td></td><td></td><td></td>
+        <td>{_fmt(gap_bl_mean)}</td>
+        <td>{_fmt(gap_ct_tr_mean)}</td>
+        <td>{_fmt(gap_ct_te_mean)}</td>
+        <td>{_fmt(gap_d_tr_mean)}</td>
+        <td>{_fmt(gap_d_te_mean)}</td>
       </tr>"""
+
+        # ── Individual seed-pair rows ──
+        if not cfg_runs.empty:
+            for _, run in cfg_runs.iterrows():
+                win_str = '&#10003;' if run['win'] else '&#10007;'
+                win_cls = 'dg' if run['win'] else 'dr'
+                nproc_td_run = (f'<td></td>' if has_nproc else '')
+                seed_label = f"s<sub>t</sub>={int(run['seed_target'])}&nbsp;s<sub>b</sub>={int(run['seed_baseline'])}"
+                f_formula_test = run.get('F_formula_test')
+                # If F_formula_test is available → CasualiT mode:
+                #   F_actual = surrogate, F_formula = formula
+                # Otherwise → formula mode:
+                #   F_actual IS the formula, surrogate = N/A
+                has_casualit = f_formula_test is not None and not (isinstance(f_formula_test, float) and np.isnan(f_formula_test))
+                if has_casualit:
+                    f_surr_val = run['F_actual_test']
+                    f_form_val = f_formula_test
+                else:
+                    f_surr_val = None
+                    f_form_val = run['F_actual_test']
+                rows_html += f"""
+      <tr style="color:#666; font-size:6.5px;">
+        <td colspan="3" style="text-align:left; padding-left:12px;">{seed_label}</td>
+        {nproc_td_run}
+        <td></td>
+        <td></td>
+        <td class="{win_cls}">{win_str}</td>
+        <td>{_fmt(run['F_star_test'])}</td>
+        <td>{_fmt(run['F_baseline_test'])}</td>
+        <td>{_fmt(f_surr_val)}</td>
+        <td>{_fmt(f_form_val)}</td>
+        <td>{_fmt(run['gap_baseline'])}</td>
+        <td>{_fmt(run['gap_ctrl_train'])}</td>
+        <td>{_fmt(run['gap_ctrl_test'])}</td>
+        <td>{_fmt(run['gap_delta_train'])}</td>
+        <td>{_fmt(run['gap_delta_test'])}</td>
+      </tr>"""
+
+    n_total = len(df_detail) if df_detail is not None else 0
 
     return f"""
 <div class="page-flow">
   <div class="hdr-row">
-    <span class="title">Complexity Sweep Report &#8212; All Configurations</span>
-    <span class="meta">{ts} &nbsp;&#183;&nbsp; {len(win_df)} configurations &nbsp;&#183;&nbsp; page 3 / 3</span>
+    <span class="title">Complexity Sweep Report &#8212; All Configurations (detailed)</span>
+    <span class="meta">{ts} &nbsp;&#183;&nbsp; {len(win_df)} configurations &nbsp;&#183;&nbsp; {n_total} runs &nbsp;&#183;&nbsp; page 3+</span>
   </div>
   <hr class="rule-heavy">
 
   <div class="sec-head">
-    05 &#8212; all configurations
+    05 &#8212; all configurations &amp; seed pairs
     <span style="font-size:7px;font-weight:400;text-transform:none;letter-spacing:0">
-      sorted by win rate &middot; descending &nbsp;&#183;&nbsp; win = F &gt; F&prime; &nbsp;&#183;&nbsp; improvement = (F&#8722;F&prime;)/|F&prime;|
+      sorted by win rate &middot; descending &nbsp;&#183;&nbsp; bold rows = config summary (mean over seed pairs) &nbsp;&#183;&nbsp; detail rows = individual seed pairs &nbsp;&#183;&nbsp; gap &#916; positive = controller better
     </span>
   </div>
   <hr class="rule-thin">
@@ -1054,10 +1138,15 @@ def build_page3_html(win_df: pd.DataFrame, now: datetime, sweep_dir: str) -> str
         <th>Runs</th>
         <th>Wins</th>
         <th>Win rate</th>
-        <th>F* mean</th>
-        <th>F&prime; baseline</th>
-        <th>F controller</th>
-        <th>Improvement<span class="def">(F&#8722;F&prime;)/|F&prime;|</span></th>
+        <th>F*</th>
+        <th>F&prime;<span class="def">baseline</span></th>
+        <th>F<span class="def">surrogate</span></th>
+        <th>F<span class="def">formula</span></th>
+        <th>Gap baseline<span class="def">|F*&#8722;F&prime;|</span></th>
+        <th>Gap ctrl train<span class="def">|F*&#8722;F|</span></th>
+        <th>Gap ctrl test<span class="def">|F*&#8722;F|</span></th>
+        <th>Gap &#916; train<span class="def">g<sub>bl</sub>&#8722;g<sub>ctrl</sub></span></th>
+        <th>Gap &#916; test<span class="def">g<sub>bl</sub>&#8722;g<sub>ctrl</sub></span></th>
       </tr>
     </thead>
     <tbody>
@@ -1070,7 +1159,8 @@ def build_page3_html(win_df: pd.DataFrame, now: datetime, sweep_dir: str) -> str
     <span class="dg">green &ge; 70%</span> &nbsp;&#183;&nbsp;
     <span class="da">amber 40&#8211;70%</span> &nbsp;&#183;&nbsp;
     <span class="dr">red &lt; 40%</span> &nbsp;&#183;&nbsp;
-    improvement positive = controller beats baseline
+    &#10003; = win &nbsp;&#183;&nbsp; &#10007; = loss &nbsp;&#183;&nbsp;
+    gap &#916; positive = controller closer to F* than baseline
   </div>
 
   <div class="footer">
@@ -1094,7 +1184,7 @@ def generate_complexity_sweep_report(sweep_dir: Path,
         print("No results found.  Cannot generate report.")
         return None
 
-    core = ['st_n', 'st_m', 'st_rho', 'F_star_train', 'F_baseline_train', 'F_actual_train']
+    core = ['st_n', 'st_m', 'st_rho', 'F_star_test', 'F_baseline_test', 'F_actual_test']
     before = len(df_raw)
     df_raw = df_raw.dropna(subset=core).reset_index(drop=True)
     if len(df_raw) < before:
@@ -1135,7 +1225,7 @@ def generate_complexity_sweep_report(sweep_dir: Path,
     html_body = (
         build_page1_html(s, now, b64_marginals, b64_wr_dist, sd, config_html)
         + build_page2_html(s, now, b64_hn_rho, b64_hn_m, b64_hm_rho, b64_3d, sd)
-        + build_page3_html(win_df, now, sd)
+        + build_page3_html(win_df, now, sd, df_raw=df_raw)
     )
 
     full_html = f"""<!DOCTYPE html>

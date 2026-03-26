@@ -836,9 +836,11 @@ def main(config=None):
     print(f"  F* (test):        {F_star_value:.6f}")
     print(f"  F' (test):        {F_baseline_test_mean:.6f}")
     print(f"  F  (test):        {F_actual_test_mean:.6f}")
+    F_formula_actual_test_mean = None
+    F_formula_baseline_test_mean = None
     if formula_surrogate is not None and F_formula_actual_test_values:
-        F_formula_actual_test_mean = np.mean(F_formula_actual_test_values)
-        F_formula_baseline_test_mean = np.mean(F_formula_baseline_test_values)
+        F_formula_actual_test_mean = float(np.mean(F_formula_actual_test_values))
+        F_formula_baseline_test_mean = float(np.mean(F_formula_baseline_test_values))
         print(f"  F  (formula test): {F_formula_actual_test_mean:.6f}")
         print(f"  F' (formula test): {F_formula_baseline_test_mean:.6f}")
     print(f"  Improvement:      {improvement_test:+.2f}%")
@@ -1686,6 +1688,7 @@ def main(config=None):
             'F_star': float(F_star_value),
             'F_baseline_mean': float(F_baseline_test_mean),
             'F_actual_mean': float(F_actual_test_mean),
+            'F_formula_mean': F_formula_actual_test_mean,
             'improvement_pct': float(improvement_test),
         },
 
