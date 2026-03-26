@@ -226,6 +226,38 @@ def load_sweep_config(sweep_dir: Path) -> dict | None:
         return None
 
     first_cfg['all_st_params'] = all_st
+
+    # ── Load uncertainty predictor config ──
+    try:
+        import sys
+        project_root = sweep_dir
+        # Walk up to find project root (contains configs/)
+        for _ in range(6):
+            if (project_root / 'configs').is_dir():
+                break
+            project_root = project_root.parent
+        if str(project_root) not in sys.path:
+            sys.path.insert(0, str(project_root))
+        from configs.uncertainty_config import (
+            GLOBAL_UNCERTAINTY_CONFIG, DEFAULT_ST_UNCERTAINTY_PREDICTOR
+        )
+        first_cfg['uncertainty_config'] = GLOBAL_UNCERTAINTY_CONFIG
+        first_cfg['uncertainty_model'] = DEFAULT_ST_UNCERTAINTY_PREDICTOR.get('model', {})
+        first_cfg['uncertainty_training'] = DEFAULT_ST_UNCERTAINTY_PREDICTOR.get('training', {})
+    except Exception as e:
+        print(f"  Warning: could not load uncertainty config: {e}")
+        first_cfg['uncertainty_config'] = {}
+        first_cfg['uncertainty_model'] = {}
+        first_cfg['uncertainty_training'] = {}
+
+    # ── Load surrogate config ──
+    try:
+        from configs.surrogate_config import SURROGATE_CONFIG
+        first_cfg['surrogate_config'] = SURROGATE_CONFIG
+    except Exception as e:
+        print(f"  Warning: could not load surrogate config: {e}")
+        first_cfg['surrogate_config'] = {}
+
     return first_cfg
 
 
@@ -658,6 +690,59 @@ def build_config_html(sweep_cfg: dict | None) -> str:
         + _cfg_row('seed_baseline', f"{sc.get('seed_baseline', '?')} (varies per run)")
     )
 
+    # ── Uncertainty predictor column ──
+    up_cfg = sweep_cfg.get('uncertainty_config', {})
+    up_model = sweep_cfg.get('uncertainty_model', {})
+    up_train = sweep_cfg.get('uncertainty_training', {})
+
+    up_html = (
+        _cfg_row('Method', up_cfg.get('uncertainty_method', '?'))
+        + _cfg_row('SWAG start epoch', up_cfg.get('swag_start_epoch', '?'))
+        + _cfg_row('SWAG LR', up_cfg.get('swag_learning_rate', '?'))
+        + _cfg_row('SWAG max rank', up_cfg.get('swag_max_rank', '?'))
+        + _cfg_row('SWAG n samples', up_cfg.get('swag_n_samples', '?'))
+    )
+    if up_model:
+        up_html += (
+            _cfg_row('Architecture', up_model.get('hidden_sizes', '?'))
+            + _cfg_row('Dropout', up_model.get('dropout_rate', '?'))
+            + _cfg_row('BatchNorm', up_model.get('use_batchnorm', '?'))
+        )
+    if up_train:
+        up_html += (
+            _cfg_row('Epochs', up_train.get('epochs', '?'))
+            + _cfg_row('Batch size', up_train.get('batch_size', '?'))
+            + _cfg_row('Learning rate', up_train.get('learning_rate', '?'))
+            + _cfg_row('Patience', up_train.get('patience', '?'))
+            + _cfg_row('Loss', up_train.get('loss_type', '?'))
+        )
+
+    # ── Surrogate column ──
+    surr_cfg = sweep_cfg.get('surrogate_config', {})
+    surr_model = surr_cfg.get('model', {})
+    surr_train = surr_cfg.get('training', {})
+
+    surr_html = _cfg_row('Type', sr.get('type', '?'))
+    if sr.get('type') == 'casualit' and surr_model:
+        surr_html += (
+            _cfg_row('CasualiT model', surr_model.get('casualit_model', '?'))
+            + _cfg_row('d_model enc', surr_model.get('d_model_enc', '?'))
+            + _cfg_row('d_model dec', surr_model.get('d_model_dec', '?'))
+            + _cfg_row('d_ff', surr_model.get('d_ff', '?'))
+            + _cfg_row('e_layers', surr_model.get('e_layers', '?'))
+            + _cfg_row('d_layers', surr_model.get('d_layers', '?'))
+            + _cfg_row('n_heads', surr_model.get('n_heads', '?'))
+            + _cfg_row('Dropout', f"{surr_model.get('dropout_emb', '?')} / {surr_model.get('dropout_attn_out', '?')} / {surr_model.get('dropout_ff', '?')}", 'emb / attn / ff')
+            + _cfg_row('Epochs', surr_train.get('max_epochs', '?'))
+            + _cfg_row('Batch size', surr_train.get('batch_size', '?'))
+            + _cfg_row('Learning rate', surr_train.get('learning_rate', '?'))
+            + _cfg_row('Patience', surr_train.get('patience', '?'))
+            + _cfg_row('Loss weights', f"x={surr_train.get('loss_weight_x', '?')} y={surr_train.get('loss_weight_y', '?')}")
+        )
+    elif sr.get('type') == 'reliability_function':
+        surr_html += _cfg_row('Description', 'Mathematical formula')
+        surr_html += _cfg_row('Deterministic', sr.get('use_deterministic_sampling', '?'))
+
     # ── Process column (with ranges from all runs) ──
     proc_html = _cfg_row('Dataset mode', dataset_mode)
     proc_html += _cfg_row('N processes', n_procs)
@@ -686,6 +771,14 @@ def build_config_html(sweep_cfg: dict | None) -> str:
     <div class="cfg-col">
       <div class="blk-title">Controller &middot; training</div>
       {train_html}
+    </div>
+    <div class="cfg-col">
+      <div class="blk-title">Uncertainty predictor</div>
+      {up_html}
+    </div>
+    <div class="cfg-col">
+      <div class="blk-title">Surrogate</div>
+      {surr_html}
     </div>
     <div class="cfg-col">
       <div class="blk-title">Processes &middot; parameter ranges</div>
