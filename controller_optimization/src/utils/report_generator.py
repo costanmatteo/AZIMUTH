@@ -919,13 +919,13 @@ def _page1(d):
                 evo_key = (sc_idx, proc)
                 evo_path = evo_paths.get(evo_key)
 
-                # Image width = right column, height = uniform across all processes
+                # Image sized to match this process's actual data rows
                 img_w = plot_w - 4
-                tbl_h = uniform_tbl_h
+                actual_tbl_h = 13 + n_data_rows * 14
 
                 if evo_path and os.path.exists(evo_path):
                     from reportlab.platypus import Image as RLImage
-                    evo_img = RLImage(evo_path, width=img_w, height=tbl_h)
+                    evo_img = RLImage(evo_path, width=img_w, height=actual_tbl_h)
                     right_cell = evo_img
                 else:
                     right_cell = Paragraph("", ST_NOTE)
@@ -938,8 +938,7 @@ def _page1(d):
                     ('VALIGN',       (0, 0), (-1, -1), 'TOP'),
                     ('LEFTPADDING',  (0, 0), (-1, -1), 0),
                     ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-                    ('TOPPADDING',   (0, 0), (0,  0),  0),   # data table: no offset
-                    ('TOPPADDING',   (1, 0), (1,  0),  10),  # plot: push down ~10pt
+                    ('TOPPADDING',   (0, 0), (-1, -1), 0),
                     ('BOTTOMPADDING',(0, 0), (-1, -1), 0),
                 ]))
                 F.append(side_tbl)
