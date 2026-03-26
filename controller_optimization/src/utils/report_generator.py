@@ -158,6 +158,16 @@ def scale_img(path, max_w, max_h):
     img.drawHeight = img.imageHeight * scale
     return img
 
+def scale_img_fw(path, target_w, max_h):
+    """Scale image to fill target_w, capping height at max_h. No deformation."""
+    if not Path(path).exists():
+        return _placeholder(Path(path).name, target_w, max_h)
+    img   = Image(str(path))
+    scale = target_w / img.imageWidth
+    img.drawWidth  = target_w
+    img.drawHeight = min(img.imageHeight * scale, max_h)
+    return img
+
 def _placeholder(name, w, h):
     st = ParagraphStyle('_ph', fontName='Helvetica', fontSize=FS_NOTE,
                         alignment=TA_CENTER, textColor=colors.HexColor('#AAAAAA'))
@@ -1179,17 +1189,21 @@ def _page3(d):
     left = Table([[row_train], [row_test]], colWidths=[col_w])
     left.setStyle(no_pad)
 
-    # ── RIGHT COLUMN: 3 charts stacked ─────────────────────────────────
+    # ── RIGHT COLUMN: 3 charts stacked, full width ─────────────────────
     right_charts = [
         (chk / 'loss_vs_L_min.png',       "Loss vs L_min Bellman"),
         (chk / 'training_efficiency.png',  "Training efficiency"),
         (chk / 'loss_decomposition.png',   "Loss decomposition"),
     ]
     rh = int((avail - len(right_charts) * cap_h) / len(right_charts))
-    right = img_stack(
-        [p for p, _ in right_charts],
-        [c for _, c in right_charts],
-        col_w, rh, gap=0)
+    r_rows = []
+    for p, cap in right_charts:
+        img = scale_img_fw(p, col_w, rh)
+        cell = Table([[img], [Paragraph(cap, ST_CAPTION)]], colWidths=[col_w])
+        cell.setStyle(no_pad)
+        r_rows.append([cell])
+    right = Table(r_rows, colWidths=[col_w])
+    right.setStyle(no_pad)
 
     # ── Assemble two-column layout ─────────────────────────────────────
     layout = Table([[left, Spacer(col_gap, 1), right]],

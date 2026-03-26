@@ -53,7 +53,7 @@ def plot_loss_vs_L_min(
     theoretical_L_min: List[float],
     save_path: Optional[str] = None,
     title: str = "Loss vs Theoretical Minimum",
-    figsize: Tuple[int, int] = (15, 5),
+    figsize: Tuple[int, int] = (10, 4),
     bellman_lmin: Optional[Dict[str, Any]] = None,
 ) -> plt.Figure:
     """
@@ -130,7 +130,7 @@ def plot_loss_vs_L_min(
     plt.tight_layout()
 
     if save_path:
-        fig.savefig(save_path, dpi=150)
+        fig.savefig(save_path, dpi=150, bbox_inches='tight')
         print(f"  Saved: {save_path}")
 
     return fig
@@ -141,7 +141,7 @@ def plot_efficiency_over_time(
     efficiency: List[float],
     save_path: Optional[str] = None,
     title: str = "Training Efficiency (L_min / Loss)",
-    figsize: Tuple[int, int] = (15, 5),
+    figsize: Tuple[int, int] = (10, 4),
     bellman_lmin: Optional[Dict[str, Any]] = None,
     observed_loss: Optional[List[float]] = None,
 ) -> plt.Figure:
@@ -235,7 +235,7 @@ def plot_efficiency_over_time(
     plt.tight_layout()
 
     if save_path:
-        fig.savefig(save_path, dpi=150)
+        fig.savefig(save_path, dpi=150, bbox_inches='tight')
         print(f"  Saved: {save_path}")
 
     return fig
@@ -248,7 +248,7 @@ def plot_loss_decomposition(
     loss_scale: float = 100.0,
     save_path: Optional[str] = None,
     title: str = "Loss Decomposition",
-    figsize: Tuple[int, int] = (15, 5)
+    figsize: Tuple[int, int] = (10, 4)
 ) -> plt.Figure:
     """
     Bar chart showing decomposition of loss into components.
@@ -332,7 +332,7 @@ def plot_loss_decomposition(
     plt.tight_layout()
 
     if save_path:
-        fig.savefig(save_path, dpi=150)
+        fig.savefig(save_path, dpi=150, bbox_inches='tight')
         print(f"  Saved: {save_path}")
 
     return fig
