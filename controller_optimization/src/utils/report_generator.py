@@ -1,7 +1,7 @@
 """
-PDF Report Generator for Controller Optimization — 2 pages A4 landscape.
-Style: Helvetica, same colors/sections as portrait version but
-landscape and more compact (less vertical whitespace).
+PDF Report Generator for Controller Optimization — A4 portrait.
+Style: Helvetica, compact layout with tables and charts rearranged
+for vertical (portrait) orientation.
 """
 
 import math
@@ -9,7 +9,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 
-from reportlab.lib.pagesizes import landscape, A4
+from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import cm, mm
 from reportlab.lib import colors
@@ -26,8 +26,8 @@ try:
 except ImportError:
     PYPDF_AVAILABLE = False
 
-# ── page geometry (A4 landscape) ─────────────────────────────────────────────
-PW, PH = landscape(A4)   # 841.89 x 595.28 pts
+# ── page geometry (A4 portrait) ──────────────────────────────────────────────
+PW, PH = A4               # 595.28 x 841.89 pts
 M  = 1.2 * cm            # margins
 TW = PW - 2 * M          # text width  ≈ 793 pts
 
@@ -36,21 +36,22 @@ def get_report_chart_sizes():
 
     Returns:
         (left_figsize, right_figsize) — each a (width, height) tuple in inches.
-        *left_figsize*  is for each chart in the baseline/gap paired grid (2×2).
-        *right_figsize* is for each of the 3 stacked theoretical charts.
+        *left_figsize*  is for each chart in the baseline/gap paired rows (2 per row).
+        *right_figsize* is for each of the 3 stacked theoretical charts (full width).
     """
-    col_gap  = 10
-    col_w    = (TW - col_gap) / 2
-    pair_w   = col_w / 2
+    pair_w   = TW / 2
     hdr_h    = 1.8 * cm
     ftr_h    = 1.5 * cm
     avail    = PH - 2 * M - hdr_h - ftr_h
-    lh       = int(avail / 2)
+    # Top portion: 2 rows of paired images (~40% of available height)
+    pair_h   = int(avail * 0.4 / 2)
+    # Bottom portion: 3 theoretical charts (~60% of available height)
     n_right  = 3
     inter_gap = 4
-    rh       = int((avail - (n_right - 1) * inter_gap) / n_right)
-    left_figsize  = (pair_w / 72.0, lh / 72.0)
-    right_figsize = (col_w  / 72.0, rh  / 72.0)
+    theo_avail = avail * 0.6
+    rh       = int((theo_avail - (n_right - 1) * inter_gap) / n_right)
+    left_figsize  = (pair_w / 72.0, pair_h / 72.0)
+    right_figsize = (TW     / 72.0, rh     / 72.0)
     return left_figsize, right_figsize
 
 # ── colors ────────────────────────────────────────────────────────────────────
@@ -471,7 +472,7 @@ def img_grid_2x2(paths, captions, total_w, total_h, gap=4):
 
 
 # ════════════════════════════════════════════════════════════════════════════
-#  PAGE 1 — text metrics (landscape: use 4-column layout where possible)
+#  PAGE 1 — text metrics (portrait: 2-column layout)
 # ════════════════════════════════════════════════════════════════════════════
 
 def _page1(d, total_pages):
@@ -638,45 +639,48 @@ def _page1(d, total_pages):
         ("Device",          str(tr_cfg.get('device', '\u2014'))),
         ("Checkpoint dir",  chk),
     ]
-    cw4 = (TW - 3 * 10) / 4
+    cw2 = (TW - 12) / 2
 
-    F.append(four_col(
-        [blk_title("Architecture")] + [kv_table(arch_rows,  cw4)],
-        [blk_title("Training")]     + [kv_table(train_rows, cw4)],
-        # col 3: reliability scores (formula primary, surrogate in grey below)
-        [blk_title("Reliability scores")] + [kv_table(
-            [
-                ("F* (target)",             f"{fstar_v:.6f}"),
-                ("F\u2019 (baseline)",       _fstr(F_bl)),
-            ] + ([
-                ("F (formula)",              _fstr(F_form)),
-                ("\u2514 surrogate",         _fstr(F_act),
-                 ST_VAL_FORM, ST_KEY_FORM),
-            ] if fform_v is not None else [
-                ("F (controller)",           _fstr(F_act)),
-            ]) + [
-                ("Improvement vs baseline",  f"{improv_pct:+.2f}%",
-                 ST_VAL_G if improv_pct >= 0 else ST_VAL_R),
-            ] + ([
-                ("\u2514 surrogate",
-                 f"{improv_surr_pct:+.2f}%",
-                 ST_VAL_FORM_G if improv_surr_pct >= 0 else ST_VAL_FORM_R,
-                 ST_KEY_FORM),
-            ] if fform_v is not None else []) + [
-                ("Gap from target",          f"{gap_pct:.2f}%", ST_VAL_R),
-            ] + ([
-                ("\u2514 surrogate",
-                 f"{gap_surr_pct:.2f}%",
-                 ST_VAL_FORM_R,
-                 ST_KEY_FORM),
-            ] if fform_v is not None else []) + [
-                ("Robustness (std)",         f"{rob_std:.6f}"),
-            ],
-        cw4)],
-        # col 4: performance (formula primary, surrogate in grey below)
-        [blk_title("Performance")] + [kv_table(
-            _perf_rows(adv, n_scenarios), cw4)],
-        gap=10,
+    # Row 1: Architecture | Training
+    F.append(two_col(
+        [blk_title("Architecture")] + [kv_table(arch_rows,  cw2)],
+        [blk_title("Training")]     + [kv_table(train_rows, cw2)],
+        gap=12,
+    ))
+    F.append(Spacer(1, 5))
+
+    # Row 2: Reliability scores | Performance
+    reliability_rows = [
+        ("F* (target)",             f"{fstar_v:.6f}"),
+        ("F\u2019 (baseline)",       _fstr(F_bl)),
+    ] + ([
+        ("F (formula)",              _fstr(F_form)),
+        ("\u2514 surrogate",         _fstr(F_act),
+         ST_VAL_FORM, ST_KEY_FORM),
+    ] if fform_v is not None else [
+        ("F (controller)",           _fstr(F_act)),
+    ]) + [
+        ("Improvement vs baseline",  f"{improv_pct:+.2f}%",
+         ST_VAL_G if improv_pct >= 0 else ST_VAL_R),
+    ] + ([
+        ("\u2514 surrogate",
+         f"{improv_surr_pct:+.2f}%",
+         ST_VAL_FORM_G if improv_surr_pct >= 0 else ST_VAL_FORM_R,
+         ST_KEY_FORM),
+    ] if fform_v is not None else []) + [
+        ("Gap from target",          f"{gap_pct:.2f}%", ST_VAL_R),
+    ] + ([
+        ("\u2514 surrogate",
+         f"{gap_surr_pct:.2f}%",
+         ST_VAL_FORM_R,
+         ST_KEY_FORM),
+    ] if fform_v is not None else []) + [
+        ("Robustness (std)",         f"{rob_std:.6f}"),
+    ]
+    F.append(two_col(
+        [blk_title("Reliability scores")] + [kv_table(reliability_rows, cw2)],
+        [blk_title("Performance")] + [kv_table(_perf_rows(adv, n_scenarios), cw2)],
+        gap=12,
     ))
     F.append(Spacer(1, 7))
 
@@ -832,12 +836,19 @@ def _page1(d, total_pages):
          ST_VAL_G if div_ep == 0 else ST_VAL_R),
     ]
 
-    F.append(four_col(
-        [blk_title("Final losses")]                        + [kv_table(losses_rows,  cw4)],
-        [blk_title("L_min Bellman (backward induction)")] + [kv_table(lmin_rows,    cw4)],
-        [blk_title("Decomposition")]                       + [kv_table(decomp_rows,  cw4)],
-        [blk_title("Cross-scenario overfitting")]          + [kv_table(cross_rows,   cw4)],
-        gap=10,
+    # Row 1: Final losses | L_min Bellman
+    F.append(two_col(
+        [blk_title("Final losses")]                        + [kv_table(losses_rows,  cw2)],
+        [blk_title("L_min Bellman (backward induction)")] + [kv_table(lmin_rows,    cw2)],
+        gap=12,
+    ))
+    F.append(Spacer(1, 5))
+
+    # Row 2: Decomposition | Cross-scenario overfitting
+    F.append(two_col(
+        [blk_title("Decomposition")]                       + [kv_table(decomp_rows,  cw2)],
+        [blk_title("Cross-scenario overfitting")]          + [kv_table(cross_rows,   cw2)],
+        gap=12,
     ))
     F.append(Spacer(1, 5))
 
@@ -1213,11 +1224,12 @@ def _page2(d):
 
 
 # ════════════════════════════════════════════════════════════════════════════
-#  PAGE 3 — comparison charts (full width)
+#  PAGE 3 — comparison charts (portrait: stacked vertically)
 # ════════════════════════════════════════════════════════════════════════════
 
 def _page3(d):
-    """Paired comparison charts page: 4 rows of paired images, full width."""
+    """Comparison charts page — portrait layout: paired rows on top,
+    theoretical charts stacked below at full width."""
     cfg    = d['config']
     chk    = Path(d.get('checkpoint_dir') or cfg.get('training', {}).get('checkpoint_dir', '.'))
 
@@ -1227,8 +1239,6 @@ def _page3(d):
     hdr_h  = 1.8 * cm   # mini-header + rule (generous)
     ftr_h  = 1.5 * cm   # footer (rule + table + spacing)
     avail  = PH - 2 * M - hdr_h - ftr_h
-    col_gap = 10
-    col_w  = (TW - col_gap) / 2
 
     no_pad = TableStyle([
         ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
@@ -1238,10 +1248,9 @@ def _page3(d):
         ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
     ])
 
-    # ── LEFT COLUMN: baseline/gap paired (train on top, test below) ────
-    # 2 rows, each row = 2 images side by side
-    pair_w = col_w / 2
-    lh = int(avail / 2)
+    # ── TOP: baseline/gap paired (2 rows of 2 images, full page width) ──
+    pair_w = TW / 2
+    pair_h = int(avail * 0.4 / 2)  # ~40% of available height for 2 rows
 
     def _img_pair(p1, p2, row_h):
         i1 = scale_img(p1, pair_w, row_h)
@@ -1252,29 +1261,28 @@ def _page3(d):
 
     row_train = _img_pair(
         chk / 'baseline_vs_controller_train.png',
-        chk / 'gap_distribution_train.png', lh)
+        chk / 'gap_distribution_train.png', pair_h)
     row_test = _img_pair(
         chk / 'baseline_vs_controller_test.png',
-        chk / 'gap_distribution_test.png', lh)
+        chk / 'gap_distribution_test.png', pair_h)
 
-    left = Table([[row_train], [row_test]], colWidths=[col_w])
-    left.setStyle(no_pad)
+    top_block = Table([[row_train], [row_test]], colWidths=[TW])
+    top_block.setStyle(no_pad)
+    F.append(top_block)
+    F.append(Spacer(1, 6))
 
-    # ── RIGHT COLUMN: 3 charts stacked, full width of column ───────────
+    # ── BOTTOM: 3 theoretical charts stacked, full width ─────────────────
     n_right   = 3
-    inter_gap = 4                           # vertical gap between charts
-    rh = int((avail - (n_right - 1) * inter_gap) / n_right)
+    inter_gap = 4
+    theo_avail = avail * 0.6 - 6  # remaining height minus spacer
+    rh = int((theo_avail - (n_right - 1) * inter_gap) / n_right)
 
-    # Compute exact figsize (inches) that matches the column slot so PNGs
-    # are generated at the right proportions and fill the space perfectly.
-    col_w_in       = col_w / 72.0           # column width in inches
-    chart_h_in     = rh    / 72.0           # chart height in inches
-    report_figsize = (col_w_in, chart_h_in)
+    # Compute exact figsize (inches) for theoretical PNGs.
+    chart_w_in     = TW / 72.0
+    chart_h_in     = rh  / 72.0
+    report_figsize = (chart_w_in, chart_h_in)
 
-    # Regenerate the 3 right-column PNGs at the exact report dimensions.
-    # Try in-memory theoretical_data first, then fall back to the JSON
-    # file saved during training (covers theoretical_analysis.enabled=False
-    # reruns where the dict is empty but the file exists on disk).
+    # Regenerate the 3 theoretical PNGs at the exact report dimensions.
     theo = d.get('theoretical_data') or {}
     if not (theo.get('epochs') and len(theo.get('epochs', [])) > 0):
         _json_path = chk / 'theoretical_analysis_data.json'
@@ -1324,24 +1332,19 @@ def _page3(d):
         )
         plt.close()
 
-    right_charts = [
+    theo_charts = [
         (chk / 'loss_vs_L_min.png',       "Loss vs L_min Bellman"),
         (chk / 'training_efficiency.png',  "Training efficiency"),
         (chk / 'loss_decomposition.png',   "Loss decomposition"),
     ]
     r_rows = []
-    for p, _cap in right_charts:
-        img = scale_img_fw(p, col_w, rh)
+    for p, _cap in theo_charts:
+        img = scale_img_fw(p, TW, rh)
         r_rows.append([img])
-    right = Table(r_rows, colWidths=[col_w])
-    right.setStyle(no_pad)
+    bottom_block = Table(r_rows, colWidths=[TW])
+    bottom_block.setStyle(no_pad)
 
-    # ── Assemble two-column layout ─────────────────────────────────────
-    layout = Table([[left, Spacer(col_gap, 1), right]],
-                   colWidths=[col_w, col_gap, col_w])
-    layout.setStyle(no_pad)
-
-    F.append(layout)
+    F.append(bottom_block)
     return F
 
 
@@ -1375,9 +1378,9 @@ def _build_pdf(d, out_path):
     body_frame = Frame(M, M, TW, PH - 2 * M, id='body',
                        leftPadding=0, rightPadding=0,
                        topPadding=0, bottomPadding=0)
-    pt  = PageTemplate(id='main', frames=[body_frame], pagesize=landscape(A4))
+    pt  = PageTemplate(id='main', frames=[body_frame], pagesize=A4)
     doc = BaseDocTemplate(
-        str(out_path), pagesize=landscape(A4),
+        str(out_path), pagesize=A4,
         leftMargin=M, rightMargin=M, topMargin=M, bottomMargin=M,
         pageTemplates=[pt])
 
