@@ -159,16 +159,17 @@ def scale_img(path, max_w, max_h):
     return img
 
 def scale_img_fw(path, target_w, max_h):
-    """Scale image to always fill *target_w*.  Height is proportional but
-    capped at *max_h* (slight vertical compression when the source PNG has
-    a taller aspect ratio than the report slot)."""
+    """Scale image to fill target_w, keeping aspect ratio. If height exceeds
+    max_h, shrink both dimensions proportionally."""
     if not Path(path).exists():
         return _placeholder(Path(path).name, target_w, max_h)
     img   = Image(str(path))
     scale = target_w / img.imageWidth
     h     = img.imageHeight * scale
-    img.drawWidth  = target_w
-    img.drawHeight = min(h, max_h)
+    if h > max_h:
+        scale = max_h / img.imageHeight
+    img.drawWidth  = img.imageWidth  * scale
+    img.drawHeight = img.imageHeight * scale
     return img
 
 def _placeholder(name, w, h):
@@ -1199,13 +1200,22 @@ def _page3(d):
 
     # Compute exact figsize (inches) that matches the column slot so PNGs
     # are generated at the right proportions and fill the space perfectly.
-    _DPI        = 150
-    col_w_in    = col_w / 72.0              # column width in inches
-    chart_h_in  = rh   / 72.0              # chart height in inches
+    col_w_in       = col_w / 72.0           # column width in inches
+    chart_h_in     = rh    / 72.0           # chart height in inches
     report_figsize = (col_w_in, chart_h_in)
 
-    # Regenerate the 3 right-column PNGs at the exact report dimensions
+    # Regenerate the 3 right-column PNGs at the exact report dimensions.
+    # Try in-memory theoretical_data first, then fall back to the JSON
+    # file saved during training (covers theoretical_analysis.enabled=False
+    # reruns where the dict is empty but the file exists on disk).
     theo = d.get('theoretical_data') or {}
+    if not (theo.get('epochs') and len(theo.get('epochs', [])) > 0):
+        _json_path = chk / 'theoretical_analysis_data.json'
+        if _json_path.exists():
+            import json as _json
+            with open(_json_path) as _f:
+                theo = _json.load(_f)
+
     if theo.get('epochs') and len(theo['epochs']) > 0:
         import matplotlib
         matplotlib.use('Agg')
