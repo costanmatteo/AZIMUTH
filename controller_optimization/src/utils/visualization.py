@@ -394,20 +394,20 @@ def plot_target_vs_actual_scatter(F_star_per_scenario, F_baseline_per_scenario, 
     # Baseline points (red squares)
     ax.scatter(F_baseline_arr, F_star_arr,
                c='red',
-               s=120,
+               s=80,
                alpha=0.6,
                edgecolors='darkred',
-               linewidths=2,
+               linewidths=1,
                label='Baseline (no controller)',
                marker='s')
 
     # Controller points — surrogate F (solid blue circles)
     ax.scatter(F_actual_arr, F_star_arr,
                c='blue',
-               s=120,
+               s=80,
                alpha=0.6,
                edgecolors='darkblue',
-               linewidths=2,
+               linewidths=1,
                label='Controller (surrogate)',
                marker='o')
 
@@ -441,34 +441,16 @@ def plot_target_vs_actual_scatter(F_star_per_scenario, F_baseline_per_scenario, 
             [min_val - margin, max_val + margin],
             'k--', linewidth=2, label='Perfect Match (y = x)', alpha=0.5)
 
-    ax.set_xlabel('F (Reliability)', fontsize=14)
-    ax.set_ylabel('F_star (Target Reliability)', fontsize=14)
-    ax.set_title('Baseline vs Controller Reliability', fontsize=15)
-    ax.tick_params(labelsize=12)
+    ax.set_xlabel('F (Reliability)', fontsize=28)
+    ax.set_ylabel('F_star (Target Reliability)', fontsize=28)
+    ax.set_title('Baseline vs Controller Reliability', fontsize=30)
+    ax.tick_params(labelsize=24)
 
     ax.grid(True, alpha=0.3)
-    ax.legend(loc='lower right', fontsize=16, framealpha=0.9)
+    ax.legend(loc='upper left', fontsize=28, framealpha=0.9)
 
     ax.set_xlim(min_val - margin, max_val + margin)
     ax.set_ylim(min_val - margin, max_val + margin)
-
-    # Statistics annotation (uses surrogate F)
-    n_scenarios = len(F_star_arr)
-    gap_baseline = np.mean(F_star_arr - F_baseline_arr)
-    gap_actual = np.mean(F_star_arr - F_actual_arr)
-    improvement = ((gap_baseline - gap_actual) / abs(gap_baseline)) * 100 if gap_baseline != 0 else 0
-
-    stats_text = (f'Scenarios: {n_scenarios}\n'
-                 f'Mean Gap (Baseline): {gap_baseline:.6f}\n'
-                 f'Mean Gap (Controller): {gap_actual:.6f}\n'
-                 f'Improvement: {improvement:.1f}%')
-
-    ax.text(0.02, 0.98, stats_text,
-            transform=ax.transAxes,
-            fontsize=15,
-            verticalalignment='top',
-            bbox=dict(boxstyle='square,pad=0.3', facecolor='white',
-                      edgecolor='#CCCCCC', linewidth=0.5, alpha=0.9))
 
     plt.tight_layout()
 
@@ -568,28 +550,12 @@ def plot_gap_distribution(F_star_per_scenario, F_actual_per_scenario, save_path=
                label=f'Worst: {worst_gap:.6f}')
 
     # Labels and title
-    ax.set_xlabel('Gap (F_star - F_actual)', fontsize=14)
-    ax.set_ylabel('Number of Scenarios', fontsize=14)
-    ax.set_title('Distribution of Target-Actual Gap', fontsize=15)
-    ax.tick_params(labelsize=12)
-    ax.legend(loc='upper right', fontsize=16)
+    ax.set_xlabel('Gap (F_star - F_actual)', fontsize=28)
+    ax.set_ylabel('Number of Scenarios', fontsize=28)
+    ax.set_title('Distribution of Target-Actual Gap', fontsize=30)
+    ax.tick_params(labelsize=24)
+    ax.legend(loc='upper left', fontsize=28)
     ax.grid(True, axis='y', alpha=0.3)
-
-    # Add statistics box
-    stats_text = (f'Scenarios: {n_scenarios}\n'
-                 f'Mean: {mean_gap:.6f}\n'
-                 f'Std: {std_gap:.6f}\n'
-                 f'Median: {median_gap:.6f}\n'
-                 f'Best: {best_gap:.6f}\n'
-                 f'Worst: {worst_gap:.6f}')
-
-    ax.text(0.98, 0.98, stats_text,
-            transform=ax.transAxes,
-            fontsize=15,
-            verticalalignment='top',
-            horizontalalignment='right',
-            bbox=dict(boxstyle='square,pad=0.3', facecolor='white',
-                      edgecolor='#CCCCCC', linewidth=0.5, alpha=0.9))
 
     plt.tight_layout()
 
