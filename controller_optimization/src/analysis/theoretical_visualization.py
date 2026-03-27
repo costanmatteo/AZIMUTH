@@ -5,10 +5,15 @@ Creates plots comparing observed loss vs theoretical minimum (L_min).
 """
 
 import numpy as np
+import matplotlib
 import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
 import matplotlib.patches as mpatches
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
+
+# Rebuild font cache once at import time so new fonts are picked up
+fm._load_fontmanager(try_read_cache=False)
 
 
 def apply_plot_style():
@@ -53,7 +58,7 @@ def plot_loss_vs_L_min(
     theoretical_L_min: List[float],
     save_path: Optional[str] = None,
     title: str = "Loss vs Theoretical Minimum",
-    figsize: tuple = (10.9, 3.7),
+    figsize: tuple = (14, 3.6),
     bellman_lmin: Optional[Dict[str, Any]] = None,
 ) -> plt.Figure:
     """
@@ -141,7 +146,7 @@ def plot_efficiency_over_time(
     efficiency: List[float],
     save_path: Optional[str] = None,
     title: str = "Training Efficiency (L_min / Loss)",
-    figsize: tuple = (10.9, 3.7),
+    figsize: tuple = (14, 3.6),
     bellman_lmin: Optional[Dict[str, Any]] = None,
     observed_loss: Optional[List[float]] = None,
 ) -> plt.Figure:
@@ -248,7 +253,7 @@ def plot_loss_decomposition(
     loss_scale: float = 100.0,
     save_path: Optional[str] = None,
     title: str = "Loss Decomposition",
-    figsize: tuple = (10.9, 3.7)
+    figsize: tuple = (14, 3.6)
 ) -> plt.Figure:
     """
     Bar chart showing decomposition of loss into components.
