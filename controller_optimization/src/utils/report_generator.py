@@ -1041,7 +1041,7 @@ def _perf_rows(adv, n_scenarios):
     rows = [
         (f"Win rate vs baseline \u2014 train",
          f"{ok_tr}/{n_sc_tr} ({pct_tr:.1f}%)",
-         ST_VAL_G if pct_tr >= 80 else ST_VAL_R),
+         ST_VAL_G if pct_tr > 50 else ST_VAL_R),
     ]
     if has_formula:
         f_ok_tr = fsr_tr.get('n_successful', fsr_tr.get('n_success', 0)) or 0
@@ -1049,20 +1049,20 @@ def _perf_rows(adv, n_scenarios):
         f_pct_tr = (float(fsr_tr.get('success_rate', f_ok_tr / f_n_tr if f_n_tr else 0)) or 0.0) * 100
         rows.append(("\u2514 formula",
                      f"{f_ok_tr}/{f_n_tr} ({f_pct_tr:.1f}%)",
-                     ST_VAL_FORM_G if f_pct_tr >= 80 else ST_VAL_FORM_R,
+                     ST_VAL_FORM_G if f_pct_tr > 50 else ST_VAL_FORM_R,
                      ST_KEY_FORM))
 
     rows.append(
         (f"Win rate vs baseline \u2014 test",
          f"{ok_te}/{n_sc_te} ({pct_te:.1f}%)",
-         ST_VAL_G if pct_te >= 80 else ST_VAL_R))
+         ST_VAL_G if pct_te > 50 else ST_VAL_R))
     if has_formula:
         f_ok_te = fsr_te.get('n_successful', fsr_te.get('n_success', 0)) or 0
         f_n_te  = fsr_te.get('n_scenarios', fsr_te.get('n_total', _n_sc))
         f_pct_te = (float(fsr_te.get('success_rate', f_ok_te / f_n_te if f_n_te else 0)) or 0.0) * 100
         rows.append(("\u2514 formula",
                      f"{f_ok_te}/{f_n_te} ({f_pct_te:.1f}%)",
-                     ST_VAL_FORM_G if f_pct_te >= 80 else ST_VAL_FORM_R,
+                     ST_VAL_FORM_G if f_pct_te > 50 else ST_VAL_FORM_R,
                      ST_KEY_FORM))
 
     rows.append(
