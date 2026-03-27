@@ -307,17 +307,6 @@ def plot_loss_decomposition(
     ax.set_title(title)
     ax.legend(loc='upper left')
 
-    # Add annotations explaining components
-    textstr = (
-        f'L_min (irreducible) = {L_min:.4f}\n'
-        f'Total Loss = {total:.4f}\n'
-        f'Efficiency = {100*L_min/total:.1f}%' if total > 0 else ''
-    )
-    props = dict(boxstyle='square,pad=0.3', facecolor='white',
-                 edgecolor='#CCCCCC', linewidth=0.5, alpha=0.9)
-    ax.text(0.02, 0.98, textstr, transform=ax.transAxes,
-            verticalalignment='top', bbox=props)
-
     plt.tight_layout(pad=0.3)
 
     if save_path:
