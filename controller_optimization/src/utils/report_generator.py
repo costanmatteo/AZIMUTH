@@ -1210,7 +1210,11 @@ def _page3(d):
         ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
     ])
     for p, cap in right_charts:
-        img = scale_img_fw(p, col_w, rh)
+        if Path(p).exists():
+            img = Image(str(p), width=col_w)
+            img.hAlign = 'LEFT'
+        else:
+            img = _placeholder(Path(p).name, col_w, rh)
         cell = Table([[img], [Paragraph(cap, ST_CAPTION)]], colWidths=[col_w])
         cell.setStyle(no_pad_left)
         r_rows.append([cell])
