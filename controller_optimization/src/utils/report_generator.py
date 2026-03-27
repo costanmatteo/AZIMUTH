@@ -456,12 +456,11 @@ def img_grid_2x2(paths, captions, total_w, total_h, gap=4):
 #  PAGE 1 — text metrics (landscape: use 4-column layout where possible)
 # ════════════════════════════════════════════════════════════════════════════
 
-def _page1(d):
+def _page1(d, total_pages):
     cfg    = d['config']
     hist   = d.get('training_history', {})
     fm     = d.get('final_metrics', {})
     adv    = d.get('advanced_metrics') or {}
-    traj   = d.get('trajectory_values') or {}
     ts     = d.get('timestamp', datetime.now())
     ts_str = ts.strftime('%Y-%m-%d %H:%M:%S') if isinstance(ts, datetime) else str(ts)
 
@@ -818,7 +817,22 @@ def _page1(d):
     F.append(kv_table(intra_rows, TW * 0.5, key_frac=0.42))
     F.append(Spacer(1, 7))
 
+    F += _footer(d, 1, total_pages)
+
+    return F
+
+
+def _page4_trajectory(d, total_pages):
+    """Trajectory comparison tables (section 04) — one page per scenario."""
+    cfg    = d['config']
+    fstar_v, _       = _fval(d.get('F_star', 0.0))
+    fbl_v,   fbl_s   = _fval(d.get('F_baseline', 0.0))
+    fact_v,  fact_s  = _fval(d.get('F_actual', 0.0))
+
+    F = []
+
     # ── 04 — trajectory comparison (all scenarios, best run, controllable inputs) ──
+    traj = d.get('trajectory_values') or {}
     traj_list = d.get('trajectory_values_list', [])
     if not traj_list and traj:
         traj_list = [traj]
@@ -839,8 +853,6 @@ def _page1(d):
         return (f'<font color="{hex_color}">\u25a0</font> ')
 
     if traj_list:
-        F += _footer(d, 1, 4)
-        F.append(PageBreak())
         F += section_header("04 \u2014 trajectory comparison (best run per scenario)")
 
         # Width split: data table ~58%, plot ~42%
@@ -990,9 +1002,7 @@ def _page1(d):
             "best of 10 runs per scenario  \u00b7  "
             "plots show X/Y evolution across training epochs", ST_NOTE)
         F.append(foot_p)
-        F += _footer(d, 2, 4)
-    else:
-        F += _footer(d, 1, 3)
+        F += _footer(d, total_pages, total_pages)
 
     return F
 
@@ -1323,15 +1333,19 @@ def _build_pdf(d, out_path):
         pageTemplates=[pt])
 
     traj = d.get('trajectory_values') or {}
-    total_pages = 4 if traj else 3
-    last_page = total_pages
+    traj_list = d.get('trajectory_values_list', [])
+    has_traj = bool(traj_list or traj)
+    total_pages = 4 if has_traj else 3
+
     story = (
-        _page1(d) +
+        _page1(d, total_pages) +
         [PageBreak()] +
-        _page3(d) + _footer(d, last_page - 1, total_pages) +
+        _page3(d) + _footer(d, 2, total_pages) +
         [PageBreak()] +
-        _page2(d) + _footer(d, last_page, total_pages)
+        _page2(d) + _footer(d, 3, total_pages)
     )
+    if has_traj:
+        story += [PageBreak()] + _page4_trajectory(d, total_pages)
     doc.build(story)
 
 
