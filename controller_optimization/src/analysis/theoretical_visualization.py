@@ -102,7 +102,7 @@ def plot_loss_vs_L_min(
         bellman_val = bellman_lmin.get('L_min_bellman', None)
         if bellman_val is not None:
             ax.axhline(y=bellman_val, color='green', linestyle='-.',
-                       label=f'L_min Bellman = {bellman_val:.4f}')
+                       label='L_min Bellman')
 
     # Fill area between L_min and observed (reducible gap)
     ax.fill_between(
@@ -191,7 +191,7 @@ def plot_efficiency_over_time(
         eff_bellman_clipped = np.clip(eff_bellman, 0, 1.5)
 
         ax.plot(epochs, eff_bellman_clipped, 'g-',
-                label=f'Efficiency (Bellman, L_min={bellman_val:.4f})')
+                label='Efficiency (Bellman)')
 
         # Secondary: empirical efficiency as dashed reference
         eff_emp_clipped = np.clip(eff_empirical, 0, 1.5)
@@ -199,14 +199,14 @@ def plot_efficiency_over_time(
                 label='Efficiency (empirical)')
 
         main_eff = eff_bellman_clipped
-        limit_label = 'Theoretical Limit — Bellman (100%)'
+        limit_label = 'Theoretical Limit'
     else:
         # Fallback: empirical efficiency only
         eff_emp_clipped = np.clip(eff_empirical, 0, 1.5)
         ax.plot(epochs, eff_emp_clipped, 'g-',
                 label='Efficiency (empirical)')
         main_eff = eff_emp_clipped
-        limit_label = 'Theoretical Limit (100%)'
+        limit_label = 'Theoretical Limit'
 
     # Add horizontal line at y=1 (theoretical limit)
     ax.axhline(y=1.0, color='red', linestyle='--', label=limit_label)
@@ -300,7 +300,7 @@ def plot_loss_decomposition(
         )
 
     # Add horizontal line for L_min
-    ax.axhline(y=L_min, color='red', linestyle='--', label=f'L_min = {L_min:.4f}')
+    ax.axhline(y=L_min, color='red', linestyle='--', label='L_min')
 
     # Labels
     ax.set_ylabel('Loss Value')
