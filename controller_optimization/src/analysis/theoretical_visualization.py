@@ -92,17 +92,17 @@ def plot_loss_vs_L_min(
     theoretical = np.array(theoretical_L_min)
 
     # Plot observed loss
-    ax.plot(epochs, observed, 'b-', linewidth=2, label='Observed Loss', marker='o', markersize=3)
+    ax.plot(epochs, observed, 'b-', label='Observed Loss', marker='o', markersize=2)
 
     # Plot theoretical L_min (empirical)
-    ax.plot(epochs, theoretical, 'r--', linewidth=2, label='L_min (empirical)')
+    ax.plot(epochs, theoretical, 'r--', label='L_min (empirical)')
 
     # Plot Bellman L_min lines if available
     if bellman_lmin is not None:
         bellman_val = bellman_lmin.get('L_min_bellman', None)
         if bellman_val is not None:
             ax.axhline(y=bellman_val, color='green', linestyle='-.',
-                       linewidth=2.5, label=f'L_min Bellman = {bellman_val:.4f}')
+                       label=f'L_min Bellman = {bellman_val:.4f}')
 
     # Fill area between L_min and observed (reducible gap)
     ax.fill_between(
@@ -121,10 +121,10 @@ def plot_loss_vs_L_min(
             all_vals = np.concatenate([all_vals, extra])
 
     # Labels and legend
-    ax.set_xlabel('Epoch', fontsize=12)
-    ax.set_ylabel('Loss', fontsize=12)
-    ax.set_title(title, fontsize=14)
-    ax.legend(loc='upper right', fontsize=10)
+    ax.set_xlabel('Epoch')
+    ax.set_ylabel('Loss')
+    ax.set_title(title)
+    ax.legend(loc='upper right')
     ax.grid(True, alpha=0.3)
 
     # Set reasonable y-axis limits
@@ -190,12 +190,12 @@ def plot_efficiency_over_time(
         eff_bellman = np.where(obs > 0, bellman_val / obs, 0.0)
         eff_bellman_clipped = np.clip(eff_bellman, 0, 1.5)
 
-        ax.plot(epochs, eff_bellman_clipped, 'g-', linewidth=2, marker='o', markersize=3,
+        ax.plot(epochs, eff_bellman_clipped, 'g-', marker='o', markersize=2,
                 label=f'Efficiency (Bellman, L_min={bellman_val:.4f})')
 
         # Secondary: empirical efficiency as dashed reference
         eff_emp_clipped = np.clip(eff_empirical, 0, 1.5)
-        ax.plot(epochs, eff_emp_clipped, 'b--', linewidth=1.5, alpha=0.5,
+        ax.plot(epochs, eff_emp_clipped, 'b--', alpha=0.5,
                 label='Efficiency (empirical)')
 
         main_eff = eff_bellman_clipped
@@ -203,17 +203,17 @@ def plot_efficiency_over_time(
     else:
         # Fallback: empirical efficiency only
         eff_emp_clipped = np.clip(eff_empirical, 0, 1.5)
-        ax.plot(epochs, eff_emp_clipped, 'g-', linewidth=2, marker='o', markersize=3,
+        ax.plot(epochs, eff_emp_clipped, 'g-', marker='o', markersize=2,
                 label='Efficiency (empirical)')
         main_eff = eff_emp_clipped
         limit_label = 'Theoretical Limit (100%)'
 
     # Add horizontal line at y=1 (theoretical limit)
-    ax.axhline(y=1.0, color='red', linestyle='--', linewidth=2, label=limit_label)
+    ax.axhline(y=1.0, color='red', linestyle='--', label=limit_label)
 
     # Add horizontal lines at 90% and 95%
-    ax.axhline(y=0.9, color='orange', linestyle=':', linewidth=1, alpha=0.7, label='90% Efficiency')
-    ax.axhline(y=0.95, color='purple', linestyle=':', linewidth=1, alpha=0.7, label='95% Efficiency')
+    ax.axhline(y=0.9, color='orange', linestyle=':', alpha=0.7, label='90% Efficiency')
+    ax.axhline(y=0.95, color='purple', linestyle=':', alpha=0.7, label='95% Efficiency')
 
     # Fill area above current efficiency (room for improvement)
     ax.fill_between(
@@ -227,11 +227,11 @@ def plot_efficiency_over_time(
     )
 
     # Labels and legend
-    ax.set_xlabel('Epoch', fontsize=12)
+    ax.set_xlabel('Epoch')
     ylabel = 'Efficiency (L_min Bellman / Loss)' if bellman_val is not None else 'Efficiency (L_min / Loss)'
-    ax.set_ylabel(ylabel, fontsize=12)
-    ax.set_title(title, fontsize=14)
-    ax.legend(loc='lower right', fontsize=9)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    ax.legend(loc='lower right')
     ax.grid(True, alpha=0.3)
 
     # Set y-axis from 0 to 1.1
@@ -286,7 +286,7 @@ def plot_loss_decomposition(
     colors = ['#ff6b6b', '#feca57', '#48dbfb']
 
     # Create bars
-    bars = ax.bar(components, values, color=colors, edgecolor='black', linewidth=1.5)
+    bars = ax.bar(components, values, color=colors, edgecolor='black', linewidth=0.5)
 
     # Add value labels on bars
     for bar, val in zip(bars, values):
@@ -294,10 +294,9 @@ def plot_loss_decomposition(
         ax.annotate(
             f'{val:.4f}',
             xy=(bar.get_x() + bar.get_width() / 2, height),
-            xytext=(0, 3),
+            xytext=(0, 2),
             textcoords="offset points",
             ha='center', va='bottom',
-            fontsize=11
         )
 
     # Compute percentages
@@ -311,17 +310,17 @@ def plot_loss_decomposition(
         pct_gap = 100 * max(gap, 0) / total
 
         # Add text below bars
-        ax.text(0, -0.1 * max(values), f'{pct_var:.1f}%', ha='center', fontsize=10, transform=ax.get_xaxis_transform())
-        ax.text(1, -0.1 * max(values), f'{pct_bias:.1f}%', ha='center', fontsize=10, transform=ax.get_xaxis_transform())
-        ax.text(2, -0.1 * max(values), f'{pct_gap:.1f}%', ha='center', fontsize=10, transform=ax.get_xaxis_transform())
+        ax.text(0, -0.1 * max(values), f'{pct_var:.1f}%', ha='center', transform=ax.get_xaxis_transform())
+        ax.text(1, -0.1 * max(values), f'{pct_bias:.1f}%', ha='center', transform=ax.get_xaxis_transform())
+        ax.text(2, -0.1 * max(values), f'{pct_gap:.1f}%', ha='center', transform=ax.get_xaxis_transform())
 
     # Add horizontal line for L_min
-    ax.axhline(y=L_min, color='red', linestyle='--', linewidth=2, label=f'L_min = {L_min:.4f}')
+    ax.axhline(y=L_min, color='red', linestyle='--', label=f'L_min = {L_min:.4f}')
 
     # Labels
-    ax.set_ylabel('Loss Value', fontsize=12)
-    ax.set_title(title, fontsize=14)
-    ax.legend(loc='upper right', fontsize=10)
+    ax.set_ylabel('Loss Value')
+    ax.set_title(title)
+    ax.legend(loc='upper right')
 
     # Add annotations explaining components
     textstr = (
@@ -331,7 +330,7 @@ def plot_loss_decomposition(
     )
     props = dict(boxstyle='square,pad=0.3', facecolor='white',
                  edgecolor='#CCCCCC', linewidth=0.5, alpha=0.9)
-    ax.text(0.02, 0.98, textstr, transform=ax.transAxes, fontsize=9,
+    ax.text(0.02, 0.98, textstr, transform=ax.transAxes,
             verticalalignment='top', bbox=props)
 
     plt.tight_layout(pad=0.3)
