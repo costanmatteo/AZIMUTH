@@ -1193,7 +1193,7 @@ def _page3(d):
     left = Table([[row_train], [row_test]], colWidths=[col_w])
     left.setStyle(no_pad)
 
-    # ── RIGHT COLUMN: 3 charts stacked, full width ─────────────────────
+    # ── RIGHT COLUMN: 3 charts stacked, full width of column ───────────
     right_charts = [
         (chk / 'loss_vs_L_min.png',       "Loss vs L_min Bellman"),
         (chk / 'training_efficiency.png',  "Training efficiency"),
@@ -1201,13 +1201,25 @@ def _page3(d):
     ]
     rh = int((avail - len(right_charts) * cap_h) / len(right_charts))
     r_rows = []
+    no_pad_left = TableStyle([
+        ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
+        ('ALIGN',         (0, 0), (-1, -1), 'LEFT'),
+        ('LEFTPADDING',   (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
+        ('TOPPADDING',    (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+    ])
     for p, cap in right_charts:
         img = scale_img_fw(p, col_w, rh)
+        # Force image to always fill the full column width
+        if hasattr(img, 'drawWidth'):
+            img.drawWidth = col_w
+            img.hAlign = 'LEFT'
         cell = Table([[img], [Paragraph(cap, ST_CAPTION)]], colWidths=[col_w])
-        cell.setStyle(no_pad)
+        cell.setStyle(no_pad_left)
         r_rows.append([cell])
     right = Table(r_rows, colWidths=[col_w])
-    right.setStyle(no_pad)
+    right.setStyle(no_pad_left)
 
     # ── Assemble two-column layout ─────────────────────────────────────
     layout = Table([[left, Spacer(col_gap, 1), right]],
