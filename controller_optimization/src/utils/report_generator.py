@@ -1328,9 +1328,9 @@ def _build_pdf(d, out_path):
     story = (
         _page1(d) +
         [PageBreak()] +
-        _page2(d) + _footer(d, last_page - 1, total_pages) +
+        _page3(d) + _footer(d, last_page - 1, total_pages) +
         [PageBreak()] +
-        _page3(d) + _footer(d, last_page, total_pages)
+        _page2(d) + _footer(d, last_page, total_pages)
     )
     doc.build(story)
 
