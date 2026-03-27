@@ -490,17 +490,25 @@ def _page1(d, total_pages):
     # When formula is available (CasualiT mode): primary metrics use formula F,
     # sub-rows "■ surrogate" show the CasualiT values.
     # When formula is NOT available: primary metrics use surrogate F directly.
+    # Improvement = gap reduction vs baseline:
+    #   gap_bl  = |F_baseline - F_star|
+    #   gap_ctrl = |F_controller - F_star|
+    #   improvement = (gap_bl - gap_ctrl) / gap_bl × 100
+    gap_bl = abs(fbl_v - fstar_v)
     if fform_v is not None:
         # Primary = formula, secondary = surrogate (CasualiT)
-        improv_pct = (fform_v - fbl_v) / abs(fbl_v) * 100 if fbl_v else 0.0
-        gap_pct    = (1 - fform_v / fstar_v) * 100 if fstar_v else 0.0
-        improv_surr_pct = (fact_v - fbl_v) / abs(fbl_v) * 100 if fbl_v else 0.0
-        gap_surr_pct    = (1 - fact_v / fstar_v) * 100 if fstar_v else 0.0
+        gap_form = abs(fform_v - fstar_v)
+        gap_surr = abs(fact_v  - fstar_v)
+        improv_pct      = (gap_bl - gap_form) / gap_bl * 100 if gap_bl else 0.0
+        improv_surr_pct = (gap_bl - gap_surr) / gap_bl * 100 if gap_bl else 0.0
+        gap_pct         = (1 - fform_v / fstar_v) * 100 if fstar_v else 0.0
+        gap_surr_pct    = (1 - fact_v  / fstar_v) * 100 if fstar_v else 0.0
     else:
-        improv_pct = (fact_v - fbl_v) / abs(fbl_v) * 100 if fbl_v else 0.0
-        gap_pct    = (1 - fact_v / fstar_v) * 100 if fstar_v else 0.0
+        gap_ctrl = abs(fact_v - fstar_v)
+        improv_pct      = (gap_bl - gap_ctrl) / gap_bl * 100 if gap_bl else 0.0
+        gap_pct         = (1 - fact_v / fstar_v) * 100 if fstar_v else 0.0
         improv_surr_pct = 0.0
-        gap_surr_pct = 0.0
+        gap_surr_pct    = 0.0
     best_loss  = _last(hist.get('best_total_loss',  hist.get('best_loss',  0.0)))
     final_loss = _last(hist.get('final_total_loss', hist.get('total_loss', 0.0)))
     rob_std    = fact_s if fact_s is not None else _last(fm.get('robustness_std', 0.0))
@@ -541,7 +549,7 @@ def _page1(d, total_pages):
             [Paragraph(f"{fact_v:.4f}",  ST_KPI_VAL),
              Paragraph(f"{fform_v:.4f}", ST_KPI_VAL),
              Paragraph(f"{fstar_v:.4f}", ST_KPI_VAL),
-             Paragraph(f"{improv_pct:+.0f}%",
+             Paragraph(f"{improv_pct:+.2f}%",
                        _s('_kv_g', FS_KPI_VAL,
                           color=C_GREEN if improv_pct >= 0 else C_RED)),
              Paragraph(f"{best_loss:.4f}", ST_KPI_VAL)],
@@ -561,7 +569,7 @@ def _page1(d, total_pages):
              Paragraph("Best loss",     ST_KPI_LBL)],
             [Paragraph(f"{fact_v:.4f}",  ST_KPI_VAL),
              Paragraph(f"{fstar_v:.4f}", ST_KPI_VAL),
-             Paragraph(f"{improv_pct:+.0f}%",
+             Paragraph(f"{improv_pct:+.2f}%",
                        _s('_kv_g', FS_KPI_VAL,
                           color=C_GREEN if improv_pct >= 0 else C_RED)),
              Paragraph(f"{best_loss:.4f}", ST_KPI_VAL)],
