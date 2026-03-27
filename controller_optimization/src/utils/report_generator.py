@@ -501,12 +501,12 @@ def _page1(d, total_pages):
         gap_surr = abs(fact_v  - fstar_v)
         improv_pct      = (gap_bl - gap_form) / gap_bl * 100 if gap_bl else 0.0
         improv_surr_pct = (gap_bl - gap_surr) / gap_bl * 100 if gap_bl else 0.0
-        gap_pct         = (1 - fform_v / fstar_v) * 100 if fstar_v else 0.0
-        gap_surr_pct    = (1 - fact_v  / fstar_v) * 100 if fstar_v else 0.0
+        gap_pct         = abs(fstar_v - fform_v) / fstar_v * 100 if fstar_v else 0.0
+        gap_surr_pct    = abs(fstar_v - fact_v)  / fstar_v * 100 if fstar_v else 0.0
     else:
         gap_ctrl = abs(fact_v - fstar_v)
         improv_pct      = (gap_bl - gap_ctrl) / gap_bl * 100 if gap_bl else 0.0
-        gap_pct         = (1 - fact_v / fstar_v) * 100 if fstar_v else 0.0
+        gap_pct         = abs(fstar_v - fact_v) / fstar_v * 100 if fstar_v else 0.0
         improv_surr_pct = 0.0
         gap_surr_pct    = 0.0
     best_loss  = _last(hist.get('best_total_loss',  hist.get('best_loss',  0.0)))
