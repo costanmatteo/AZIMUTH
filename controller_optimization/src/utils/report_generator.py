@@ -1017,8 +1017,8 @@ def _perf_rows(adv, n_scenarios):
     _n_sc  = int(n_scenarios) if isinstance(n_scenarios, (int, float)) else 5
     n_sc_tr = sr_tr.get('n_scenarios', sr_tr.get('n_total', _n_sc))
     n_sc_te = sr_te.get('n_scenarios', sr_te.get('n_total', _n_sc))
-    ok_tr   = sr_tr.get('n_success', sr_tr.get('n_above_threshold', 0)) or 0
-    ok_te   = sr_te.get('n_success', sr_te.get('n_above_threshold', 0)) or 0
+    ok_tr   = sr_tr.get('n_successful', sr_tr.get('n_success', sr_tr.get('n_above_threshold', 0))) or 0
+    ok_te   = sr_te.get('n_successful', sr_te.get('n_success', sr_te.get('n_above_threshold', 0))) or 0
     pct_tr_r = sr_tr.get('success_rate', sr_tr.get('rate',
                ok_tr / n_sc_tr if n_sc_tr else 0))
     pct_te_r = sr_te.get('success_rate', sr_te.get('rate',
@@ -1044,7 +1044,7 @@ def _perf_rows(adv, n_scenarios):
          ST_VAL_G if pct_tr >= 80 else ST_VAL_R),
     ]
     if has_formula:
-        f_ok_tr = fsr_tr.get('n_successful', fsr_tr.get('n_success', fsr_tr.get('n_above_threshold', 0))) or 0
+        f_ok_tr = fsr_tr.get('n_successful', fsr_tr.get('n_success', 0)) or 0
         f_n_tr  = fsr_tr.get('n_scenarios', fsr_tr.get('n_total', _n_sc))
         f_pct_tr = (float(fsr_tr.get('success_rate', f_ok_tr / f_n_tr if f_n_tr else 0)) or 0.0) * 100
         rows.append(("\u2514 formula",
@@ -1057,7 +1057,7 @@ def _perf_rows(adv, n_scenarios):
          f"{ok_te}/{n_sc_te} ({pct_te:.1f}%)",
          ST_VAL_G if pct_te >= 80 else ST_VAL_R))
     if has_formula:
-        f_ok_te = fsr_te.get('n_successful', fsr_te.get('n_success', fsr_te.get('n_above_threshold', 0))) or 0
+        f_ok_te = fsr_te.get('n_successful', fsr_te.get('n_success', 0)) or 0
         f_n_te  = fsr_te.get('n_scenarios', fsr_te.get('n_total', _n_sc))
         f_pct_te = (float(fsr_te.get('success_rate', f_ok_te / f_n_te if f_n_te else 0)) or 0.0) * 100
         rows.append(("\u2514 formula",
