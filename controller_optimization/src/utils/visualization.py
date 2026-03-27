@@ -394,20 +394,20 @@ def plot_target_vs_actual_scatter(F_star_per_scenario, F_baseline_per_scenario, 
     # Baseline points (red squares)
     ax.scatter(F_baseline_arr, F_star_arr,
                c='red',
-               s=20,
+               s=8,
                alpha=0.6,
                edgecolors='darkred',
-               linewidths=0.5,
+               linewidths=0.3,
                label='Baseline (no controller)',
                marker='s')
 
     # Controller points — surrogate F (solid blue circles)
     ax.scatter(F_actual_arr, F_star_arr,
                c='blue',
-               s=20,
+               s=8,
                alpha=0.6,
                edgecolors='darkblue',
-               linewidths=0.5,
+               linewidths=0.3,
                label='Controller (surrogate)',
                marker='o')
 
@@ -421,7 +421,7 @@ def plot_target_vs_actual_scatter(F_star_per_scenario, F_baseline_per_scenario, 
             F_star_for_formula = np.full_like(F_formula_arr, F_star_arr[0])
         ax.scatter(F_formula_arr, F_star_for_formula,
                    facecolors='none',
-                   s=20,
+                   s=8,
                    alpha=0.7,
                    edgecolors='blue',
                    linewidths=0.5,
