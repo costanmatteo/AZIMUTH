@@ -164,12 +164,15 @@ def scale_img_fw(path, target_w, max_h):
     if not Path(path).exists():
         return _placeholder(Path(path).name, target_w, max_h)
     img   = Image(str(path))
+    print(f"  [scale_img_fw] {Path(path).name}: imageWidth={img.imageWidth:.1f} imageHeight={img.imageHeight:.1f}  target_w={target_w:.1f}  max_h={max_h:.1f}")
     scale = target_w / img.imageWidth
     h     = img.imageHeight * scale
     if h > max_h:
+        print(f"    -> h={h:.1f} > max_h={max_h:.1f}  => SHRINKING to fit height")
         scale = max_h / img.imageHeight
     img.drawWidth  = img.imageWidth  * scale
     img.drawHeight = img.imageHeight * scale
+    print(f"    -> drawWidth={img.drawWidth:.1f}  drawHeight={img.drawHeight:.1f}  (target_w={target_w:.1f})")
     return img
 
 def _placeholder(name, w, h):
