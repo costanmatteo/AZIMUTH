@@ -15,36 +15,36 @@ def apply_plot_style():
     plt.rcParams.update({
         'font.family':           'sans-serif',
         'font.sans-serif':       ['Helvetica', 'Arial', 'DejaVu Sans'],
-        'font.size':             8,
-        'axes.titlesize':        9,
+        'font.size':             6,
+        'axes.titlesize':        6.5,
         'axes.titleweight':      'normal',
         'axes.titlelocation':    'left',
-        'axes.labelsize':        8,
+        'axes.labelsize':        6,
         'axes.labelweight':      'normal',
-        'axes.linewidth':        0.5,
+        'axes.linewidth':        0.4,
         'axes.spines.top':       False,
         'axes.spines.right':     False,
         'axes.grid':             True,
         'grid.color':            '#DDDDDD',
-        'grid.linewidth':        0.4,
+        'grid.linewidth':        0.3,
         'grid.alpha':            1.0,
-        'xtick.labelsize':       7.5,
-        'ytick.labelsize':       7.5,
-        'xtick.major.width':     0.4,
-        'ytick.major.width':     0.4,
-        'xtick.major.size':      3,
-        'ytick.major.size':      3,
-        'legend.fontsize':       7.5,
+        'xtick.labelsize':       5.5,
+        'ytick.labelsize':       5.5,
+        'xtick.major.width':     0.3,
+        'ytick.major.width':     0.3,
+        'xtick.major.size':      2.5,
+        'ytick.major.size':      2.5,
+        'legend.fontsize':       5.5,
         'legend.framealpha':     0.9,
         'legend.edgecolor':      '#DDDDDD',
         'legend.fancybox':       False,
-        'legend.borderpad':      0.4,
+        'legend.borderpad':      0.3,
         'figure.facecolor':      'white',
         'axes.facecolor':        'white',
         'savefig.facecolor':     'white',
         'savefig.dpi':           150,
         'savefig.bbox':          'tight',
-        'lines.linewidth':       1.4,
+        'lines.linewidth':       0.8,
     })
 
 
@@ -364,7 +364,7 @@ def plot_process_improvements(process_metrics, save_path=None):
 
 
 def plot_target_vs_actual_scatter(F_star_per_scenario, F_baseline_per_scenario, F_actual_per_scenario,
-                                  F_formula_per_scenario=None, save_path=None):
+                                  F_formula_per_scenario=None, save_path=None, figsize=(8, 10)):
     """
     Scatter plot: Baseline vs Controller reliability.
 
@@ -387,7 +387,7 @@ def plot_target_vs_actual_scatter(F_star_per_scenario, F_baseline_per_scenario, 
     F_baseline_arr = np.atleast_1d(F_baseline_per_scenario)
     F_actual_arr = np.atleast_1d(F_actual_per_scenario)
 
-    fig, ax = plt.subplots(figsize=(8, 10))
+    fig, ax = plt.subplots(figsize=figsize)
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
 
@@ -441,13 +441,12 @@ def plot_target_vs_actual_scatter(F_star_per_scenario, F_baseline_per_scenario, 
             [min_val - margin, max_val + margin],
             'k--', linewidth=2, label='Perfect Match (y = x)', alpha=0.5)
 
-    ax.set_xlabel('F (Reliability)', fontsize=28)
-    ax.set_ylabel('F_star (Target Reliability)', fontsize=28)
-    ax.set_title('Baseline vs Controller Reliability', fontsize=30)
-    ax.tick_params(labelsize=24)
+    ax.set_xlabel('F (Reliability)')
+    ax.set_ylabel('F_star (Target Reliability)')
+    ax.set_title('Baseline vs Controller Reliability')
 
     ax.grid(True, alpha=0.3)
-    ax.legend(loc='upper left', fontsize=28, framealpha=0.9)
+    ax.legend(loc='upper left', framealpha=0.9)
 
     ax.set_xlim(min_val - margin, max_val + margin)
     ax.set_ylim(min_val - margin, max_val + margin)
@@ -463,7 +462,7 @@ def plot_target_vs_actual_scatter(F_star_per_scenario, F_baseline_per_scenario, 
     plt.close()
 
 
-def plot_gap_distribution(F_star_per_scenario, F_actual_per_scenario, save_path=None):
+def plot_gap_distribution(F_star_per_scenario, F_actual_per_scenario, save_path=None, figsize=(8, 10)):
     """
     Histogram of gap distribution: F_star - F_actual.
 
@@ -484,7 +483,7 @@ def plot_gap_distribution(F_star_per_scenario, F_actual_per_scenario, save_path=
     # Compute gaps
     gaps = F_star_arr - F_actual_arr
 
-    fig, ax = plt.subplots(figsize=(8, 10))
+    fig, ax = plt.subplots(figsize=figsize)
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
 
@@ -550,11 +549,10 @@ def plot_gap_distribution(F_star_per_scenario, F_actual_per_scenario, save_path=
                label=f'Worst: {worst_gap:.6f}')
 
     # Labels and title
-    ax.set_xlabel('Gap (F_star - F_actual)', fontsize=28)
-    ax.set_ylabel('Number of Scenarios', fontsize=28)
-    ax.set_title('Distribution of Target-Actual Gap', fontsize=30)
-    ax.tick_params(labelsize=24)
-    ax.legend(loc='upper left', fontsize=28)
+    ax.set_xlabel('Gap (F_star - F_actual)')
+    ax.set_ylabel('Number of Scenarios')
+    ax.set_title('Distribution of Target-Actual Gap')
+    ax.legend(loc='upper left')
     ax.grid(True, axis='y', alpha=0.3)
 
     plt.tight_layout()

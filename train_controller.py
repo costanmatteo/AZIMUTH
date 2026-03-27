@@ -78,7 +78,7 @@ from controller_optimization.src.utils.visualization import (
     plot_loss_chart,
     generate_process_evolution_plots
 )
-from controller_optimization.src.utils.report_generator import generate_controller_report
+from controller_optimization.src.utils.report_generator import generate_controller_report, get_report_chart_sizes
 from controller_optimization.src.utils.model_utils import convert_numpy_to_tensor
 from controller_optimization.src.utils.scm_validation import validate_all_processes
 from controller_optimization.src.analysis import (
@@ -1157,6 +1157,9 @@ def main(config=None):
         # 8a. Generate NEW advanced plots
         print("\n  Generating advanced plots...")
 
+        # Get exact figsize for report PDF slots
+        _left_figsize, _ = get_report_chart_sizes()
+
         # Scatter plot: Baseline vs Controller (train)
         # When CasualiT: solid blue = surrogate, hollow blue = ProT formula
         # When ProTSurrogate: only solid blue (no formula_surrogate)
@@ -1165,7 +1168,8 @@ def main(config=None):
             F_baseline_per_scenario=F_baseline_array,
             F_actual_per_scenario=F_actual_per_sample,
             F_formula_per_scenario=F_formula_per_sample,  # None when no formula_surrogate
-            save_path=str(checkpoint_dir / 'baseline_vs_controller_train.png')
+            save_path=str(checkpoint_dir / 'baseline_vs_controller_train.png'),
+            figsize=_left_figsize,
         )
 
         # Scatter plot: Baseline vs Controller (test)
@@ -1175,21 +1179,24 @@ def main(config=None):
             F_baseline_per_scenario=F_baseline_test_array,
             F_actual_per_scenario=F_actual_test_array,
             F_formula_per_scenario=_formula_test,
-            save_path=str(checkpoint_dir / 'baseline_vs_controller_test.png')
+            save_path=str(checkpoint_dir / 'baseline_vs_controller_test.png'),
+            figsize=_left_figsize,
         )
 
         # Gap distribution (train) - ALL SAMPLES
         plot_gap_distribution(
             F_star_per_scenario=F_star_array,
             F_actual_per_scenario=F_actual_per_sample,
-            save_path=str(checkpoint_dir / 'gap_distribution_train.png')
+            save_path=str(checkpoint_dir / 'gap_distribution_train.png'),
+            figsize=_left_figsize,
         )
 
         # Gap distribution (test)
         plot_gap_distribution(
             F_star_per_scenario=F_star_test_array,
             F_actual_per_scenario=F_actual_test_array,
-            save_path=str(checkpoint_dir / 'gap_distribution_test.png')
+            save_path=str(checkpoint_dir / 'gap_distribution_test.png'),
+            figsize=_left_figsize,
         )
 
         print("  ✓ Advanced visualizations generated")

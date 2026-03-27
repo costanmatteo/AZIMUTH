@@ -31,6 +31,29 @@ PW, PH = landscape(A4)   # 841.89 x 595.28 pts
 M  = 1.2 * cm            # margins
 TW = PW - 2 * M          # text width  ≈ 793 pts
 
+def get_report_chart_sizes():
+    """Return figsize (inches) for page-3 chart slots.
+
+    Returns:
+        (left_figsize, right_figsize) — each a (width, height) tuple in inches.
+        *left_figsize*  is for each chart in the baseline/gap paired grid (2×2).
+        *right_figsize* is for each of the 3 stacked theoretical charts.
+    """
+    col_gap  = 10
+    col_w    = (TW - col_gap) / 2
+    pair_w   = col_w / 2
+    hdr_h    = 1.8 * cm
+    ftr_h    = 1.5 * cm
+    avail    = PH - 2 * M - hdr_h - ftr_h
+    cap_h    = 12
+    lh       = int((avail - 2 * cap_h) / 2)
+    n_right  = 3
+    inter_gap = 4
+    rh       = int((avail - n_right * cap_h - (n_right - 1) * inter_gap) / n_right)
+    left_figsize  = (pair_w / 72.0, lh / 72.0)
+    right_figsize = (col_w  / 72.0, rh  / 72.0)
+    return left_figsize, right_figsize
+
 # ── colors ────────────────────────────────────────────────────────────────────
 C_GREEN = colors.HexColor('#1D9E75')
 C_RED   = colors.HexColor('#D85A30')
