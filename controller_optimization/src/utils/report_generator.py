@@ -1039,7 +1039,7 @@ def _perf_rows(adv, n_scenarios):
     has_formula = bool(fsr_tr)
 
     rows = [
-        (f"Success rate \u2014 train",
+        (f"Win rate vs baseline \u2014 train",
          f"{ok_tr}/{n_sc_tr} ({pct_tr:.1f}%)",
          ST_VAL_G if pct_tr >= 80 else ST_VAL_R),
     ]
@@ -1053,7 +1053,7 @@ def _perf_rows(adv, n_scenarios):
                      ST_KEY_FORM))
 
     rows.append(
-        (f"Success rate \u2014 test",
+        (f"Win rate vs baseline \u2014 test",
          f"{ok_te}/{n_sc_te} ({pct_te:.1f}%)",
          ST_VAL_G if pct_te >= 80 else ST_VAL_R))
     if has_formula:
@@ -1089,7 +1089,6 @@ def _perf_rows(adv, n_scenarios):
                      if isinstance(fwc_te_v, (int, float)) else '\u2014',
                      ST_VAL_FORM, ST_KEY_FORM))
 
-    rows.append((f"Threshold", f"{thresh}% \u00d7 F*"))
     return rows
 
 

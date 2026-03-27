@@ -938,8 +938,10 @@ def main(config=None):
     print(f"  Test:  {gap_closure_test['gap_closure_mean']:.4f} +/- {gap_closure_test['gap_closure_std']:.4f} (worst: {gap_closure_test['gap_closure_min']:.4f} at scenario {gap_closure_test['gap_closure_min_scenario_idx']})")
 
     # Success rate (train and test) - using scenario-level aggregates
-    success_rate_train = compute_success_rate(F_star_per_scenario_mean, F_actual_per_scenario_mean, threshold=success_threshold)
-    success_rate_test = compute_success_rate(F_star_test_array, F_actual_test_array, threshold=success_threshold)
+    success_rate_train = compute_success_rate(F_star_per_scenario_mean, F_actual_per_scenario_mean,
+                                              F_baseline_per_scenario=F_baseline_per_scenario_mean, threshold=success_threshold)
+    success_rate_test = compute_success_rate(F_star_test_array, F_actual_test_array,
+                                             F_baseline_per_scenario=F_baseline_test_array, threshold=success_threshold)
 
     print(f"\nSuccess Rate (threshold: {success_threshold*100:.0f}% of F_star):")
     print(f"  Train: {success_rate_train['success_rate_pct']:.1f}% ({success_rate_train['n_successful']}/{success_rate_train['n_total']} scenarios)")
@@ -981,9 +983,11 @@ def main(config=None):
         formula_advanced_metrics['formula_worst_case_gap_test'] = compute_worst_case_gap(
             F_star_test_array, F_formula_actual_test_array)
         formula_advanced_metrics['formula_success_rate_train'] = compute_success_rate(
-            F_star_per_scenario_mean, F_formula_per_scenario_mean, threshold=success_threshold)
+            F_star_per_scenario_mean, F_formula_per_scenario_mean,
+            F_baseline_per_scenario=F_baseline_per_scenario_mean, threshold=success_threshold)
         formula_advanced_metrics['formula_success_rate_test'] = compute_success_rate(
-            F_star_test_array, F_formula_actual_test_array, threshold=success_threshold)
+            F_star_test_array, F_formula_actual_test_array,
+            F_baseline_per_scenario=F_baseline_test_array, threshold=success_threshold)
         formula_advanced_metrics['formula_train_test_gap'] = compute_train_test_gap(
             F_star_per_scenario_mean, F_formula_per_scenario_mean,
             F_star_test_array, F_formula_actual_test_array)
