@@ -394,20 +394,20 @@ def plot_target_vs_actual_scatter(F_star_per_scenario, F_baseline_per_scenario, 
     # Baseline points (red squares)
     ax.scatter(F_baseline_arr, F_star_arr,
                c='red',
-               s=80,
+               s=20,
                alpha=0.6,
                edgecolors='darkred',
-               linewidths=1,
+               linewidths=0.5,
                label='Baseline (no controller)',
                marker='s')
 
     # Controller points — surrogate F (solid blue circles)
     ax.scatter(F_actual_arr, F_star_arr,
                c='blue',
-               s=80,
+               s=20,
                alpha=0.6,
                edgecolors='darkblue',
-               linewidths=1,
+               linewidths=0.5,
                label='Controller (surrogate)',
                marker='o')
 
@@ -421,10 +421,10 @@ def plot_target_vs_actual_scatter(F_star_per_scenario, F_baseline_per_scenario, 
             F_star_for_formula = np.full_like(F_formula_arr, F_star_arr[0])
         ax.scatter(F_formula_arr, F_star_for_formula,
                    facecolors='none',
-                   s=100,
+                   s=20,
                    alpha=0.7,
                    edgecolors='blue',
-                   linewidths=1.5,
+                   linewidths=0.5,
                    label='Controller (ProT formula)',
                    marker='o')
 
@@ -439,7 +439,7 @@ def plot_target_vs_actual_scatter(F_star_per_scenario, F_baseline_per_scenario, 
 
     ax.plot([min_val - margin, max_val + margin],
             [min_val - margin, max_val + margin],
-            'k--', linewidth=2, label='Perfect Match (y = x)', alpha=0.5)
+            'k--', label='Perfect Match (y = x)', alpha=0.5)
 
     ax.set_xlabel('F (Reliability)')
     ax.set_ylabel('F_star (Target Reliability)')
@@ -503,7 +503,7 @@ def plot_gap_distribution(F_star_per_scenario, F_actual_per_scenario, save_path=
                                      color='steelblue',
                                      alpha=0.7,
                                      edgecolor='black',
-                                     linewidth=1.5)
+                                     linewidth=0.5)
 
     # Color bars based on gap value (green = small, red = large)
     gap_max = gaps.max()
@@ -541,11 +541,11 @@ def plot_gap_distribution(F_star_per_scenario, F_actual_per_scenario, save_path=
     # Add vertical lines for statistics
     y_max = ax.get_ylim()[1]
 
-    ax.axvline(mean_gap, color='darkblue', linestyle='--', linewidth=2,
+    ax.axvline(mean_gap, color='darkblue', linestyle='--',
                label=f'Mean: {mean_gap:.6f}')
-    ax.axvline(median_gap, color='purple', linestyle='--', linewidth=2,
+    ax.axvline(median_gap, color='purple', linestyle='--',
                label=f'Median: {median_gap:.6f}')
-    ax.axvline(worst_gap, color='darkred', linestyle='--', linewidth=2,
+    ax.axvline(worst_gap, color='darkred', linestyle='--',
                label=f'Worst: {worst_gap:.6f}')
 
     # Labels and title
