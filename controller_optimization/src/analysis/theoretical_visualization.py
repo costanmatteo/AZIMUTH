@@ -20,35 +20,35 @@ def apply_plot_style():
     plt.rcParams.update({
         'font.family':           'sans-serif',
         'font.sans-serif':       ['Helvetica', 'Arial', 'DejaVu Sans'],
-        'font.size':             8,
-        'axes.titlesize':        9,
+        'font.size':             6.5,
+        'axes.titlesize':        7,
         'axes.titleweight':      'normal',
         'axes.titlelocation':    'left',
-        'axes.labelsize':        8,
+        'axes.labelsize':        6.5,
         'axes.labelweight':      'normal',
-        'axes.linewidth':        0.5,
+        'axes.linewidth':        0.4,
         'axes.spines.top':       False,
         'axes.spines.right':     False,
         'axes.grid':             True,
         'grid.color':            '#DDDDDD',
-        'grid.linewidth':        0.4,
+        'grid.linewidth':        0.3,
         'grid.alpha':            1.0,
-        'xtick.labelsize':       7.5,
-        'ytick.labelsize':       7.5,
-        'xtick.major.width':     0.4,
-        'ytick.major.width':     0.4,
-        'xtick.major.size':      3,
-        'ytick.major.size':      3,
-        'legend.fontsize':       7.5,
+        'xtick.labelsize':       6,
+        'ytick.labelsize':       6,
+        'xtick.major.width':     0.3,
+        'ytick.major.width':     0.3,
+        'xtick.major.size':      2.5,
+        'ytick.major.size':      2.5,
+        'legend.fontsize':       6,
         'legend.framealpha':     0.9,
         'legend.edgecolor':      '#DDDDDD',
         'legend.fancybox':       False,
-        'legend.borderpad':      0.4,
+        'legend.borderpad':      0.3,
         'figure.facecolor':      'white',
         'axes.facecolor':        'white',
         'savefig.facecolor':     'white',
         'savefig.dpi':           150,
-        'lines.linewidth':       1.4,
+        'lines.linewidth':       0.8,
     })
 
 
@@ -92,7 +92,7 @@ def plot_loss_vs_L_min(
     theoretical = np.array(theoretical_L_min)
 
     # Plot observed loss
-    ax.plot(epochs, observed, 'b-', label='Observed Loss', marker='o', markersize=2)
+    ax.plot(epochs, observed, 'b-', label='Observed Loss')
 
     # Plot theoretical L_min (empirical)
     ax.plot(epochs, theoretical, 'r--', label='L_min (empirical)')
@@ -190,7 +190,7 @@ def plot_efficiency_over_time(
         eff_bellman = np.where(obs > 0, bellman_val / obs, 0.0)
         eff_bellman_clipped = np.clip(eff_bellman, 0, 1.5)
 
-        ax.plot(epochs, eff_bellman_clipped, 'g-', marker='o', markersize=2,
+        ax.plot(epochs, eff_bellman_clipped, 'g-',
                 label=f'Efficiency (Bellman, L_min={bellman_val:.4f})')
 
         # Secondary: empirical efficiency as dashed reference
@@ -203,17 +203,13 @@ def plot_efficiency_over_time(
     else:
         # Fallback: empirical efficiency only
         eff_emp_clipped = np.clip(eff_empirical, 0, 1.5)
-        ax.plot(epochs, eff_emp_clipped, 'g-', marker='o', markersize=2,
+        ax.plot(epochs, eff_emp_clipped, 'g-',
                 label='Efficiency (empirical)')
         main_eff = eff_emp_clipped
         limit_label = 'Theoretical Limit (100%)'
 
     # Add horizontal line at y=1 (theoretical limit)
     ax.axhline(y=1.0, color='red', linestyle='--', label=limit_label)
-
-    # Add horizontal lines at 90% and 95%
-    ax.axhline(y=0.9, color='orange', linestyle=':', alpha=0.7, label='90% Efficiency')
-    ax.axhline(y=0.95, color='purple', linestyle=':', alpha=0.7, label='95% Efficiency')
 
     # Fill area above current efficiency (room for improvement)
     ax.fill_between(
@@ -228,8 +224,7 @@ def plot_efficiency_over_time(
 
     # Labels and legend
     ax.set_xlabel('Epoch')
-    ylabel = 'Efficiency (L_min Bellman / Loss)' if bellman_val is not None else 'Efficiency (L_min / Loss)'
-    ax.set_ylabel(ylabel)
+    ax.set_ylabel('Efficiency')
     ax.set_title(title)
     ax.legend(loc='lower right')
     ax.grid(True, alpha=0.3)
@@ -281,38 +276,28 @@ def plot_loss_decomposition(
     ax.spines['right'].set_visible(False)
 
     # Data
-    components = ['Var(F)\n(Irreducible)', 'Bias²\n(Irreducible)', 'Gap\n(Reducible)']
+    components = ['Var(F)', 'Bias²', 'Gap']
     values = [Var_F, Bias2, max(gap, 0)]  # Ensure gap is non-negative
     colors = ['#ff6b6b', '#feca57', '#48dbfb']
 
     # Create bars
     bars = ax.bar(components, values, color=colors, edgecolor='black', linewidth=0.5)
 
-    # Add value labels on bars
-    for bar, val in zip(bars, values):
+    # Compute percentages
+    total = sum(values)
+    L_min = Var_F + Bias2
+
+    # Add percentage + value labels on bars (percentage on top, value below)
+    for i, (bar, val) in enumerate(zip(bars, values)):
         height = bar.get_height()
+        pct = 100 * val / total if total > 0 else 0
         ax.annotate(
-            f'{val:.4f}',
+            f'{pct:.1f}%\n{val:.4f}',
             xy=(bar.get_x() + bar.get_width() / 2, height),
             xytext=(0, 2),
             textcoords="offset points",
             ha='center', va='bottom',
         )
-
-    # Compute percentages
-    total = sum(values)
-    L_min = Var_F + Bias2
-
-    # Add percentage annotations
-    if total > 0:
-        pct_var = 100 * Var_F / total
-        pct_bias = 100 * Bias2 / total
-        pct_gap = 100 * max(gap, 0) / total
-
-        # Add text below bars
-        ax.text(0, -0.1 * max(values), f'{pct_var:.1f}%', ha='center', transform=ax.get_xaxis_transform())
-        ax.text(1, -0.1 * max(values), f'{pct_bias:.1f}%', ha='center', transform=ax.get_xaxis_transform())
-        ax.text(2, -0.1 * max(values), f'{pct_gap:.1f}%', ha='center', transform=ax.get_xaxis_transform())
 
     # Add horizontal line for L_min
     ax.axhline(y=L_min, color='red', linestyle='--', label=f'L_min = {L_min:.4f}')
