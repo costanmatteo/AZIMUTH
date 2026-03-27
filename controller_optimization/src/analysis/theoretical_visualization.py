@@ -132,10 +132,10 @@ def plot_loss_vs_L_min(
     y_min = min(min(all_vals), 0) * 0.9 if min(all_vals) < 0 else 0
     ax.set_ylim(y_min, y_max)
 
-    plt.tight_layout()
+    plt.tight_layout(pad=0.3)
 
     if save_path:
-        fig.savefig(save_path, dpi=150, bbox_inches='tight')
+        fig.savefig(save_path, dpi=150)
         print(f"  Saved: {save_path}")
 
     return fig
@@ -237,10 +237,10 @@ def plot_efficiency_over_time(
     # Set y-axis from 0 to 1.1
     ax.set_ylim(0, 1.1)
 
-    plt.tight_layout()
+    plt.tight_layout(pad=0.3)
 
     if save_path:
-        fig.savefig(save_path, dpi=150, bbox_inches='tight')
+        fig.savefig(save_path, dpi=150)
         print(f"  Saved: {save_path}")
 
     return fig
@@ -334,10 +334,10 @@ def plot_loss_decomposition(
     ax.text(0.02, 0.98, textstr, transform=ax.transAxes, fontsize=9,
             verticalalignment='top', bbox=props)
 
-    plt.tight_layout()
+    plt.tight_layout(pad=0.3)
 
     if save_path:
-        fig.savefig(save_path, dpi=150, bbox_inches='tight')
+        fig.savefig(save_path, dpi=150)
         print(f"  Saved: {save_path}")
 
     return fig

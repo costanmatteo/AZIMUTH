@@ -1211,10 +1211,6 @@ def _page3(d):
     ])
     for p, cap in right_charts:
         img = scale_img_fw(p, col_w, rh)
-        # Force image to always fill the full column width
-        if hasattr(img, 'drawWidth'):
-            img.drawWidth = col_w
-            img.hAlign = 'LEFT'
         cell = Table([[img], [Paragraph(cap, ST_CAPTION)]], colWidths=[col_w])
         cell.setStyle(no_pad_left)
         r_rows.append([cell])
