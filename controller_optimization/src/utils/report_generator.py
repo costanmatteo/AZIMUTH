@@ -45,11 +45,10 @@ def get_report_chart_sizes():
     hdr_h    = 1.8 * cm
     ftr_h    = 1.5 * cm
     avail    = PH - 2 * M - hdr_h - ftr_h
-    cap_h    = 12
-    lh       = int((avail - 2 * cap_h) / 2)
+    lh       = int(avail / 2)
     n_right  = 3
     inter_gap = 4
-    rh       = int((avail - n_right * cap_h - (n_right - 1) * inter_gap) / n_right)
+    rh       = int((avail - (n_right - 1) * inter_gap) / n_right)
     left_figsize  = (pair_w / 72.0, lh / 72.0)
     right_figsize = (col_w  / 72.0, rh  / 72.0)
     return left_figsize, right_figsize
@@ -1169,7 +1168,6 @@ def _page3(d):
     hdr_h  = 1.8 * cm   # mini-header + rule (generous)
     ftr_h  = 1.5 * cm   # footer (rule + table + spacing)
     avail  = PH - 2 * M - hdr_h - ftr_h
-    cap_h  = 12          # caption row height allowance
     col_gap = 10
     col_w  = (TW - col_gap) / 2
 
@@ -1182,36 +1180,23 @@ def _page3(d):
     ])
 
     # ── LEFT COLUMN: baseline/gap paired (train on top, test below) ────
-    # 2 rows, each row = 2 images side by side + caption
+    # 2 rows, each row = 2 images side by side
     pair_w = col_w / 2
-    lh = int((avail - 2 * cap_h) / 2)
+    lh = int(avail / 2)
 
-    def _img_pair(p1, p2, c1, c2, row_h):
+    def _img_pair(p1, p2, row_h):
         i1 = scale_img(p1, pair_w, row_h)
         i2 = scale_img(p2, pair_w, row_h)
-        t1 = Table([[i1], [Paragraph(c1, ST_CAPTION)]], colWidths=[pair_w])
-        t2 = Table([[i2], [Paragraph(c2, ST_CAPTION)]], colWidths=[pair_w])
-        for t in (t1, t2):
-            t.setStyle(TableStyle([
-                ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
-                ('ALIGN',         (0, 0), (0,  0),  'CENTER'),
-                ('LEFTPADDING',   (0, 0), (-1, -1), 0),
-                ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
-                ('TOPPADDING',    (0, 0), (-1, -1), 0),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 1),
-            ]))
-        row = Table([[t1, t2]], colWidths=[pair_w, pair_w])
+        row = Table([[i1, i2]], colWidths=[pair_w, pair_w])
         row.setStyle(no_pad)
         return row
 
     row_train = _img_pair(
         chk / 'baseline_vs_controller_train.png',
-        chk / 'gap_distribution_train.png',
-        "Baseline vs controller \u2014 train", "Gap distribution \u2014 train", lh)
+        chk / 'gap_distribution_train.png', lh)
     row_test = _img_pair(
         chk / 'baseline_vs_controller_test.png',
-        chk / 'gap_distribution_test.png',
-        "Baseline vs controller \u2014 test", "Gap distribution \u2014 test", lh)
+        chk / 'gap_distribution_test.png', lh)
 
     left = Table([[row_train], [row_test]], colWidths=[col_w])
     left.setStyle(no_pad)
@@ -1219,7 +1204,7 @@ def _page3(d):
     # ── RIGHT COLUMN: 3 charts stacked, full width of column ───────────
     n_right   = 3
     inter_gap = 4                           # vertical gap between charts
-    rh = int((avail - n_right * cap_h - (n_right - 1) * inter_gap) / n_right)
+    rh = int((avail - (n_right - 1) * inter_gap) / n_right)
 
     # Compute exact figsize (inches) that matches the column slot so PNGs
     # are generated at the right proportions and fill the space perfectly.
@@ -1286,11 +1271,9 @@ def _page3(d):
         (chk / 'loss_decomposition.png',   "Loss decomposition"),
     ]
     r_rows = []
-    for p, cap in right_charts:
+    for p, _cap in right_charts:
         img = scale_img_fw(p, col_w, rh)
-        cell = Table([[img], [Paragraph(cap, ST_CAPTION)]], colWidths=[col_w])
-        cell.setStyle(no_pad)
-        r_rows.append([cell])
+        r_rows.append([img])
     right = Table(r_rows, colWidths=[col_w])
     right.setStyle(no_pad)
 
