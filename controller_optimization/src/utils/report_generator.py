@@ -303,6 +303,24 @@ def four_col(c1, c2, c3, c4, gap=8):
     ]))
     return outer
 
+def five_col(c1, c2, c3, c4, c5, gap=8):
+    cw = (TW - 4 * gap) / 5
+    outer = Table(
+        [[_wrap_col(c1, cw), Spacer(gap, 1),
+          _wrap_col(c2, cw), Spacer(gap, 1),
+          _wrap_col(c3, cw), Spacer(gap, 1),
+          _wrap_col(c4, cw), Spacer(gap, 1),
+          _wrap_col(c5, cw)]],
+        colWidths=[cw, gap, cw, gap, cw, gap, cw, gap, cw])
+    outer.setStyle(TableStyle([
+        ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
+        ('LEFTPADDING',   (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
+        ('TOPPADDING',    (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+    ]))
+    return outer
+
 def img_pair(left_path, right_path, left_cap, right_cap, h, gap=0):
     cw  = (TW - gap) / 2
     lt = Table(
@@ -625,15 +643,18 @@ def _page1(d, total_pages):
     F.append(four_col(
         [blk_title("Architecture")] + [kv_table(arch_rows,  cw4)],
         [blk_title("Training")]     + [kv_table(train_rows, cw4)],
-        # col 3: reliability scores
+        # col 3: reliability scores (formula primary, surrogate in grey below)
         [blk_title("Reliability scores")] + [kv_table(
             [
                 ("F* (target)",             f"{fstar_v:.6f}"),
                 ("F\u2019 (baseline)",       _fstr(F_bl)),
-                ("F (controller)",           _fstr(F_act)),
             ] + ([
                 ("F (formula)",              _fstr(F_form)),
-            ] if fform_v is not None else []) + [
+                ("\u2514 surrogate",         _fstr(F_act),
+                 ST_VAL_FORM, ST_KEY_FORM),
+            ] if fform_v is not None else [
+                ("F (controller)",           _fstr(F_act)),
+            ]) + [
                 ("Improvement vs baseline",  f"{improv_pct:+.2f}%",
                  ST_VAL_G if improv_pct >= 0 else ST_VAL_R),
             ] + ([
@@ -652,7 +673,7 @@ def _page1(d, total_pages):
                 ("Robustness (std)",         f"{rob_std:.6f}"),
             ],
         cw4)],
-        # col 4: performance
+        # col 4: performance (formula primary, surrogate in grey below)
         [blk_title("Performance")] + [kv_table(
             _perf_rows(adv, n_scenarios), cw4)],
         gap=10,
@@ -1046,56 +1067,77 @@ def _perf_rows(adv, n_scenarios):
     fwc_te = adv.get('formula_worst_case_gap_test')  or {}
     has_formula = bool(fsr_tr)
 
-    rows = [
-        (f"Win rate vs baseline \u2014 train",
-         f"{ok_tr}/{n_sc_tr} ({pct_tr:.1f}%)",
-         ST_VAL_G if pct_tr > 50 else ST_VAL_R),
-    ]
     if has_formula:
         f_ok_tr = fsr_tr.get('n_successful', fsr_tr.get('n_success', 0)) or 0
         f_n_tr  = fsr_tr.get('n_scenarios', fsr_tr.get('n_total', _n_sc))
         f_pct_tr = (float(fsr_tr.get('success_rate', f_ok_tr / f_n_tr if f_n_tr else 0)) or 0.0) * 100
-        rows.append(("\u2514 formula",
-                     f"{f_ok_tr}/{f_n_tr} ({f_pct_tr:.1f}%)",
-                     ST_VAL_FORM_G if f_pct_tr > 50 else ST_VAL_FORM_R,
-                     ST_KEY_FORM))
+        rows = [
+            (f"Win rate vs baseline \u2014 train",
+             f"{f_ok_tr}/{f_n_tr} ({f_pct_tr:.1f}%)",
+             ST_VAL_G if f_pct_tr > 50 else ST_VAL_R),
+            ("\u2514 surrogate",
+             f"{ok_tr}/{n_sc_tr} ({pct_tr:.1f}%)",
+             ST_VAL_FORM_G if pct_tr > 50 else ST_VAL_FORM_R,
+             ST_KEY_FORM),
+        ]
+    else:
+        rows = [
+            (f"Win rate vs baseline \u2014 train",
+             f"{ok_tr}/{n_sc_tr} ({pct_tr:.1f}%)",
+             ST_VAL_G if pct_tr > 50 else ST_VAL_R),
+        ]
 
-    rows.append(
-        (f"Win rate vs baseline \u2014 test",
-         f"{ok_te}/{n_sc_te} ({pct_te:.1f}%)",
-         ST_VAL_G if pct_te > 50 else ST_VAL_R))
     if has_formula:
         f_ok_te = fsr_te.get('n_successful', fsr_te.get('n_success', 0)) or 0
         f_n_te  = fsr_te.get('n_scenarios', fsr_te.get('n_total', _n_sc))
         f_pct_te = (float(fsr_te.get('success_rate', f_ok_te / f_n_te if f_n_te else 0)) or 0.0) * 100
-        rows.append(("\u2514 formula",
-                     f"{f_ok_te}/{f_n_te} ({f_pct_te:.1f}%)",
-                     ST_VAL_FORM_G if f_pct_te > 50 else ST_VAL_FORM_R,
+        rows.append(
+            (f"Win rate vs baseline \u2014 test",
+             f"{f_ok_te}/{f_n_te} ({f_pct_te:.1f}%)",
+             ST_VAL_G if f_pct_te > 50 else ST_VAL_R))
+        rows.append(("\u2514 surrogate",
+                     f"{ok_te}/{n_sc_te} ({pct_te:.1f}%)",
+                     ST_VAL_FORM_G if pct_te > 50 else ST_VAL_FORM_R,
                      ST_KEY_FORM))
+    else:
+        rows.append(
+            (f"Win rate vs baseline \u2014 test",
+             f"{ok_te}/{n_sc_te} ({pct_te:.1f}%)",
+             ST_VAL_G if pct_te > 50 else ST_VAL_R))
 
-    rows.append(
-        (f"Worst-case gap \u2014 train",
-         f"{float(wc_tr):.6f} at sc. {wc_tr_s}"
-         if isinstance(wc_tr, (int, float)) else '\u2014'))
     if has_formula:
         fwc_tr_v = fwc_tr.get('worst_case_gap', None)
         fwc_tr_s = fwc_tr.get('worst_case_scenario_idx', '')
-        rows.append(("\u2514 formula",
-                     f"{float(fwc_tr_v):.6f} at sc. {fwc_tr_s}"
-                     if isinstance(fwc_tr_v, (int, float)) else '\u2014',
+        rows.append(
+            (f"Worst-case gap \u2014 train",
+             f"{float(fwc_tr_v):.6f} at sc. {fwc_tr_s}"
+             if isinstance(fwc_tr_v, (int, float)) else '\u2014'))
+        rows.append(("\u2514 surrogate",
+                     f"{float(wc_tr):.6f} at sc. {wc_tr_s}"
+                     if isinstance(wc_tr, (int, float)) else '\u2014',
                      ST_VAL_FORM, ST_KEY_FORM))
+    else:
+        rows.append(
+            (f"Worst-case gap \u2014 train",
+             f"{float(wc_tr):.6f} at sc. {wc_tr_s}"
+             if isinstance(wc_tr, (int, float)) else '\u2014'))
 
-    rows.append(
-        (f"Worst-case gap \u2014 test",
-         f"{float(wc_te):.6f} at sc. {wc_te_s}"
-         if isinstance(wc_te, (int, float)) else '\u2014'))
     if has_formula:
         fwc_te_v = fwc_te.get('worst_case_gap', None)
         fwc_te_s = fwc_te.get('worst_case_scenario_idx', '')
-        rows.append(("\u2514 formula",
-                     f"{float(fwc_te_v):.6f} at sc. {fwc_te_s}"
-                     if isinstance(fwc_te_v, (int, float)) else '\u2014',
+        rows.append(
+            (f"Worst-case gap \u2014 test",
+             f"{float(fwc_te_v):.6f} at sc. {fwc_te_s}"
+             if isinstance(fwc_te_v, (int, float)) else '\u2014'))
+        rows.append(("\u2514 surrogate",
+                     f"{float(wc_te):.6f} at sc. {wc_te_s}"
+                     if isinstance(wc_te, (int, float)) else '\u2014',
                      ST_VAL_FORM, ST_KEY_FORM))
+    else:
+        rows.append(
+            (f"Worst-case gap \u2014 test",
+             f"{float(wc_te):.6f} at sc. {wc_te_s}"
+         if isinstance(wc_te, (int, float)) else '\u2014'))
 
     return rows
 
