@@ -159,13 +159,17 @@ def scale_img(path, max_w, max_h):
     return img
 
 def scale_img_fw(path, target_w, max_h):
-    """Scale image to fill target_w, capping height at max_h. No deformation."""
+    """Scale image to fill target_w, keeping aspect ratio. If height exceeds
+    max_h, shrink both dimensions proportionally."""
     if not Path(path).exists():
         return _placeholder(Path(path).name, target_w, max_h)
     img   = Image(str(path))
     scale = target_w / img.imageWidth
-    img.drawWidth  = target_w
-    img.drawHeight = min(img.imageHeight * scale, max_h)
+    h     = img.imageHeight * scale
+    if h > max_h:
+        scale = max_h / img.imageHeight
+    img.drawWidth  = img.imageWidth  * scale
+    img.drawHeight = img.imageHeight * scale
     return img
 
 def _placeholder(name, w, h):
