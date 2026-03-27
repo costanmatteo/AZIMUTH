@@ -1194,32 +1194,73 @@ def _page3(d):
     left.setStyle(no_pad)
 
     # ── RIGHT COLUMN: 3 charts stacked, full width of column ───────────
+    n_right   = 3
+    inter_gap = 4                           # vertical gap between charts
+    rh = int((avail - n_right * cap_h - (n_right - 1) * inter_gap) / n_right)
+
+    # Compute exact figsize (inches) that matches the column slot so PNGs
+    # are generated at the right proportions and fill the space perfectly.
+    _DPI        = 150
+    col_w_in    = col_w / 72.0              # column width in inches
+    chart_h_in  = rh   / 72.0              # chart height in inches
+    report_figsize = (col_w_in, chart_h_in)
+
+    # Regenerate the 3 right-column PNGs at the exact report dimensions
+    theo = d.get('theoretical_data') or {}
+    if theo.get('epochs') and len(theo['epochs']) > 0:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        from controller_optimization.src.analysis.theoretical_visualization import (
+            plot_loss_vs_L_min, plot_efficiency_over_time, plot_loss_decomposition,
+        )
+        bellman_data = theo.get('bellman_lmin', None)
+
+        p = chk / 'loss_vs_L_min.png'
+        plot_loss_vs_L_min(
+            epochs=theo['epochs'],
+            observed_loss=theo['observed_loss'],
+            theoretical_L_min=theo['theoretical_L_min'],
+            save_path=str(p),
+            figsize=report_figsize,
+            bellman_lmin=bellman_data,
+        )
+        plt.close()
+
+        p = chk / 'training_efficiency.png'
+        plot_efficiency_over_time(
+            epochs=theo['epochs'],
+            efficiency=theo['efficiency'],
+            save_path=str(p),
+            figsize=report_figsize,
+            bellman_lmin=bellman_data,
+            observed_loss=theo['observed_loss'],
+        )
+        plt.close()
+
+        p = chk / 'loss_decomposition.png'
+        plot_loss_decomposition(
+            Var_F=theo['theoretical_Var_F'][-1],
+            Bias2=theo['theoretical_Bias2'][-1],
+            gap=theo['gap'][-1],
+            save_path=str(p),
+            figsize=report_figsize,
+        )
+        plt.close()
+
     right_charts = [
         (chk / 'loss_vs_L_min.png',       "Loss vs L_min Bellman"),
         (chk / 'training_efficiency.png',  "Training efficiency"),
         (chk / 'loss_decomposition.png',   "Loss decomposition"),
     ]
-    rh = int((avail - len(right_charts) * cap_h) / len(right_charts))
     r_rows = []
-    no_pad_left = TableStyle([
-        ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
-        ('ALIGN',         (0, 0), (-1, -1), 'LEFT'),
-        ('LEFTPADDING',   (0, 0), (-1, -1), 0),
-        ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
-        ('TOPPADDING',    (0, 0), (-1, -1), 0),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
-    ])
     for p, cap in right_charts:
-        if Path(p).exists():
-            img = Image(str(p), width=col_w)
-            img.hAlign = 'LEFT'
-        else:
-            img = _placeholder(Path(p).name, col_w, rh)
+        img = scale_img_fw(p, col_w, rh)
         cell = Table([[img], [Paragraph(cap, ST_CAPTION)]], colWidths=[col_w])
-        cell.setStyle(no_pad_left)
+        cell.setStyle(no_pad)
         r_rows.append([cell])
     right = Table(r_rows, colWidths=[col_w])
-    right.setStyle(no_pad_left)
+    right.setStyle(no_pad)
 
     # ── Assemble two-column layout ─────────────────────────────────────
     layout = Table([[left, Spacer(col_gap, 1), right]],
