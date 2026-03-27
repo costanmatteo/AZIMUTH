@@ -3,8 +3,12 @@ Visualizzazioni per controller optimization.
 """
 
 import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
 import numpy as np
 from pathlib import Path
+
+# Rebuild font cache once at import time so new fonts are picked up
+fm._load_fontmanager(try_read_cache=False)
 
 
 def apply_plot_style():

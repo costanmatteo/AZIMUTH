@@ -20,30 +20,30 @@ def apply_plot_style():
     plt.rcParams.update({
         'font.family':           'sans-serif',
         'font.sans-serif':       ['Helvetica', 'Arial', 'DejaVu Sans'],
-        'font.size':             6.5,
-        'axes.titlesize':        7,
+        'font.size':             8,
+        'axes.titlesize':        9,
         'axes.titleweight':      'normal',
         'axes.titlelocation':    'left',
-        'axes.labelsize':        6.5,
+        'axes.labelsize':        8,
         'axes.labelweight':      'normal',
-        'axes.linewidth':        0.4,
+        'axes.linewidth':        0.5,
         'axes.spines.top':       False,
         'axes.spines.right':     False,
         'axes.grid':             True,
         'grid.color':            '#DDDDDD',
-        'grid.linewidth':        0.3,
+        'grid.linewidth':        0.4,
         'grid.alpha':            1.0,
-        'xtick.labelsize':       6,
-        'ytick.labelsize':       6,
-        'xtick.major.width':     0.3,
-        'ytick.major.width':     0.3,
-        'xtick.major.size':      2.5,
-        'ytick.major.size':      2.5,
-        'legend.fontsize':       6,
+        'xtick.labelsize':       7.5,
+        'ytick.labelsize':       7.5,
+        'xtick.major.width':     0.4,
+        'ytick.major.width':     0.4,
+        'xtick.major.size':      3,
+        'ytick.major.size':      3,
+        'legend.fontsize':       7.5,
         'legend.framealpha':     0.9,
         'legend.edgecolor':      '#DDDDDD',
         'legend.fancybox':       False,
-        'legend.borderpad':      0.3,
+        'legend.borderpad':      0.4,
         'figure.facecolor':      'white',
         'axes.facecolor':        'white',
         'savefig.facecolor':     'white',
@@ -124,7 +124,7 @@ def plot_loss_vs_L_min(
     ax.set_xlabel('Epoch')
     ax.set_ylabel('Loss')
     ax.set_title(title)
-    ax.legend(loc='upper right')
+    ax.legend(loc='upper left')
     ax.grid(True, alpha=0.3)
 
     # Set reasonable y-axis limits
@@ -226,7 +226,7 @@ def plot_efficiency_over_time(
     ax.set_xlabel('Epoch')
     ax.set_ylabel('Efficiency')
     ax.set_title(title)
-    ax.legend(loc='lower right')
+    ax.legend(loc='upper left')
     ax.grid(True, alpha=0.3)
 
     # Set y-axis from 0 to 1.1
@@ -305,7 +305,7 @@ def plot_loss_decomposition(
     # Labels
     ax.set_ylabel('Loss Value')
     ax.set_title(title)
-    ax.legend(loc='upper right')
+    ax.legend(loc='upper left')
 
     # Add annotations explaining components
     textstr = (
