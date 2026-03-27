@@ -159,20 +159,16 @@ def scale_img(path, max_w, max_h):
     return img
 
 def scale_img_fw(path, target_w, max_h):
-    """Scale image to fill target_w, keeping aspect ratio. If height exceeds
-    max_h, shrink both dimensions proportionally."""
+    """Scale image to always fill *target_w*.  Height is proportional but
+    capped at *max_h* (slight vertical compression when the source PNG has
+    a taller aspect ratio than the report slot)."""
     if not Path(path).exists():
         return _placeholder(Path(path).name, target_w, max_h)
     img   = Image(str(path))
-    print(f"  [scale_img_fw] {Path(path).name}: imageWidth={img.imageWidth:.1f} imageHeight={img.imageHeight:.1f}  target_w={target_w:.1f}  max_h={max_h:.1f}")
     scale = target_w / img.imageWidth
     h     = img.imageHeight * scale
-    if h > max_h:
-        print(f"    -> h={h:.1f} > max_h={max_h:.1f}  => SHRINKING to fit height")
-        scale = max_h / img.imageHeight
-    img.drawWidth  = img.imageWidth  * scale
-    img.drawHeight = img.imageHeight * scale
-    print(f"    -> drawWidth={img.drawWidth:.1f}  drawHeight={img.drawHeight:.1f}  (target_w={target_w:.1f})")
+    img.drawWidth  = target_w
+    img.drawHeight = min(h, max_h)
     return img
 
 def _placeholder(name, w, h):
