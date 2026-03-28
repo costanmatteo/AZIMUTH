@@ -26,6 +26,127 @@ from configs.processes_config import (
 )
 
 
+def _save_st_dag_schematic(n: int, m: int, rho: float, save_path: str,
+                           dpi: int = 200):
+    """Save a clean academic-style DAG of a single ST stage.
+
+    Layout:
+        S_1      S_2      ...      S_m
+         |f       |f                |f
+        X_1 ---> X_2 ---> ... ---> X_m ---> Y
+                                       +e(rho)
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import FancyArrowPatch
+
+    # Show at most 5 stages explicitly; use ellipsis for the rest
+    max_show = 5
+    if m <= max_show + 1:
+        stages = list(range(1, m + 1))
+        has_ellipsis = False
+    else:
+        stages = [1, 2, None, m - 1, m]  # None = ellipsis
+        has_ellipsis = True
+
+    n_cols = len(stages) + 1  # +1 for Y
+    fig_w = max(6, n_cols * 1.6)
+    fig, ax = plt.subplots(figsize=(fig_w, 2.8), facecolor='white')
+
+    x_spacing = 1.6
+    y_top = 1.5     # S row
+    y_bot = 0.0     # X row
+    y_out = 0.0     # Y row (same as X)
+
+    node_r = 0.22   # node radius for circle
+    arr_kw = dict(arrowstyle='->', mutation_scale=14, lw=1.4, color='#333')
+
+    def _circle(x, y, label, fill='white', edge='#333'):
+        c = plt.Circle((x, y), node_r, fc=fill, ec=edge, lw=1.4, zorder=3)
+        ax.add_patch(c)
+        ax.text(x, y, label, ha='center', va='center', fontsize=10,
+                fontfamily='serif', zorder=4)
+
+    positions_x = {}  # stage_idx -> x coordinate
+    x = 0.5
+
+    for i, s in enumerate(stages):
+        if s is None:
+            # Ellipsis
+            ax.text(x, y_top, r'$\cdots$', ha='center', va='center',
+                    fontsize=14, color='#666')
+            ax.text(x, y_bot, r'$\cdots$', ha='center', va='center',
+                    fontsize=14, color='#666')
+            positions_x[i] = x
+            x += x_spacing
+            continue
+
+        positions_x[i] = x
+
+        # S node (top)
+        _circle(x, y_top, f'$S_{{{s}}}$', fill='#E8F5E9', edge='#2E7D32')
+
+        # X node (bottom)
+        _circle(x, y_bot, f'$X_{{{s}}}$', fill='#E3F2FD', edge='#1565C0')
+
+        # f arrow: S -> X (vertical)
+        ax.annotate('', xy=(x, y_bot + node_r + 0.02),
+                    xytext=(x, y_top - node_r - 0.02),
+                    arrowprops=dict(arrowstyle='->', lw=1.2, color='#555'))
+        ax.text(x + 0.12, (y_top + y_bot) / 2, '$f$', fontsize=9,
+                fontfamily='serif', color='#555', ha='left', va='center')
+
+        # Horizontal arrow: X_prev -> X_curr
+        if i > 0 and stages[i - 1] is not None:
+            prev_x = positions_x[i - 1]
+            ax.annotate('', xy=(x - node_r - 0.02, y_bot),
+                        xytext=(prev_x + node_r + 0.02, y_bot),
+                        arrowprops=arr_kw)
+        elif i > 0 and stages[i - 1] is None:
+            # Arrow from ellipsis
+            prev_x = positions_x[i - 1]
+            ax.annotate('', xy=(x - node_r - 0.02, y_bot),
+                        xytext=(prev_x + 0.3, y_bot),
+                        arrowprops=arr_kw)
+
+        # Arrow from X before ellipsis to ellipsis
+        if i < len(stages) - 1 and stages[i + 1] is None:
+            next_x = positions_x.get(i + 1, x + x_spacing)
+            # Will be drawn when we reach ellipsis position
+            pass
+
+        x += x_spacing
+
+    # Y node
+    y_x = x
+    _circle(y_x, y_out, '$Y$', fill='#FFF3E0', edge='#E65100')
+
+    # Arrow: X_m -> Y
+    last_stage_idx = [i for i, s in enumerate(stages) if s is not None][-1]
+    last_x = positions_x[last_stage_idx]
+    ax.annotate('', xy=(y_x - node_r - 0.02, y_out),
+                xytext=(last_x + node_r + 0.02, y_out),
+                arrowprops=arr_kw)
+
+    # +e(rho) label on last arrow
+    mid_x = (last_x + y_x) / 2
+    ax.text(mid_x, y_out - 0.35, f'$+\\varepsilon(\\rho={rho})$',
+            ha='center', va='top', fontsize=8, fontfamily='serif', color='#888')
+
+    # Title
+    ax.set_title(f'DAG of a single stage  ($n={n},\\ m={m},\\ \\rho={rho}$)',
+                 fontsize=12, fontfamily='serif', pad=12)
+
+    ax.set_xlim(-0.2, y_x + 0.7)
+    ax.set_ylim(-0.7, y_top + 0.6)
+    ax.set_aspect('equal')
+    ax.axis('off')
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=dpi, bbox_inches='tight', facecolor='white')
+    plt.close(fig)
+
+
 def main():
     parser = argparse.ArgumentParser(description='Generate dataset for all processes')
     parser.add_argument('--n_samples', type=int, default=None,
@@ -147,11 +268,16 @@ def main():
     print(f"\n[2/4] Saving DAG image...")
     if DATASET_MODE == 'st':
         try:
-            from scm_ds.datasets_st import STConfig, build_st_scm
             proc0 = current_processes[0]
             st_p = proc0.get('st_params', {})
-            scm = build_st_scm(STConfig(**st_p), dag_image_dir=str(output_dir))
-            print(f"  DAG saved to: {output_dir}/")
+            dag_path = output_dir / 'dag_single_stage.png'
+            _save_st_dag_schematic(
+                n=st_p.get('n', 5),
+                m=st_p.get('m', 3),
+                rho=st_p.get('rho', 0.0),
+                save_path=str(dag_path),
+            )
+            print(f"  DAG saved to: {dag_path}")
         except Exception as e:
             print(f"  Warning: Could not save DAG image: {e}")
     else:
