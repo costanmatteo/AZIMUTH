@@ -2,8 +2,13 @@
 Metriche per valutazione controller optimization.
 """
 
+import logging
+import warnings
+
 import numpy as np
 import torch
+
+logger = logging.getLogger(__name__)
 
 
 def convert_trajectory_to_numpy(trajectory):
@@ -231,3 +236,100 @@ def compute_final_metrics(target_trajectory, baseline_trajectory, actual_traject
             'actual': process_metrics_actual,
         }
     }
+
+
+def compute_empirical_lmin(uncertainty_predictor, surrogate, target_trajectory,
+                           F_star, N=500, device='cpu'):
+    """
+    Empirical minimum achievable loss estimator L̂_min (Eq. 3.46–3.48).
+
+    Estimates the irreducible loss floor for a dataset by sampling N complete
+    trajectories from the uncertainty predictor's predictive distributions
+    along the optimal target trajectory, scoring each with the surrogate,
+    and computing the mean squared deviation from F*.
+
+    Args:
+        uncertainty_predictor: Callable a*_t → (µ_t, σ²_t) as tensors.
+        surrogate: Callable trajectory tensor (P, d_out) → scalar F̂.
+        target_trajectory: Sequence of P action tensors {a*_t}.
+        F_star (float): Target reliability score.
+        N (int): Number of Monte Carlo trajectories to sample (default: 500).
+        device (str): Torch device (default: 'cpu').
+
+    Returns:
+        float: Estimated L̂_min ≥ 0.
+    """
+    if N < 100:
+        warnings.warn(
+            f"N={N} is small; the L̂_min estimate may have high variance. "
+            "Consider N >= 100 for stable estimates.",
+            stacklevel=2,
+        )
+
+    P = len(target_trajectory)
+    F_star_tensor = torch.tensor(F_star, dtype=torch.float32, device=device)
+
+    with torch.no_grad():
+        # Step 2: get predictive distributions for each step
+        mus = []
+        vars_ = []
+        for t in range(P):
+            a_t = target_trajectory[t]
+            if not torch.is_tensor(a_t):
+                a_t = torch.tensor(a_t, dtype=torch.float32, device=device)
+            else:
+                a_t = a_t.to(device)
+            mu_t, var_t = uncertainty_predictor(a_t)
+            mus.append(mu_t)
+            vars_.append(var_t)
+
+        # Stack: (P, d_out) each
+        mus = torch.stack(mus)     # (P, d_out)
+        vars_ = torch.stack(vars_) # (P, d_out)
+        stds = torch.sqrt(vars_ + 1e-8)
+
+        # Step 3–4: sample N trajectories and score each
+        # Use fixed seed for reproducibility in eval mode
+        generator = torch.Generator(device=device)
+        generator.manual_seed(42)
+
+        F_samples = torch.empty(N, dtype=torch.float32, device=device)
+        for k in range(N):
+            # Sample o_{t,k} ~ N(mu_t, sigma_t^2) for all t at once
+            eps = torch.randn(mus.shape, generator=generator,
+                              dtype=torch.float32, device=device)
+            trajectory_k = mus + eps * stds  # (P, d_out)
+            F_samples[k] = surrogate(trajectory_k)
+
+        # Step 5: L̂_min = (1/N) * Σ (F̂_k - F*)²
+        l_hat_min = torch.mean((F_samples - F_star_tensor) ** 2).item()
+
+    # Validity check: warn if suspiciously close to 0
+    if l_hat_min < 1e-7:
+        logger.warning(
+            "L̂_min = %.2e is implausibly close to 0. This may indicate "
+            "surrogate overfitting near the target trajectory τ*.",
+            l_hat_min,
+        )
+
+    return l_hat_min
+
+
+def compute_training_efficiency_emp(L_phi, L_hat_min):
+    """
+    Empirical training efficiency η_emp = L̂_min / L(Φ), clipped to [0, 1].
+
+    Values near 1 indicate the controller loss is close to the irreducible
+    minimum; values near 0 indicate large controllable suboptimality.
+
+    Args:
+        L_phi (float): Current controller loss L(Φ).
+        L_hat_min (float): Empirical minimum achievable loss L̂_min.
+
+    Returns:
+        float: η_emp ∈ [0, 1].
+    """
+    if L_phi <= 0:
+        raise ValueError(f"L_phi must be positive, got {L_phi}")
+    ratio = L_hat_min / L_phi
+    return float(max(0.0, min(1.0, ratio)))
