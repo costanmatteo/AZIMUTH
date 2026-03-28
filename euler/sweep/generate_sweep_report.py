@@ -28,7 +28,7 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 
 matplotlib.rcParams['font.family'] = 'sans-serif'
-matplotlib.rcParams['font.sans-serif'] = ['Liberation Sans', 'Arial', 'DejaVu Sans']
+matplotlib.rcParams['font.sans-serif'] = ['Arial', 'DejaVu Sans']
 
 # ── WeasyPrint for HTML → PDF ────────────────────────────────────────────────
 try:
@@ -168,7 +168,7 @@ def compute_stats(df: pd.DataFrame) -> dict:
 _GREEN  = '#1D9E75'
 _RED    = '#D85A30'
 _AMBER  = '#BA7517'
-_FONT   = 'Liberation Sans'
+_FONT   = 'Arial'
 
 
 def _b64(fig) -> str:
@@ -300,7 +300,7 @@ PAGE_CSS = """
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
-  font-family: 'Liberation Sans', Helvetica, Arial, sans-serif;
+  font-family: Arial, Helvetica, sans-serif;
   font-size: 9px;
   line-height: 1.45;
   color: #1a1a1a;
