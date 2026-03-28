@@ -27,7 +27,9 @@ from configs.processes_config import (
 
 
 
-def _save_st_dag(n: int, m: int, rho: float, save_path: str, dpi: int = 200):
+def _save_st_dag(n: int, m: int, rho: float, save_path: str,
+                 me: int = 0, p: int = 1, env_mode: str = 'A',
+                 dpi: int = 200):
     """Save a B&W academic DAG matching the thesis figure.
 
     Notation (thesis convention):
@@ -143,7 +145,8 @@ def _save_st_dag(n: int, m: int, rho: float, save_path: str, dpi: int = 200):
 
     # Caption
     ax.text((0.8 + y_cx) / 2, y_x - 0.55,
-            f'DAG of a single stage  ($n={n},\\ m={m_eff},\\ \\rho={rho}$)',
+            f'DAG of a single stage  ($n={n},\\ m={m_eff},\\ \\rho={rho},'
+            f'\\ m_e={me},\\ p={p},\\ \\mathrm{{env}}={env_mode}$)',
             ha='center', va='top', fontsize=9, fontfamily='serif')
 
     ax.set_xlim(0, y_cx + 0.6)
@@ -284,6 +287,9 @@ def main():
                 m=st_p.get('m', 3),
                 rho=st_p.get('rho', 0.0),
                 save_path=str(dag_path),
+                me=st_p.get('me', 0),
+                p=st_p.get('p', 1),
+                env_mode=st_p.get('env_mode', 'A'),
             )
             print(f"  DAG saved to: {dag_path}")
         except Exception as e:
