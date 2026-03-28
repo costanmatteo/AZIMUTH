@@ -97,8 +97,10 @@ def _save_st_dag(n: int, m: int, rho: float, save_path: str, dpi: int = 200):
         # S label (input group) — above X
         if first_s == last_s:
             s_label = f'$S_{{{first_s}}}$'
+        elif last_s - first_s == 1:
+            s_label = f'$S_{{{first_s}}},\\, S_{{{last_s}}}$'
         else:
-            s_label = f'$S_{{{first_s}}}\\!\\!\\cdots\\!\\! S_{{{last_s}}}$'
+            s_label = f'$S_{{{first_s}}} \\cdot\\cdot S_{{{last_s}}}$'
         ax.text(cx, y_s, s_label, ha='center', va='center', fontsize=10,
                 fontfamily='serif')
 
@@ -106,12 +108,10 @@ def _save_st_dag(n: int, m: int, rho: float, save_path: str, dpi: int = 200):
         ax.text(cx, y_x, f'$X_{{{k}}}$', ha='center', va='center',
                 fontsize=10, fontfamily='serif')
 
-        # Vertical arrow S -> X with f label
+        # Vertical arrow S -> X
         ax.annotate('', xy=(cx, y_x + 0.25),
                     xytext=(cx, y_s - 0.25),
                     arrowprops=dict(arrowstyle='->', lw=0.9, color='black'))
-        ax.text(cx - 0.18, (y_s + y_x) / 2, '$f$', ha='right', va='center',
-                fontsize=9, fontfamily='serif')
 
         # Horizontal arrow from previous stage
         if si > 0:
@@ -140,11 +140,6 @@ def _save_st_dag(n: int, m: int, rho: float, save_path: str, dpi: int = 200):
     ax.annotate('', xy=(y_cx - 0.18, y_x),
                 xytext=(col_x[last_si] + 0.22, y_x),
                 arrowprops=dict(arrowstyle='->', lw=0.9, color='black'))
-
-    # +e(rho) label above last arrow
-    mid_last = (col_x[last_si] + y_cx) / 2
-    ax.text(mid_last, y_x + 0.22, f'$+\\varepsilon(\\rho)$',
-            ha='center', va='bottom', fontsize=8, fontfamily='serif')
 
     # Caption
     ax.text((0.8 + y_cx) / 2, y_x - 0.55,
