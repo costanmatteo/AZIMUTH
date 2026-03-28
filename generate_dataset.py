@@ -30,116 +30,151 @@ def _save_st_dag_schematic(n: int, m: int, rho: float, save_path: str,
                            dpi: int = 200):
     """Save a clean academic-style DAG of a single ST stage.
 
-    Layout:
-        S_1      S_2      ...      S_m
-         |f       |f                |f
-        X_1 ---> X_2 ---> ... ---> X_m ---> Y
-                                       +e(rho)
+    Layout (3 rows):
+        Row 1 (inputs):   X_1 .. X_w1      X_{w1+1} .. X_{w1+w2}    ...   X_{n-wm+1} .. X_n     E_1
+        Row 2 (stages):        S_1     --->      S_2           ---> ... --->     S_m
+        Row 3 (output):                                                          Y
+                                                                            +epsilon(rho)
+
+    Input groups are shown above each stage with arrows going down.
+    Stages are chained horizontally. S_m -> Y with noise label.
     """
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
-    from matplotlib.patches import FancyArrowPatch
+    import math
 
-    # Show at most 5 stages explicitly; use ellipsis for the rest
+    # Compute input partition widths (uniform profile, matching _compute_width)
+    m_eff = min(m, n)
+    base = n // m_eff
+    rem = n % m_eff
+    widths = [base + (1 if k < rem else 0) for k in range(m_eff)]
+
+    # Build input groups per stage
+    groups = []
+    idx = 0
+    for k in range(m_eff):
+        groups.append(list(range(idx + 1, idx + widths[k] + 1)))  # 1-indexed
+        idx += widths[k]
+
+    # Show at most 5 stages; use ellipsis for the rest
     max_show = 5
-    if m <= max_show + 1:
-        stages = list(range(1, m + 1))
+    if m_eff <= max_show + 1:
+        show = list(range(m_eff))
         has_ellipsis = False
     else:
-        stages = [1, 2, None, m - 1, m]  # None = ellipsis
+        show = [0, 1, None, m_eff - 2, m_eff - 1]
         has_ellipsis = True
 
-    n_cols = len(stages) + 1  # +1 for Y
-    fig_w = max(6, n_cols * 1.6)
-    fig, ax = plt.subplots(figsize=(fig_w, 2.8), facecolor='white')
+    n_cols = len(show) + 1  # +1 for Y
+    col_w = 2.2
+    fig_w = max(7, n_cols * col_w + 1.5)
+    fig, ax = plt.subplots(figsize=(fig_w, 3.6), facecolor='white')
 
-    x_spacing = 1.6
-    y_top = 1.5     # S row
-    y_bot = 0.0     # X row
-    y_out = 0.0     # Y row (same as X)
+    y_inp = 2.4      # input row
+    y_stage = 1.2    # stage row
+    y_out = 0.0      # output row
+    node_r = 0.28
+    arr_kw = dict(arrowstyle='->', mutation_scale=13, lw=1.3, color='#333')
 
-    node_r = 0.22   # node radius for circle
-    arr_kw = dict(arrowstyle='->', mutation_scale=14, lw=1.4, color='#333')
-
-    def _circle(x, y, label, fill='white', edge='#333'):
-        c = plt.Circle((x, y), node_r, fc=fill, ec=edge, lw=1.4, zorder=3)
+    def _circle(cx, cy, label, fill='white', edge='#333', fs=10):
+        c = plt.Circle((cx, cy), node_r, fc=fill, ec=edge, lw=1.4, zorder=3)
         ax.add_patch(c)
-        ax.text(x, y, label, ha='center', va='center', fontsize=10,
+        ax.text(cx, cy, label, ha='center', va='center', fontsize=fs,
                 fontfamily='serif', zorder=4)
 
-    positions_x = {}  # stage_idx -> x coordinate
-    x = 0.5
+    def _input_label(grp):
+        """Compact label for an input group: X_1..X_3 or X_5."""
+        if len(grp) == 1:
+            return f'$X_{{{grp[0]}}}$'
+        return f'$X_{{{grp[0]}}}\\!\\cdots\\! X_{{{grp[-1]}}}$'
 
-    for i, s in enumerate(stages):
-        if s is None:
-            # Ellipsis
-            ax.text(x, y_top, r'$\cdots$', ha='center', va='center',
+    col_x = {}
+    x = 1.0
+
+    for si, slot in enumerate(show):
+        if slot is None:
+            ax.text(x, y_stage, r'$\cdots$', ha='center', va='center',
+                    fontsize=16, color='#666')
+            ax.text(x, y_inp, r'$\cdots$', ha='center', va='center',
                     fontsize=14, color='#666')
-            ax.text(x, y_bot, r'$\cdots$', ha='center', va='center',
-                    fontsize=14, color='#666')
-            positions_x[i] = x
-            x += x_spacing
+            col_x[si] = x
+            x += col_w
             continue
 
-        positions_x[i] = x
+        col_x[si] = x
+        grp = groups[slot]
+        k = slot + 1  # 1-indexed stage number
 
-        # S node (top)
-        _circle(x, y_top, f'$S_{{{s}}}$', fill='#E8F5E9', edge='#2E7D32')
+        # Stage node
+        _circle(x, y_stage, f'$S_{{{k}}}$', fill='#E8F5E9', edge='#2E7D32')
 
-        # X node (bottom)
-        _circle(x, y_bot, f'$X_{{{s}}}$', fill='#E3F2FD', edge='#1565C0')
+        # Input group label above
+        inp_lbl = _input_label(grp)
+        ax.text(x, y_inp, inp_lbl, ha='center', va='center', fontsize=8.5,
+                fontfamily='serif', color='#1565C0',
+                bbox=dict(boxstyle='round,pad=0.25', fc='#E3F2FD',
+                          ec='#1565C0', lw=0.8))
 
-        # f arrow: S -> X (vertical)
-        ax.annotate('', xy=(x, y_bot + node_r + 0.02),
-                    xytext=(x, y_top - node_r - 0.02),
-                    arrowprops=dict(arrowstyle='->', lw=1.2, color='#555'))
-        ax.text(x + 0.12, (y_top + y_bot) / 2, '$f$', fontsize=9,
+        # Arrow: inputs -> S_k
+        ax.annotate('', xy=(x, y_stage + node_r + 0.02),
+                    xytext=(x, y_inp - 0.22),
+                    arrowprops=dict(arrowstyle='->', lw=1.0, color='#1565C0',
+                                   alpha=0.7))
+        # f label
+        ax.text(x + 0.18, (y_inp + y_stage) / 2, '$f$', fontsize=8,
                 fontfamily='serif', color='#555', ha='left', va='center')
 
-        # Horizontal arrow: X_prev -> X_curr
-        if i > 0 and stages[i - 1] is not None:
-            prev_x = positions_x[i - 1]
-            ax.annotate('', xy=(x - node_r - 0.02, y_bot),
-                        xytext=(prev_x + node_r + 0.02, y_bot),
-                        arrowprops=arr_kw)
-        elif i > 0 and stages[i - 1] is None:
-            # Arrow from ellipsis
-            prev_x = positions_x[i - 1]
-            ax.annotate('', xy=(x - node_r - 0.02, y_bot),
-                        xytext=(prev_x + 0.3, y_bot),
-                        arrowprops=arr_kw)
+        # Horizontal arrow: S_{k-1} -> S_k
+        if si > 0:
+            prev_si = si - 1
+            prev_x = col_x[prev_si]
+            if show[prev_si] is None:
+                ax.annotate('', xy=(x - node_r - 0.02, y_stage),
+                            xytext=(prev_x + 0.35, y_stage),
+                            arrowprops=arr_kw)
+            else:
+                ax.annotate('', xy=(x - node_r - 0.02, y_stage),
+                            xytext=(prev_x + node_r + 0.02, y_stage),
+                            arrowprops=arr_kw)
 
-        # Arrow from X before ellipsis to ellipsis
-        if i < len(stages) - 1 and stages[i + 1] is None:
-            next_x = positions_x.get(i + 1, x + x_spacing)
-            # Will be drawn when we reach ellipsis position
-            pass
-
-        x += x_spacing
+        x += col_w
 
     # Y node
     y_x = x
-    _circle(y_x, y_out, '$Y$', fill='#FFF3E0', edge='#E65100')
+    _circle(y_x, y_out, '$Y$', fill='#FFF3E0', edge='#E65100', fs=11)
 
-    # Arrow: X_m -> Y
-    last_stage_idx = [i for i, s in enumerate(stages) if s is not None][-1]
-    last_x = positions_x[last_stage_idx]
-    ax.annotate('', xy=(y_x - node_r - 0.02, y_out),
-                xytext=(last_x + node_r + 0.02, y_out),
+    # Arrow: S_m -> Y (diagonal)
+    last_si = [i for i, s in enumerate(show) if s is not None][-1]
+    last_x = col_x[last_si]
+    ax.annotate('', xy=(y_x - node_r + 0.05, y_out + node_r - 0.05),
+                xytext=(last_x + node_r - 0.05, y_stage - node_r + 0.05),
                 arrowprops=arr_kw)
 
-    # +e(rho) label on last arrow
-    mid_x = (last_x + y_x) / 2
-    ax.text(mid_x, y_out - 0.35, f'$+\\varepsilon(\\rho={rho})$',
-            ha='center', va='top', fontsize=8, fontfamily='serif', color='#888')
+    # +e(rho) label
+    mid_diag_x = (last_x + y_x) / 2 + 0.15
+    mid_diag_y = (y_stage + y_out) / 2 - 0.15
+    ax.text(mid_diag_x, mid_diag_y,
+            f'$+\\varepsilon(\\rho\\!=\\!{rho})$',
+            ha='left', va='top', fontsize=8, fontfamily='serif', color='#888')
+
+    # E_1 node (environmental) — shown to the right of inputs
+    env_x = y_x
+    _circle(env_x, y_inp, '$E_1$', fill='#F3E5F5', edge='#6A1B9A', fs=9)
+    # Arrow E -> Y
+    ax.annotate('', xy=(env_x, y_out + node_r + 0.02),
+                xytext=(env_x, y_inp - 0.28),
+                arrowprops=dict(arrowstyle='->', lw=1.0, color='#6A1B9A',
+                                alpha=0.6))
 
     # Title
-    ax.set_title(f'DAG of a single stage  ($n={n},\\ m={m},\\ \\rho={rho}$)',
-                 fontsize=12, fontfamily='serif', pad=12)
+    ax.set_title(
+        f'DAG of a single stage  ($n\\!=\\!{n},\\ m\\!=\\!{m_eff},'
+        f'\\ \\rho\\!=\\!{rho}$)',
+        fontsize=11, fontfamily='serif', pad=10)
 
-    ax.set_xlim(-0.2, y_x + 0.7)
-    ax.set_ylim(-0.7, y_top + 0.6)
+    ax.set_xlim(-0.3, y_x + 1.0)
+    ax.set_ylim(-0.6, y_inp + 0.6)
     ax.set_aspect('equal')
     ax.axis('off')
     plt.tight_layout()
