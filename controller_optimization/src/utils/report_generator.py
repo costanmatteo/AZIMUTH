@@ -1,14 +1,15 @@
 """
-PDF Report Generator for Controller Optimization — 2 pages A4 landscape.
-Style: Courier, monospace, same colors/sections as portrait version but
-landscape and more compact (less vertical whitespace).
+PDF Report Generator for Controller Optimization — A4 portrait.
+Style: Helvetica, compact layout with tables and charts rearranged
+for vertical (portrait) orientation.
 """
 
 import math
+import os
 from datetime import datetime
 from pathlib import Path
 
-from reportlab.lib.pagesizes import landscape, A4
+from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import cm, mm
 from reportlab.lib import colors
@@ -25,10 +26,33 @@ try:
 except ImportError:
     PYPDF_AVAILABLE = False
 
-# ── page geometry (A4 landscape) ─────────────────────────────────────────────
-PW, PH = landscape(A4)   # 841.89 x 595.28 pts
+# ── page geometry (A4 portrait) ──────────────────────────────────────────────
+PW, PH = A4               # 595.28 x 841.89 pts
 M  = 1.2 * cm            # margins
 TW = PW - 2 * M          # text width  ≈ 793 pts
+
+def get_report_chart_sizes():
+    """Return figsize (inches) for page-3 chart slots.
+
+    Returns:
+        (left_figsize, right_figsize) — each a (width, height) tuple in inches.
+        *left_figsize*  is for each chart in the baseline/gap paired rows (2 per row).
+        *right_figsize* is for each of the 3 stacked theoretical charts (full width).
+    """
+    pair_w   = TW / 2
+    hdr_h    = 1.8 * cm
+    ftr_h    = 1.5 * cm
+    avail    = PH - 2 * M - hdr_h - ftr_h
+    # Top portion: 2 rows of paired images (~40% of available height)
+    pair_h   = int(avail * 0.4 / 2)
+    # Bottom portion: 3 theoretical charts (~60% of available height)
+    n_right  = 3
+    inter_gap = 4
+    theo_avail = avail * 0.6
+    rh       = int((theo_avail - (n_right - 1) * inter_gap) / n_right)
+    left_figsize  = (pair_w / 72.0, pair_h / 72.0)
+    right_figsize = (TW     / 72.0, rh     / 72.0)
+    return left_figsize, right_figsize
 
 # ── colors ────────────────────────────────────────────────────────────────────
 C_GREEN = colors.HexColor('#1D9E75')
@@ -55,7 +79,7 @@ FS_NOTE    = 6.5
 
 # ── style factory ────────────────────────────────────────────────────────────
 def _s(name, size, bold=False, italic=False, color=C_BLACK, align=TA_LEFT):
-    font = 'Courier-Bold' if bold else ('Courier-Oblique' if italic else 'Courier')
+    font = 'Helvetica-Bold' if bold else ('Helvetica-Oblique' if italic else 'Helvetica')
     return ParagraphStyle(name, fontName=font, fontSize=size,
                           leading=size * 1.35, textColor=color, alignment=align)
 
@@ -80,8 +104,8 @@ ST_STATUS_R = _s('ct_str',    FS_STATUS,  color=C_RED,   align=TA_CENTER)
 ST_CAPTION  = _s('ct_cap',    FS_NOTE,    italic=True, color=C_TGRAY)
 ST_FTR      = _s('ct_ftr',    FS_NOTE,    color=C_TGRAY)
 ST_FTR_R    = _s('ct_ftrr',   FS_NOTE,    color=C_TGRAY, align=TA_RIGHT)
-ST_TRAJ_H   = _s('ct_th',     FS_BLK,     bold=False, color=C_TGRAY)
-ST_TRAJ_C   = _s('ct_tc',     FS_BODY)
+ST_TRAJ_H   = _s('ct_th',     5.5,        bold=False, color=C_TGRAY)
+ST_TRAJ_C   = _s('ct_tc',     5.5)
 ST_TRAJ_G   = _s('ct_tg',     FS_BODY,    color=C_GREEN)
 ST_TRAJ_R   = _s('ct_tr',     FS_BODY,    color=C_RED)
 
@@ -94,7 +118,7 @@ ST_VAL_FORM_G = _s('ct_val_fg', FS_BODY, italic=True, color=C_GREEN, align=TA_RI
 ST_VAL_FORM_R = _s('ct_val_fr', FS_BODY, italic=True, color=C_RED, align=TA_RIGHT)
 
 def _dyn(c, align=TA_RIGHT):
-    return ParagraphStyle(f'_d{id(c)}{align}', fontName='Courier',
+    return ParagraphStyle(f'_d{id(c)}{align}', fontName='Helvetica',
                           fontSize=FS_BODY, leading=FS_BODY * 1.35,
                           textColor=c, alignment=align)
 
@@ -157,8 +181,22 @@ def scale_img(path, max_w, max_h):
     img.drawHeight = img.imageHeight * scale
     return img
 
+def scale_img_fw(path, target_w, max_h):
+    """Scale image to fill target_w, keeping aspect ratio. If height exceeds
+    max_h, shrink both dimensions proportionally."""
+    if not Path(path).exists():
+        return _placeholder(Path(path).name, target_w, max_h)
+    img   = Image(str(path))
+    scale = target_w / img.imageWidth
+    h     = img.imageHeight * scale
+    if h > max_h:
+        scale = max_h / img.imageHeight
+    img.drawWidth  = img.imageWidth  * scale
+    img.drawHeight = img.imageHeight * scale
+    return img
+
 def _placeholder(name, w, h):
-    st = ParagraphStyle('_ph', fontName='Courier', fontSize=FS_NOTE,
+    st = ParagraphStyle('_ph', fontName='Helvetica', fontSize=FS_NOTE,
                         alignment=TA_CENTER, textColor=colors.HexColor('#AAAAAA'))
     t  = Table([[Paragraph(name, st)]], colWidths=[w], rowHeights=[h])
     t.setStyle(TableStyle([
@@ -257,6 +295,24 @@ def four_col(c1, c2, c3, c4, gap=8):
           _wrap_col(c3, cw), Spacer(gap, 1),
           _wrap_col(c4, cw)]],
         colWidths=[cw, gap, cw, gap, cw, gap, cw])
+    outer.setStyle(TableStyle([
+        ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
+        ('LEFTPADDING',   (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
+        ('TOPPADDING',    (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+    ]))
+    return outer
+
+def five_col(c1, c2, c3, c4, c5, gap=8):
+    cw = (TW - 4 * gap) / 5
+    outer = Table(
+        [[_wrap_col(c1, cw), Spacer(gap, 1),
+          _wrap_col(c2, cw), Spacer(gap, 1),
+          _wrap_col(c3, cw), Spacer(gap, 1),
+          _wrap_col(c4, cw), Spacer(gap, 1),
+          _wrap_col(c5, cw)]],
+        colWidths=[cw, gap, cw, gap, cw, gap, cw, gap, cw])
     outer.setStyle(TableStyle([
         ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
         ('LEFTPADDING',   (0, 0), (-1, -1), 0),
@@ -416,15 +472,14 @@ def img_grid_2x2(paths, captions, total_w, total_h, gap=4):
 
 
 # ════════════════════════════════════════════════════════════════════════════
-#  PAGE 1 — text metrics (landscape: use 4-column layout where possible)
+#  PAGE 1 — text metrics (portrait: 2-column layout)
 # ════════════════════════════════════════════════════════════════════════════
 
-def _page1(d):
+def _page1(d, total_pages):
     cfg    = d['config']
     hist   = d.get('training_history', {})
     fm     = d.get('final_metrics', {})
     adv    = d.get('advanced_metrics') or {}
-    traj   = d.get('trajectory_values') or {}
     ts     = d.get('timestamp', datetime.now())
     ts_str = ts.strftime('%Y-%m-%d %H:%M:%S') if isinstance(ts, datetime) else str(ts)
 
@@ -451,16 +506,28 @@ def _page1(d):
     status_st  = ST_STATUS_G if completed else ST_STATUS_A
     status_col = C_GREEN     if completed else C_AMBER
 
-    improv_pct = (fact_v - fbl_v) / abs(fbl_v) * 100 if fbl_v else 0.0
-    gap_pct    = (1 - fact_v / fstar_v) * 100 if fstar_v else 0.0
-
-    # Formula-based metrics (only when CasualiT surrogate is used)
+    # When formula is available (CasualiT mode): primary metrics use formula F,
+    # sub-rows "■ surrogate" show the CasualiT values.
+    # When formula is NOT available: primary metrics use surrogate F directly.
+    # Improvement = gap reduction vs baseline:
+    #   gap_bl  = |F_baseline - F_star|
+    #   gap_ctrl = |F_controller - F_star|
+    #   improvement = (gap_bl - gap_ctrl) / gap_bl × 100
+    gap_bl = abs(fbl_v - fstar_v)
     if fform_v is not None:
-        improv_form_pct = (fform_v - fbl_v) / abs(fbl_v) * 100 if fbl_v else 0.0
-        gap_form_pct    = (1 - fform_v / fstar_v) * 100 if fstar_v else 0.0
+        # Primary = formula, secondary = surrogate (CasualiT)
+        gap_form = abs(fform_v - fstar_v)
+        gap_surr = abs(fact_v  - fstar_v)
+        improv_pct      = (gap_bl - gap_form) / gap_bl * 100 if gap_bl else 0.0
+        improv_surr_pct = (gap_bl - gap_surr) / gap_bl * 100 if gap_bl else 0.0
+        gap_pct         = abs(fstar_v - fform_v) / fstar_v * 100 if fstar_v else 0.0
+        gap_surr_pct    = abs(fstar_v - fact_v)  / fstar_v * 100 if fstar_v else 0.0
     else:
-        improv_form_pct = 0.0
-        gap_form_pct = 0.0
+        gap_ctrl = abs(fact_v - fstar_v)
+        improv_pct      = (gap_bl - gap_ctrl) / gap_bl * 100 if gap_bl else 0.0
+        gap_pct         = abs(fstar_v - fact_v) / fstar_v * 100 if fstar_v else 0.0
+        improv_surr_pct = 0.0
+        gap_surr_pct    = 0.0
     best_loss  = _last(hist.get('best_total_loss',  hist.get('best_loss',  0.0)))
     final_loss = _last(hist.get('final_total_loss', hist.get('total_loss', 0.0)))
     rob_std    = fact_s if fact_s is not None else _last(fm.get('robustness_std', 0.0))
@@ -501,7 +568,7 @@ def _page1(d):
             [Paragraph(f"{fact_v:.4f}",  ST_KPI_VAL),
              Paragraph(f"{fform_v:.4f}", ST_KPI_VAL),
              Paragraph(f"{fstar_v:.4f}", ST_KPI_VAL),
-             Paragraph(f"{improv_pct:+.0f}%",
+             Paragraph(f"{improv_pct:+.2f}%",
                        _s('_kv_g', FS_KPI_VAL,
                           color=C_GREEN if improv_pct >= 0 else C_RED)),
              Paragraph(f"{best_loss:.4f}", ST_KPI_VAL)],
@@ -521,7 +588,7 @@ def _page1(d):
              Paragraph("Best loss",     ST_KPI_LBL)],
             [Paragraph(f"{fact_v:.4f}",  ST_KPI_VAL),
              Paragraph(f"{fstar_v:.4f}", ST_KPI_VAL),
-             Paragraph(f"{improv_pct:+.0f}%",
+             Paragraph(f"{improv_pct:+.2f}%",
                        _s('_kv_g', FS_KPI_VAL,
                           color=C_GREEN if improv_pct >= 0 else C_RED)),
              Paragraph(f"{best_loss:.4f}", ST_KPI_VAL)],
@@ -572,42 +639,48 @@ def _page1(d):
         ("Device",          str(tr_cfg.get('device', '\u2014'))),
         ("Checkpoint dir",  chk),
     ]
-    cw4 = (TW - 3 * 10) / 4
+    cw2 = (TW - 12) / 2
 
-    F.append(four_col(
-        [blk_title("Architecture")] + [kv_table(arch_rows,  cw4)],
-        [blk_title("Training")]     + [kv_table(train_rows, cw4)],
-        # col 3: reliability scores
-        [blk_title("Reliability scores")] + [kv_table(
-            [
-                ("F* (target)",             f"{fstar_v:.6f}"),
-                ("F\u2019 (baseline)",       _fstr(F_bl)),
-                ("F (controller)",           _fstr(F_act)),
-            ] + ([
-                ("F (formula)",              _fstr(F_form)),
-            ] if fform_v is not None else []) + [
-                ("Improvement vs baseline",  f"{improv_pct:+.2f}%",
-                 ST_VAL_G if improv_pct >= 0 else ST_VAL_R),
-            ] + ([
-                ("\u2514 formula",
-                 f"{improv_form_pct:+.2f}%",
-                 ST_VAL_FORM_G if improv_form_pct >= 0 else ST_VAL_FORM_R,
-                 ST_KEY_FORM),
-            ] if fform_v is not None else []) + [
-                ("Gap from target",          f"{gap_pct:.2f}%", ST_VAL_R),
-            ] + ([
-                ("\u2514 formula",
-                 f"{gap_form_pct:.2f}%",
-                 ST_VAL_FORM_R,
-                 ST_KEY_FORM),
-            ] if fform_v is not None else []) + [
-                ("Robustness (std)",         f"{rob_std:.6f}"),
-            ],
-        cw4)],
-        # col 4: performance
-        [blk_title("Performance")] + [kv_table(
-            _perf_rows(adv, n_scenarios), cw4)],
-        gap=10,
+    # Row 1: Architecture | Training
+    F.append(two_col(
+        [blk_title("Architecture")] + [kv_table(arch_rows,  cw2)],
+        [blk_title("Training")]     + [kv_table(train_rows, cw2)],
+        gap=12,
+    ))
+    F.append(Spacer(1, 5))
+
+    # Row 2: Reliability scores | Performance
+    reliability_rows = [
+        ("F* (target)",             f"{fstar_v:.6f}"),
+        ("F\u2019 (baseline)",       _fstr(F_bl)),
+    ] + ([
+        ("F (formula)",              _fstr(F_form)),
+        ("\u2514 surrogate",         _fstr(F_act),
+         ST_VAL_FORM, ST_KEY_FORM),
+    ] if fform_v is not None else [
+        ("F (controller)",           _fstr(F_act)),
+    ]) + [
+        ("Improvement vs baseline",  f"{improv_pct:+.2f}%",
+         ST_VAL_G if improv_pct >= 0 else ST_VAL_R),
+    ] + ([
+        ("\u2514 surrogate",
+         f"{improv_surr_pct:+.2f}%",
+         ST_VAL_FORM_G if improv_surr_pct >= 0 else ST_VAL_FORM_R,
+         ST_KEY_FORM),
+    ] if fform_v is not None else []) + [
+        ("Gap from target",          f"{gap_pct:.2f}%", ST_VAL_R),
+    ] + ([
+        ("\u2514 surrogate",
+         f"{gap_surr_pct:.2f}%",
+         ST_VAL_FORM_R,
+         ST_KEY_FORM),
+    ] if fform_v is not None else []) + [
+        ("Robustness (std)",         f"{rob_std:.6f}"),
+    ]
+    F.append(two_col(
+        [blk_title("Reliability scores")] + [kv_table(reliability_rows, cw2)],
+        [blk_title("Performance")] + [kv_table(_perf_rows(adv, n_scenarios), cw2)],
+        gap=12,
     ))
     F.append(Spacer(1, 7))
 
@@ -763,12 +836,19 @@ def _page1(d):
          ST_VAL_G if div_ep == 0 else ST_VAL_R),
     ]
 
-    F.append(four_col(
-        [blk_title("Final losses")]                        + [kv_table(losses_rows,  cw4)],
-        [blk_title("L_min Bellman (backward induction)")] + [kv_table(lmin_rows,    cw4)],
-        [blk_title("Decomposition")]                       + [kv_table(decomp_rows,  cw4)],
-        [blk_title("Cross-scenario overfitting")]          + [kv_table(cross_rows,   cw4)],
-        gap=10,
+    # Row 1: Final losses | L_min Bellman
+    F.append(two_col(
+        [blk_title("Final losses")]                        + [kv_table(losses_rows,  cw2)],
+        [blk_title("L_min Bellman (backward induction)")] + [kv_table(lmin_rows,    cw2)],
+        gap=12,
+    ))
+    F.append(Spacer(1, 5))
+
+    # Row 2: Decomposition | Cross-scenario overfitting
+    F.append(two_col(
+        [blk_title("Decomposition")]                       + [kv_table(decomp_rows,  cw2)],
+        [blk_title("Cross-scenario overfitting")]          + [kv_table(cross_rows,   cw2)],
+        gap=12,
     ))
     F.append(Spacer(1, 5))
 
@@ -777,89 +857,192 @@ def _page1(d):
     F.append(kv_table(intra_rows, TW * 0.5, key_frac=0.42))
     F.append(Spacer(1, 7))
 
-    # ── 04 — trajectory comparison (new page) ───────────────────────────────
-    if traj:
-        F += _footer(d, 1, 3)
-        F.append(PageBreak())
-        sc_idx  = traj.get('scenario_idx', 0)
-        F += section_header(f"04 \u2014 trajectory comparison \u2014 scenario {sc_idx}")
+    F += _footer(d, 1, total_pages)
 
-        p_names = traj.get('process_names', [])
-        t_traj  = traj.get('target_trajectory', {})
-        b_traj  = traj.get('baseline_trajectory', {})
-        a_traj  = traj.get('actual_trajectory', {})
+    return F
 
-        traj_hdr = [Paragraph(h, ST_TRAJ_H) for h in
-                    ["Step", "Target a*", "Baseline a\u2019",
-                     "Controller a", "\u0394 baseline", "\u0394 actual", "Note"]]
-        cws_t = [r * TW for r in [0.07, 0.11, 0.12, 0.12, 0.11, 0.11, 0.36]]
-        traj_rows = [traj_hdr]
 
-        def _extract(tr_dict, proc, key='inputs'):
-            v   = tr_dict.get(proc, {})
-            arr = v.get(key, v.get('inputs', []))
-            if hasattr(arr, 'detach'):
-                arr = arr.detach().cpu().numpy()
-            return arr[0] if len(arr) else [0.0]
+def _page4_trajectory(d, total_pages):
+    """Trajectory comparison tables (section 04) — one page per scenario."""
+    cfg    = d['config']
+    fstar_v, _       = _fval(d.get('F_star', 0.0))
+    fbl_v,   fbl_s   = _fval(d.get('F_baseline', 0.0))
+    fact_v,  fact_s  = _fval(d.get('F_actual', 0.0))
 
-        for proc in p_names:
-            t_inp = _extract(t_traj, proc)
-            b_inp = _extract(b_traj, proc)
-            a_inp = _extract(a_traj, proc)
-            t_v   = float(t_inp[0]) if len(t_inp) else 0.0
-            b_v   = float(b_inp[0]) if len(b_inp) else 0.0
-            a_v   = float(a_inp[0]) if len(a_inp) else 0.0
-            d_base   = a_v - b_v
-            d_actual = a_v - t_v
-            closer   = abs(a_v - t_v) < abs(b_v - t_v)
-            note     = "adjusted \u2191" if closer else "adjusted"
-            if abs(b_v - t_v) < 1e-6:
-                note = "identical inputs"
-            traj_rows.append([
-                Paragraph(proc,           ST_TRAJ_C),
-                Paragraph(f"{t_v:+.4f}",  ST_TRAJ_C),
-                Paragraph(f"{b_v:+.4f}",  ST_TRAJ_C),
-                Paragraph(f"{a_v:+.4f}",  ST_TRAJ_C),
-                Paragraph(f"{d_base:+.4f}",  ST_TRAJ_C),
-                Paragraph(f"{d_actual:+.4f}", ST_TRAJ_G if closer else ST_TRAJ_R),
-                Paragraph(note,           ST_NOTE),
-            ])
+    F = []
 
-        traj_tbl = Table(traj_rows, colWidths=cws_t)
-        traj_tbl.setStyle(TableStyle([
-            ('LINEBELOW',     (0, 0), (-1,  0), 0.5, C_BLACK),
-            ('LINEBELOW',     (0, 1), (-1, -1), 0.4, C_LGRAY),
-            ('TOPPADDING',    (0, 0), (-1, -1), 1.5),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 1.5),
-            ('LEFTPADDING',   (0, 0), (-1, -1), 3),
-            ('RIGHTPADDING',  (0, 0), (-1, -1), 3),
-            ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
-        ]))
-        F.append(traj_tbl)
+    # ── 04 — trajectory comparison (all scenarios, best run, controllable inputs) ──
+    traj = d.get('trajectory_values') or {}
+    traj_list = d.get('trajectory_values_list', [])
+    if not traj_list and traj:
+        traj_list = [traj]
 
-        tf_s  = traj.get('F_star',     fstar_v)
-        tf_bl = traj.get('F_baseline', fbl_v)
-        tf_ac = traj.get('F_actual',   fact_v)
-        tf_form_ac = traj.get('F_formula_actual')
-        foot_text = (f"F* {tf_s:.6f}  \u00b7  F\u2019 {tf_bl:.6f}  \u00b7  "
-                     f"F {tf_ac:.6f}")
-        if tf_form_ac is not None:
-            foot_text += f"  \u00b7  F(formula) {tf_form_ac:.6f}"
-        foot_text += f"  \u00b7  scenario {sc_idx} only"
-        foot_l = Paragraph(foot_text, ST_NOTE)
-        foot_r = Paragraph("\u2191 = closer to target than baseline", ST_NOTE_G)
-        foot_t = Table([[foot_l, foot_r]], colWidths=[TW * 0.65, TW * 0.35])
-        foot_t.setStyle(TableStyle([
-            ('LEFTPADDING',   (0, 0), (-1, -1), 0),
-            ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
-            ('TOPPADDING',    (0, 0), (-1, -1), 3),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
-            ('ALIGN',         (1, 0), (1,  0),  'RIGHT'),
-        ]))
-        F.append(foot_t)
-        F += _footer(d, 2, 3)
-    else:
-        F += _footer(d, 1, 2)
+    def _to_np(arr):
+        """Convert tensor or array to numpy, return first sample."""
+        if hasattr(arr, 'detach'):
+            arr = arr.detach().cpu().numpy()
+        if hasattr(arr, '__len__') and len(arr) > 0:
+            return arr[0]
+        return arr
+
+    evo_paths = d.get('evolution_plot_paths', {})
+    evo_colors = d.get('evolution_color_maps', {})  # {proc_name: {var_label: hex_color}}
+
+    def _color_dot(hex_color):
+        """Inline HTML for a small colored square."""
+        return (f'<font color="{hex_color}">\u25a0</font> ')
+
+    if traj_list:
+        F += section_header("04 \u2014 trajectory comparison (best run per scenario)")
+
+        # Width split: data table ~58%, plot ~42%
+        data_w = TW * 0.58
+        plot_w = TW * 0.42
+
+        for traj_i_idx, traj_i in enumerate(traj_list):
+            # Each scenario starts on a new page
+            if traj_i_idx > 0:
+                F.append(PageBreak())
+
+            sc_idx = traj_i.get('scenario_idx', traj_i_idx)
+            ctrl_info = traj_i.get('controllable_info', {})
+
+            # Scenario sub-header with F values
+            tf_s  = traj_i.get('F_star',     fstar_v)
+            tf_bl = traj_i.get('F_baseline', fbl_v)
+            tf_ac = traj_i.get('F_actual',   fact_v)
+            tf_form_ac = traj_i.get('F_formula_actual')
+            sc_info = f"F* {tf_s:.4f}  \u00b7  F\u2019 {tf_bl:.4f}  \u00b7  F {tf_ac:.4f}"
+            if tf_form_ac is not None:
+                sc_info += f"  \u00b7  F(formula) {tf_form_ac:.4f}"
+            F.append(Paragraph(
+                f"<b>Scenario {sc_idx}</b> &mdash; {sc_info}", ST_NOTE))
+            F.append(Spacer(1, 2))
+
+            p_names = traj_i.get('process_names', [])
+            t_traj  = traj_i.get('target_trajectory', {})
+            b_traj  = traj_i.get('baseline_trajectory', {})
+            a_traj  = traj_i.get('actual_trajectory', {})
+
+            # Pre-compute max data rows across processes for uniform plot height
+            max_data_rows = 0
+            for pi, pn in enumerate(p_names):
+                pi_info = ctrl_info.get(pn, {})
+                ci = pi_info.get('controllable_indices', [])
+                ol = pi_info.get('output_labels', [])
+                nr = (len(ci) if pi > 0 else 0) + len(ol)
+                max_data_rows = max(max_data_rows, nr)
+            uniform_tbl_h = 13 + max_data_rows * 14
+
+            # Build one row per process: [data_subtable | evolution_plot]
+            for proc_idx, proc in enumerate(p_names):
+                p_info = ctrl_info.get(proc, {})
+                input_labels = p_info.get('input_labels', [])
+                output_labels = p_info.get('output_labels', [])
+                ctrl_indices = p_info.get('controllable_indices', [])
+
+                t_inputs = _to_np(t_traj.get(proc, {}).get('inputs', []))
+                a_inputs = _to_np(a_traj.get(proc, {}).get('inputs', []))
+                t_outputs = _to_np(t_traj.get(proc, {}).get('outputs', []))
+                b_outputs = _to_np(b_traj.get(proc, {}).get('outputs', []))
+                a_outputs_raw = a_traj.get(proc, {})
+                a_outputs = _to_np(a_outputs_raw.get('outputs_mean',
+                                   a_outputs_raw.get('outputs', [])))
+
+                # Build data rows for this process
+                proc_hdr = [Paragraph(h, ST_TRAJ_H) for h in
+                            ["Variable", "Target", "Controller", "\u0394", ""]]
+                data_cws = [r * data_w for r in [0.22, 0.18, 0.18, 0.18, 0.24]]
+                proc_rows = [proc_hdr]
+
+                # Color map for this process (from evolution plots)
+                proc_cm = evo_colors.get(proc, {})
+
+                # Controllable input rows
+                if ctrl_indices:
+                    for ci in ctrl_indices:
+                        lbl = input_labels[ci] if ci < len(input_labels) else f"input_{ci}"
+                        dot = _color_dot(proc_cm[lbl]) if lbl in proc_cm else ''
+                        t_v = float(t_inputs[ci]) if hasattr(t_inputs, '__len__') and ci < len(t_inputs) else 0.0
+                        a_v = float(a_inputs[ci]) if hasattr(a_inputs, '__len__') and ci < len(a_inputs) else 0.0
+                        delta = a_v - t_v
+                        proc_rows.append([
+                            Paragraph(f"{dot}{lbl}",    ST_TRAJ_C),
+                            Paragraph(f"{t_v:.4f}",     ST_TRAJ_C),
+                            Paragraph(f"{a_v:.4f}",     ST_TRAJ_C),
+                            Paragraph(f"{delta:+.4f}",  ST_TRAJ_C),
+                            Paragraph("input",          ST_NOTE),
+                        ])
+
+                # Output row
+                for oi, olbl in enumerate(output_labels):
+                    dot = _color_dot(proc_cm[olbl]) if olbl in proc_cm else ''
+                    t_v = float(t_outputs[oi]) if hasattr(t_outputs, '__len__') and oi < len(t_outputs) else 0.0
+                    b_v = float(b_outputs[oi]) if hasattr(b_outputs, '__len__') and oi < len(b_outputs) else 0.0
+                    a_v = float(a_outputs[oi]) if hasattr(a_outputs, '__len__') and oi < len(a_outputs) else 0.0
+                    d_bl = b_v - t_v
+                    d_ctrl = a_v - t_v
+                    proc_rows.append([
+                        Paragraph(f"{dot}{olbl}",    ST_TRAJ_C),
+                        Paragraph(f"{t_v:.4f}",      ST_TRAJ_C),
+                        Paragraph(f"{a_v:.4f}",      ST_TRAJ_C),
+                        Paragraph(f"{d_ctrl:+.4f}",  ST_TRAJ_C),
+                        Paragraph(f"output (\u0394bl {d_bl:+.4f})", ST_NOTE),
+                    ])
+
+                n_data_rows = len(proc_rows) - 1  # minus header
+
+                data_tbl = Table(proc_rows, colWidths=data_cws)
+                data_tbl.setStyle(TableStyle([
+                    ('LINEBELOW',     (0, 0), (-1,  0), 0.5, C_BLACK),
+                    ('LINEBELOW',     (0, 1), (-1, n_data_rows), 0.3, C_LGRAY),
+                    ('TOPPADDING',    (0, 0), (-1, -1), 1.5),
+                    ('BOTTOMPADDING', (0, 0), (-1, -1), 1.5),
+                    ('LEFTPADDING',   (0, 0), (-1, -1), 2),
+                    ('RIGHTPADDING',  (0, 0), (-1, -1), 2),
+                    ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
+                ]))
+
+                # Evolution plot for this process (if available)
+                evo_key = (sc_idx, proc)
+                evo_path = evo_paths.get(evo_key)
+
+                # Image sized to match this process's actual data rows
+                img_w = plot_w - 4
+                actual_tbl_h = 13 + n_data_rows * 14
+
+                if evo_path and os.path.exists(evo_path):
+                    from reportlab.platypus import Image as RLImage
+                    evo_img = RLImage(evo_path, width=img_w, height=actual_tbl_h)
+                    right_cell = evo_img
+                else:
+                    right_cell = Paragraph("", ST_NOTE)
+
+                # Process label + side-by-side layout
+                F.append(Paragraph(f"<b>{proc}</b>", ST_TRAJ_C))
+                side_tbl = Table([[data_tbl, right_cell]],
+                                 colWidths=[data_w, plot_w])
+                plot_top = 15 if proc_idx == 0 else 0
+                side_tbl.setStyle(TableStyle([
+                    ('VALIGN',       (0, 0), (-1, -1), 'TOP'),
+                    ('LEFTPADDING',  (0, 0), (-1, -1), 0),
+                    ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+                    ('TOPPADDING',   (0, 0), (0,  0),  0),
+                    ('TOPPADDING',   (1, 0), (1,  0),  plot_top),
+                    ('BOTTOMPADDING',(0, 0), (-1, -1), 0),
+                ]))
+                F.append(side_tbl)
+
+            F.append(Spacer(1, 2))
+
+        # Footer legend
+        foot_p = Paragraph(
+            "\u0394 = controller \u2212 target  \u00b7  "
+            "\u0394bl = baseline output \u2212 target output  \u00b7  "
+            "best of 10 runs per scenario  \u00b7  "
+            "plots show X/Y evolution across training epochs", ST_NOTE)
+        F.append(foot_p)
+        F += _footer(d, total_pages, total_pages)
 
     return F
 
@@ -874,8 +1057,8 @@ def _perf_rows(adv, n_scenarios):
     _n_sc  = int(n_scenarios) if isinstance(n_scenarios, (int, float)) else 5
     n_sc_tr = sr_tr.get('n_scenarios', sr_tr.get('n_total', _n_sc))
     n_sc_te = sr_te.get('n_scenarios', sr_te.get('n_total', _n_sc))
-    ok_tr   = sr_tr.get('n_success', sr_tr.get('n_above_threshold', 0)) or 0
-    ok_te   = sr_te.get('n_success', sr_te.get('n_above_threshold', 0)) or 0
+    ok_tr   = sr_tr.get('n_successful', sr_tr.get('n_success', sr_tr.get('n_above_threshold', 0))) or 0
+    ok_te   = sr_te.get('n_successful', sr_te.get('n_success', sr_te.get('n_above_threshold', 0))) or 0
     pct_tr_r = sr_tr.get('success_rate', sr_tr.get('rate',
                ok_tr / n_sc_tr if n_sc_tr else 0))
     pct_te_r = sr_te.get('success_rate', sr_te.get('rate',
@@ -895,72 +1078,91 @@ def _perf_rows(adv, n_scenarios):
     fwc_te = adv.get('formula_worst_case_gap_test')  or {}
     has_formula = bool(fsr_tr)
 
-    rows = [
-        (f"Success rate \u2014 train",
-         f"{ok_tr}/{n_sc_tr} ({pct_tr:.1f}%)",
-         ST_VAL_G if pct_tr >= 80 else ST_VAL_R),
-    ]
     if has_formula:
-        f_ok_tr = fsr_tr.get('n_successful', fsr_tr.get('n_success', fsr_tr.get('n_above_threshold', 0))) or 0
+        f_ok_tr = fsr_tr.get('n_successful', fsr_tr.get('n_success', 0)) or 0
         f_n_tr  = fsr_tr.get('n_scenarios', fsr_tr.get('n_total', _n_sc))
         f_pct_tr = (float(fsr_tr.get('success_rate', f_ok_tr / f_n_tr if f_n_tr else 0)) or 0.0) * 100
-        rows.append(("\u2514 formula",
-                     f"{f_ok_tr}/{f_n_tr} ({f_pct_tr:.1f}%)",
-                     ST_VAL_FORM_G if f_pct_tr >= 80 else ST_VAL_FORM_R,
-                     ST_KEY_FORM))
+        rows = [
+            (f"Win rate vs baseline \u2014 train",
+             f"{f_ok_tr}/{f_n_tr} ({f_pct_tr:.1f}%)",
+             ST_VAL_G if f_pct_tr > 50 else ST_VAL_R),
+            ("\u2514 surrogate",
+             f"{ok_tr}/{n_sc_tr} ({pct_tr:.1f}%)",
+             ST_VAL_FORM_G if pct_tr > 50 else ST_VAL_FORM_R,
+             ST_KEY_FORM),
+        ]
+    else:
+        rows = [
+            (f"Win rate vs baseline \u2014 train",
+             f"{ok_tr}/{n_sc_tr} ({pct_tr:.1f}%)",
+             ST_VAL_G if pct_tr > 50 else ST_VAL_R),
+        ]
 
-    rows.append(
-        (f"Success rate \u2014 test",
-         f"{ok_te}/{n_sc_te} ({pct_te:.1f}%)",
-         ST_VAL_G if pct_te >= 80 else ST_VAL_R))
     if has_formula:
-        f_ok_te = fsr_te.get('n_successful', fsr_te.get('n_success', fsr_te.get('n_above_threshold', 0))) or 0
+        f_ok_te = fsr_te.get('n_successful', fsr_te.get('n_success', 0)) or 0
         f_n_te  = fsr_te.get('n_scenarios', fsr_te.get('n_total', _n_sc))
         f_pct_te = (float(fsr_te.get('success_rate', f_ok_te / f_n_te if f_n_te else 0)) or 0.0) * 100
-        rows.append(("\u2514 formula",
-                     f"{f_ok_te}/{f_n_te} ({f_pct_te:.1f}%)",
-                     ST_VAL_FORM_G if f_pct_te >= 80 else ST_VAL_FORM_R,
+        rows.append(
+            (f"Win rate vs baseline \u2014 test",
+             f"{f_ok_te}/{f_n_te} ({f_pct_te:.1f}%)",
+             ST_VAL_G if f_pct_te > 50 else ST_VAL_R))
+        rows.append(("\u2514 surrogate",
+                     f"{ok_te}/{n_sc_te} ({pct_te:.1f}%)",
+                     ST_VAL_FORM_G if pct_te > 50 else ST_VAL_FORM_R,
                      ST_KEY_FORM))
+    else:
+        rows.append(
+            (f"Win rate vs baseline \u2014 test",
+             f"{ok_te}/{n_sc_te} ({pct_te:.1f}%)",
+             ST_VAL_G if pct_te > 50 else ST_VAL_R))
 
-    rows.append(
-        (f"Worst-case gap \u2014 train",
-         f"{float(wc_tr):.6f} at sc. {wc_tr_s}"
-         if isinstance(wc_tr, (int, float)) else '\u2014'))
     if has_formula:
         fwc_tr_v = fwc_tr.get('worst_case_gap', None)
         fwc_tr_s = fwc_tr.get('worst_case_scenario_idx', '')
-        rows.append(("\u2514 formula",
-                     f"{float(fwc_tr_v):.6f} at sc. {fwc_tr_s}"
-                     if isinstance(fwc_tr_v, (int, float)) else '\u2014',
+        rows.append(
+            (f"Worst-case gap \u2014 train",
+             f"{float(fwc_tr_v):.6f} at sc. {fwc_tr_s}"
+             if isinstance(fwc_tr_v, (int, float)) else '\u2014'))
+        rows.append(("\u2514 surrogate",
+                     f"{float(wc_tr):.6f} at sc. {wc_tr_s}"
+                     if isinstance(wc_tr, (int, float)) else '\u2014',
                      ST_VAL_FORM, ST_KEY_FORM))
+    else:
+        rows.append(
+            (f"Worst-case gap \u2014 train",
+             f"{float(wc_tr):.6f} at sc. {wc_tr_s}"
+             if isinstance(wc_tr, (int, float)) else '\u2014'))
 
-    rows.append(
-        (f"Worst-case gap \u2014 test",
-         f"{float(wc_te):.6f} at sc. {wc_te_s}"
-         if isinstance(wc_te, (int, float)) else '\u2014'))
     if has_formula:
         fwc_te_v = fwc_te.get('worst_case_gap', None)
         fwc_te_s = fwc_te.get('worst_case_scenario_idx', '')
-        rows.append(("\u2514 formula",
-                     f"{float(fwc_te_v):.6f} at sc. {fwc_te_s}"
-                     if isinstance(fwc_te_v, (int, float)) else '\u2014',
+        rows.append(
+            (f"Worst-case gap \u2014 test",
+             f"{float(fwc_te_v):.6f} at sc. {fwc_te_s}"
+             if isinstance(fwc_te_v, (int, float)) else '\u2014'))
+        rows.append(("\u2514 surrogate",
+                     f"{float(wc_te):.6f} at sc. {wc_te_s}"
+                     if isinstance(wc_te, (int, float)) else '\u2014',
                      ST_VAL_FORM, ST_KEY_FORM))
+    else:
+        rows.append(
+            (f"Worst-case gap \u2014 test",
+             f"{float(wc_te):.6f} at sc. {wc_te_s}"
+         if isinstance(wc_te, (int, float)) else '\u2014'))
 
-    rows.append((f"Threshold", f"{thresh}% \u00d7 F*"))
     return rows
 
 
 # ════════════════════════════════════════════════════════════════════════════
-#  PAGE 2 — charts
+#  PAGE 2 — training charts (full width)
 # ════════════════════════════════════════════════════════════════════════════
 
-def _page2(d):
-    """Single charts page: left column (training + overfitting), right column
-    (scatter/gap 2x2 top + theoretical 2x2 bottom)."""
+
+def _mini_header(d):
+    """Reusable mini-header block for chart pages."""
     cfg    = d['config']
     ts     = d.get('timestamp', datetime.now())
     ts_str = ts.strftime('%Y-%m-%d %H:%M:%S') if isinstance(ts, datetime) else str(ts)
-    chk    = Path(d.get('checkpoint_dir') or cfg.get('training', {}).get('checkpoint_dir', '.'))
     hist   = d.get('training_history', {})
     seed   = cfg.get('misc', {}).get('random_seed', '\u2014')
     epochs = cfg.get('training', {}).get('epochs',
@@ -973,8 +1175,6 @@ def _page2(d):
     status_col = C_GREEN     if completed else C_AMBER
 
     F = []
-
-    # mini header
     title_p = Paragraph("Controller Optimization \u2014 Training Report", ST_TITLE)
     meta_p  = Paragraph(
         f"{ts_str}  \u00b7  seed {seed}  \u00b7  epochs {epochs} / {max_ep}", ST_SUB)
@@ -994,89 +1194,157 @@ def _page2(d):
     F.append(Spacer(1, 1))
     F.append(meta_p)
     F.append(_rule_heavy())
+    return F
+
+
+def _page2(d):
+    """Training charts page: training_history + loss_chart stacked, full width."""
+    cfg    = d['config']
+    chk    = Path(d.get('checkpoint_dir') or cfg.get('training', {}).get('checkpoint_dir', '.'))
+
+    F = _mini_header(d)
 
     # Available height for plots
     hdr_h  = 1.8 * cm   # mini-header + rule (generous)
     ftr_h  = 1.5 * cm   # footer (rule + table + spacing)
     avail  = PH - 2 * M - hdr_h - ftr_h
-    col_gap = 10
-    col_w  = (TW - col_gap) / 2
     cap_h  = 12          # caption row height allowance
 
-    # ── LEFT COLUMN: training_history + loss_chart stacked ────────────────
+    # ── Full-width: training_history + loss_chart stacked ────────────────
     # 2 images + 2 captions + 1 gap spacer
-    h_left = int((avail - 2 * cap_h - 4) / 2)
-    left = img_stack(
+    h_each = int((avail - 2 * cap_h - 4) / 2)
+    charts = img_stack(
         [chk / 'training_history.png',  chk / 'loss_chart.png'],
         ["Training losses & weights \u00b7 reliability evolution",
          "Train vs validation \u2014 overfitting detection"],
-        col_w, h_left, gap=4)
+        TW, h_each, gap=4)
 
-    # ── RIGHT COLUMN: 4 rows of paired images ────────────────────────────
-    # 4 image rows + 4 captions + 3 gap spacers
-    rh = int((avail - 4 * cap_h - 3 * 3) / 4)
-    pair_w = col_w / 2
+    F.append(charts)
+    return F
 
-    def _img_row(p1, p2, c1, c2, row_h):
+
+# ════════════════════════════════════════════════════════════════════════════
+#  PAGE 3 — comparison charts (portrait: stacked vertically)
+# ════════════════════════════════════════════════════════════════════════════
+
+def _page3(d):
+    """Comparison charts page — portrait layout: paired rows on top,
+    theoretical charts stacked below at full width."""
+    cfg    = d['config']
+    chk    = Path(d.get('checkpoint_dir') or cfg.get('training', {}).get('checkpoint_dir', '.'))
+
+    F = _mini_header(d)
+
+    # Available height for plots
+    hdr_h  = 1.8 * cm   # mini-header + rule (generous)
+    ftr_h  = 1.5 * cm   # footer (rule + table + spacing)
+    avail  = PH - 2 * M - hdr_h - ftr_h
+
+    no_pad = TableStyle([
+        ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
+        ('LEFTPADDING',   (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
+        ('TOPPADDING',    (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+    ])
+
+    # ── TOP: baseline/gap paired (2 rows of 2 images, full page width) ──
+    pair_w = TW / 2
+    pair_h = int(avail * 0.4 / 2)  # ~40% of available height for 2 rows
+
+    def _img_pair(p1, p2, row_h):
         i1 = scale_img(p1, pair_w, row_h)
         i2 = scale_img(p2, pair_w, row_h)
-        t1 = Table([[i1], [Paragraph(c1, ST_CAPTION)]], colWidths=[pair_w])
-        t2 = Table([[i2], [Paragraph(c2, ST_CAPTION)]], colWidths=[pair_w])
-        for t in (t1, t2):
-            t.setStyle(TableStyle([
-                ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
-                ('ALIGN',         (0, 0), (0,  0),  'CENTER'),
-                ('LEFTPADDING',   (0, 0), (-1, -1), 0),
-                ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
-                ('TOPPADDING',    (0, 0), (-1, -1), 0),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 1),
-            ]))
-        return Table([[t1, t2]], colWidths=[pair_w, pair_w])
+        row = Table([[i1, i2]], colWidths=[pair_w, pair_w])
+        row.setStyle(no_pad)
+        return row
 
-    r1 = _img_row(
-        chk / 'target_vs_actual_scatter_train.png',
-        chk / 'gap_distribution_train.png',
-        "Target vs actual \u2014 train", "Gap distribution \u2014 train", rh)
-    r2 = _img_row(
-        chk / 'target_vs_actual_scatter_test.png',
-        chk / 'gap_distribution_test.png',
-        "Target vs actual \u2014 test", "Gap distribution \u2014 test", rh)
-    r3 = _img_row(
-        chk / 'loss_vs_L_min.png',
-        chk / 'training_efficiency.png',
-        "Loss vs L_min Bellman", "Training efficiency", rh)
-    r4 = _img_row(
-        chk / 'loss_decomposition.png',
-        chk / 'loss_scatter.png',
-        "Loss decomposition", "Loss vs L_min scatter", rh)
+    row_train = _img_pair(
+        chk / 'baseline_vs_controller_train.png',
+        chk / 'gap_distribution_train.png', pair_h)
+    row_test = _img_pair(
+        chk / 'baseline_vs_controller_test.png',
+        chk / 'gap_distribution_test.png', pair_h)
 
-    spc = 3
-    right = Table(
-        [[r1], [Spacer(1, spc)],
-         [r2], [Spacer(1, spc)],
-         [r3], [Spacer(1, spc)],
-         [r4]],
-        colWidths=[col_w])
-    right.setStyle(TableStyle([
-        ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
-        ('LEFTPADDING',   (0, 0), (-1, -1), 0),
-        ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
-        ('TOPPADDING',    (0, 0), (-1, -1), 0),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
-    ]))
+    top_block = Table([[row_train], [row_test]], colWidths=[TW])
+    top_block.setStyle(no_pad)
+    F.append(top_block)
+    F.append(Spacer(1, 6))
 
-    # ── Assemble two-column layout ───────────────────────────────────────
-    layout = Table([[left, Spacer(col_gap, 1), right]],
-                   colWidths=[col_w, col_gap, col_w])
-    layout.setStyle(TableStyle([
-        ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
-        ('LEFTPADDING',   (0, 0), (-1, -1), 0),
-        ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
-        ('TOPPADDING',    (0, 0), (-1, -1), 0),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
-    ]))
-    F.append(layout)
+    # ── BOTTOM: 3 theoretical charts stacked, full width ─────────────────
+    n_right   = 3
+    inter_gap = 4
+    theo_avail = avail * 0.6 - 6  # remaining height minus spacer
+    rh = int((theo_avail - (n_right - 1) * inter_gap) / n_right)
 
+    # Compute exact figsize (inches) for theoretical PNGs.
+    chart_w_in     = TW / 72.0
+    chart_h_in     = rh  / 72.0
+    report_figsize = (chart_w_in, chart_h_in)
+
+    # Regenerate the 3 theoretical PNGs at the exact report dimensions.
+    theo = d.get('theoretical_data') or {}
+    if not (theo.get('epochs') and len(theo.get('epochs', [])) > 0):
+        _json_path = chk / 'theoretical_analysis_data.json'
+        if _json_path.exists():
+            import json as _json
+            with open(_json_path) as _f:
+                theo = _json.load(_f)
+
+    if theo.get('epochs') and len(theo['epochs']) > 0:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        from controller_optimization.src.analysis.theoretical_visualization import (
+            plot_loss_vs_L_min, plot_efficiency_over_time, plot_loss_decomposition,
+        )
+        bellman_data = theo.get('bellman_lmin', None)
+
+        p = chk / 'loss_vs_L_min.png'
+        plot_loss_vs_L_min(
+            epochs=theo['epochs'],
+            observed_loss=theo['observed_loss'],
+            theoretical_L_min=theo['theoretical_L_min'],
+            save_path=str(p),
+            figsize=report_figsize,
+            bellman_lmin=bellman_data,
+        )
+        plt.close()
+
+        p = chk / 'training_efficiency.png'
+        plot_efficiency_over_time(
+            epochs=theo['epochs'],
+            efficiency=theo['efficiency'],
+            save_path=str(p),
+            figsize=report_figsize,
+            bellman_lmin=bellman_data,
+            observed_loss=theo['observed_loss'],
+        )
+        plt.close()
+
+        p = chk / 'loss_decomposition.png'
+        plot_loss_decomposition(
+            Var_F=theo['theoretical_Var_F'][-1],
+            Bias2=theo['theoretical_Bias2'][-1],
+            gap=theo['gap'][-1],
+            save_path=str(p),
+            figsize=report_figsize,
+        )
+        plt.close()
+
+    theo_charts = [
+        (chk / 'loss_vs_L_min.png',       "Loss vs L_min Bellman"),
+        (chk / 'training_efficiency.png',  "Training efficiency"),
+        (chk / 'loss_decomposition.png',   "Loss decomposition"),
+    ]
+    r_rows = []
+    for p, _cap in theo_charts:
+        img = scale_img_fw(p, TW, rh)
+        r_rows.append([img])
+    bottom_block = Table(r_rows, colWidths=[TW])
+    bottom_block.setStyle(no_pad)
+
+    F.append(bottom_block)
     return F
 
 
@@ -1110,20 +1378,26 @@ def _build_pdf(d, out_path):
     body_frame = Frame(M, M, TW, PH - 2 * M, id='body',
                        leftPadding=0, rightPadding=0,
                        topPadding=0, bottomPadding=0)
-    pt  = PageTemplate(id='main', frames=[body_frame], pagesize=landscape(A4))
+    pt  = PageTemplate(id='main', frames=[body_frame], pagesize=A4)
     doc = BaseDocTemplate(
-        str(out_path), pagesize=landscape(A4),
+        str(out_path), pagesize=A4,
         leftMargin=M, rightMargin=M, topMargin=M, bottomMargin=M,
         pageTemplates=[pt])
 
     traj = d.get('trajectory_values') or {}
-    total_pages = 3 if traj else 2
-    last_page = total_pages
+    traj_list = d.get('trajectory_values_list', [])
+    has_traj = bool(traj_list or traj)
+    total_pages = 4 if has_traj else 3
+
     story = (
-        _page1(d) +
+        _page1(d, total_pages) +
         [PageBreak()] +
-        _page2(d) + _footer(d, last_page, total_pages)
+        _page3(d) + _footer(d, 2, total_pages) +
+        [PageBreak()] +
+        _page2(d) + _footer(d, 3, total_pages)
     )
+    if has_traj:
+        story += [PageBreak()] + _page4_trajectory(d, total_pages)
     doc.build(story)
 
 
@@ -1144,6 +1418,9 @@ def generate_controller_report(
     n_scenarios=None,
     advanced_metrics=None,
     trajectory_values=None,
+    trajectory_values_list=None,
+    evolution_plot_paths=None,
+    evolution_color_maps=None,
     theoretical_data=None,
     F_formula=None,
 ):
@@ -1164,6 +1441,9 @@ def generate_controller_report(
         n_scenarios=n_scenarios,
         advanced_metrics=advanced_metrics or {},
         trajectory_values=trajectory_values,
+        trajectory_values_list=trajectory_values_list or [],
+        evolution_plot_paths=evolution_plot_paths or {},
+        evolution_color_maps=evolution_color_maps or {},
         theoretical_data=theoretical_data or {},
         checkpoint_dir=checkpoint_dir,
         F_formula=F_formula,
@@ -1181,6 +1461,7 @@ class ControllerReportGenerator:
     def generate(self, config, training_history, final_metrics, process_metrics,
                  F_star, F_baseline, F_actual, timestamp, n_scenarios=None,
                  advanced_metrics=None, trajectory_values=None,
+                 trajectory_values_list=None,
                  theoretical_data=None, F_formula=None):
         if timestamp is None:
             timestamp = datetime.now()

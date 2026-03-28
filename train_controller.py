@@ -51,6 +51,7 @@ from configs.processes_config import (
 from configs.controller_config import CONTROLLER_CONFIG
 from controller_optimization.src.utils.target_generation import (
     generate_target_trajectory,
+    generate_baseline_trajectories,
     generate_baseline_trajectory
 )
 from controller_optimization.src.utils.process_chain import ProcessChain
@@ -74,9 +75,10 @@ from controller_optimization.src.utils.visualization import (
     plot_target_vs_actual_scatter,
     plot_gap_distribution,
     plot_training_progression,
-    plot_loss_chart
+    plot_loss_chart,
+    generate_process_evolution_plots
 )
-from controller_optimization.src.utils.report_generator import generate_controller_report
+from controller_optimization.src.utils.report_generator import generate_controller_report, get_report_chart_sizes
 from controller_optimization.src.utils.model_utils import convert_numpy_to_tensor
 from controller_optimization.src.utils.scm_validation import validate_all_processes
 from controller_optimization.src.analysis import (
@@ -330,72 +332,83 @@ def main(config=None):
     checkpoint_dir = Path(cfg['training']['checkpoint_dir'])
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Generate TRAINING scenarios (diverse structural + zero process noise)
-    print("\n[1/9] Generating training scenarios...")
+    # =========================================================================
+    # 1. ADAPTIVE CALIBRATION TARGETS — TARGET & BASELINE GENERATION
+    # =========================================================================
+    # Target trajectory: SINGLE sample (1 row). seed_target determines both
+    # environmental parameters and controllable inputs. F* is NOT necessarily 1.
+    #
+    # Train baselines: n_train baselines, each with:
+    #   - Target controllable inputs (copied)
+    #   - DIFFERENT env params (seed_env = seed_baseline)
+    #   - Active process noise (seed_noise = seed_baseline)
+    #
+    # Test baselines: n_test baselines, each with:
+    #   - Same controllable inputs as target
+    #   - SAME noise realization as train (seed_noise = seed_baseline)
+    #   - DIFFERENT env params (seed_env = seed_baseline + n_train)
+    # =========================================================================
+
+    print("\n[1/9] Generating target trajectory (single sample)...")
     n_train = cfg['scenarios']['n_train']
     n_test = cfg['scenarios']['n_test']
-    print(f"  Training scenarios: {n_train}")
-    print(f"  Test scenarios: {n_test} (for future evaluation)")
+    seed_target = cfg['scenarios']['seed_target']
+    seed_baseline = cfg['scenarios']['seed_baseline']
+    print(f"  n_train: {n_train} baselines (different env params)")
+    print(f"  n_test:  {n_test} baselines (different env params, same noise)")
+    print(f"  seed_target:  {seed_target}")
+    print(f"  seed_baseline: {seed_baseline}")
 
-    # Generate TRAIN target trajectory
-    print("\n  Generating TRAIN target trajectory (a*)...")
+    # Generate SINGLE target trajectory (seed determines env + inputs)
     target_trajectory_train = generate_target_trajectory(
         process_configs=selected_processes,
-        n_samples=n_train,
-        seed=cfg['scenarios']['seed_target']
+        n_samples=1,  # Always 1 — single target trajectory
+        seed=seed_target
     )
 
-    print("  Train target trajectory generated:")
+    print("  Target trajectory (1 sample):")
     for process_name, data in target_trajectory_train.items():
-        print(f"    {process_name}: inputs={data['inputs'].shape}, outputs={data['outputs'].shape}")
+        print(f"    {process_name}: inputs={data['inputs'][0]}, output={data['outputs'][0]}")
         if 'structural_conditions' in data and data['structural_conditions']:
             for var, vals in data['structural_conditions'].items():
-                print(f"      {var}: [{vals.min():.2f}, {vals.max():.2f}] (range)")
+                print(f"      {var}: {vals[0]:.4f}")
 
-    # Generate TRAIN baseline trajectory
-    print("\n  Generating TRAIN baseline trajectory (a')...")
-    baseline_trajectory_train = generate_baseline_trajectory(
+    # Generate TRAIN baselines (n_train, different env params)
+    print(f"\n  Generating {n_train} TRAIN baselines...")
+    baseline_trajectory_train = generate_baseline_trajectories(
         process_configs=selected_processes,
         target_trajectory=target_trajectory_train,
-        n_samples=n_train,
-        seed=cfg['scenarios']['seed_baseline']
+        n_baselines=n_train,
+        seed_env=seed_baseline,
+        seed_noise=seed_baseline
     )
 
-    print("  Train baseline trajectory generated:")
+    print("  Train baselines generated:")
     for process_name, data in baseline_trajectory_train.items():
         print(f"    {process_name}: inputs={data['inputs'].shape}, outputs={data['outputs'].shape}")
 
-    # 2. Generate TEST scenarios (for future evaluation, not used yet)
-    print("\n[2/9] Generating test scenarios (not used in training)...")
+    # 2. Generate TEST baselines (same noise, different env params)
+    print("\n[2/9] Generating test baselines...")
 
-    # Use seed offset from config to ensure test scenarios are truly unseen
-    test_seed_offset = cfg['scenarios']['test_seed_offset']
-
-    print(f"  Test seed offset: {test_seed_offset}")
-    print(f"  Generating TEST target trajectory (a*)...")
-    target_trajectory_test = generate_target_trajectory(
+    # Test baselines: same noise seed (identical process noise) but different env
+    # seed_env offset by n_train to get non-overlapping env params
+    baseline_trajectory_test = generate_baseline_trajectories(
         process_configs=selected_processes,
-        n_samples=n_test,
-        seed=cfg['scenarios']['seed_target'] + test_seed_offset
+        target_trajectory=target_trajectory_train,
+        n_baselines=n_test,
+        seed_env=seed_baseline + n_train,  # different env params
+        seed_noise=seed_baseline            # same noise realization
     )
 
-    print("  Test target trajectory generated:")
-    for process_name, data in target_trajectory_test.items():
-        print(f"    {process_name}: inputs={data['inputs'].shape}, outputs={data['outputs'].shape}")
-
-    print(f"  Generating TEST baseline trajectory (a')...")
-    baseline_trajectory_test = generate_baseline_trajectory(
-        process_configs=selected_processes,
-        target_trajectory=target_trajectory_test,
-        n_samples=n_test,
-        seed=cfg['scenarios']['seed_baseline'] + test_seed_offset
-    )
-
-    print("  Test baseline trajectory generated:")
+    print("  Test baselines generated:")
     for process_name, data in baseline_trajectory_test.items():
         print(f"    {process_name}: inputs={data['inputs'].shape}, outputs={data['outputs'].shape}")
 
-    # Use ONLY training trajectories for now
+    # Target trajectory is the SAME for train and test (single sample)
+    # Test uses the same target as reference for F* and BC
+    target_trajectory_test = target_trajectory_train
+
+    # Assign working variables
     target_trajectory = target_trajectory_train
     baseline_trajectory = baseline_trajectory_train
     n_scenarios = n_train
@@ -414,14 +427,15 @@ def main(config=None):
     print(f"\n  Using {n_scenarios} TRAIN scenarios for controller training")
     print(f"  Test scenarios saved: {test_scenarios_path}")
 
-    # 3. Create ProcessChain (uses multi-scenario trajectory)
+    # 3. Create ProcessChain (target + baseline trajectories for env params)
     print("\n[3/9] Building process chain...")
     try:
         process_chain = ProcessChain(
             processes_config=selected_processes,
             target_trajectory=target_trajectory,
             policy_config=cfg['policy_generator'],
-            device=device
+            device=device,
+            baseline_trajectories=baseline_trajectory
         )
         print(f"  ✓ Process chain created")
         print(f"    Uncertainty predictors: {len(process_chain.uncertainty_predictors)} (frozen)")
@@ -448,29 +462,33 @@ def main(config=None):
     use_deterministic_sampling = surrogate_config.get('use_deterministic_sampling', True)
 
     # Use factory function to create appropriate surrogate
+    # n_scenarios = n_train (from baselines), even though target has 1 sample
     surrogate = create_surrogate(
         config=surrogate_config,
         target_trajectory=target_trajectory,
         device=device,
         process_configs=selected_processes,
+        n_scenarios=n_train,
     )
+    # Ensure surrogate.n_scenarios is correct (guard against fallback to target shape=1)
+    surrogate.n_scenarios = n_train
 
-    # For CasualiTSurrogate, connect to ProcessChain for format conversion
-    # and create a formula surrogate for comparison
+    # For CasualiTSurrogate, connect to ProcessChain and create formula surrogate
     formula_surrogate = None
     if isinstance(surrogate, CasualiTSurrogate):
         surrogate.set_process_chain(process_chain)
         print(f"  Surrogate type: CasualiT (TransformerForecaster)")
         print(f"  Checkpoint: {surrogate_config.get('casualit', {}).get('checkpoint_path')}")
 
-        # Create a ProTSurrogate (mathematical formula) for comparison
+        # Create a separate ProTSurrogate for formula-based comparison
         formula_surrogate = ProTSurrogate(
             target_trajectory=target_trajectory,
             device=device,
             use_deterministic_sampling=use_deterministic_sampling,
             process_configs=selected_processes,
+            n_scenarios=n_train,
         )
-        print(f"  Formula surrogate created for comparison (F* formula = {formula_surrogate.F_star:.6f})")
+        print(f"  Formula surrogate created (F* formula = {formula_surrogate.F_star:.6f})")
     else:
         print(f"  Surrogate type: reliability_function (mathematical formula)")
 
@@ -478,6 +496,11 @@ def main(config=None):
     F_star_value = surrogate.F_star  # Single scalar from scenario 0
     print(f"  ✓ Surrogate initialized")
     print(f"    F* = {F_star_value:.6f} (from scenario 0)")
+    print(f"    n_scenarios = {surrogate.n_scenarios} (should match n_train={n_train})")
+    assert surrogate.n_scenarios == n_train, (
+        f"Surrogate n_scenarios={surrogate.n_scenarios} != n_train={n_train}. "
+        f"Target has {list(target_trajectory.values())[0]['inputs'].shape[0]} sample(s)."
+    )
 
     # 5. Create Trainer
     print("\n[5/9] Creating controller trainer...")
@@ -531,13 +554,17 @@ def main(config=None):
             processes_config=selected_processes,
             target_trajectory=target_trajectory_test,
             policy_config=cfg['policy_generator'],
-            device=device
+            device=device,
+            baseline_trajectories=baseline_trajectory_test
         )
         validation_surrogate = create_surrogate(
             config=surrogate_config,
             target_trajectory=target_trajectory_test,
-            device=device
+            device=device,
+            process_configs=selected_processes,
+            n_scenarios=n_test,
         )
+        validation_surrogate.n_scenarios = n_test  # Ensure correct
         # For CasualiTSurrogate, connect to validation ProcessChain
         if isinstance(validation_surrogate, CasualiTSurrogate):
             validation_surrogate.set_process_chain(validation_process_chain)
@@ -686,13 +713,17 @@ def main(config=None):
 
     print(f"  Total baseline samples: {len(F_baseline_array)}")
 
-    # Aggregate final metrics
+    # Aggregate final metrics — surrogate F is primary (CasualiT when used)
+    # Formula (ProT) F is shown as secondary reference
+    F_formula_baseline_mean = np.mean(F_formula_baseline_array) if F_formula_baseline_array is not None else None
+    F_formula_baseline_std = np.std(F_formula_baseline_array) if F_formula_baseline_array is not None else None
+
     improvement = (F_actual_mean - F_baseline_mean) / abs(F_baseline_mean) * 100 if F_baseline_mean != 0 else 0
     target_gap = abs(F_star_mean - F_actual_mean) / F_star_mean * 100 if F_star_mean != 0 else 0
 
     # Print summary
     print("\n" + "="*70)
-    print("FINAL RESULTS - AGGREGATED OVER ALL SAMPLES")
+    print("FINAL RESULTS")
     print("="*70)
     print(f"Number of scenarios:           {n_scenarios}")
     print(f"Samples per scenario:          {eval_batch_size}")
@@ -700,81 +731,103 @@ def main(config=None):
     print(f"\nF* (target, optimal):          {F_star_value:.6f}")
     print(f"\nF' (baseline, no controller):")
     print(f"  Mean:  {F_baseline_mean:.6f} ± {F_baseline_std:.6f}")
-    print(f"  Range: [{F_baseline_array.min():.6f}, {F_baseline_array.max():.6f}]")
-    print(f"\nF  (actual, with controller):")
+    print(f"\nF  (controller, surrogate):")
     print(f"  Mean:  {F_actual_mean:.6f} ± {F_actual_std:.6f}")
     print(f"  Range: [{F_actual_per_sample.min():.6f}, {F_actual_per_sample.max():.6f}]")
     if F_formula_mean is not None:
-        print(f"\nF  (formula, mathematical):")
+        print(f"\nF  (controller, ProT formula):")
         print(f"  Mean:  {F_formula_mean:.6f} ± {F_formula_std:.6f}")
         print(f"  Range: [{F_formula_per_sample.min():.6f}, {F_formula_per_sample.max():.6f}]")
+    if F_formula_baseline_mean is not None:
+        print(f"\nF' (baseline, ProT formula):")
+        print(f"  Mean:  {F_formula_baseline_mean:.6f} ± {F_formula_baseline_std:.6f}")
     print(f"\nImprovement over baseline:     {improvement:+.2f}%")
     print(f"Gap from optimal:              {target_gap:.2f}%")
     print(f"Robustness (std of F):         {F_actual_std:.6f}  (lower = more robust)")
     print("="*70)
 
-    # 7a.5. Prepare trajectory values for PDF report
-    print("\n[7a.5/9] Preparing trajectory values for PDF report...")
+    # 7a.5. Prepare trajectory values for PDF report — best run per scenario
+    print("\n[7a.5/9] Preparing trajectory values for PDF report (best run per scenario)...")
     print("-"*70)
 
-    # Choose representative scenario (scenario 0 for simplicity)
-    representative_scenario_idx = 0
-    print(f"  Using scenario {representative_scenario_idx} for trajectory comparison...")
-
-    # Generate actual trajectory for this scenario
-    with torch.no_grad():
-        process_chain.eval()
-        actual_trajectory_repr = process_chain.forward(batch_size=1, scenario_idx=representative_scenario_idx)
-
-    # Extract baseline for this scenario
-    baseline_scenario_repr = {}
-    for process_name, data in baseline_trajectory.items():
-        baseline_scenario_repr[process_name] = {
-            'inputs': data['inputs'][representative_scenario_idx:representative_scenario_idx+1],
-            'outputs': data['outputs'][representative_scenario_idx:representative_scenario_idx+1]
+    # Build controllable info for report
+    from configs.processes_config import get_controllable_inputs
+    controllable_info_for_report = {}
+    for proc_cfg in selected_processes:
+        pname = proc_cfg['name']
+        ctrl = get_controllable_inputs(proc_cfg)
+        controllable_info_for_report[pname] = {
+            'input_labels': proc_cfg['input_labels'],
+            'output_labels': proc_cfg['output_labels'],
+            'controllable_labels': ctrl,
+            'controllable_indices': [i for i, l in enumerate(proc_cfg['input_labels']) if l in ctrl],
         }
 
-    # Convert to tensors for reliability computation
-    baseline_repr_tensor = convert_numpy_to_tensor(baseline_scenario_repr, device=device)
+    n_best_runs = 10  # Number of candidate runs per scenario to find best
+    trajectory_values_for_report_list = []
 
-    # Compute reliability for this specific scenario
-    F_star_repr = F_star_value  # F* is a single scalar
-    F_baseline_repr = surrogate.compute_reliability(baseline_repr_tensor).item()
-    F_actual_repr = surrogate.compute_reliability(actual_trajectory_repr).item()
+    with torch.no_grad():
+        process_chain.eval()
+        for scenario_idx in range(n_scenarios):
+            # Generate multiple runs and pick the best (highest F)
+            best_F = -float('inf')
+            best_trajectory = None
+            for _ in range(n_best_runs):
+                candidate = process_chain.forward(batch_size=1, scenario_idx=scenario_idx)
+                F_candidate = surrogate.compute_reliability(candidate).item()
+                if F_candidate > best_F:
+                    best_F = F_candidate
+                    best_trajectory = candidate
 
-    # Compute formula-based F for representative scenario (if using CasualiT)
-    F_formula_baseline_repr = None
-    F_formula_actual_repr = None
-    if formula_surrogate is not None:
-        F_formula_baseline_repr = formula_surrogate.compute_reliability(baseline_repr_tensor).item()
-        F_formula_actual_repr = formula_surrogate.compute_reliability(actual_trajectory_repr).item()
+            # Extract baseline for this scenario
+            baseline_scenario = {}
+            for process_name, data in baseline_trajectory.items():
+                baseline_scenario[process_name] = {
+                    'inputs': data['inputs'][scenario_idx:scenario_idx+1],
+                    'outputs': data['outputs'][scenario_idx:scenario_idx+1]
+                }
+            baseline_tensor = convert_numpy_to_tensor(baseline_scenario, device=device)
+            F_baseline_sc = surrogate.compute_reliability(baseline_tensor).item()
 
-    # Prepare trajectory values dict for PDF report
-    trajectory_values_for_report = {
-        'target_trajectory': target_trajectory,
-        'baseline_trajectory': baseline_trajectory,
-        'actual_trajectory': actual_trajectory_repr,
-        'scenario_idx': representative_scenario_idx,
-        'process_names': process_chain.process_names,
-        'F_star': F_star_repr,
-        'F_baseline': F_baseline_repr,
-        'F_actual': F_actual_repr,
-        'F_formula_baseline': F_formula_baseline_repr,
-        'F_formula_actual': F_formula_actual_repr,
-    }
-    print(f"  ✓ Trajectory values prepared (will be included in PDF report)")
+            # Formula-based F (if CasualiT)
+            F_formula_baseline_sc = None
+            F_formula_actual_sc = None
+            if formula_surrogate is not None:
+                F_formula_baseline_sc = formula_surrogate.compute_reliability(baseline_tensor).item()
+                F_formula_actual_sc = formula_surrogate.compute_reliability(best_trajectory).item()
+
+            trajectory_values_for_report_list.append({
+                'target_trajectory': target_trajectory,
+                'baseline_trajectory': baseline_scenario,
+                'actual_trajectory': best_trajectory,
+                'scenario_idx': scenario_idx,
+                'process_names': process_chain.process_names,
+                'controllable_info': controllable_info_for_report,
+                'F_star': F_star_value,
+                'F_baseline': F_baseline_sc,
+                'F_actual': best_F,
+                'F_formula_baseline': F_formula_baseline_sc,
+                'F_formula_actual': F_formula_actual_sc,
+            })
+            print(f"  Scenario {scenario_idx}: best F = {best_F:.6f} (from {n_best_runs} runs)")
+
+    # For backward compatibility, keep the first scenario as the main one
+    trajectory_values_for_report = trajectory_values_for_report_list[0] if trajectory_values_for_report_list else {}
+    print(f"  ✓ {len(trajectory_values_for_report_list)} trajectory comparisons prepared")
 
     # 7b. Evaluate on TEST scenarios
     print("\n[7b/9] Evaluating on TEST scenarios...")
     print("-"*70)
 
     # Create temporary ProcessChain for test scenarios
+    # Uses test baselines for env params, same target for controllable inputs
     print(f"  Creating process chain for test scenarios...")
     process_chain_test = ProcessChain(
         processes_config=selected_processes,
         target_trajectory=target_trajectory_test,
         policy_config=cfg['policy_generator'],
-        device=device
+        device=device,
+        baseline_trajectories=baseline_trajectory_test
     )
 
     # Load trained policy generators into test chain
@@ -832,17 +885,20 @@ def main(config=None):
 
     improvement_test = (F_actual_test_mean - F_baseline_test_mean) / abs(F_baseline_test_mean) * 100 if F_baseline_test_mean != 0 else 0
 
-    print(f"\nTest Results:")
-    print(f"  F* (test):        {F_star_value:.6f}")
-    print(f"  F' (test):        {F_baseline_test_mean:.6f}")
-    print(f"  F  (test):        {F_actual_test_mean:.6f}")
+    # Formula test means (always available since formula_surrogate is always set)
     F_formula_actual_test_mean = None
     F_formula_baseline_test_mean = None
     if formula_surrogate is not None and F_formula_actual_test_values:
         F_formula_actual_test_mean = float(np.mean(F_formula_actual_test_values))
         F_formula_baseline_test_mean = float(np.mean(F_formula_baseline_test_values))
-        print(f"  F  (formula test): {F_formula_actual_test_mean:.6f}")
-        print(f"  F' (formula test): {F_formula_baseline_test_mean:.6f}")
+
+    print(f"\nTest Results:")
+    print(f"  F* (test):        {F_star_value:.6f}")
+    print(f"  F' (test):        {F_baseline_test_mean:.6f}")
+    print(f"  F  (test):        {F_actual_test_mean:.6f}")
+    if F_formula_actual_test_mean is not None:
+        print(f"  F  (ProT test):   {F_formula_actual_test_mean:.6f}")
+        print(f"  F' (ProT test):   {F_formula_baseline_test_mean:.6f}")
     print(f"  Improvement:      {improvement_test:+.2f}%")
 
     # 7c. Compute advanced metrics
@@ -882,8 +938,10 @@ def main(config=None):
     print(f"  Test:  {gap_closure_test['gap_closure_mean']:.4f} +/- {gap_closure_test['gap_closure_std']:.4f} (worst: {gap_closure_test['gap_closure_min']:.4f} at scenario {gap_closure_test['gap_closure_min_scenario_idx']})")
 
     # Success rate (train and test) - using scenario-level aggregates
-    success_rate_train = compute_success_rate(F_star_per_scenario_mean, F_actual_per_scenario_mean, threshold=success_threshold)
-    success_rate_test = compute_success_rate(F_star_test_array, F_actual_test_array, threshold=success_threshold)
+    success_rate_train = compute_success_rate(F_star_per_scenario_mean, F_actual_per_scenario_mean,
+                                              F_baseline_per_scenario=F_baseline_per_scenario_mean, threshold=success_threshold)
+    success_rate_test = compute_success_rate(F_star_test_array, F_actual_test_array,
+                                             F_baseline_per_scenario=F_baseline_test_array, threshold=success_threshold)
 
     print(f"\nSuccess Rate (threshold: {success_threshold*100:.0f}% of F_star):")
     print(f"  Train: {success_rate_train['success_rate_pct']:.1f}% ({success_rate_train['n_successful']}/{success_rate_train['n_total']} scenarios)")
@@ -902,7 +960,7 @@ def main(config=None):
     else:
         print(f"    → Controller performs WORSE on test (overfitting concern)")
 
-    # Formula-based advanced metrics (only when using CasualiT surrogate)
+    # Formula-based advanced metrics (only when formula_surrogate exists, i.e. CasualiT)
     formula_advanced_metrics = {}
     if formula_surrogate is not None and F_formula_per_sample is not None:
         print(f"\n  Computing formula-based advanced metrics...")
@@ -925,9 +983,11 @@ def main(config=None):
         formula_advanced_metrics['formula_worst_case_gap_test'] = compute_worst_case_gap(
             F_star_test_array, F_formula_actual_test_array)
         formula_advanced_metrics['formula_success_rate_train'] = compute_success_rate(
-            F_star_per_scenario_mean, F_formula_per_scenario_mean, threshold=success_threshold)
+            F_star_per_scenario_mean, F_formula_per_scenario_mean,
+            F_baseline_per_scenario=F_baseline_per_scenario_mean, threshold=success_threshold)
         formula_advanced_metrics['formula_success_rate_test'] = compute_success_rate(
-            F_star_test_array, F_formula_actual_test_array, threshold=success_threshold)
+            F_star_test_array, F_formula_actual_test_array,
+            F_baseline_per_scenario=F_baseline_test_array, threshold=success_threshold)
         formula_advanced_metrics['formula_train_test_gap'] = compute_train_test_gap(
             F_star_per_scenario_mean, F_formula_per_scenario_mean,
             F_star_test_array, F_formula_actual_test_array)
@@ -980,8 +1040,8 @@ def main(config=None):
     train_structural_conditions = {}
     test_structural_conditions = {}
 
-    # Extract structural conditions from train scenarios
-    for process_name, data in target_trajectory_train.items():
+    # Extract structural conditions from train baselines (env diversity)
+    for process_name, data in baseline_trajectory_train.items():
         if 'structural_conditions' in data and data['structural_conditions']:
             for var, vals in data['structural_conditions'].items():
                 if var not in train_structural_conditions:
@@ -989,8 +1049,8 @@ def main(config=None):
                 else:
                     train_structural_conditions[var] = np.concatenate([train_structural_conditions[var], vals])
 
-    # Extract structural conditions from test scenarios
-    for process_name, data in target_trajectory_test.items():
+    # Extract structural conditions from test baselines (env diversity)
+    for process_name, data in baseline_trajectory_test.items():
         if 'structural_conditions' in data and data['structural_conditions']:
             for var, vals in data['structural_conditions'].items():
                 if var not in test_structural_conditions:
@@ -1060,12 +1120,14 @@ def main(config=None):
         print(f"    Using scenario {representative_idx} (F_mean={F_actual_per_scenario_mean[representative_idx]:.6f}, close to global mean {F_actual_mean:.6f})")
 
         # Extract representative scenario from target and baseline trajectories
+        # Target always has 1 sample; use index 0. Baseline uses representative_idx.
         target_scenario = {}
         baseline_scenario = {}
         for process_name, data in target_trajectory.items():
+            target_idx = min(representative_idx, data['inputs'].shape[0] - 1)
             target_scenario[process_name] = {
-                'inputs': data['inputs'][representative_idx:representative_idx+1],
-                'outputs': data['outputs'][representative_idx:representative_idx+1]
+                'inputs': data['inputs'][target_idx:target_idx+1],
+                'outputs': data['outputs'][target_idx:target_idx+1]
             }
 
         for process_name, data in baseline_trajectory.items():
@@ -1099,34 +1161,46 @@ def main(config=None):
         # 8a. Generate NEW advanced plots
         print("\n  Generating advanced plots...")
 
-        # Scatter plot: Target vs Baseline & Actual (train) - ALL SAMPLES
+        # Get exact figsize for report PDF slots
+        _left_figsize, _ = get_report_chart_sizes()
+
+        # Scatter plot: Baseline vs Controller (train)
+        # When CasualiT: solid blue = surrogate, hollow blue = ProT formula
+        # When ProTSurrogate: only solid blue (no formula_surrogate)
         plot_target_vs_actual_scatter(
             F_star_per_scenario=F_star_array,
             F_baseline_per_scenario=F_baseline_array,
             F_actual_per_scenario=F_actual_per_sample,
-            save_path=str(checkpoint_dir / 'target_vs_actual_scatter_train.png')
+            F_formula_per_scenario=F_formula_per_sample,  # None when no formula_surrogate
+            save_path=str(checkpoint_dir / 'baseline_vs_controller_train.png'),
+            figsize=_left_figsize,
         )
 
-        # Scatter plot: Target vs Baseline & Actual (test)
+        # Scatter plot: Baseline vs Controller (test)
+        _formula_test = np.array(F_formula_actual_test_values) if F_formula_actual_test_values else None
         plot_target_vs_actual_scatter(
             F_star_per_scenario=F_star_test_array,
             F_baseline_per_scenario=F_baseline_test_array,
             F_actual_per_scenario=F_actual_test_array,
-            save_path=str(checkpoint_dir / 'target_vs_actual_scatter_test.png')
+            F_formula_per_scenario=_formula_test,
+            save_path=str(checkpoint_dir / 'baseline_vs_controller_test.png'),
+            figsize=_left_figsize,
         )
 
         # Gap distribution (train) - ALL SAMPLES
         plot_gap_distribution(
             F_star_per_scenario=F_star_array,
             F_actual_per_scenario=F_actual_per_sample,
-            save_path=str(checkpoint_dir / 'gap_distribution_train.png')
+            save_path=str(checkpoint_dir / 'gap_distribution_train.png'),
+            figsize=_left_figsize,
         )
 
         # Gap distribution (test)
         plot_gap_distribution(
             F_star_per_scenario=F_star_test_array,
             F_actual_per_scenario=F_actual_test_array,
-            save_path=str(checkpoint_dir / 'gap_distribution_test.png')
+            save_path=str(checkpoint_dir / 'gap_distribution_test.png'),
+            figsize=_left_figsize,
         )
 
         print("  ✓ Advanced visualizations generated")
@@ -1149,28 +1223,30 @@ def main(config=None):
         # F* is a single scalar
         F_star_dict = float(F_star_value)
 
+        # Report uses TEST F values for improvement/gap (generalization metrics)
         F_baseline_dict = {
-            'mean': float(F_baseline_mean),
-            'std': float(F_baseline_std),
-            'min': float(F_baseline_array.min()),
-            'max': float(F_baseline_array.max())
+            'mean': float(F_baseline_test_mean),
+            'std': float(np.std(F_baseline_test_array)),
+            'min': float(F_baseline_test_array.min()),
+            'max': float(F_baseline_test_array.max())
         }
 
         F_actual_dict = {
-            'mean': float(F_actual_mean),
-            'std': float(F_actual_std),
-            'min': float(F_actual_per_sample.min()),
-            'max': float(F_actual_per_sample.max())
+            'mean': float(F_actual_test_mean),
+            'std': float(np.std(F_actual_test_array)),
+            'min': float(F_actual_test_array.min()),
+            'max': float(F_actual_test_array.max())
         }
 
-        # F_formula dict (only when using CasualiT surrogate)
+        # F_formula dict — only when formula_surrogate exists (CasualiT mode)
         F_formula_dict = None
-        if F_formula_mean is not None:
+        if formula_surrogate is not None and F_formula_actual_test_mean is not None:
+            F_formula_actual_test_arr = np.array(F_formula_actual_test_values)
             F_formula_dict = {
-                'mean': float(F_formula_mean),
-                'std': float(F_formula_std),
-                'min': float(F_formula_per_sample.min()),
-                'max': float(F_formula_per_sample.max())
+                'mean': float(F_formula_actual_test_mean),
+                'std': float(np.std(F_formula_actual_test_arr)),
+                'min': float(F_formula_actual_test_arr.min()),
+                'max': float(F_formula_actual_test_arr.max())
             }
 
         # Prepare final metrics for report
@@ -1608,6 +1684,30 @@ def main(config=None):
             print("  Set 'theoretical_analysis': {'enabled': True} in your config.")
             print("  This will add L_min plots and Bellman lines to the PDF report.")
 
+        # Generate per-process evolution plots (X/Y across epochs)
+        evolution_plot_paths = {}
+        evolution_color_maps = {}
+        if hasattr(trainer, 'training_progression') and trainer.training_progression:
+            print("\n  Generating per-process evolution plots...")
+            try:
+                _y_lo, _y_hi = -5.0, 5.0
+                if selected_processes and 'st_params' in selected_processes[0]:
+                    _x_dom = selected_processes[0]['st_params'].get('x_domain', (-5.0, 5.0))
+                    _y_lo, _y_hi = _x_dom
+
+                evolution_plot_paths, evolution_color_maps = generate_process_evolution_plots(
+                    training_progression=trainer.training_progression,
+                    controllable_info=controllable_info_for_report,
+                    checkpoint_dir=checkpoint_dir,
+                    n_scenarios=n_scenarios,
+                    y_range=(_y_lo, _y_hi),
+                )
+                print(f"  ✓ Generated {len(evolution_plot_paths)} evolution plots")
+            except Exception as e:
+                print(f"  ✗ Warning: Evolution plots failed: {e}")
+                import traceback
+                traceback.print_exc()
+
         # Generate PDF report
         try:
             report_path = generate_controller_report(
@@ -1623,6 +1723,9 @@ def main(config=None):
                 n_scenarios=n_scenarios,
                 advanced_metrics=advanced_metrics_for_report,
                 trajectory_values=trajectory_values_for_report,
+                trajectory_values_list=trajectory_values_for_report_list,
+                evolution_plot_paths=evolution_plot_paths,
+                evolution_color_maps=evolution_color_maps,
                 theoretical_data=theoretical_data,
                 F_formula=F_formula_dict,
             )

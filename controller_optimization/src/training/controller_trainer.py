@@ -393,8 +393,8 @@ class ControllerTrainer:
         """
         Save snapshot of generated inputs/outputs at key epochs for progression visualization.
 
-        Uses 3 fixed random seeds to generate consistent samples across epochs,
-        allowing tracking of how the same samples evolve during training.
+        Generates one trajectory per scenario (fixed seed for reproducibility),
+        allowing tracking of how controller outputs evolve during training.
 
         Args:
             epoch (int): Current epoch number
@@ -404,61 +404,59 @@ class ControllerTrainer:
         """
         self.process_chain.eval()
 
-        # Use first scenario as representative
-        representative_scenario_idx = 0
-
-        # Fixed seeds for reproducible samples across epochs
-        fixed_seeds = [42, 123, 456]
+        n_scenarios = self.surrogate.n_scenarios
+        fixed_seed = 42  # Single fixed seed for reproducibility across epochs
 
         with torch.no_grad():
             from controller_optimization.src.utils.metrics import convert_trajectory_to_numpy
 
-            # Save random state before setting seeds (to restore after)
             rng_state = torch.get_rng_state()
 
-            # Generate 3 trajectories with fixed seeds
-            trajectories_np = []
-            F_actuals = []
-
-            for seed in fixed_seeds:
-                # Set seed for reproducibility
-                torch.manual_seed(seed)
-
+            # Generate one trajectory per scenario
+            per_scenario = {}
+            F_actuals_per_scenario = {}
+            for scenario_idx in range(n_scenarios):
+                torch.manual_seed(fixed_seed)
                 trajectory = self.process_chain.forward(
-                    batch_size=1,
-                    scenario_idx=representative_scenario_idx
+                    batch_size=1, scenario_idx=scenario_idx
                 )
+                per_scenario[scenario_idx] = convert_trajectory_to_numpy(trajectory)
+                F_actuals_per_scenario[scenario_idx] = self.surrogate.compute_reliability(trajectory).item()
 
-                trajectories_np.append(convert_trajectory_to_numpy(trajectory))
-                F_actuals.append(self.surrogate.compute_reliability(trajectory).item())
-
-            # Restore random state so training is not affected
             torch.set_rng_state(rng_state)
 
-            # Also get target trajectory for this scenario
+            # Target trajectory (single sample, same for all scenarios)
             target_trajectory_np = {}
             for process_name, data in self.surrogate.target_trajectory_tensors.items():
+                t_idx = min(0, data['inputs'].shape[0] - 1)
                 target_trajectory_np[process_name] = {
-                    'inputs': data['inputs'][representative_scenario_idx:representative_scenario_idx+1].cpu().numpy(),
-                    'outputs': data['outputs'][representative_scenario_idx:representative_scenario_idx+1].cpu().numpy()
+                    'inputs': data['inputs'][t_idx:t_idx+1].cpu().numpy(),
+                    'outputs': data['outputs'][t_idx:t_idx+1].cpu().numpy()
                 }
 
             F_star = self.surrogate.F_star
 
-            # Save snapshot with all 3 samples
+            # Backward-compatible fields (scenario 0)
+            trajectories_0 = [per_scenario[0]]
+            F_actuals_0 = [F_actuals_per_scenario[0]]
+
             snapshot = {
                 'epoch': epoch,
                 'phase': phase,
                 'lambda_bc': lambda_bc,
                 'reliability_weight': reliability_weight,
-                'trajectories': trajectories_np,  # List of 3 trajectories
-                'trajectory': trajectories_np[0],  # Keep first for backward compatibility
+                # Per-scenario data (new)
+                'per_scenario': per_scenario,
+                'F_per_scenario': F_actuals_per_scenario,
+                # Backward compatibility (scenario 0)
+                'trajectories': trajectories_0,
+                'trajectory': trajectories_0[0],
                 'target_trajectory': target_trajectory_np,
-                'F_actuals': F_actuals,  # List of 3 F values
-                'F_actual': F_actuals[0],  # Keep first for backward compatibility
+                'F_actuals': F_actuals_0,
+                'F_actual': F_actuals_0[0],
                 'F_star': F_star,
-                'scenario_idx': representative_scenario_idx,
-                'seeds': fixed_seeds
+                'scenario_idx': 0,
+                'seeds': [fixed_seed]
             }
 
             self.training_progression.append(snapshot)
@@ -523,7 +521,11 @@ class ControllerTrainer:
                 continue
 
             actual_inputs = trajectory[process_name]['inputs'][..., ctrl_idx]
-            target_inputs_scenario = self.surrogate.target_trajectory_tensors[process_name]['inputs'][scenario_idx:scenario_idx+1][..., ctrl_idx]
+            # Target trajectory may have only 1 sample (adaptive calibration targets).
+            # Always use sample 0 for BC reference; clamp scenario_idx for legacy cases.
+            target_all = self.surrogate.target_trajectory_tensors[process_name]['inputs']
+            target_idx = min(scenario_idx, target_all.shape[0] - 1)
+            target_inputs_scenario = target_all[target_idx:target_idx+1][..., ctrl_idx]
 
             # Normalize inputs using precomputed stats
             # Non-constant dims: normalized by actual range → [0,1]
@@ -932,7 +934,9 @@ class ControllerTrainer:
                         continue
 
                     actual_inputs = trajectory[process_name]['inputs'][..., ctrl_idx]
-                    target_inputs = self.validation_surrogate.target_trajectory_tensors[process_name]['inputs'][scenario_idx:scenario_idx+1][..., ctrl_idx]
+                    val_target_all = self.validation_surrogate.target_trajectory_tensors[process_name]['inputs']
+                    val_target_idx = min(scenario_idx, val_target_all.shape[0] - 1)
+                    target_inputs = val_target_all[val_target_idx:val_target_idx+1][..., ctrl_idx]
 
                     # Use same normalization stats as training (with fallback scale for constant dims)
                     stats = self.input_stats[process_name]

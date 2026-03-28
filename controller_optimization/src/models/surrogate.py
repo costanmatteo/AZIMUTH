@@ -59,11 +59,11 @@ class ProTSurrogate:
     }
 
     def __init__(self, target_trajectory, device='cpu', use_deterministic_sampling=True,
-                 process_configs=None):
+                 process_configs=None, n_scenarios=None):
         """
         Args:
-            target_trajectory (dict): Target trajectory da target_generation
-                                     Ora contiene n_samples scenarios
+            target_trajectory (dict): Target trajectory da target_generation.
+                                     Can be a single sample (1 row) — F* computed from it.
             device (str): Device for computations
             use_deterministic_sampling (bool): If True, use mean values directly (deterministic).
                                                If False, use reparameterization trick (stochastic).
@@ -71,10 +71,13 @@ class ProTSurrogate:
             process_configs (list, optional): Lista di configurazioni processo (da PROCESSES).
                 Se fornita e i processi hanno 'surrogate_target'/'surrogate_scale',
                 usa quelli al posto dei PROCESS_CONFIGS hardcoded.
+            n_scenarios (int, optional): Override number of scenarios. If None, inferred
+                from target_trajectory shape. Use this when target has 1 sample but
+                training has n_train scenarios (from baseline trajectories).
         """
         self.device = device
         self.use_deterministic_sampling = use_deterministic_sampling
-        self.n_scenarios = None  # Will be inferred from data
+        self.n_scenarios = n_scenarios  # May be overridden below if None
 
         # Se process_configs contiene target calibrati, costruisci i config per processo
         self._dynamic_configs = None
@@ -108,13 +111,13 @@ class ProTSurrogate:
                 'outputs': torch.tensor(data['outputs'], dtype=torch.float32, device=device)
             }
 
-            # Infer number of scenarios
+            # Infer number of scenarios from target if not overridden
             if self.n_scenarios is None:
                 self.n_scenarios = data['inputs'].shape[0]
 
         # Compute F_star from scenario 0 (single scalar, same for all scenarios)
         self.F_star = self._compute_F_star_from_scenario_0()
-        print(f"  F* = {self.F_star:.6f} (from scenario 0)")
+        print(f"  F* = {self.F_star:.6f} (from target trajectory, scenario 0)")
 
     def compute_reliability(self, trajectory, return_quality_scores=False):
         """
@@ -385,7 +388,8 @@ if __name__ == '__main__':
 def create_surrogate(config: Dict,
                      target_trajectory: Dict,
                      device: str = 'cpu',
-                     process_configs: list = None) -> Union['ProTSurrogate', 'CasualiTSurrogate']:
+                     process_configs: list = None,
+                     n_scenarios: int = None) -> Union['ProTSurrogate', 'CasualiTSurrogate']:
     """
     Factory function to create the appropriate surrogate based on configuration.
 
@@ -399,6 +403,8 @@ def create_surrogate(config: Dict,
         process_configs: Lista configurazioni processo (da PROCESSES).
             Se i processi hanno 'surrogate_target'/'surrogate_scale',
             ProTSurrogate li usa al posto dei target hardcoded.
+        n_scenarios: Override number of scenarios. If None, inferred from
+            target_trajectory shape.
 
     Returns:
         Surrogate instance (ProTSurrogate or CasualiTSurrogate)
@@ -421,6 +427,7 @@ def create_surrogate(config: Dict,
             device=device,
             use_deterministic_sampling=use_deterministic,
             process_configs=process_configs,
+            n_scenarios=n_scenarios,
         )
 
     elif surrogate_type == 'casualit':

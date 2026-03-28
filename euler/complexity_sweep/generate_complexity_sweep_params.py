@@ -163,40 +163,82 @@ def generate_complexity_sweep(
         f.write("\n".join(lines) + "\n")
 
     print(f"\nWritten to: {output_file}")
-    print(f"\nRemember to update complexity_sweep.sh:")
-    print(f"  #SBATCH --array=0-{total_runs - 1}")
+
+    # Auto-update complexity_sweep.sh with correct array range and time limit
+    import re
+    sweep_sh = output_file.parent / "complexity_sweep.sh"
+    if sweep_sh.exists():
+        text = sweep_sh.read_text()
+        text = re.sub(r'#SBATCH --array=\S+', f'#SBATCH --array=0-{total_runs - 1}', text)
+        # Update time from config if available
+        cfg = _load_config()
+        slurm_time = cfg.get('slurm', {}).get('time')
+        if slurm_time:
+            text = re.sub(r'#SBATCH --time=\S+', f'#SBATCH --time={slurm_time}', text)
+        sweep_sh.write_text(text)
+        print(f"\nUpdated {sweep_sh}:")
+        print(f"  --array=0-{total_runs - 1}")
+        if slurm_time:
+            print(f"  --time={slurm_time}")
+    else:
+        print(f"\nRemember to update complexity_sweep.sh:")
+        print(f"  #SBATCH --array=0-{total_runs - 1}")
+
+
+def _load_config():
+    """Load defaults from configs/complexity_sweep_config.py if available."""
+    try:
+        import sys, importlib.util
+        cfg_path = Path(__file__).resolve().parent.parent.parent / 'configs' / 'complexity_sweep_config.py'
+        if not cfg_path.exists():
+            return {}
+        spec = importlib.util.spec_from_file_location('complexity_sweep_config', cfg_path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod.COMPLEXITY_SWEEP_CONFIG
+    except Exception:
+        return {}
 
 
 def main():
+    cfg = _load_config()
+    sampling = cfg.get('sampling', {})
+    pr = cfg.get('param_ranges', {})
+
     parser = argparse.ArgumentParser(
         description='Generate complexity sweep parameters (LHS + reduced seeds)',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument('--n_lhs', type=int, default=30,
+    parser.add_argument('--n_lhs', type=int, default=sampling.get('n_lhs', 30),
                         help='Number of LHS configurations for (n, m, rho)')
-    parser.add_argument('--n_seeds', type=int, default=5,
+    parser.add_argument('--n_seeds', type=int, default=sampling.get('n_seeds', 5),
                         help='Number of seed values per axis (total pairs = n_seeds^2)')
-    parser.add_argument('--seed', type=int, default=42,
+    parser.add_argument('--seed', type=int, default=sampling.get('seed', 42),
                         help='Random seed for LHS generation')
-    parser.add_argument('--output', type=str, default=None,
+    parser.add_argument('--output', type=str,
+                        default=cfg.get('output', {}).get('params_file'),
                         help='Output file path')
 
     # Parameter ranges
-    parser.add_argument('--n_min', type=int, default=2,
+    n_r = pr.get('n', (2, 8))
+    m_r = pr.get('m', (1, 4))
+    rho_r = pr.get('rho', (0.0, 0.5))
+    np_r = pr.get('n_processes', (2, 5))
+    parser.add_argument('--n_min', type=int, default=n_r[0],
                         help='Min ST input variables (n)')
-    parser.add_argument('--n_max', type=int, default=8,
+    parser.add_argument('--n_max', type=int, default=n_r[1],
                         help='Max ST input variables (n)')
-    parser.add_argument('--m_min', type=int, default=1,
+    parser.add_argument('--m_min', type=int, default=m_r[0],
                         help='Min ST cascaded stages (m)')
-    parser.add_argument('--m_max', type=int, default=4,
+    parser.add_argument('--m_max', type=int, default=m_r[1],
                         help='Max ST cascaded stages (m)')
-    parser.add_argument('--rho_min', type=float, default=0.0,
+    parser.add_argument('--rho_min', type=float, default=rho_r[0],
                         help='Min ST noise intensity (rho)')
-    parser.add_argument('--rho_max', type=float, default=0.5,
+    parser.add_argument('--rho_max', type=float, default=rho_r[1],
                         help='Max ST noise intensity (rho)')
-    parser.add_argument('--nproc_min', type=int, default=2,
+    parser.add_argument('--nproc_min', type=int, default=np_r[0],
                         help='Min number of processes in sequence')
-    parser.add_argument('--nproc_max', type=int, default=5,
+    parser.add_argument('--nproc_max', type=int, default=np_r[1],
                         help='Max number of processes in sequence')
 
     args = parser.parse_args()

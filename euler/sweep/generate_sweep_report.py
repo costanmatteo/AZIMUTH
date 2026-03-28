@@ -10,7 +10,7 @@ This script:
 2. Computes aggregate statistics (train + test splits)
 3. Generates matplotlib plots embedded as base64
 4. Renders a pixel-faithful HTML layout to PDF via WeasyPrint
-   (landscape A4, Courier monospace, matches the design spec exactly)
+   (landscape A4, Helvetica, matches the design spec exactly)
 """
 
 import argparse
@@ -26,6 +26,9 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
+
+matplotlib.rcParams['font.family'] = 'sans-serif'
+matplotlib.rcParams['font.sans-serif'] = ['Arial', 'DejaVu Sans']
 
 # ── WeasyPrint for HTML → PDF ────────────────────────────────────────────────
 try:
@@ -165,7 +168,7 @@ def compute_stats(df: pd.DataFrame) -> dict:
 _GREEN  = '#1D9E75'
 _RED    = '#D85A30'
 _AMBER  = '#BA7517'
-_MONO   = 'DejaVu Sans Mono'   # closest fallback to Courier on Linux
+_FONT   = 'Arial'
 
 
 def _b64(fig) -> str:
@@ -180,17 +183,17 @@ def _b64(fig) -> str:
 def plot_scatter(df: pd.DataFrame) -> str:
     fig, ax = plt.subplots(figsize=(4.2, 3.4))
     fstar = df['F_star_train']
-    ax.scatter(fstar, df['F_baseline_train'], color=_RED,   s=14, alpha=0.55,
+    ax.scatter(df['F_baseline_train'], fstar, color=_RED,   s=14, alpha=0.55,
                linewidths=0, label="Baseline F'")
-    ax.scatter(fstar, df['F_actual_train'],   color='#2563EB', s=14, alpha=0.55,
+    ax.scatter(df['F_actual_train'],   fstar, color='#2563EB', s=14, alpha=0.55,
                linewidths=0, label='Controller F')
     lo = min(fstar.min(), df['F_baseline_train'].min(), df['F_actual_train'].min()) - 0.02
     hi = fstar.max() + 0.02
     ax.plot([lo, hi], [lo, hi], 'k--', lw=0.8, alpha=0.4)
-    ax.set_xlabel('F*  (target)', fontsize=7, fontfamily=_MONO)
-    ax.set_ylabel('F  (achieved)', fontsize=7, fontfamily=_MONO)
-    ax.set_title('F* vs F\' (red) and F* vs F (blue)', fontsize=7.5,
-                 fontfamily=_MONO, fontweight='bold')
+    ax.set_xlabel('F  (achieved)', fontsize=7, fontfamily=_FONT)
+    ax.set_ylabel('F*  (target)', fontsize=7, fontfamily=_FONT)
+    ax.set_title('F\' (red) and F (blue) vs F*', fontsize=7.5,
+                 fontfamily=_FONT, fontweight='bold')
     ax.tick_params(labelsize=6)
     ax.legend(fontsize=6, framealpha=0.6)
     ax.grid(True, alpha=0.18, lw=0.4)
@@ -206,9 +209,9 @@ def plot_boxplot(df: pd.DataFrame) -> str:
                     medianprops=dict(color='black', lw=1.2))
     bp['boxes'][0].set(facecolor=_RED,   alpha=0.55)
     bp['boxes'][1].set(facecolor=_GREEN, alpha=0.55)
-    ax.set_ylabel('Gap', fontsize=7, fontfamily=_MONO)
+    ax.set_ylabel('Gap', fontsize=7, fontfamily=_FONT)
     ax.set_title('Gap distribution: baseline vs controller', fontsize=7.5,
-                 fontfamily=_MONO, fontweight='bold')
+                 fontfamily=_FONT, fontweight='bold')
     ax.tick_params(labelsize=6)
     ax.grid(True, axis='y', alpha=0.18, lw=0.4)
     fig.tight_layout(pad=0.6)
@@ -229,9 +232,9 @@ def plot_improvement(df: pd.DataFrame) -> str:
             label="Baseline", density=True)
     ax.hist(df['gap_ctrl_train'],     bins=bins, color=_GREEN, alpha=0.55,
             label="Ctrl",     density=True)
-    ax.set_xlabel('Gap', fontsize=7, fontfamily=_MONO)
-    ax.set_ylabel('Density', fontsize=7, fontfamily=_MONO)
-    ax.set_title('Gap overlap', fontsize=7.5, fontfamily=_MONO, fontweight='bold')
+    ax.set_xlabel('Gap', fontsize=7, fontfamily=_FONT)
+    ax.set_ylabel('Density', fontsize=7, fontfamily=_FONT)
+    ax.set_title('Gap overlap', fontsize=7.5, fontfamily=_FONT, fontweight='bold')
     ax.legend(fontsize=6)
     ax.tick_params(labelsize=6)
     ax.grid(True, alpha=0.18, lw=0.4)
@@ -245,10 +248,10 @@ def plot_improvement(df: pd.DataFrame) -> str:
     colors_bar = [_GREEN if v >= 0 else _RED for v in deltas]
     ax.bar(range(len(deltas)), deltas, color=colors_bar, width=1.0, linewidth=0)
     ax.axhline(0, color='black', lw=0.6)
-    ax.set_xlabel('Run (sorted)', fontsize=7, fontfamily=_MONO)
-    ax.set_ylabel('|Gap baseline| − |Gap ctrl|', fontsize=7, fontfamily=_MONO)
+    ax.set_xlabel('Run (sorted)', fontsize=7, fontfamily=_FONT)
+    ax.set_ylabel('|Gap baseline| − |Gap ctrl|', fontsize=7, fontfamily=_FONT)
     ax.set_title('Gap reduction per run', fontsize=7.5,
-                 fontfamily=_MONO, fontweight='bold')
+                 fontfamily=_FONT, fontweight='bold')
     ax.tick_params(labelsize=6)
     ax.grid(True, axis='y', alpha=0.18, lw=0.4)
 
@@ -272,14 +275,14 @@ def plot_heatmap(df: pd.DataFrame) -> str:
                    vmin=-vmax, vmax=vmax, origin='upper')
     ax.set_xticks(range(len(pivot.columns)))
     ax.set_xticklabels([str(int(c)) for c in pivot.columns],
-                       fontsize=5, fontfamily=_MONO)
+                       fontsize=5, fontfamily=_FONT)
     ax.set_yticks(range(len(pivot.index)))
     ax.set_yticklabels([str(int(i)) for i in pivot.index],
-                       fontsize=5, fontfamily=_MONO)
-    ax.set_xlabel('seed_b', fontsize=7, fontfamily=_MONO)
-    ax.set_ylabel('seed_t', fontsize=7, fontfamily=_MONO)
+                       fontsize=5, fontfamily=_FONT)
+    ax.set_xlabel('seed_b', fontsize=7, fontfamily=_FONT)
+    ax.set_ylabel('seed_t', fontsize=7, fontfamily=_FONT)
     ax.set_title('Gap reduction by seed combination', fontsize=7.5,
-                 fontfamily=_MONO, fontweight='bold')
+                 fontfamily=_FONT, fontweight='bold')
     cb = fig.colorbar(im, ax=ax, fraction=0.03, pad=0.03)
     cb.ax.tick_params(labelsize=5)
     fig.tight_layout(pad=0.6)
@@ -297,7 +300,7 @@ PAGE_CSS = """
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
-  font-family: 'Courier New', Courier, monospace;
+  font-family: Arial, Helvetica, sans-serif;
   font-size: 9px;
   line-height: 1.45;
   color: #1a1a1a;

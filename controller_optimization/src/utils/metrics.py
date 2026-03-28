@@ -280,28 +280,36 @@ def compute_gap_closure(F_star_per_scenario, F_baseline_per_scenario, F_actual_p
     }
 
 
-def compute_success_rate(F_star_per_scenario, F_actual_per_scenario, threshold=0.95):
+def compute_success_rate(F_star_per_scenario, F_actual_per_scenario,
+                         F_baseline_per_scenario=None, threshold=0.95):
     """
-    Compute success rate: percentage of scenarios where F_actual >= threshold * F_star.
+    Compute win rate: percentage of scenarios where the controller's gap
+    to the target is smaller than the baseline's gap.
+
+    Win condition per scenario:
+        |F_actual - F_star| < |F_baseline - F_star|
 
     Args:
         F_star_per_scenario (array-like): Target reliability for each scenario
-        F_actual_per_scenario (array-like): Actual reliability for each scenario
-        threshold (float): Success threshold (default: 0.95 = 95%)
+        F_actual_per_scenario (array-like): Controller reliability for each scenario
+        F_baseline_per_scenario (array-like): Baseline reliability for each scenario
+        threshold (float): Unused, kept for backward compatibility
 
     Returns:
-        dict: {
-            'success_rate': Success rate (0.0 to 1.0),
-            'success_rate_pct': Success rate as percentage,
-            'n_successful': Number of successful scenarios,
-            'n_total': Total number of scenarios,
-            'threshold': Threshold used,
-        }
+        dict with success_rate, n_successful, n_total, threshold
     """
     F_star_arr = np.atleast_1d(F_star_per_scenario)
     F_actual_arr = np.atleast_1d(F_actual_per_scenario)
 
-    success_mask = F_actual_arr >= (threshold * F_star_arr)
+    if F_baseline_per_scenario is not None:
+        F_baseline_arr = np.atleast_1d(F_baseline_per_scenario)
+        gap_actual = np.abs(F_actual_arr - F_star_arr)
+        gap_baseline = np.abs(F_baseline_arr - F_star_arr)
+        success_mask = gap_actual < gap_baseline
+    else:
+        # Fallback: old behaviour (F_actual >= threshold * F_star)
+        success_mask = F_actual_arr >= (threshold * F_star_arr)
+
     n_successful = int(np.sum(success_mask))
     n_total = len(F_star_arr)
     success_rate = n_successful / n_total if n_total > 0 else 0.0

@@ -126,6 +126,8 @@ class ProcessChain(nn.Module):
         """
         Estrae parametri strutturali (non-controllabili) per uno scenario specifico.
 
+        Sources from baseline_trajectories if available, otherwise from target.
+
         Args:
             scenario_idx (int): Index dello scenario
 
@@ -138,15 +140,18 @@ class ProcessChain(nn.Module):
             process_name = process_config['name']
             info = self._get_controllable_info(process_config)
 
-            # Get target inputs for this scenario
-            target_inputs = self.target_trajectory[process_name]['inputs'][scenario_idx]
+            # Source from baseline (env params) or target
+            if self.baseline_trajectories is not None:
+                source_inputs = self.baseline_trajectories[process_name]['inputs'][scenario_idx]
+            else:
+                target_inputs_all = self.target_trajectory[process_name]['inputs']
+                target_idx = min(scenario_idx, target_inputs_all.shape[0] - 1)
+                source_inputs = target_inputs_all[target_idx]
 
-            # Extract non-controllable values using indices
             for idx in info['non_controllable_indices']:
-                structural_values.append(target_inputs[idx])
+                structural_values.append(source_inputs[idx])
 
         if len(structural_values) == 0:
-            # No structural params → return dummy zero tensor
             return torch.tensor([0.0], dtype=torch.float32, device=self.device)
 
         return torch.tensor(structural_values, dtype=torch.float32, device=self.device)
@@ -180,24 +185,26 @@ class ProcessChain(nn.Module):
 
         return self
 
-    def __init__(self, processes_config, target_trajectory, policy_config=None, device='cpu'):
+    def __init__(self, processes_config, target_trajectory, policy_config=None, device='cpu',
+                 baseline_trajectories=None):
         """
         Args:
             processes_config (list): Lista da PROCESSES
-            target_trajectory (dict): Da generate_target_trajectory()
+            target_trajectory (dict): Da generate_target_trajectory() — single target (1 sample)
             policy_config (dict): Config for policy generators
             device (str): Device
+            baseline_trajectories (dict, optional): Baseline trajectories with different env params.
+                If provided, non-controllable inputs (env params) are sourced from baselines
+                instead of the target trajectory. Shape: (n_baselines, input_dim) per process.
         """
         super(ProcessChain, self).__init__()
 
         self.device = device
         self.process_names = [p['name'] for p in processes_config]
 
-
-
-
         self.processes_config = processes_config
         self.target_trajectory = target_trajectory
+        self.baseline_trajectories = baseline_trajectories
 
         # Default policy config
         if policy_config is None:
@@ -355,11 +362,15 @@ class ProcessChain(nn.Module):
 
     def get_initial_inputs(self, batch_size=1, scenario_idx=None):
         """
-        Get initial inputs a1 from target trajectory.
+        Get initial inputs a1 for the first process.
+
+        Controllable inputs come from the target trajectory (always sample 0).
+        Non-controllable inputs (env params) come from baseline_trajectories[scenario_idx]
+        if available, otherwise from target_trajectory[scenario_idx].
 
         Args:
             batch_size (int): Number of parallel samples
-            scenario_idx (int, optional): Which scenario's structural conditions to use.
+            scenario_idx (int, optional): Which scenario's env params to use.
                                          If None, uses scenario 0.
 
         Returns:
@@ -369,13 +380,26 @@ class ProcessChain(nn.Module):
             scenario_idx = 0
 
         first_process_name = self.process_names[0]
-        target_inputs_all = self.target_trajectory[first_process_name]['inputs']
+        info = self.controllable_info_per_process[0]
 
-        # Select specific scenario
-        target_inputs = target_inputs_all[scenario_idx]  # Shape: (input_dim,)
+        if self.baseline_trajectories is not None:
+            # Target always has 1 sample — use sample 0 for controllable inputs
+            target_inputs = self.target_trajectory[first_process_name]['inputs'][0].copy()  # (input_dim,)
+            # Non-controllable inputs from baseline scenario
+            baseline_inputs = self.baseline_trajectories[first_process_name]['inputs'][scenario_idx]
 
-        # Replicate for batch
-        initial_inputs = np.tile(target_inputs, (batch_size, 1))
+            # Override non-controllable with baseline env params
+            for idx in info['non_controllable_indices']:
+                target_inputs[idx] = baseline_inputs[idx]
+
+            initial_inputs = np.tile(target_inputs, (batch_size, 1))
+        else:
+            # Legacy: use target trajectory directly
+            target_inputs_all = self.target_trajectory[first_process_name]['inputs']
+            target_idx = min(scenario_idx, target_inputs_all.shape[0] - 1)
+            target_inputs = target_inputs_all[target_idx]  # (input_dim,)
+            initial_inputs = np.tile(target_inputs, (batch_size, 1))
+
         return torch.tensor(initial_inputs, dtype=torch.float32, device=self.device)
 
     def scale_inputs(self, inputs, process_idx):
@@ -422,17 +446,16 @@ class ProcessChain(nn.Module):
 
     def _merge_controllable_inputs(self, controllable_outputs, process_idx, scenario_idx, batch_size):
         """
-        Merges controllable inputs from policy with non-controllable inputs from target.
+        Merges controllable inputs from policy with non-controllable inputs.
 
-        The policy generator outputs ONLY controllable inputs. This method combines them
-        with non-controllable values from the target trajectory to form the complete
-        input tensor for the process.
+        Non-controllable values come from baseline_trajectories[scenario_idx] if
+        available, otherwise from target_trajectory.
 
         Args:
             controllable_outputs: Tensor with ONLY controllable inputs from policy generator
                                  Shape: (batch_size, n_controllable)
             process_idx: Index of the current process
-            scenario_idx: Index of the scenario (for retrieving target values)
+            scenario_idx: Index of the scenario (for retrieving env params)
             batch_size: Batch size
 
         Returns:
@@ -451,9 +474,13 @@ class ProcessChain(nn.Module):
         if info['n_non_controllable'] == 0:
             return controllable_outputs
 
-        # Get target inputs for this scenario (for non-controllable values)
-        target_inputs_all = self.target_trajectory[process_name]['inputs']
-        target_inputs = target_inputs_all[scenario_idx]  # Shape: (input_dim,)
+        # Source non-controllable values from baseline (env params) or target
+        if self.baseline_trajectories is not None:
+            source_inputs = self.baseline_trajectories[process_name]['inputs'][scenario_idx]
+        else:
+            target_inputs_all = self.target_trajectory[process_name]['inputs']
+            target_idx = min(scenario_idx, target_inputs_all.shape[0] - 1)
+            source_inputs = target_inputs_all[target_idx]
 
         # Create full input tensor
         full_inputs = torch.zeros(batch_size, input_dim, dtype=torch.float32, device=self.device)
@@ -462,22 +489,22 @@ class ProcessChain(nn.Module):
         for out_idx, input_idx in enumerate(controllable_indices):
             full_inputs[:, input_idx] = controllable_outputs[:, out_idx]
 
-        # Place non-controllable values from target in their positions
+        # Place non-controllable values from source in their positions
         for input_idx in non_controllable_indices:
-            full_inputs[:, input_idx] = target_inputs[input_idx]
+            full_inputs[:, input_idx] = source_inputs[input_idx]
 
         return full_inputs
 
     def _get_non_controllable_inputs(self, process_idx, scenario_idx, batch_size):
         """
-        Get non-controllable inputs for a process from the target trajectory.
+        Get non-controllable inputs (env params) for a process.
 
-        These are environmental conditions (e.g., temperature, ambient conditions)
-        that the policy generator needs to make informed decisions.
+        Sources from baseline_trajectories[scenario_idx] if available,
+        otherwise from target_trajectory.
 
         Args:
             process_idx: Index of the process
-            scenario_idx: Index of the scenario (for retrieving target values)
+            scenario_idx: Index of the scenario (for retrieving env params)
             batch_size: Batch size
 
         Returns:
@@ -489,24 +516,25 @@ class ProcessChain(nn.Module):
 
         n_non_controllable = info['n_non_controllable']
 
-        # If no non-controllable inputs, return None
         if n_non_controllable == 0:
             return None
 
         non_controllable_indices = info['non_controllable_indices']
 
-        # Get target inputs for this scenario
-        target_inputs_all = self.target_trajectory[process_name]['inputs']
-        target_inputs = target_inputs_all[scenario_idx]  # Shape: (input_dim,)
+        # Source from baseline (env params) or target
+        if self.baseline_trajectories is not None:
+            source_inputs = self.baseline_trajectories[process_name]['inputs'][scenario_idx]
+        else:
+            target_inputs_all = self.target_trajectory[process_name]['inputs']
+            target_idx = min(scenario_idx, target_inputs_all.shape[0] - 1)
+            source_inputs = target_inputs_all[target_idx]
 
-        # Extract non-controllable values and expand to batch
         non_controllable_values = torch.tensor(
-            [target_inputs[idx] for idx in non_controllable_indices],
+            [source_inputs[idx] for idx in non_controllable_indices],
             dtype=torch.float32,
             device=self.device
         )
 
-        # Expand to batch size: (n_non_controllable,) -> (batch_size, n_non_controllable)
         non_controllable_batch = non_controllable_values.unsqueeze(0).expand(batch_size, -1)
 
         return non_controllable_batch

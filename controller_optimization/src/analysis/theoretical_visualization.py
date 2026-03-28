@@ -5,45 +5,50 @@ Creates plots comparing observed loss vs theoretical minimum (L_min).
 """
 
 import numpy as np
+import matplotlib
 import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
 import matplotlib.patches as mpatches
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 
+# Rebuild font cache once at import time so new fonts are picked up
+fm._load_fontmanager(try_read_cache=False)
+
 
 def apply_plot_style():
     plt.rcParams.update({
-        'font.family':           'monospace',
-        'font.size':             8,
-        'axes.titlesize':        9,
+        'font.family':           'sans-serif',
+        'font.sans-serif':       ['Helvetica', 'Arial', 'DejaVu Sans'],
+        'font.size':             6,
+        'axes.titlesize':        6.5,
         'axes.titleweight':      'normal',
         'axes.titlelocation':    'left',
-        'axes.labelsize':        8,
+        'axes.labelsize':        6,
         'axes.labelweight':      'normal',
-        'axes.linewidth':        0.5,
+        'axes.linewidth':        0.4,
         'axes.spines.top':       False,
         'axes.spines.right':     False,
         'axes.grid':             True,
         'grid.color':            '#DDDDDD',
-        'grid.linewidth':        0.4,
+        'grid.linewidth':        0.3,
         'grid.alpha':            1.0,
-        'xtick.labelsize':       7.5,
-        'ytick.labelsize':       7.5,
-        'xtick.major.width':     0.4,
-        'ytick.major.width':     0.4,
-        'xtick.major.size':      3,
-        'ytick.major.size':      3,
-        'legend.fontsize':       7.5,
+        'xtick.labelsize':       5.5,
+        'ytick.labelsize':       5.5,
+        'xtick.major.width':     0.3,
+        'ytick.major.width':     0.3,
+        'xtick.major.size':      2.5,
+        'ytick.major.size':      2.5,
+        'legend.fontsize':       5.5,
         'legend.framealpha':     0.9,
         'legend.edgecolor':      '#DDDDDD',
         'legend.fancybox':       False,
-        'legend.borderpad':      0.4,
+        'legend.borderpad':      0.3,
         'figure.facecolor':      'white',
         'axes.facecolor':        'white',
         'savefig.facecolor':     'white',
         'savefig.dpi':           150,
-        'savefig.bbox':          'tight',
-        'lines.linewidth':       1.4,
+        'lines.linewidth':       0.8,
     })
 
 
@@ -53,7 +58,7 @@ def plot_loss_vs_L_min(
     theoretical_L_min: List[float],
     save_path: Optional[str] = None,
     title: str = "Loss vs Theoretical Minimum",
-    figsize: Tuple[int, int] = (10, 6),
+    figsize: tuple = (14, 4.8),
     bellman_lmin: Optional[Dict[str, Any]] = None,
 ) -> plt.Figure:
     """
@@ -87,17 +92,17 @@ def plot_loss_vs_L_min(
     theoretical = np.array(theoretical_L_min)
 
     # Plot observed loss
-    ax.plot(epochs, observed, 'b-', linewidth=2, label='Observed Loss', marker='o', markersize=3)
+    ax.plot(epochs, observed, 'b-', label='Observed Loss')
 
     # Plot theoretical L_min (empirical)
-    ax.plot(epochs, theoretical, 'r--', linewidth=2, label='L_min (empirical)')
+    ax.plot(epochs, theoretical, 'r--', label='L_min (empirical)')
 
     # Plot Bellman L_min lines if available
     if bellman_lmin is not None:
         bellman_val = bellman_lmin.get('L_min_bellman', None)
         if bellman_val is not None:
             ax.axhline(y=bellman_val, color='green', linestyle='-.',
-                       linewidth=2.5, label=f'L_min Bellman = {bellman_val:.4f}')
+                       label='L_min Bellman')
 
     # Fill area between L_min and observed (reducible gap)
     ax.fill_between(
@@ -116,10 +121,10 @@ def plot_loss_vs_L_min(
             all_vals = np.concatenate([all_vals, extra])
 
     # Labels and legend
-    ax.set_xlabel('Epoch', fontsize=12)
-    ax.set_ylabel('Loss', fontsize=12)
-    ax.set_title(title, fontsize=14)
-    ax.legend(loc='upper right', fontsize=10)
+    ax.set_xlabel('Epoch')
+    ax.set_ylabel('Loss')
+    ax.set_title(title)
+    ax.legend(loc='upper left')
     ax.grid(True, alpha=0.3)
 
     # Set reasonable y-axis limits
@@ -127,10 +132,10 @@ def plot_loss_vs_L_min(
     y_min = min(min(all_vals), 0) * 0.9 if min(all_vals) < 0 else 0
     ax.set_ylim(y_min, y_max)
 
-    plt.tight_layout()
+    plt.tight_layout(pad=0.3)
 
     if save_path:
-        fig.savefig(save_path, dpi=150, bbox_inches='tight')
+        fig.savefig(save_path, dpi=150)
         print(f"  Saved: {save_path}")
 
     return fig
@@ -141,7 +146,7 @@ def plot_efficiency_over_time(
     efficiency: List[float],
     save_path: Optional[str] = None,
     title: str = "Training Efficiency (L_min / Loss)",
-    figsize: Tuple[int, int] = (10, 5),
+    figsize: tuple = (14, 4.8),
     bellman_lmin: Optional[Dict[str, Any]] = None,
     observed_loss: Optional[List[float]] = None,
 ) -> plt.Figure:
@@ -185,30 +190,26 @@ def plot_efficiency_over_time(
         eff_bellman = np.where(obs > 0, bellman_val / obs, 0.0)
         eff_bellman_clipped = np.clip(eff_bellman, 0, 1.5)
 
-        ax.plot(epochs, eff_bellman_clipped, 'g-', linewidth=2, marker='o', markersize=3,
-                label=f'Efficiency (Bellman, L_min={bellman_val:.4f})')
+        ax.plot(epochs, eff_bellman_clipped, 'g-',
+                label='Efficiency (Bellman)')
 
         # Secondary: empirical efficiency as dashed reference
         eff_emp_clipped = np.clip(eff_empirical, 0, 1.5)
-        ax.plot(epochs, eff_emp_clipped, 'b--', linewidth=1.5, alpha=0.5,
+        ax.plot(epochs, eff_emp_clipped, 'b--', alpha=0.5,
                 label='Efficiency (empirical)')
 
         main_eff = eff_bellman_clipped
-        limit_label = 'Theoretical Limit — Bellman (100%)'
+        limit_label = 'Theoretical Limit'
     else:
         # Fallback: empirical efficiency only
         eff_emp_clipped = np.clip(eff_empirical, 0, 1.5)
-        ax.plot(epochs, eff_emp_clipped, 'g-', linewidth=2, marker='o', markersize=3,
+        ax.plot(epochs, eff_emp_clipped, 'g-',
                 label='Efficiency (empirical)')
         main_eff = eff_emp_clipped
-        limit_label = 'Theoretical Limit (100%)'
+        limit_label = 'Theoretical Limit'
 
     # Add horizontal line at y=1 (theoretical limit)
-    ax.axhline(y=1.0, color='red', linestyle='--', linewidth=2, label=limit_label)
-
-    # Add horizontal lines at 90% and 95%
-    ax.axhline(y=0.9, color='orange', linestyle=':', linewidth=1, alpha=0.7, label='90% Efficiency')
-    ax.axhline(y=0.95, color='purple', linestyle=':', linewidth=1, alpha=0.7, label='95% Efficiency')
+    ax.axhline(y=1.0, color='red', linestyle='--', label=limit_label)
 
     # Fill area above current efficiency (room for improvement)
     ax.fill_between(
@@ -222,20 +223,19 @@ def plot_efficiency_over_time(
     )
 
     # Labels and legend
-    ax.set_xlabel('Epoch', fontsize=12)
-    ylabel = 'Efficiency (L_min Bellman / Loss)' if bellman_val is not None else 'Efficiency (L_min / Loss)'
-    ax.set_ylabel(ylabel, fontsize=12)
-    ax.set_title(title, fontsize=14)
-    ax.legend(loc='lower right', fontsize=9)
+    ax.set_xlabel('Epoch')
+    ax.set_ylabel('Efficiency')
+    ax.set_title(title)
+    ax.legend(loc='upper left')
     ax.grid(True, alpha=0.3)
 
     # Set y-axis from 0 to 1.1
     ax.set_ylim(0, 1.1)
 
-    plt.tight_layout()
+    plt.tight_layout(pad=0.3)
 
     if save_path:
-        fig.savefig(save_path, dpi=150, bbox_inches='tight')
+        fig.savefig(save_path, dpi=150)
         print(f"  Saved: {save_path}")
 
     return fig
@@ -248,7 +248,7 @@ def plot_loss_decomposition(
     loss_scale: float = 100.0,
     save_path: Optional[str] = None,
     title: str = "Loss Decomposition",
-    figsize: Tuple[int, int] = (8, 6)
+    figsize: tuple = (14, 4.8)
 ) -> plt.Figure:
     """
     Bar chart showing decomposition of loss into components.
@@ -276,63 +276,41 @@ def plot_loss_decomposition(
     ax.spines['right'].set_visible(False)
 
     # Data
-    components = ['Var(F)\n(Irreducible)', 'Bias²\n(Irreducible)', 'Gap\n(Reducible)']
+    components = ['Var(F)', 'Bias²', 'Gap']
     values = [Var_F, Bias2, max(gap, 0)]  # Ensure gap is non-negative
     colors = ['#ff6b6b', '#feca57', '#48dbfb']
 
     # Create bars
-    bars = ax.bar(components, values, color=colors, edgecolor='black', linewidth=1.5)
-
-    # Add value labels on bars
-    for bar, val in zip(bars, values):
-        height = bar.get_height()
-        ax.annotate(
-            f'{val:.4f}',
-            xy=(bar.get_x() + bar.get_width() / 2, height),
-            xytext=(0, 3),
-            textcoords="offset points",
-            ha='center', va='bottom',
-            fontsize=11
-        )
+    bars = ax.bar(components, values, color=colors, edgecolor='black', linewidth=0.5)
 
     # Compute percentages
     total = sum(values)
     L_min = Var_F + Bias2
 
-    # Add percentage annotations
-    if total > 0:
-        pct_var = 100 * Var_F / total
-        pct_bias = 100 * Bias2 / total
-        pct_gap = 100 * max(gap, 0) / total
-
-        # Add text below bars
-        ax.text(0, -0.1 * max(values), f'{pct_var:.1f}%', ha='center', fontsize=10, transform=ax.get_xaxis_transform())
-        ax.text(1, -0.1 * max(values), f'{pct_bias:.1f}%', ha='center', fontsize=10, transform=ax.get_xaxis_transform())
-        ax.text(2, -0.1 * max(values), f'{pct_gap:.1f}%', ha='center', fontsize=10, transform=ax.get_xaxis_transform())
+    # Add percentage + value labels on bars (percentage on top, value below)
+    for i, (bar, val) in enumerate(zip(bars, values)):
+        height = bar.get_height()
+        pct = 100 * val / total if total > 0 else 0
+        ax.annotate(
+            f'{pct:.1f}%\n{val:.4f}',
+            xy=(bar.get_x() + bar.get_width() / 2, height),
+            xytext=(0, 2),
+            textcoords="offset points",
+            ha='center', va='bottom',
+        )
 
     # Add horizontal line for L_min
-    ax.axhline(y=L_min, color='red', linestyle='--', linewidth=2, label=f'L_min = {L_min:.4f}')
+    ax.axhline(y=L_min, color='red', linestyle='--', label='L_min')
 
     # Labels
-    ax.set_ylabel('Loss Value', fontsize=12)
-    ax.set_title(title, fontsize=14)
-    ax.legend(loc='upper right', fontsize=10)
+    ax.set_ylabel('Loss Value')
+    ax.set_title(title)
+    ax.legend(loc='upper left')
 
-    # Add annotations explaining components
-    textstr = (
-        f'L_min (irreducible) = {L_min:.4f}\n'
-        f'Total Loss = {total:.4f}\n'
-        f'Efficiency = {100*L_min/total:.1f}%' if total > 0 else ''
-    )
-    props = dict(boxstyle='square,pad=0.3', facecolor='white',
-                 edgecolor='#CCCCCC', linewidth=0.5, alpha=0.9)
-    ax.text(0.02, 0.98, textstr, transform=ax.transAxes, fontsize=9,
-            verticalalignment='top', bbox=props)
-
-    plt.tight_layout()
+    plt.tight_layout(pad=0.3)
 
     if save_path:
-        fig.savefig(save_path, dpi=150, bbox_inches='tight')
+        fig.savefig(save_path, dpi=150)
         print(f"  Saved: {save_path}")
 
     return fig
@@ -344,7 +322,7 @@ def plot_loss_scatter(
     epochs: Optional[List[int]] = None,
     save_path: Optional[str] = None,
     title: str = "Observed Loss vs Theoretical L_min",
-    figsize: Tuple[int, int] = (8, 8)
+    figsize: Tuple[int, int] = (10, 3)
 ) -> plt.Figure:
     """
     Scatter plot of observed loss vs theoretical L_min.

@@ -3,43 +3,48 @@ Visualizzazioni per controller optimization.
 """
 
 import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
 import numpy as np
 from pathlib import Path
+
+# Rebuild font cache once at import time so new fonts are picked up
+fm._load_fontmanager(try_read_cache=False)
 
 
 def apply_plot_style():
     plt.rcParams.update({
-        'font.family':           'monospace',
-        'font.size':             8,
-        'axes.titlesize':        9,
+        'font.family':           'sans-serif',
+        'font.sans-serif':       ['Helvetica', 'Arial', 'DejaVu Sans'],
+        'font.size':             6,
+        'axes.titlesize':        6.5,
         'axes.titleweight':      'normal',
         'axes.titlelocation':    'left',
-        'axes.labelsize':        8,
+        'axes.labelsize':        6,
         'axes.labelweight':      'normal',
-        'axes.linewidth':        0.5,
+        'axes.linewidth':        0.4,
         'axes.spines.top':       False,
         'axes.spines.right':     False,
         'axes.grid':             True,
         'grid.color':            '#DDDDDD',
-        'grid.linewidth':        0.4,
+        'grid.linewidth':        0.3,
         'grid.alpha':            1.0,
-        'xtick.labelsize':       7.5,
-        'ytick.labelsize':       7.5,
-        'xtick.major.width':     0.4,
-        'ytick.major.width':     0.4,
-        'xtick.major.size':      3,
-        'ytick.major.size':      3,
-        'legend.fontsize':       7.5,
+        'xtick.labelsize':       5.5,
+        'ytick.labelsize':       5.5,
+        'xtick.major.width':     0.3,
+        'ytick.major.width':     0.3,
+        'xtick.major.size':      2.5,
+        'ytick.major.size':      2.5,
+        'legend.fontsize':       5.5,
         'legend.framealpha':     0.9,
         'legend.edgecolor':      '#DDDDDD',
         'legend.fancybox':       False,
-        'legend.borderpad':      0.4,
+        'legend.borderpad':      0.3,
         'figure.facecolor':      'white',
         'axes.facecolor':        'white',
         'savefig.facecolor':     'white',
         'savefig.dpi':           150,
         'savefig.bbox':          'tight',
-        'lines.linewidth':       1.4,
+        'lines.linewidth':       0.8,
     })
 
 
@@ -60,7 +65,7 @@ def plot_training_history(history, save_path=None):
     has_curriculum_weights = 'lambda_bc' in history and 'reliability_weight' in history
 
     # Create figure with 2 rows: combined losses/weights on top, reliability on bottom
-    fig, axes = plt.subplots(2, 1, figsize=(14, 10))
+    fig, axes = plt.subplots(2, 1, figsize=(20, 5))
 
     for _ax in axes.flatten():
         _ax.spines['top'].set_visible(False)
@@ -358,20 +363,23 @@ def plot_process_improvements(process_metrics, save_path=None):
     plt.close()
 
 
-def plot_target_vs_actual_scatter(F_star_per_scenario, F_baseline_per_scenario, F_actual_per_scenario, save_path=None):
+def plot_target_vs_actual_scatter(F_star_per_scenario, F_baseline_per_scenario, F_actual_per_scenario,
+                                  F_formula_per_scenario=None, save_path=None, figsize=(8, 10)):
     """
-    Scatter plot: F_star (target) vs F_baseline and F_actual.
+    Scatter plot: Baseline vs Controller reliability.
 
     Y-axis: F_star (target reliability)
-    X-axis: F_baseline (red) and F_actual (blue)
-    Shows how well both baseline and controller match the target.
+    X-axis: F values (baseline red, controller blue)
 
-    Works with both single and multiple scenarios.
+    When F_formula_per_scenario is provided, adds hollow blue circles
+    showing the ProT formula-based F estimate alongside the solid
+    surrogate-based controller dots.
 
     Args:
         F_star_per_scenario (array-like): Target reliability for each scenario
         F_baseline_per_scenario (array-like): Baseline reliability for each scenario
-        F_actual_per_scenario (array-like): Actual reliability for each scenario
+        F_actual_per_scenario (array-like): Controller reliability (surrogate) for each scenario
+        F_formula_per_scenario (array-like, optional): Controller reliability (ProT formula)
         save_path (str): Path to save figure
     """
     apply_plot_style()
@@ -379,71 +387,69 @@ def plot_target_vs_actual_scatter(F_star_per_scenario, F_baseline_per_scenario, 
     F_baseline_arr = np.atleast_1d(F_baseline_per_scenario)
     F_actual_arr = np.atleast_1d(F_actual_per_scenario)
 
-    fig, ax = plt.subplots(figsize=(12, 8))
+    fig, ax = plt.subplots(figsize=figsize)
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
 
-    # Scatter plots
-    # Baseline points (red)
+    # Baseline points (red squares)
     ax.scatter(F_baseline_arr, F_star_arr,
                c='red',
-               s=120,
+               s=8,
                alpha=0.6,
                edgecolors='darkred',
-               linewidths=2,
+               linewidths=0.3,
                label='Baseline (no controller)',
-               marker='s')  # square
+               marker='s')
 
-    # Actual points (blue)
+    # Controller points — surrogate F (solid blue circles)
     ax.scatter(F_actual_arr, F_star_arr,
                c='blue',
-               s=120,
+               s=8,
                alpha=0.6,
                edgecolors='darkblue',
-               linewidths=2,
-               label='Controller',
-               marker='o')  # circle
+               linewidths=0.3,
+               label='Controller (surrogate)',
+               marker='o')
+
+    # Controller points — ProT formula F (hollow blue circles)
+    if F_formula_per_scenario is not None:
+        F_formula_arr = np.atleast_1d(F_formula_per_scenario)
+        # Match F_star length to F_formula length (may differ if per_sample)
+        if len(F_formula_arr) == len(F_star_arr):
+            F_star_for_formula = F_star_arr
+        else:
+            F_star_for_formula = np.full_like(F_formula_arr, F_star_arr[0])
+        ax.scatter(F_formula_arr, F_star_for_formula,
+                   facecolors='none',
+                   s=8,
+                   alpha=0.7,
+                   edgecolors='blue',
+                   linewidths=0.5,
+                   label='Controller (ProT formula)',
+                   marker='o')
 
     # Diagonal line (perfect match)
-    all_values = np.concatenate([F_star_arr, F_baseline_arr, F_actual_arr])
+    all_values_list = [F_star_arr, F_baseline_arr, F_actual_arr]
+    if F_formula_per_scenario is not None:
+        all_values_list.append(np.atleast_1d(F_formula_per_scenario))
+    all_values = np.concatenate(all_values_list)
     min_val = all_values.min()
     max_val = all_values.max()
     margin = (max_val - min_val) * 0.1
 
     ax.plot([min_val - margin, max_val + margin],
             [min_val - margin, max_val + margin],
-            'k--', linewidth=2, label='Perfect Match (y = x)', alpha=0.5)
+            'k--', label='Perfect Match (y = x)', alpha=0.5)
 
-    # Axis labels and title
     ax.set_xlabel('F (Reliability)')
     ax.set_ylabel('F_star (Target Reliability)')
-    ax.set_title('Target vs Baseline & Controller Reliability')
+    ax.set_title('Baseline vs Controller Reliability')
 
-    # Grid and legend
     ax.grid(True, alpha=0.3)
-    ax.legend(loc='lower right', fontsize=11, framealpha=0.9)
+    ax.legend(loc='upper left', framealpha=0.9)
 
-    # Set limits with margin
     ax.set_xlim(min_val - margin, max_val + margin)
     ax.set_ylim(min_val - margin, max_val + margin)
-
-    # Add statistics annotation
-    n_scenarios = len(F_star_arr)
-    gap_baseline = np.mean(F_star_arr - F_baseline_arr)
-    gap_actual = np.mean(F_star_arr - F_actual_arr)
-    improvement = ((gap_baseline - gap_actual) / abs(gap_baseline)) * 100 if gap_baseline != 0 else 0
-
-    stats_text = (f'Scenarios: {n_scenarios}\n'
-                 f'Mean Gap (Baseline): {gap_baseline:.6f}\n'
-                 f'Mean Gap (Controller): {gap_actual:.6f}\n'
-                 f'Improvement: {improvement:.1f}%')
-
-    ax.text(0.02, 0.98, stats_text,
-            transform=ax.transAxes,
-            fontsize=10,
-            verticalalignment='top',
-            bbox=dict(boxstyle='square,pad=0.3', facecolor='white',
-                      edgecolor='#CCCCCC', linewidth=0.5, alpha=0.9))
 
     plt.tight_layout()
 
@@ -456,7 +462,7 @@ def plot_target_vs_actual_scatter(F_star_per_scenario, F_baseline_per_scenario, 
     plt.close()
 
 
-def plot_gap_distribution(F_star_per_scenario, F_actual_per_scenario, save_path=None):
+def plot_gap_distribution(F_star_per_scenario, F_actual_per_scenario, save_path=None, figsize=(8, 10)):
     """
     Histogram of gap distribution: F_star - F_actual.
 
@@ -477,7 +483,7 @@ def plot_gap_distribution(F_star_per_scenario, F_actual_per_scenario, save_path=
     # Compute gaps
     gaps = F_star_arr - F_actual_arr
 
-    fig, ax = plt.subplots(figsize=(12, 7))
+    fig, ax = plt.subplots(figsize=figsize)
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
 
@@ -497,7 +503,7 @@ def plot_gap_distribution(F_star_per_scenario, F_actual_per_scenario, save_path=
                                      color='steelblue',
                                      alpha=0.7,
                                      edgecolor='black',
-                                     linewidth=1.5)
+                                     linewidth=0.5)
 
     # Color bars based on gap value (green = small, red = large)
     gap_max = gaps.max()
@@ -535,35 +541,19 @@ def plot_gap_distribution(F_star_per_scenario, F_actual_per_scenario, save_path=
     # Add vertical lines for statistics
     y_max = ax.get_ylim()[1]
 
-    ax.axvline(mean_gap, color='darkblue', linestyle='--', linewidth=2,
+    ax.axvline(mean_gap, color='darkblue', linestyle='--',
                label=f'Mean: {mean_gap:.6f}')
-    ax.axvline(median_gap, color='purple', linestyle='--', linewidth=2,
+    ax.axvline(median_gap, color='purple', linestyle='--',
                label=f'Median: {median_gap:.6f}')
-    ax.axvline(worst_gap, color='darkred', linestyle='--', linewidth=2,
+    ax.axvline(worst_gap, color='darkred', linestyle='--',
                label=f'Worst: {worst_gap:.6f}')
 
     # Labels and title
     ax.set_xlabel('Gap (F_star - F_actual)')
     ax.set_ylabel('Number of Scenarios')
     ax.set_title('Distribution of Target-Actual Gap')
-    ax.legend(loc='upper right', fontsize=11)
+    ax.legend(loc='upper left')
     ax.grid(True, axis='y', alpha=0.3)
-
-    # Add statistics box
-    stats_text = (f'Scenarios: {n_scenarios}\n'
-                 f'Mean: {mean_gap:.6f}\n'
-                 f'Std: {std_gap:.6f}\n'
-                 f'Median: {median_gap:.6f}\n'
-                 f'Best: {best_gap:.6f}\n'
-                 f'Worst: {worst_gap:.6f}')
-
-    ax.text(0.98, 0.98, stats_text,
-            transform=ax.transAxes,
-            fontsize=10,
-            verticalalignment='top',
-            horizontalalignment='right',
-            bbox=dict(boxstyle='square,pad=0.3', facecolor='white',
-                      edgecolor='#CCCCCC', linewidth=0.5, alpha=0.9))
 
     plt.tight_layout()
 
@@ -831,7 +821,7 @@ def plot_loss_chart(history, save_path=None):
     # Determine number of plots
     n_plots = 2  # Total loss and Reliability loss
 
-    fig, axes = plt.subplots(n_plots, 1, figsize=(12, 5 * n_plots))
+    fig, axes = plt.subplots(n_plots, 1, figsize=(20, 5))
 
     for _ax in (axes.flatten() if hasattr(axes, 'flatten') else [axes]):
         _ax.spines['top'].set_visible(False)
@@ -962,3 +952,177 @@ def plot_loss_chart(history, save_path=None):
         plt.show()
 
     plt.close()
+
+
+class _SquareHandler:
+    """Legend handler that draws a small filled square instead of a line."""
+    def legend_artist(self, legend, orig_handle, fontsize, handlebox):
+        from matplotlib.patches import Rectangle
+        x0, y0 = handlebox.xdescent, handlebox.ydescent
+        w, h = handlebox.width * 0.5, handlebox.height * 0.7
+        patch = Rectangle((x0, y0 + h * 0.15), w, h,
+                           facecolor=orig_handle.get_color(),
+                           edgecolor='none', transform=handlebox.get_transform())
+        handlebox.add_artist(patch)
+        return patch
+
+
+def generate_process_evolution_plots(training_progression, controllable_info,
+                                     checkpoint_dir, n_scenarios=1,
+                                     row_height_pt=14, plot_width_in=3.5,
+                                     uniform_height=True,
+                                     y_range=None):
+    """
+    Generate per-process evolution plots showing controllable inputs and outputs
+    across training epochs, for each scenario.
+
+    Args:
+        training_progression (list): List of epoch snapshots from trainer.
+        controllable_info (dict): per-process info (input_labels, controllable_indices, etc.)
+        checkpoint_dir (Path): Directory to save plots
+        n_scenarios (int): Number of scenarios
+        row_height_pt (float): Height per data row in points (must match PDF table)
+        plot_width_in (float): Fixed plot width in inches
+        uniform_height (bool): If True, all plots have same height (max across processes)
+        y_range (tuple, optional): (y_min, y_max) for Y-axis limits (shared across all plots).
+            Derived from process config domains (e.g. x_domain, output range).
+
+    Returns:
+        tuple: (plot_paths, color_maps) where
+            plot_paths: {(scenario_idx, process_name): plot_path}
+            color_maps: {process_name: {variable_label: hex_color}}
+    """
+    apply_plot_style()
+    checkpoint_dir = Path(checkpoint_dir)
+    plot_paths = {}
+    color_maps = {}  # {process_name: {var_label: hex_color}}
+
+    if not training_progression:
+        return plot_paths, color_maps
+
+    # Extract process names from first snapshot
+    first_snap = training_progression[0]
+    per_sc = first_snap.get('per_scenario', {})
+    if not per_sc:
+        return plot_paths, color_maps
+    proc_names = list(per_sc[0].keys()) if 0 in per_sc else []
+    if not proc_names:
+        return plot_paths, color_maps
+
+    epochs = [s['epoch'] for s in training_progression]
+
+    # Pre-compute max n_rows across all processes for uniform height
+    max_n_rows = 0
+    if uniform_height:
+        for proc_idx, proc_name in enumerate(proc_names):
+            p_info = controllable_info.get(proc_name, {})
+            ctrl_idx = p_info.get('controllable_indices', [])
+            out_lbls = p_info.get('output_labels', [])
+            nr = (len(ctrl_idx) if proc_idx > 0 else 0) + len(out_lbls)
+            max_n_rows = max(max_n_rows, nr)
+
+    for scenario_idx in range(n_scenarios):
+        for proc_idx, proc_name in enumerate(proc_names):
+            p_info = controllable_info.get(proc_name, {})
+            ctrl_indices = p_info.get('controllable_indices', [])
+            input_labels = p_info.get('input_labels', [])
+            output_labels = p_info.get('output_labels', [])
+
+            # Skip first process (no policy generator, inputs fixed)
+            if proc_idx == 0 and not ctrl_indices:
+                # Still plot output evolution
+                pass
+
+            # Collect per-epoch values
+            ctrl_series = {ci: [] for ci in ctrl_indices}
+            out_series = {oi: [] for oi in range(len(output_labels))}
+
+            for snap in training_progression:
+                sc_data = snap.get('per_scenario', {}).get(scenario_idx)
+                if sc_data is None:
+                    for ci in ctrl_indices:
+                        ctrl_series[ci].append(np.nan)
+                    for oi in range(len(output_labels)):
+                        out_series[oi].append(np.nan)
+                    continue
+
+                proc_data = sc_data.get(proc_name, {})
+                inputs = proc_data.get('inputs', np.array([[]]))
+                outputs = proc_data.get('outputs_mean', proc_data.get('outputs', np.array([[]])))
+
+                # inputs shape: (1, input_dim) or (input_dim,)
+                inp = inputs.flatten()
+                out = outputs.flatten()
+
+                for ci in ctrl_indices:
+                    ctrl_series[ci].append(float(inp[ci]) if ci < len(inp) else np.nan)
+                for oi in range(len(output_labels)):
+                    out_series[oi].append(float(out[oi]) if oi < len(out) else np.nan)
+
+            # Count data rows (controllable inputs + outputs)
+            n_rows = (len(ctrl_indices) if proc_idx > 0 else 0) + len(output_labels)
+            n_lines = len(ctrl_indices) + len(output_labels)
+            if n_lines == 0:
+                continue
+
+            # Height: use max_n_rows for uniform height, or n_rows for adaptive
+            h_rows = max_n_rows if uniform_height else n_rows
+            tbl_h_pt = 13 + h_rows * row_height_pt
+            fig_h_in = tbl_h_pt / 72.0
+            fig_h_in = max(fig_h_in, 0.8)
+            fig, ax = plt.subplots(figsize=(plot_width_in, fig_h_in))
+
+            # Get default color cycle
+            prop_cycle = plt.rcParams['axes.prop_cycle']
+            cycle_colors = [c['color'] for c in prop_cycle]
+
+            # Track colors for this process
+            proc_colors = {}
+            color_idx = 0
+
+            # Plot controllable inputs (solid)
+            for ci in ctrl_indices:
+                lbl = input_labels[ci] if ci < len(input_labels) else f"X_{ci}"
+                c = cycle_colors[color_idx % len(cycle_colors)]
+                ax.plot(epochs, ctrl_series[ci], color=c, linewidth=0.8)
+                proc_colors[lbl] = c
+                color_idx += 1
+
+            # Plot outputs (dashed)
+            for oi in range(len(output_labels)):
+                lbl = output_labels[oi]
+                c = cycle_colors[color_idx % len(cycle_colors)]
+                ax.plot(epochs, out_series[oi], color=c, linewidth=0.9,
+                        linestyle='--')
+                proc_colors[lbl] = c
+                color_idx += 1
+
+            color_maps[proc_name] = proc_colors
+
+            # Y-axis: shared range
+            if y_range is not None:
+                y_lo, y_hi = y_range
+                ax.set_ylim(y_lo, y_hi)
+
+            # Minimal horizontal grid at 0 only
+            ax.axhline(y=0, color='#CCCCCC', linewidth=0.3)
+            ax.grid(False)
+
+            # Remove all axes, ticks, labels, legend
+            ax.set_xticks([])
+            ax.set_yticks([])
+            ax.set_xlabel('')
+            ax.set_ylabel('')
+            for spine in ax.spines.values():
+                spine.set_visible(False)
+
+            plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
+
+            fname = f'evolution_sc{scenario_idx}_{proc_name}.png'
+            fpath = checkpoint_dir / fname
+            plt.savefig(str(fpath), dpi=180, bbox_inches='tight')
+            plt.close()
+
+            plot_paths[(scenario_idx, proc_name)] = str(fpath)
+
+    return plot_paths, color_maps
