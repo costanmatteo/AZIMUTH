@@ -143,8 +143,22 @@ def main():
         print(f"  {proc_name}: control {inputs_tensor.shape}, env {env_tensor.shape}, "
               f"outputs {outputs_tensor.shape} → {save_path}")
 
-    # ── Step 2: Build full trajectories and compute F ───────────────────────
-    print(f"\n[2/3] Building full trajectories and computing F...")
+    # ── Step 2: Save DAG image ──────────────────────────────────────────────
+    print(f"\n[2/4] Saving DAG image...")
+    if DATASET_MODE == 'st':
+        try:
+            from scm_ds.datasets_st import STConfig, build_st_scm
+            proc0 = current_processes[0]
+            st_p = proc0.get('st_params', {})
+            scm = build_st_scm(STConfig(**st_p), dag_image_dir=str(output_dir))
+            print(f"  DAG saved to: {output_dir}/")
+        except Exception as e:
+            print(f"  Warning: Could not save DAG image: {e}")
+    else:
+        print("  Skipped (non-ST dataset mode)")
+
+    # ── Step 3: Build full trajectories and compute F ───────────────────────
+    print(f"\n[3/4] Building full trajectories and computing F...")
 
     # Build process configs for ReliabilityFunction
     # For ST mode, use surrogate_* fields; for physical mode, use default PROCESS_CONFIGS
@@ -221,8 +235,8 @@ def main():
           f"min={np.min(F_values):.4f}, max={np.max(F_values):.4f}")
     print(f"  Saved to: {traj_path}")
 
-    # ── Step 3: Summary ─────────────────────────────────────────────────────
-    print(f"\n[3/3] Dataset generation complete!")
+    # ── Step 4: Summary ─────────────────────────────────────────────────────
+    print(f"\n[4/4] Dataset generation complete!")
     print("\n" + "=" * 70)
     print("GENERATED FILES")
     print("=" * 70)
