@@ -163,8 +163,26 @@ def generate_complexity_sweep(
         f.write("\n".join(lines) + "\n")
 
     print(f"\nWritten to: {output_file}")
-    print(f"\nRemember to update complexity_sweep.sh:")
-    print(f"  #SBATCH --array=0-{total_runs - 1}")
+
+    # Auto-update complexity_sweep.sh with correct array range and time limit
+    import re
+    sweep_sh = output_file.parent / "complexity_sweep.sh"
+    if sweep_sh.exists():
+        text = sweep_sh.read_text()
+        text = re.sub(r'#SBATCH --array=\S+', f'#SBATCH --array=0-{total_runs - 1}', text)
+        # Update time from config if available
+        cfg = _load_config()
+        slurm_time = cfg.get('slurm', {}).get('time')
+        if slurm_time:
+            text = re.sub(r'#SBATCH --time=\S+', f'#SBATCH --time={slurm_time}', text)
+        sweep_sh.write_text(text)
+        print(f"\nUpdated {sweep_sh}:")
+        print(f"  --array=0-{total_runs - 1}")
+        if slurm_time:
+            print(f"  --time={slurm_time}")
+    else:
+        print(f"\nRemember to update complexity_sweep.sh:")
+        print(f"  #SBATCH --array=0-{total_runs - 1}")
 
 
 def _load_config():
