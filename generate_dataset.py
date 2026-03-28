@@ -84,10 +84,10 @@ def _save_st_dag_schematic(n: int, m: int, rho: float, save_path: str,
                 fontfamily='serif', zorder=4)
 
     def _input_label(grp):
-        """Compact label for an input group: X_1..X_3 or X_5."""
+        """Compact label for an input group: S_1..S_3 or S_5."""
         if len(grp) == 1:
-            return f'$X_{{{grp[0]}}}$'
-        return f'$X_{{{grp[0]}}}\\!\\cdots\\! X_{{{grp[-1]}}}$'
+            return f'$S_{{{grp[0]}}}$'
+        return f'$S_{{{grp[0]}}}\\!\\cdots\\! S_{{{grp[-1]}}}$'
 
     col_x = {}
     x = 1.0
@@ -106,8 +106,8 @@ def _save_st_dag_schematic(n: int, m: int, rho: float, save_path: str,
         grp = groups[slot]
         k = slot + 1  # 1-indexed stage number
 
-        # Stage node
-        _circle(x, y_stage, f'$S_{{{k}}}$', fill='#E8F5E9', edge='#2E7D32')
+        # Stage node (intermediate variable X_k)
+        _circle(x, y_stage, f'$X_{{{k}}}$', fill='#E8F5E9', edge='#2E7D32')
 
         # Input group label above
         inp_lbl = _input_label(grp)
