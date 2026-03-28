@@ -19,7 +19,7 @@ COMPLEXITY_SWEEP_CONFIG = {
     'slurm': {
         'job_name': 'complexity_sweep',
         'account': 'es_mohr',
-        'time': '00:30:00',
+        'time': '04:00:00',
         'ntasks': 1,
         'cpus_per_task': 1,
         'mem_per_cpu': '4G',
