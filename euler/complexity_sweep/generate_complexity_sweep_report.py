@@ -10,7 +10,7 @@ This script:
 2. Computes per-configuration win rates and aggregate statistics
 3. Generates matplotlib plots embedded as base64
 4. Renders a pixel-faithful HTML layout to PDF via WeasyPrint
-   (landscape A4, Courier monospace, matches generate_sweep_report.py exactly)
+   (landscape A4, Arial, matches generate_sweep_report.py exactly)
 """
 
 import argparse
@@ -25,6 +25,9 @@ import pandas as pd
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+
+matplotlib.rcParams['font.family'] = 'sans-serif'
+matplotlib.rcParams['font.sans-serif'] = ['Arial', 'DejaVu Sans']
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 
 # ── WeasyPrint for HTML → PDF ────────────────────────────────────────────────
@@ -287,7 +290,7 @@ def _range_str(values) -> str:
 _GREEN  = '#1D9E75'
 _RED    = '#D85A30'
 _AMBER  = '#BA7517'
-_MONO   = 'DejaVu Sans Mono'
+_FONT   = 'Arial'
 
 
 def _b64(fig) -> str:
@@ -340,10 +343,10 @@ def plot_marginals(win_df: pd.DataFrame) -> str:
                 ax.plot(xs, np.clip(p(xs), 0, 100), 'b--', lw=1.4, alpha=0.55)
         ax.axhline(50, color='#999', lw=0.7, ls=':')
         ax.set_ylim(-5, 105)
-        ax.set_xlabel(label, fontsize=7, fontfamily=_MONO)
-        ax.set_ylabel('Win Rate (%)', fontsize=7, fontfamily=_MONO)
+        ax.set_xlabel(label, fontsize=7, fontfamily=_FONT)
+        ax.set_ylabel('Win Rate (%)', fontsize=7, fontfamily=_FONT)
         ax.set_title(f'Win rate vs {label.split("(")[0].strip()}',
-                     fontsize=7.5, fontfamily=_MONO, fontweight='bold')
+                     fontsize=7.5, fontfamily=_FONT, fontweight='bold')
         ax.tick_params(labelsize=6)
         ax.grid(True, alpha=0.18, lw=0.4)
 
@@ -372,13 +375,13 @@ def _make_heatmap(win_df: pd.DataFrame, px: str, py: str,
                    vmin=0, vmax=100, origin='lower')
     cb = fig.colorbar(im, ax=ax, fraction=0.03, pad=0.03)
     cb.ax.tick_params(labelsize=5)
-    cb.set_label('Win %', fontsize=6, fontfamily=_MONO)
+    cb.set_label('Win %', fontsize=6, fontfamily=_FONT)
 
     ax.set_xticks(range(len(pivot.columns)))
     ax.set_xticklabels([str(c) for c in pivot.columns], rotation=35,
-                       ha='right', fontsize=5, fontfamily=_MONO)
+                       ha='right', fontsize=5, fontfamily=_FONT)
     ax.set_yticks(range(len(pivot.index)))
-    ax.set_yticklabels([str(i) for i in pivot.index], fontsize=5, fontfamily=_MONO)
+    ax.set_yticklabels([str(i) for i in pivot.index], fontsize=5, fontfamily=_FONT)
 
     for i in range(pivot.shape[0]):
         for j in range(pivot.shape[1]):
@@ -386,12 +389,12 @@ def _make_heatmap(win_df: pd.DataFrame, px: str, py: str,
             if not np.isnan(v):
                 col = 'white' if v < 30 or v > 70 else '#222'
                 ax.text(j, i, f'{v:.0f}', ha='center', va='center',
-                        color=col, fontsize=5.5, fontweight='bold', fontfamily=_MONO)
+                        color=col, fontsize=5.5, fontweight='bold', fontfamily=_FONT)
 
-    ax.set_xlabel(lx, fontsize=7, fontfamily=_MONO)
-    ax.set_ylabel(ly, fontsize=7, fontfamily=_MONO)
+    ax.set_xlabel(lx, fontsize=7, fontfamily=_FONT)
+    ax.set_ylabel(ly, fontsize=7, fontfamily=_FONT)
     ax.set_title(f'Win rate: {lx} × {ly}', fontsize=7.5,
-                 fontfamily=_MONO, fontweight='bold')
+                 fontfamily=_FONT, fontweight='bold')
     fig.tight_layout(pad=0.6)
     return _b64(fig)
 
@@ -418,12 +421,12 @@ def plot_3d_scatter(win_df: pd.DataFrame) -> str:
     )
     cb = fig.colorbar(sc, ax=ax, shrink=0.55, pad=0.08)
     cb.ax.tick_params(labelsize=5)
-    cb.set_label('Win %', fontsize=6, fontfamily=_MONO)
-    ax.set_xlabel('n', fontsize=6, fontfamily=_MONO, labelpad=4)
-    ax.set_ylabel('m', fontsize=6, fontfamily=_MONO, labelpad=4)
-    ax.set_zlabel('ρ', fontsize=6, fontfamily=_MONO, labelpad=4)
+    cb.set_label('Win %', fontsize=6, fontfamily=_FONT)
+    ax.set_xlabel('n', fontsize=6, fontfamily=_FONT, labelpad=4)
+    ax.set_ylabel('m', fontsize=6, fontfamily=_FONT, labelpad=4)
+    ax.set_zlabel('ρ', fontsize=6, fontfamily=_FONT, labelpad=4)
     ax.set_title('Win rate in (n, m, ρ) space', fontsize=7.5,
-                 fontfamily=_MONO, fontweight='bold')
+                 fontfamily=_FONT, fontweight='bold')
     ax.tick_params(labelsize=5)
     fig.tight_layout(pad=0.6)
     return _b64(fig)
@@ -441,10 +444,10 @@ def plot_winrate_distribution(win_df: pd.DataFrame) -> str:
             linewidth=0.4, alpha=0.80)
     ax.axvline(50,  color=_AMBER,  lw=0.9, ls='--', label='50 %')
     ax.axvline(wr.mean(), color=_GREEN, lw=0.9, ls='-',  label=f'mean {wr.mean():.1f}%')
-    ax.set_xlabel('Win rate (%)', fontsize=7, fontfamily=_MONO)
-    ax.set_ylabel('# configs', fontsize=7, fontfamily=_MONO)
+    ax.set_xlabel('Win rate (%)', fontsize=7, fontfamily=_FONT)
+    ax.set_ylabel('# configs', fontsize=7, fontfamily=_FONT)
     ax.set_title('Win-rate distribution', fontsize=7.5,
-                 fontfamily=_MONO, fontweight='bold')
+                 fontfamily=_FONT, fontweight='bold')
     ax.legend(fontsize=5.5, framealpha=0.6)
     ax.tick_params(labelsize=6)
     ax.grid(True, axis='y', alpha=0.18, lw=0.4)
@@ -456,10 +459,10 @@ def plot_winrate_distribution(win_df: pd.DataFrame) -> str:
     ax.bar(range(len(wr_sorted)), wr_sorted, color=colors_bar,
            width=1.0, linewidth=0)
     ax.axhline(50, color='black', lw=0.6)
-    ax.set_xlabel('Config (sorted)', fontsize=7, fontfamily=_MONO)
-    ax.set_ylabel('Win rate (%)', fontsize=7, fontfamily=_MONO)
+    ax.set_xlabel('Config (sorted)', fontsize=7, fontfamily=_FONT)
+    ax.set_ylabel('Win rate (%)', fontsize=7, fontfamily=_FONT)
     ax.set_title('Win rate per config (sorted)', fontsize=7.5,
-                 fontfamily=_MONO, fontweight='bold')
+                 fontfamily=_FONT, fontweight='bold')
     ax.tick_params(labelsize=6)
     ax.grid(True, axis='y', alpha=0.18, lw=0.4)
 
@@ -478,7 +481,7 @@ PAGE_CSS = """
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
-  font-family: 'Courier New', Courier, monospace;
+  font-family: Arial, Helvetica, sans-serif;
   font-size: 9px;
   line-height: 1.45;
   color: #1a1a1a;
