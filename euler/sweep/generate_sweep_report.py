@@ -183,16 +183,16 @@ def _b64(fig) -> str:
 def plot_scatter(df: pd.DataFrame) -> str:
     fig, ax = plt.subplots(figsize=(4.2, 3.4))
     fstar = df['F_star_train']
-    ax.scatter(fstar, df['F_baseline_train'], color=_RED,   s=14, alpha=0.55,
+    ax.scatter(df['F_baseline_train'], fstar, color=_RED,   s=14, alpha=0.55,
                linewidths=0, label="Baseline F'")
-    ax.scatter(fstar, df['F_actual_train'],   color='#2563EB', s=14, alpha=0.55,
+    ax.scatter(df['F_actual_train'],   fstar, color='#2563EB', s=14, alpha=0.55,
                linewidths=0, label='Controller F')
     lo = min(fstar.min(), df['F_baseline_train'].min(), df['F_actual_train'].min()) - 0.02
     hi = fstar.max() + 0.02
     ax.plot([lo, hi], [lo, hi], 'k--', lw=0.8, alpha=0.4)
-    ax.set_xlabel('F*  (target)', fontsize=7, fontfamily=_FONT)
-    ax.set_ylabel('F  (achieved)', fontsize=7, fontfamily=_FONT)
-    ax.set_title('F* vs F\' (red) and F* vs F (blue)', fontsize=7.5,
+    ax.set_xlabel('F  (achieved)', fontsize=7, fontfamily=_FONT)
+    ax.set_ylabel('F*  (target)', fontsize=7, fontfamily=_FONT)
+    ax.set_title('F\' (red) and F (blue) vs F*', fontsize=7.5,
                  fontfamily=_FONT, fontweight='bold')
     ax.tick_params(labelsize=6)
     ax.legend(fontsize=6, framealpha=0.6)
