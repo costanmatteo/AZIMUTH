@@ -51,10 +51,10 @@ COMPLEXITY_SWEEP_CONFIG = {
     # LHS samples uniformly within these ranges.
     # Constraint: m <= n is enforced after sampling.
     'param_ranges': {
-        'n': (2, 8),               # ST input variables
-        'm': (1, 4),               # ST cascaded stages (must be <= n)
+        'n': (2, 100),             # ST input variables
+        'm': (1, 50),              # ST cascaded stages (must be <= n)
         'rho': (0.0, 0.5),         # ST noise intensity
-        'n_processes': (2, 5),     # Number of processes in sequence
+        'n_processes': (2, 20),    # Number of processes in sequence
     },
 
     # =========================================================================
