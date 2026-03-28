@@ -173,7 +173,8 @@ if [ "$SURROGATE_TYPE" = "casualit" ]; then
             --st_n_processes "$ST_NPROC" \
             --up_checkpoint_dir "$UP_DIR" \
             --output_dir "$SURROGATE_DIR" \
-            --generate_data
+            --use_existing_dataset \
+            --trajectories_path "${DATA_DIR}/trajectories/full_trajectories.pt"
     fi
 
     echo ""

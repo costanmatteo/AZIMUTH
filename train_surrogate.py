@@ -715,6 +715,8 @@ def main():
                        help='Output directory')
     parser.add_argument('--data_dir', type=str, default='causaliT/data/surrogate_training',
                        help='Data directory')
+    parser.add_argument('--trajectories_path', type=str, default=None,
+                       help='Path to full_trajectories.pt (overrides config default)')
     parser.add_argument('--device', type=str, default='auto', help='Device (cpu/cuda/auto)')
 
     # ST dataset complexity overrides (for complexity sweep)
@@ -769,7 +771,11 @@ def main():
         config['training']['learning_rate'] = args.learning_rate
 
     casualit_model = config['model'].get('casualit_model', 'proT')
-    use_existing = args.use_existing_dataset or config['data'].get('use_existing_dataset', False)
+    # --generate_data takes priority over use_existing_dataset config
+    if args.generate_data:
+        use_existing = False
+    else:
+        use_existing = args.use_existing_dataset or config['data'].get('use_existing_dataset', False)
 
     print("="*70)
     print("CasualiT Surrogate Training")
@@ -786,8 +792,9 @@ def main():
         # Convert from full_trajectories.pt if needed
         from causaliT.surrogate_training.convert_dataset import convert_trajectories_to_causalit_format
 
-        dataset_path = config['data'].get('dataset_path',
-                                           'data/trajectories/full_trajectories.pt')
+        dataset_path = (args.trajectories_path
+                        or config['data'].get('dataset_path',
+                                              'data/trajectories/full_trajectories.pt'))
         print("\n[1/4] Converting existing dataset...")
         convert_trajectories_to_causalit_format(
             trajectories_path=dataset_path,
