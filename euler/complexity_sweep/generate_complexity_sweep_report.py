@@ -323,24 +323,14 @@ def plot_marginals(win_df: pd.DataFrame) -> str:
 
     for param, label, ax in params:
         df_s = win_df.dropna(subset=[param]).sort_values(param)
-        if param in ('st_n', 'st_m', 'n_processes'):
-            grp = df_s.groupby(param)['win_rate_pct'].agg(['mean', 'std', 'count'])
-            x   = grp.index.values
-            y   = grp['mean'].values
-            yerr = grp['std'].values / np.sqrt(np.maximum(grp['count'].values, 1))
-            bars = ax.bar(x, y, yerr=yerr, color='steelblue', edgecolor='#444',
-                          alpha=0.75, capsize=3, width=0.6 * (x[1] - x[0]) if len(x) > 1 else 0.5)
-            for bar, val in zip(bars, y):
-                bar.set_facecolor(cmap(norm(val)))
-        else:
-            ax.scatter(df_s[param], df_s['win_rate_pct'],
-                       c=df_s['win_rate_pct'], cmap='RdYlGn', vmin=0, vmax=100,
-                       s=55, edgecolors='#444', linewidths=0.4, alpha=0.85)
-            if len(df_s) >= 5:
-                z = np.polyfit(df_s[param], df_s['win_rate_pct'], deg=2)
-                p = np.poly1d(z)
-                xs = np.linspace(df_s[param].min(), df_s[param].max(), 120)
-                ax.plot(xs, np.clip(p(xs), 0, 100), 'b--', lw=1.4, alpha=0.55)
+        ax.scatter(df_s[param], df_s['win_rate_pct'],
+                   c=df_s['win_rate_pct'], cmap='RdYlGn', vmin=0, vmax=100,
+                   s=55, edgecolors='#444', linewidths=0.4, alpha=0.85)
+        if len(df_s) >= 5:
+            z = np.polyfit(df_s[param], df_s['win_rate_pct'], deg=2)
+            p = np.poly1d(z)
+            xs = np.linspace(df_s[param].min(), df_s[param].max(), 120)
+            ax.plot(xs, np.clip(p(xs), 0, 100), 'b--', lw=1.4, alpha=0.55)
         ax.axhline(50, color='#999', lw=0.7, ls=':')
         ax.set_ylim(-5, 105)
         ax.set_xlabel(label, fontsize=7, fontfamily=_FONT)
