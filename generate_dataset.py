@@ -27,6 +27,139 @@ from configs.processes_config import (
 
 
 
+def _save_st_dag(n: int, m: int, rho: float, save_path: str, dpi: int = 200):
+    """Save a B&W academic DAG matching the thesis figure.
+
+    Notation (thesis convention):
+        S_1..S_n  = input variables   (code: X_1..X_n)
+        X_1..X_m  = stage variables   (code: S_1..S_m)
+        Y         = output
+
+    Structure:
+        S inputs are partitioned across stages.  Each X_k = f(subset of S, X_{k-1}).
+        The chain X_1 -> X_2 -> ... -> X_m -> Y runs horizontally.
+        S inputs sit above the X they feed into, with vertical f arrows.
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    # Compute actual input partition (uniform, matching _compute_width)
+    m_eff = min(m, n)
+    base = n // m_eff
+    rem = n % m_eff
+    widths = [base + (1 if k < rem else 0) for k in range(m_eff)]
+
+    # Build input groups per stage (1-indexed)
+    groups = []
+    idx = 0
+    for k in range(m_eff):
+        groups.append((idx + 1, idx + widths[k]))  # (first, last) 1-indexed
+        idx += widths[k]
+
+    # Decide which stages to show (ellipsis for large m)
+    max_show = 5
+    if m_eff <= max_show + 1:
+        show = list(range(m_eff))
+    else:
+        show = [0, 1, None, m_eff - 2, m_eff - 1]  # None = ellipsis
+
+    # Layout
+    x_sp = 1.8
+    y_s = 1.2   # S row (top)
+    y_x = 0.0   # X row (bottom)
+    fig_w = max(5.5, (len(show) + 1) * x_sp + 0.5)
+    fig, ax = plt.subplots(figsize=(fig_w, 2.4), facecolor='white')
+
+    col_x = {}
+    cx = 0.8
+
+    for si, slot in enumerate(show):
+        if slot is None:
+            # Ellipsis column
+            ax.text(cx, y_s, r'$\cdots$', ha='center', va='center',
+                    fontsize=12, color='black')
+            ax.text(cx, y_x, r'$\cdots$', ha='center', va='center',
+                    fontsize=12, color='black')
+            # Horizontal arrows into/out of ellipsis
+            prev_cx = col_x[si - 1]
+            ax.annotate('', xy=(cx - 0.32, y_x),
+                        xytext=(prev_cx + 0.22, y_x),
+                        arrowprops=dict(arrowstyle='->', lw=0.9, color='black'))
+            col_x[si] = cx
+            cx += x_sp
+            continue
+
+        col_x[si] = cx
+        k = slot + 1  # 1-indexed stage
+        first_s, last_s = groups[slot]
+
+        # S label (input group) — above X
+        if first_s == last_s:
+            s_label = f'$S_{{{first_s}}}$'
+        else:
+            s_label = f'$S_{{{first_s}}}\\!\\!\\cdots\\!\\! S_{{{last_s}}}$'
+        ax.text(cx, y_s, s_label, ha='center', va='center', fontsize=10,
+                fontfamily='serif')
+
+        # X label (stage) — on the chain
+        ax.text(cx, y_x, f'$X_{{{k}}}$', ha='center', va='center',
+                fontsize=10, fontfamily='serif')
+
+        # Vertical arrow S -> X with f label
+        ax.annotate('', xy=(cx, y_x + 0.25),
+                    xytext=(cx, y_s - 0.25),
+                    arrowprops=dict(arrowstyle='->', lw=0.9, color='black'))
+        ax.text(cx - 0.18, (y_s + y_x) / 2, '$f$', ha='right', va='center',
+                fontsize=9, fontfamily='serif')
+
+        # Horizontal arrow from previous stage
+        if si > 0:
+            prev_cx = col_x[si - 1]
+            if show[si - 1] is None:
+                # Arrow from ellipsis
+                ax.annotate('', xy=(cx - 0.22, y_x),
+                            xytext=(prev_cx + 0.32, y_x),
+                            arrowprops=dict(arrowstyle='->', lw=0.9,
+                                            color='black'))
+            else:
+                ax.annotate('', xy=(cx - 0.22, y_x),
+                            xytext=(prev_cx + 0.22, y_x),
+                            arrowprops=dict(arrowstyle='->', lw=0.9,
+                                            color='black'))
+
+        cx += x_sp
+
+    # Y node
+    y_cx = cx
+    ax.text(y_cx, y_x, '$Y$', ha='center', va='center', fontsize=10,
+            fontfamily='serif')
+
+    # Arrow X_m -> Y
+    last_si = [i for i, s in enumerate(show) if s is not None][-1]
+    ax.annotate('', xy=(y_cx - 0.18, y_x),
+                xytext=(col_x[last_si] + 0.22, y_x),
+                arrowprops=dict(arrowstyle='->', lw=0.9, color='black'))
+
+    # +e(rho) label above last arrow
+    mid_last = (col_x[last_si] + y_cx) / 2
+    ax.text(mid_last, y_x + 0.22, f'$+\\varepsilon(\\rho)$',
+            ha='center', va='bottom', fontsize=8, fontfamily='serif')
+
+    # Caption
+    ax.text((0.8 + y_cx) / 2, y_x - 0.55,
+            f'DAG of a single stage  ($n={n},\\ m={m_eff},\\ \\rho={rho}$)',
+            ha='center', va='top', fontsize=9, fontfamily='serif')
+
+    ax.set_xlim(0, y_cx + 0.6)
+    ax.set_ylim(y_x - 0.75, y_s + 0.45)
+    ax.set_aspect('equal')
+    ax.axis('off')
+    plt.tight_layout(pad=0.2)
+    plt.savefig(save_path, dpi=dpi, bbox_inches='tight', facecolor='white')
+    plt.close(fig)
+
+
 def main():
     parser = argparse.ArgumentParser(description='Generate dataset for all processes')
     parser.add_argument('--n_samples', type=int, default=None,
@@ -148,10 +281,16 @@ def main():
     print(f"\n[2/4] Saving DAG image...")
     if DATASET_MODE == 'st':
         try:
-            from scm_ds.datasets_st import STConfig, build_st_scm
             proc0 = current_processes[0]
             st_p = proc0.get('st_params', {})
-            scm = build_st_scm(STConfig(**st_p), dag_image_dir=str(output_dir))
+            dag_path = output_dir / 'dag.png'
+            _save_st_dag(
+                n=st_p.get('n', 5),
+                m=st_p.get('m', 3),
+                rho=st_p.get('rho', 0.0),
+                save_path=str(dag_path),
+            )
+            print(f"  DAG saved to: {dag_path}")
         except Exception as e:
             print(f"  Warning: Could not save DAG image: {e}")
     else:
