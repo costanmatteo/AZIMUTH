@@ -1604,13 +1604,13 @@ def main(config=None):
                     bellman_result.save(checkpoint_dir / 'bellman_lmin_result.json')
                     theoretical_data['bellman_lmin'] = bellman_result.to_dict()
 
-                    # Compute Bellman-based violations (loss < L_min_bellman)
-                    bellman_lmin_val = bellman_result.L_min_bellman
+                    # Compute violations using forward MC L_min (primary benchmark)
+                    bellman_lmin_val = bellman_result.L_min_forward
                     observed_losses = theoretical_data.get('observed_loss', [])
                     n_violations_bellman = sum(1 for obs in observed_losses if obs < bellman_lmin_val * 0.99)
                     theoretical_data['bellman_lmin']['n_violations'] = n_violations_bellman
 
-                    # Update summary violations to use Bellman reference
+                    # Update summary violations to use forward MC reference
                     if 'summary' in theoretical_data:
                         theoretical_data['summary']['n_violations'] = n_violations_bellman
 
@@ -1622,24 +1622,25 @@ def main(config=None):
                     print(f"    Var[F] raw:                  {_raw_var_F:.10f}")
                     print(f"    Bias² raw:                   {_raw_bias2:.10f}")
                     print(f"    Var[F]+Bias² raw:            {_raw_var_F + _raw_bias2:.10f}")
-                    # Bellman pre-scale: if loss_scale != 1, the returned value is already scaled
-                    _bellman_prescale = bellman_result.L_min_bellman / loss_scale if loss_scale != 1.0 else bellman_result.L_min_bellman
-                    print(f"    Bellman L_min raw:            {_bellman_prescale:.10f}")
+                    _fwd_prescale = bellman_result.L_min_forward / loss_scale if loss_scale != 1.0 else bellman_result.L_min_forward
+                    _bwd_prescale = bellman_result.L_min_bellman / loss_scale if loss_scale != 1.0 else bellman_result.L_min_bellman
+                    print(f"    Bellman L_min fwd raw:        {_fwd_prescale:.10f}")
+                    print(f"    Bellman L_min bwd raw:        {_bwd_prescale:.10f}")
                     print(f"  [POST-SCALE values]")
                     print(f"    Var[F] + Bias²:              {combined_components.Var_F + combined_components.Bias2:.6f}")
-                    print(f"    Bellman L_min (reactive):     {bellman_result.L_min_bellman:.6f}")
-                    print(f"    Bellman L_min (forward val.): {bellman_result.L_min_forward:.6f} "
+                    print(f"    Bellman L_min (forward, PRIMARY): {bellman_result.L_min_forward:.6f} "
                           f"± {bellman_result.L_min_forward_se:.6f}")
-                    _hierarchy_ok = bellman_result.L_min_bellman <= (combined_components.Var_F + combined_components.Bias2) * 1.01
-                    print(f"  Hierarchy L_min_Bellman ≤ Var[F]+Bias²: {'✓ OK' if _hierarchy_ok else '✗ VIOLATED'}")
+                    print(f"    Bellman L_min (backward, info):   {bellman_result.L_min_bellman:.6f}")
+                    _hierarchy_ok = bellman_result.L_min_forward <= (combined_components.Var_F + combined_components.Bias2) * 1.01
+                    print(f"  Hierarchy L_min_forward ≤ Var[F]+Bias²: {'✓ OK' if _hierarchy_ok else '✗ VIOLATED'}")
                     print(f"  {'─'*60}")
                     if summary.get('final_loss', 0) > 0:
                         obs_loss = summary['final_loss']
                         print(f"    Observed loss (final):       {obs_loss:.6f}")
-                        gap_bellman = obs_loss - bellman_result.L_min_bellman
-                        eff_bellman = bellman_result.L_min_bellman / obs_loss * 100 if obs_loss > 0 else 0
-                        print(f"    Gap (obs - Bellman):          {gap_bellman:.6f}")
-                        print(f"    Bellman efficiency:           {eff_bellman:.1f}%")
+                        gap_fwd = obs_loss - bellman_result.L_min_forward
+                        eff_fwd = bellman_result.L_min_forward / obs_loss * 100 if obs_loss > 0 else 0
+                        print(f"    Gap (obs - forward):          {gap_fwd:.6f}")
+                        print(f"    Bellman efficiency (forward):  {eff_fwd:.1f}%")
                     print(f"  {'─'*50}")
                     print(f"  Sigma (noise covariance diagonal): "
                           f"{[f'{s:.4f}' for s in bellman_result.Sigma.diagonal().tolist()]}")
