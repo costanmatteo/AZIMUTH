@@ -40,6 +40,14 @@ echo "  Controller Sweep — Full Pipeline"
 echo "=============================================="
 echo ""
 
+# ── Cleanup previous sweep ─────────────────────────────────────────────────
+echo "[cleanup] Removing previous sweep results..."
+rm -rf controller_optimization/checkpoints/sweep
+rm -f logs/sweep_*.out logs/sweep_*.err
+rm -f euler/sweep/sweep_params.txt
+echo "  Done."
+echo ""
+
 # ── Step 1: Generate dataset ────────────────────────────────────────────────
 echo "[1/5] Generating dataset..."
 srun --cpus-per-task=2 --mem-per-cpu=4G --time=00:30:00 \
