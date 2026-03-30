@@ -223,14 +223,14 @@ CONTROLLER_CONFIG = {
 
     # Bellman backward-induction L_min
     'bellman': {
-        'N_R': 80,               # Grid points for remaining reliability R
-        'N_eps': 20,             # Grid points per noise dimension
-        'eps_range': 3.5,        # Noise range: [-eps_range, +eps_range]
+        'N_R': 100,              # Grid points for remaining reliability R
+        'N_eps': 24,             # Grid points per noise dimension
+        'eps_range': 4.0,        # Noise range: [-eps_range, +eps_range]
         'R_min': -0.1,           # Lower bound of R grid
-        'M_actions': 80,         # Number of action candidates per process
-        'K_mc': 1000,            # MC samples for non-terminal steps
+        'M_actions': 100,        # Number of action candidates per process
+        'K_mc': 2000,            # MC samples for non-terminal steps
         'use_antithetic': True,  # Antithetic variates
-        'N_forward': 10000,      # Forward simulation trajectories
+        'N_forward': 20000,      # Forward simulation trajectories
         'sigma_shrinkage': 0.01, # Shrinkage for Sigma if not PD
     },
 
