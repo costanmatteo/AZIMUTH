@@ -393,15 +393,25 @@ def precompute_conditional_params(Sigma: np.ndarray, n: int = 4):
     return sigma2_cond, cond_weights
 
 
-def build_grids(F_star: float, cfg: BellmanConfig):
+def build_grids(F_star: float, cfg: BellmanConfig,
+                 w_bar: np.ndarray = None, margin: float = 0.05):
     """
     Build discretisation grids for R and eps.
+
+    If w_bar is provided, R_min is computed dynamically as
+        R_min = F* - sum(w_bar) - margin
+    so the grid always covers the full range reachable during
+    forward simulation.  Falls back to cfg.R_min otherwise.
 
     Returns:
         grid_R: (N_R,) array
         grid_eps: (N_eps,) array
     """
-    grid_R = np.linspace(cfg.R_min, F_star, cfg.N_R)
+    if w_bar is not None:
+        R_min = F_star - float(np.sum(w_bar)) - margin
+    else:
+        R_min = cfg.R_min
+    grid_R = np.linspace(R_min, F_star, cfg.N_R)
     grid_eps = np.linspace(-cfg.eps_range, cfg.eps_range, cfg.N_eps)
     return grid_R, grid_eps
 
@@ -699,7 +709,11 @@ def backward_induction(
         mu0_opt, sigma2_0_opt: optimal action for initial step (scalars)
     """
     n = len(process_names)
-    grid_R, grid_eps = build_grids(F_star, cfg)
+    grid_R, grid_eps = build_grids(F_star, cfg, w_bar=w_bar)
+
+    if verbose:
+        print(f"  R grid: [{grid_R[0]:.4f}, {grid_R[-1]:.4f}]  "
+              f"(R_min = F*-sum(w̄)-margin = {F_star:.4f}-{float(np.sum(w_bar)):.4f}-0.05)")
 
     # Precompute conditional parameters
     sigma2_cond, cond_weights = precompute_conditional_params(Sigma, n)
