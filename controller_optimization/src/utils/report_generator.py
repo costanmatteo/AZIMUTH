@@ -792,7 +792,7 @@ def _page1(d, total_pages):
         ]
     else:
         lmin_rows = [
-            ("L_min empirical",          _tv(lmin_emp)),
+            ("Var[F]",                   _tv(lmin_emp)),
             ("Gap (reducible)",          _tv(gap_red)),
             ("Efficiency",               f"{float(eff)*100:.1f}%" if eff != '\u2014' else '\u2014',
              ST_VAL_G),
@@ -800,7 +800,7 @@ def _page1(d, total_pages):
              ST_VAL_G if viol == 0 else ST_VAL_R),
         ]
     decomp_rows = [
-        ("L_min empirical (Var+Bias\u00b2)", _tv(lmin_emp)),
+        ("Var[F]",                            _tv(lmin_emp)),
         ("Var(F) \u2014 irreducible",        _tv(var_f)),
         ("Bias\u00b2 \u2014 irreducible",    _tv(bias2)),
         ("Gap \u2014 reducible",             _tv(gap_r)),

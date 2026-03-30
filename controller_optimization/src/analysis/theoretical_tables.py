@@ -93,7 +93,7 @@ def generate_main_results_table(
 
     lines.append("=" * 85)
     lines.append("")
-    lines.append(f"L_min = Var[F] + Bias² (minimo teorico irriducibile)")
+    lines.append(f"L_min = Var[F] (minimo teorico irriducibile)")
     lines.append(f"Status: OK = match (<5%), WARN = warning (5-20%), MISMATCH = >20%")
     lines.append("")
 
@@ -298,7 +298,7 @@ def generate_full_report(
     lines.append("con i limiti teorici derivati dall'analisi della loss function.")
     lines.append("")
     lines.append("Loss function: L = scale * (F - F*)^2")
-    lines.append("Minimo teorico: L_min = Var[F] + Bias^2")
+    lines.append("Minimo teorico: L_min = Var[F]")
     lines.append("")
 
     summary = tracker_data.get('summary', {})
@@ -334,7 +334,7 @@ def generate_full_report(
     lines.append("- δ = μ_target - τ (distanza del target dall'ottimo del processo)")
     lines.append("")
     lines.append("CALCOLO L_min:")
-    lines.append("- L_min = Var[F] + Bias² = minimo teorico irriducibile")
+    lines.append("- L_min = Var[F] = minimo teorico irriducibile")
     lines.append("- Var[F] = varianza irriducibile (dovuta al sampling stocastico)")
     lines.append("- Bias² = (E[F] - F*)² = bias sistematico")
     lines.append("")

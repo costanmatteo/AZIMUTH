@@ -83,7 +83,7 @@ from controller_optimization.src.utils.model_utils import convert_numpy_to_tenso
 from controller_optimization.src.utils.scm_validation import validate_all_processes
 from controller_optimization.src.analysis import (
     TheoreticalLossTracker,
-    compute_empirical_L_min,
+    compute_loss_decomposition,
     generate_all_theoretical_plots,
     generate_full_report,
     save_report_txt,
@@ -1398,7 +1398,7 @@ def main(config=None):
                 # samples_per_scenario as training, so L_min reflects the
                 # actual training distribution.
                 # With single F*, all scenarios share the same target.
-                print("  Running validation sampling (empirical L_min)...")
+                print("  Running validation sampling (loss decomposition)...")
                 training_batch_size = cfg['training']['batch_size']
                 samples_per_scenario = max(1, training_batch_size // n_scenarios)
                 n_L_min_repeats = 500  # Number of independent "epoch-like" repetitions
@@ -1437,17 +1437,17 @@ def main(config=None):
                 print(f"  Empirical Var[F]: {np.var(F_samples_array):.8f}")
 
                 # ── Compute L_min from samples ──────────────────────────────
-                # L_min = (Var[F] + (E[F] - F*)²) × loss_scale
+                # L_min = Var[F] × loss_scale
                 # Uses single F* consistently with training loss
                 loss_scale = cfg['training']['reliability_loss_scale']
 
-                combined_components = compute_empirical_L_min(
+                combined_components = compute_loss_decomposition(
                     F_samples=F_samples_array,
                     F_star=F_star_for_L_min,
                     loss_scale=loss_scale
                 )
 
-                print(f"\n  Empirical L_min = Var[F] + Bias² (from {len(F_samples_array)} samples, single F*):")
+                print(f"\n  Loss decomposition (from {len(F_samples_array)} samples, single F*):")
                 print(f"    L_min:            {combined_components.L_min:.6f}")
                 print(f"    Var[F] component: {combined_components.Var_F:.6f}")
                 print(f"    Bias² component:  {combined_components.Bias2:.6f}")
@@ -1500,13 +1500,13 @@ def main(config=None):
                 # ── Build theoretical_data dict ─────────────────────────────
                 theoretical_data = theoretical_tracker.to_dict()
 
-                # Store empirical combined L_min (same structure as before)
+                # Store loss decomposition (same structure as before)
                 theoretical_data['combined_L_min'] = combined_components.to_dict()
                 theoretical_data['per_process_L_min'] = {}  # not computed analytically
-                theoretical_data['l_min_method'] = 'empirical'
+                theoretical_data['l_min_method'] = 'variance_decomposition'
                 theoretical_data['n_validation_samples'] = int(len(F_samples_array))
 
-                # Override tracker's per-epoch L_min with the empirical value
+                # Override tracker's per-epoch L_min with the Var[F] value
                 # (constant across epochs — measured at end of training)
                 correct_L_min = combined_components.L_min
                 correct_Var_F = combined_components.Var_F
@@ -1560,14 +1560,14 @@ def main(config=None):
 
                 # Print empirical summary
                 summary = theoretical_data.get('summary', {})
-                print(f"\n  THEORETICAL ANALYSIS SUMMARY (empirical):")
+                print(f"\n  THEORETICAL ANALYSIS SUMMARY (Var[F]):")
                 print(f"    Final Loss:   {summary.get('final_loss', 0):.6f}")
                 print(f"    L_min:        {summary.get('final_L_min', 0):.6f}")
                 print(f"    Gap:          {summary.get('final_gap', 0):.6f}")
                 print(f"    Efficiency:   {summary.get('final_efficiency', 0)*100:.1f}%")
                 print(f"    Violations:   {summary.get('n_violations', 0)}/{summary.get('total_epochs', 0)}")
 
-                print("  ✓ Theoretical analysis completed (empirical L_min)")
+                print("  ✓ Theoretical analysis completed (L_min = Var[F])")
 
                 # ── Bellman backward-induction L_min ──────────────────────
                 try:
@@ -1615,7 +1615,7 @@ def main(config=None):
                     print(f"\n  {'─'*50}")
                     print(f"  L_min COMPARISON TABLE")
                     print(f"  {'─'*50}")
-                    print(f"    Empirical L_min (Var+Bias²): {combined_components.L_min:.6f}")
+                    print(f"    Var[F] + Bias²:              {combined_components.Var_F + combined_components.Bias2:.6f}")
                     print(f"    Bellman L_min (reactive):     {bellman_result.L_min_bellman:.6f}")
                     print(f"    Bellman L_min (forward val.): {bellman_result.L_min_forward:.6f} "
                           f"± {bellman_result.L_min_forward_se:.6f}")
@@ -1651,7 +1651,7 @@ def main(config=None):
                         print(f"  HINT: Reduce N_eps or M_actions to lower memory usage.")
                         print(f"        Current peak: ~{_mem_est*4:.0f} MB (with intermediates)")
                     print(f"  Consequence: Bellman lines will NOT appear in theoretical plots.")
-                    print(f"  The empirical L_min plots will still be generated normally.")
+                    print(f"  The Var[F] L_min plots will still be generated normally.")
                     print(f"  {'─'*50}")
                     print(f"  Full traceback:")
                     traceback.print_exc()
@@ -1680,7 +1680,7 @@ def main(config=None):
 
         else:
             print("\n[8.6/9] Theoretical loss analysis SKIPPED (theoretical_analysis.enabled = False)")
-            print("  To enable empirical L_min + Bellman backward-induction L_min:")
+            print("  To enable L_min (Var[F]) + Bellman backward-induction L_min:")
             print("  Set 'theoretical_analysis': {'enabled': True} in your config.")
             print("  This will add L_min plots and Bellman lines to the PDF report.")
 

@@ -73,7 +73,7 @@ def plot_loss_vs_L_min(
     Args:
         epochs: List of epoch numbers
         observed_loss: List of observed loss values
-        theoretical_L_min: List of L_min values (Var[F] + Bias²)
+        theoretical_L_min: List of L_min values (Var[F])
         save_path: Path to save figure (optional)
         title: Plot title
         figsize: Figure size
@@ -94,8 +94,8 @@ def plot_loss_vs_L_min(
     # Plot observed loss
     ax.plot(epochs, observed, 'b-', label='Observed Loss')
 
-    # Plot theoretical L_min (empirical)
-    ax.plot(epochs, theoretical, 'r--', label='L_min (empirical)')
+    # Plot theoretical L_min (Var[F])
+    ax.plot(epochs, theoretical, 'r--', label='Var[F]')
 
     # Plot Bellman L_min lines if available
     if bellman_lmin is not None:
@@ -157,11 +157,11 @@ def plot_efficiency_over_time(
     L_min_Bellman / Loss_observed — so efficiency=1 means loss
     has reached the absolute theoretical minimum.
 
-    Without Bellman, falls back to L_min_empirical / Loss_observed.
+    Without Bellman, falls back to Var[F] / Loss_observed.
 
     Args:
         epochs: List of epoch numbers
-        efficiency: List of empirical efficiency values (L_min_emp / Loss)
+        efficiency: List of efficiency values (Var[F] / Loss)
         save_path: Path to save figure (optional)
         title: Plot title
         figsize: Figure size
@@ -193,18 +193,18 @@ def plot_efficiency_over_time(
         ax.plot(epochs, eff_bellman_clipped, 'g-',
                 label='Efficiency (Bellman)')
 
-        # Secondary: empirical efficiency as dashed reference
+        # Secondary: Var[F]-based efficiency as dashed reference
         eff_emp_clipped = np.clip(eff_empirical, 0, 1.5)
         ax.plot(epochs, eff_emp_clipped, 'b--', alpha=0.5,
-                label='Efficiency (empirical)')
+                label='Efficiency(Var[F])')
 
         main_eff = eff_bellman_clipped
         limit_label = 'Theoretical Limit'
     else:
-        # Fallback: empirical efficiency only
+        # Fallback: Var[F]-based efficiency only
         eff_emp_clipped = np.clip(eff_empirical, 0, 1.5)
         ax.plot(epochs, eff_emp_clipped, 'g-',
-                label='Efficiency (empirical)')
+                label='Efficiency(Var[F])')
         main_eff = eff_emp_clipped
         limit_label = 'Theoretical Limit'
 
@@ -518,7 +518,7 @@ def create_summary_figure(
     ax1.spines['top'].set_visible(False)
     ax1.spines['right'].set_visible(False)
     ax1.plot(epochs, observed_loss, 'b-', linewidth=2, label='Observed Loss', marker='o', markersize=2)
-    ax1.plot(epochs, theoretical_L_min, 'r--', linewidth=2, label='L_min (empirical)')
+    ax1.plot(epochs, theoretical_L_min, 'r--', linewidth=2, label='Var[F]')
     if bellman_data is not None:
         bellman_val = bellman_data.get('L_min_bellman', None)
         if bellman_val is not None:
@@ -547,13 +547,13 @@ def create_summary_figure(
         bellman_eff_clipped = np.clip(bellman_eff_curve, 0, 1.5)
         ax2.plot(epochs, bellman_eff_clipped, 'g-', linewidth=2, marker='o', markersize=2,
                  label=f'Efficiency (Bellman)')
-        # Empirical as dashed reference
+        # Var[F]-based efficiency as dashed reference
         ax2.plot(epochs, efficiency, 'b--', linewidth=1.5, alpha=0.5, marker='o', markersize=1,
-                 label='Efficiency (empirical)')
+                 label='Efficiency(Var[F])')
         ax2.set_ylabel('Efficiency (L_min Bellman / Loss)')
     else:
         ax2.plot(epochs, efficiency, 'g-', linewidth=2, marker='o', markersize=2,
-                 label='Efficiency (empirical)')
+                 label='Efficiency(Var[F])')
         ax2.set_ylabel('Efficiency (L_min / Loss)')
 
     ax2.axhline(y=1.0, color='red', linestyle='--', linewidth=2, label='100%')
@@ -575,8 +575,8 @@ def create_summary_figure(
     for bar, val in zip(bars, values):
         ax3.annotate(f'{val:.4f}', xy=(bar.get_x() + bar.get_width()/2, bar.get_height()),
                     xytext=(0, 3), textcoords="offset points", ha='center', fontsize=9)
-    ax3.axhline(y=final_Var_F + final_Bias2, color='red', linestyle='--', linewidth=2,
-                label=f'L_min emp = {final_Var_F + final_Bias2:.4f}')
+    ax3.axhline(y=final_Var_F, color='red', linestyle='--', linewidth=2,
+                label=f'L_min (Var[F]) = {final_Var_F:.4f}')
     if bellman_data is not None and bellman_data.get('L_min_bellman') is not None:
         ax3.axhline(y=bellman_data['L_min_bellman'], color='green', linestyle='-.',
                     linewidth=2, label=f'L_min Bellman = {bellman_data["L_min_bellman"]:.4f}')

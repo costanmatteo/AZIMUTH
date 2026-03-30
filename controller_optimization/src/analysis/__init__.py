@@ -3,7 +3,7 @@
 from .theoretical_loss_analysis import (
     TheoreticalLossComponents,
     TheoreticalLossTracker,
-    compute_empirical_L_min,
+    compute_loss_decomposition,
     run_validation_sampling,
     compute_z_score,
     format_status
@@ -44,7 +44,7 @@ __all__ = [
     # Core analysis
     'TheoreticalLossComponents',
     'TheoreticalLossTracker',
-    'compute_empirical_L_min',
+    'compute_loss_decomposition',
     'run_validation_sampling',
     'compute_z_score',
     'format_status',
