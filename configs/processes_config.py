@@ -64,7 +64,7 @@ ST_DATASET_CONFIG = {
         'gamma': 0.3,               # ampiezza moltiplicativa
         'rho': 0.2,                 # intensità rumore [0,1]
         'width_profile': 'uniform',
-        'carry_beta': 1.0,
+        'carry_beta': 0.3,
         'x_domain': (-2.0, 2.0),
         'e_domain': (-1.0, 1.0),
         'cal_n': 2000,
