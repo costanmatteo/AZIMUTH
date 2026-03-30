@@ -740,6 +740,15 @@ def _page1(d, total_pages):
             gap_bel, eff_bel = None, None
     else:
         gap_bel, eff_bel = None, None
+    # Compute efficiency using backward induction L_min
+    if lmin_bel is not None and final_total != '\u2014':
+        try:
+            _ft = float(final_total)
+            eff_bel_bwd = float(lmin_bel) / _ft * 100 if _ft > 0 else 0.0
+        except (TypeError, ValueError):
+            eff_bel_bwd = None
+    else:
+        eff_bel_bwd = None
 
     # overfitting data
     ttg  = adv.get('train_test_gap')       or adv.get('overfitting')    or {}
@@ -784,8 +793,11 @@ def _page1(d, total_pages):
              if lmin_fse is not None else _tv(lmin_fwd)),
             ("L_min Bellman (backward)",  _tv(lmin_bel) if lmin_bel is not None else '\u2014'),
             ("Gap (obs \u2212 L_min fwd)",  _tv(gap_bel) if gap_bel is not None else '\u2014'),
-            ("Efficiency",
+            ("Efficiency (forward)",
              f"{eff_bel:.1f}%" if eff_bel is not None else '\u2014',
+             ST_VAL_G),
+            ("Efficiency (backward)",
+             f"{eff_bel_bwd:.1f}%" if eff_bel_bwd is not None else '\u2014',
              ST_VAL_G),
             (f"Violations (loss&lt;L_min)", f"{viol_bel} / {total_ep}",
              ST_VAL_G if viol_bel == 0 else ST_VAL_R),

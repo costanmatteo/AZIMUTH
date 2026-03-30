@@ -183,26 +183,50 @@ def plot_efficiency_over_time(
     epochs = np.array(epochs)
     eff_empirical = np.array(efficiency)
 
-    # Determine if we can compute Bellman-based efficiency (forward MC as primary)
+    # Determine if we can compute Bellman-based efficiency
     bellman_fwd = None
+    bellman_bwd = None
     if bellman_lmin is not None:
         bellman_fwd = bellman_lmin.get('L_min_forward', None)
+        bellman_bwd = bellman_lmin.get('L_min_bellman', None)
 
-    if bellman_fwd is not None and observed_loss is not None and len(observed_loss) == len(epochs):
-        # Primary: Bellman forward MC efficiency
+    has_obs = observed_loss is not None and len(observed_loss) == len(epochs)
+
+    if bellman_fwd is not None and has_obs:
         obs = np.array(observed_loss)
-        eff_bellman = np.where(obs > 0, bellman_fwd / obs, 0.0)
-        eff_bellman_clipped = np.clip(eff_bellman, 0, 1.5)
-
-        ax.plot(epochs, eff_bellman_clipped, 'g-',
+        # Forward MC efficiency
+        eff_bellman_fwd = np.where(obs > 0, bellman_fwd / obs, 0.0)
+        eff_bellman_fwd_clipped = np.clip(eff_bellman_fwd, 0, 1.5)
+        ax.plot(epochs, eff_bellman_fwd_clipped, 'g-',
                 label='Efficiency (Bellman forward)')
 
-        # Secondary: Var[F]-based efficiency as dashed reference
-        eff_emp_clipped = np.clip(eff_empirical, 0, 1.5)
-        ax.plot(epochs, eff_emp_clipped, 'b--', alpha=0.5,
-                label='Efficiency(Var[F])')
+        # Backward induction efficiency
+        if bellman_bwd is not None:
+            eff_bellman_bwd = np.where(obs > 0, bellman_bwd / obs, 0.0)
+            eff_bellman_bwd_clipped = np.clip(eff_bellman_bwd, 0, 1.5)
+            ax.plot(epochs, eff_bellman_bwd_clipped, color='darkviolet', linestyle='--',
+                    label='Efficiency (Bellman backward)')
 
-        main_eff = eff_bellman_clipped
+        # Var[F]-based efficiency as lighter reference
+        eff_emp_clipped = np.clip(eff_empirical, 0, 1.5)
+        ax.plot(epochs, eff_emp_clipped, 'b--', alpha=0.4,
+                label='Efficiency (Var[F])')
+
+        main_eff = eff_bellman_fwd_clipped
+        limit_label = 'Theoretical Limit'
+    elif bellman_bwd is not None and has_obs:
+        # Only backward available (no forward)
+        obs = np.array(observed_loss)
+        eff_bellman_bwd = np.where(obs > 0, bellman_bwd / obs, 0.0)
+        eff_bellman_bwd_clipped = np.clip(eff_bellman_bwd, 0, 1.5)
+        ax.plot(epochs, eff_bellman_bwd_clipped, color='darkviolet', linestyle='--',
+                label='Efficiency (Bellman backward)')
+
+        eff_emp_clipped = np.clip(eff_empirical, 0, 1.5)
+        ax.plot(epochs, eff_emp_clipped, 'b--', alpha=0.4,
+                label='Efficiency (Var[F])')
+
+        main_eff = eff_bellman_bwd_clipped
         limit_label = 'Theoretical Limit'
     else:
         # Fallback: Var[F]-based efficiency only
@@ -558,20 +582,39 @@ def create_summary_figure(
     ax2.spines['right'].set_visible(False)
 
     bellman_fwd = None
+    bellman_bwd = None
     if bellman_data is not None:
         bellman_fwd = bellman_data.get('L_min_forward', None)
+        bellman_bwd = bellman_data.get('L_min_bellman', None)
 
     if bellman_fwd is not None and len(observed_loss) > 0:
-        # Primary: Bellman forward MC efficiency per epoch
         obs_arr = np.array(observed_loss)
-        bellman_eff_curve = np.where(obs_arr > 0, bellman_fwd / obs_arr, 0.0)
-        bellman_eff_clipped = np.clip(bellman_eff_curve, 0, 1.5)
-        ax2.plot(epochs, bellman_eff_clipped, 'g-', linewidth=2, marker='o', markersize=2,
-                 label=f'Efficiency (Bellman fwd)')
-        # Var[F]-based efficiency as dashed reference
-        ax2.plot(epochs, efficiency, 'b--', linewidth=1.5, alpha=0.5, marker='o', markersize=1,
-                 label='Efficiency(Var[F])')
-        ax2.set_ylabel('Efficiency (L_min forward / Loss)')
+        # Forward MC efficiency
+        bellman_eff_fwd = np.where(obs_arr > 0, bellman_fwd / obs_arr, 0.0)
+        bellman_eff_fwd_clipped = np.clip(bellman_eff_fwd, 0, 1.5)
+        ax2.plot(epochs, bellman_eff_fwd_clipped, 'g-', linewidth=2, marker='o', markersize=2,
+                 label='Efficiency (Bellman fwd)')
+        # Backward induction efficiency
+        if bellman_bwd is not None:
+            bellman_eff_bwd = np.where(obs_arr > 0, bellman_bwd / obs_arr, 0.0)
+            bellman_eff_bwd_clipped = np.clip(bellman_eff_bwd, 0, 1.5)
+            ax2.plot(epochs, bellman_eff_bwd_clipped, color='darkviolet', linestyle='--',
+                     linewidth=1.5, marker='o', markersize=1,
+                     label='Efficiency (Bellman bwd)')
+        # Var[F]-based efficiency as lighter reference
+        ax2.plot(epochs, efficiency, 'b--', linewidth=1.5, alpha=0.4, marker='o', markersize=1,
+                 label='Efficiency (Var[F])')
+        ax2.set_ylabel('Efficiency (L_min / Loss)')
+    elif bellman_bwd is not None and len(observed_loss) > 0:
+        obs_arr = np.array(observed_loss)
+        bellman_eff_bwd = np.where(obs_arr > 0, bellman_bwd / obs_arr, 0.0)
+        bellman_eff_bwd_clipped = np.clip(bellman_eff_bwd, 0, 1.5)
+        ax2.plot(epochs, bellman_eff_bwd_clipped, color='darkviolet', linestyle='--',
+                 linewidth=2, marker='o', markersize=2,
+                 label='Efficiency (Bellman bwd)')
+        ax2.plot(epochs, efficiency, 'b--', linewidth=1.5, alpha=0.4, marker='o', markersize=1,
+                 label='Efficiency (Var[F])')
+        ax2.set_ylabel('Efficiency (L_min / Loss)')
     else:
         ax2.plot(epochs, efficiency, 'g-', linewidth=2, marker='o', markersize=2,
                  label='Efficiency(Var[F])')
