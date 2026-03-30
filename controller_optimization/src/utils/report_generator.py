@@ -1329,6 +1329,7 @@ def _page3(d):
             gap=theo['gap'][-1],
             save_path=str(p),
             figsize=report_figsize,
+            bellman_lmin=bellman_data,
         )
         plt.close()
 

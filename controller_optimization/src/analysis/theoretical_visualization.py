@@ -97,16 +97,16 @@ def plot_loss_vs_L_min(
     # Plot theoretical L_min (Var[F])
     ax.plot(epochs, theoretical, 'r--', label='Var[F]')
 
-    # Plot Bellman L_min lines if available (forward MC as primary)
+    # Plot Bellman L_min lines if available
     if bellman_lmin is not None:
         bellman_fwd = bellman_lmin.get('L_min_forward', None)
         bellman_bwd = bellman_lmin.get('L_min_bellman', None)
         if bellman_fwd is not None:
             ax.axhline(y=bellman_fwd, color='green', linestyle='-.',
-                       label='L_min Bellman (forward)')
+                       label=f'L_min Bellman (forward) = {bellman_fwd:.6f}')
         if bellman_bwd is not None:
-            ax.axhline(y=bellman_bwd, color='green', linestyle=':', alpha=0.4,
-                       label='L_min Bellman (backward)')
+            ax.axhline(y=bellman_bwd, color='darkviolet', linestyle='--',
+                       label=f'L_min Bellman (backward) = {bellman_bwd:.6f}')
 
     # Fill area between L_min and observed (reducible gap)
     ax.fill_between(
@@ -252,7 +252,8 @@ def plot_loss_decomposition(
     loss_scale: float = 100.0,
     save_path: Optional[str] = None,
     title: str = "Loss Decomposition",
-    figsize: tuple = (14, 4.8)
+    figsize: tuple = (14, 4.8),
+    bellman_lmin: Optional[Dict[str, Any]] = None,
 ) -> plt.Figure:
     """
     Bar chart showing decomposition of loss into components.
@@ -270,6 +271,7 @@ def plot_loss_decomposition(
         save_path: Path to save figure
         title: Plot title
         figsize: Figure size
+        bellman_lmin: Dict with Bellman results (keys: L_min_bellman, L_min_forward)
 
     Returns:
         Matplotlib Figure object
@@ -305,6 +307,17 @@ def plot_loss_decomposition(
 
     # Add horizontal line for L_min
     ax.axhline(y=L_min, color='red', linestyle='--', label='L_min')
+
+    # Add Bellman L_min lines if available
+    if bellman_lmin is not None:
+        bellman_fwd = bellman_lmin.get('L_min_forward')
+        bellman_bwd = bellman_lmin.get('L_min_bellman')
+        if bellman_fwd is not None:
+            ax.axhline(y=bellman_fwd, color='green', linestyle='-.',
+                       linewidth=1.5, label=f'L_min Bellman (fwd) = {bellman_fwd:.4f}')
+        if bellman_bwd is not None:
+            ax.axhline(y=bellman_bwd, color='darkviolet', linestyle='--',
+                       linewidth=1.5, label=f'L_min Bellman (bwd) = {bellman_bwd:.4f}')
 
     # Labels
     ax.set_ylabel('Loss Value')
@@ -530,7 +543,7 @@ def create_summary_figure(
             ax1.axhline(y=bellman_fwd, color='green', linestyle='-.', linewidth=2,
                         label=f'L_min Bellman (fwd) = {bellman_fwd:.4f}')
         if bellman_bwd is not None:
-            ax1.axhline(y=bellman_bwd, color='green', linestyle=':', linewidth=1, alpha=0.4,
+            ax1.axhline(y=bellman_bwd, color='darkviolet', linestyle='--', linewidth=1.5,
                         label=f'L_min Bellman (bwd) = {bellman_bwd:.4f}')
     ax1.fill_between(epochs, theoretical_L_min, observed_loss, alpha=0.3, color='orange', label='Gap')
     ax1.set_xlabel('Epoch')
@@ -592,7 +605,7 @@ def create_summary_figure(
             ax3.axhline(y=bellman_fwd, color='green', linestyle='-.',
                         linewidth=2, label=f'L_min Bellman (fwd) = {bellman_fwd:.4f}')
         if bellman_bwd is not None:
-            ax3.axhline(y=bellman_bwd, color='green', linestyle=':', linewidth=1, alpha=0.4,
+            ax3.axhline(y=bellman_bwd, color='darkviolet', linestyle='--', linewidth=1.5,
                         label=f'L_min Bellman (bwd) = {bellman_bwd:.4f}')
     ax3.set_ylabel('Loss Value')
     ax3.set_title('Loss Decomposition (Final)')
@@ -686,7 +699,8 @@ def generate_all_theoretical_plots(
         Var_F=tracker_data['theoretical_Var_F'][-1],
         Bias2=tracker_data['theoretical_Bias2'][-1],
         gap=tracker_data['gap'][-1],
-        save_path=str(path)
+        save_path=str(path),
+        bellman_lmin=bellman_data,
     )
     plots['loss_decomposition'] = path
     plt.close()
