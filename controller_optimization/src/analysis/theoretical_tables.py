@@ -319,6 +319,28 @@ def generate_full_report(
         final_loss = tracker_data['observed_loss'][-1]
         lines.append(generate_decomposition_table(final_Var_F, final_Bias2, final_gap, final_L_min, final_loss))
 
+    # Lambda_MC table (if available)
+    lambda_mc_data = tracker_data.get('lambda_mc', {})
+    if lambda_mc_data:
+        lines.append("")
+        lines.append("LAMBDA_MC — Stima Monte Carlo per-trajectory")
+        lines.append("=" * 65)
+        lmc_total = lambda_mc_data.get('lambda_mc', 0)
+        lmc_var = lambda_mc_data.get('lambda_mc_var', 0)
+        lmc_bias = lambda_mc_data.get('lambda_mc_bias', 0)
+        lmc_n = lambda_mc_data.get('n_trajectories', 0)
+        lmc_s = lambda_mc_data.get('n_perturbations', 0)
+        lines.append(f"{'Λ_MC (totale)':<25} {format_value(lmc_total):>12}")
+        lines.append(f"{'  Var component':<25} {format_value(lmc_var):>12}")
+        lines.append(f"{'  Bias component':<25} {format_value(lmc_bias):>12}")
+        lines.append(f"{'N trajectories':<25} {lmc_n:>12}")
+        lines.append(f"{'S perturbations':<25} {lmc_s:>12}")
+        if lmc_total > 0 and final_loss > 0:
+            eff_lmc = lmc_total / final_loss
+            lines.append(f"{'Efficienza (Λ_MC/Loss)':<25} {format_pct(100*eff_lmc):>12}")
+        lines.append("=" * 65)
+        lines.append("")
+
     # Efficiency table
     lines.append(generate_efficiency_table(summary))
 

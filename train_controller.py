@@ -84,6 +84,7 @@ from controller_optimization.src.utils.scm_validation import validate_all_proces
 from controller_optimization.src.analysis import (
     TheoreticalLossTracker,
     compute_empirical_L_min,
+    compute_lambda_mc,
     generate_all_theoretical_plots,
     generate_full_report,
     save_report_txt,
@@ -1569,6 +1570,57 @@ def main(config=None):
 
                 print("  ✓ Theoretical analysis completed (empirical L_min)")
 
+                # ── Lambda_MC (per-trajectory variance method) ────────────
+                try:
+                    lambda_mc_S = cfg.get('theoretical_analysis', {}).get('lambda_mc_S', 100)
+                    print(f"\n  ── Lambda_MC (per-trajectory variance) ──")
+                    print(f"  S={lambda_mc_S} perturbations per trajectory, "
+                          f"{n_scenarios} scenarios")
+
+                    import time as _time_lmc
+                    _t0_lmc = _time_lmc.time()
+
+                    lambda_mc_result = compute_lambda_mc(
+                        process_chain=process_chain,
+                        surrogate=surrogate,
+                        n_scenarios=n_scenarios,
+                        S=lambda_mc_S,
+                        loss_scale=loss_scale,
+                        verbose=True,
+                    )
+
+                    _elapsed_lmc = _time_lmc.time() - _t0_lmc
+
+                    # Save alongside other analysis files
+                    lambda_mc_result.save(checkpoint_dir / 'lambda_mc_result.json')
+                    theoretical_data['lambda_mc'] = lambda_mc_result.to_dict()
+
+                    # ── Comparison with empirical L_min ──
+                    print(f"\n  {'─'*50}")
+                    print(f"  Lambda_MC vs Empirical L_min")
+                    print(f"  {'─'*50}")
+                    print(f"    Lambda_MC (total):       {lambda_mc_result.lambda_mc:.6f}")
+                    print(f"      Var component:         {lambda_mc_result.lambda_mc_var:.6f}")
+                    print(f"      Bias component:        {lambda_mc_result.lambda_mc_bias:.6f}")
+                    print(f"    Empirical L_min (global): {combined_components.L_min:.6f}")
+                    print(f"      Var[F] component:      {combined_components.Var_F:.6f}")
+                    print(f"      Bias² component:       {combined_components.Bias2:.6f}")
+                    ratio = lambda_mc_result.lambda_mc / combined_components.L_min if combined_components.L_min > 0 else float('inf')
+                    print(f"    Ratio Lambda_MC/L_min:   {ratio:.4f}")
+                    if abs(ratio - 1.0) < 0.1:
+                        print(f"    → Linear approximation validated (ratio ≈ 1)")
+                    else:
+                        print(f"    → Divergence detected: Lambda_MC captures nonlinear effects")
+                    print(f"  {'─'*50}")
+                    print(f"  Computation time: {_elapsed_lmc:.1f}s")
+                    print(f"  Saved: {checkpoint_dir / 'lambda_mc_result.json'}")
+                    print(f"  ✓ Lambda_MC completed\n")
+
+                except Exception as e:
+                    import traceback
+                    print(f"\n  ✗ Lambda_MC computation FAILED: {e}")
+                    traceback.print_exc()
+
                 # ── Bellman backward-induction L_min ──────────────────────
                 try:
                     bellman_cfg = BellmanConfig(**cfg['bellman'])
@@ -1616,6 +1668,11 @@ def main(config=None):
                     print(f"  L_min COMPARISON TABLE")
                     print(f"  {'─'*50}")
                     print(f"    Empirical L_min (Var+Bias²): {combined_components.L_min:.6f}")
+                    if 'lambda_mc' in theoretical_data:
+                        lmc = theoretical_data['lambda_mc']
+                        print(f"    Lambda_MC (per-traj var):    {lmc['lambda_mc']:.6f}")
+                        print(f"      Var component:             {lmc['lambda_mc_var']:.6f}")
+                        print(f"      Bias component:            {lmc['lambda_mc_bias']:.6f}")
                     print(f"    Bellman L_min (reactive):     {bellman_result.L_min_bellman:.6f}")
                     print(f"    Bellman L_min (forward val.): {bellman_result.L_min_forward:.6f} "
                           f"± {bellman_result.L_min_forward_se:.6f}")
@@ -1627,6 +1684,9 @@ def main(config=None):
                         eff_bellman = bellman_result.L_min_bellman / obs_loss * 100 if obs_loss > 0 else 0
                         print(f"    Gap (obs - Bellman):          {gap_bellman:.6f}")
                         print(f"    Bellman efficiency:           {eff_bellman:.1f}%")
+                        if 'lambda_mc' in theoretical_data:
+                            eff_lmc = lmc['lambda_mc'] / obs_loss * 100 if obs_loss > 0 else 0
+                            print(f"    Lambda_MC efficiency:         {eff_lmc:.1f}%")
                     print(f"  {'─'*50}")
                     print(f"  Sigma (noise covariance diagonal): "
                           f"{[f'{s:.4f}' for s in bellman_result.Sigma.diagonal().tolist()]}")

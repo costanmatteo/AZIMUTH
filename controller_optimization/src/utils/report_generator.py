@@ -799,6 +799,12 @@ def _page1(d, total_pages):
             (f"Violations (loss&lt;L_min)", f"{viol} / {total_ep}",
              ST_VAL_G if viol == 0 else ST_VAL_R),
         ]
+    # Lambda_MC data (per-trajectory variance method)
+    lambda_mc_data = theo.get('lambda_mc', {})
+    lmc_total = lambda_mc_data.get('lambda_mc')
+    lmc_var   = lambda_mc_data.get('lambda_mc_var')
+    lmc_bias  = lambda_mc_data.get('lambda_mc_bias')
+
     decomp_rows = [
         ("L_min empirical (Var+Bias\u00b2)", _tv(lmin_emp)),
         ("Var(F) \u2014 irreducible",        _tv(var_f)),
@@ -806,6 +812,13 @@ def _page1(d, total_pages):
         ("Gap \u2014 reducible",             _tv(gap_r)),
         ("% of loss",                        str(pct_str)),
     ]
+    if lmc_total is not None:
+        decomp_rows += [
+            ("",                                       ""),
+            ("\u039b_MC (per-traj var)",               _tv(lmc_total)),
+            ("\u039b_MC Var component",                _tv(lmc_var)),
+            ("\u039b_MC Bias component",               _tv(lmc_bias)),
+        ]
     cross_rows = [
         ("Mean gap \u2014 train",         f"{float(mg_tr):.6f}"  if mg_tr  is not None else '\u2014'),
     ]

@@ -6,7 +6,9 @@ from .theoretical_loss_analysis import (
     compute_empirical_L_min,
     run_validation_sampling,
     compute_z_score,
-    format_status
+    format_status,
+    LambdaMCResult,
+    compute_lambda_mc,
 )
 
 from .theoretical_visualization import (
@@ -48,6 +50,9 @@ __all__ = [
     'run_validation_sampling',
     'compute_z_score',
     'format_status',
+    # Lambda MC
+    'LambdaMCResult',
+    'compute_lambda_mc',
     # Visualization
     'plot_loss_vs_L_min',
     'plot_efficiency_over_time',

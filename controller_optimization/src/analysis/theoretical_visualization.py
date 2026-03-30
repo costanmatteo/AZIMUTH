@@ -60,6 +60,7 @@ def plot_loss_vs_L_min(
     title: str = "Loss vs Theoretical Minimum",
     figsize: tuple = (14, 4.8),
     bellman_lmin: Optional[Dict[str, Any]] = None,
+    lambda_mc: Optional[Dict[str, Any]] = None,
 ) -> plt.Figure:
     """
     Plot observed loss and theoretical L_min over epochs.
@@ -104,6 +105,13 @@ def plot_loss_vs_L_min(
             ax.axhline(y=bellman_val, color='green', linestyle='-.',
                        label='L_min Bellman')
 
+    # Plot Lambda_MC line if available
+    if lambda_mc is not None:
+        lmc_val = lambda_mc.get('lambda_mc', None)
+        if lmc_val is not None:
+            ax.axhline(y=lmc_val, color='purple', linestyle=':',
+                       linewidth=2, label='\u039b_MC (per-traj)')
+
     # Fill area between L_min and observed (reducible gap)
     ax.fill_between(
         epochs,
@@ -117,6 +125,10 @@ def plot_loss_vs_L_min(
     all_vals = np.concatenate([observed, theoretical])
     if bellman_lmin is not None:
         extra = [v for v in [bellman_lmin.get('L_min_bellman')] if v is not None]
+        if extra:
+            all_vals = np.concatenate([all_vals, extra])
+    if lambda_mc is not None:
+        extra = [v for v in [lambda_mc.get('lambda_mc')] if v is not None]
         if extra:
             all_vals = np.concatenate([all_vals, extra])
 
@@ -149,6 +161,7 @@ def plot_efficiency_over_time(
     figsize: tuple = (14, 4.8),
     bellman_lmin: Optional[Dict[str, Any]] = None,
     observed_loss: Optional[List[float]] = None,
+    lambda_mc: Optional[Dict[str, Any]] = None,
 ) -> plt.Figure:
     """
     Plot efficiency over epochs.
@@ -210,6 +223,17 @@ def plot_efficiency_over_time(
 
     # Add horizontal line at y=1 (theoretical limit)
     ax.axhline(y=1.0, color='red', linestyle='--', label=limit_label)
+
+    # Lambda_MC-based efficiency
+    lmc_val = None
+    if lambda_mc is not None:
+        lmc_val = lambda_mc.get('lambda_mc', None)
+    if lmc_val is not None and observed_loss is not None and len(observed_loss) == len(epochs):
+        obs = np.array(observed_loss)
+        eff_lmc = np.where(obs > 0, lmc_val / obs, 0.0)
+        eff_lmc_clipped = np.clip(eff_lmc, 0, 1.5)
+        ax.plot(epochs, eff_lmc_clipped, color='purple', linestyle=':',
+                linewidth=2, label='Efficiency (\u039b_MC)')
 
     # Fill area above current efficiency (room for improvement)
     ax.fill_between(
@@ -510,8 +534,9 @@ def create_summary_figure(
         final_Bias2 = 0
         final_gap = 0
 
-    # Extract Bellman data if available
+    # Extract Bellman and Lambda_MC data if available
     bellman_data = tracker_data.get('bellman_lmin', None)
+    lambda_mc_data = tracker_data.get('lambda_mc', None)
 
     # 1. Loss vs L_min (top left)
     ax1 = fig.add_subplot(2, 2, 1)
@@ -524,6 +549,11 @@ def create_summary_figure(
         if bellman_val is not None:
             ax1.axhline(y=bellman_val, color='green', linestyle='-.', linewidth=2,
                         label=f'L_min Bellman = {bellman_val:.4f}')
+    if lambda_mc_data is not None:
+        lmc_val = lambda_mc_data.get('lambda_mc', None)
+        if lmc_val is not None:
+            ax1.axhline(y=lmc_val, color='purple', linestyle=':', linewidth=2,
+                        label=f'\u039b_MC = {lmc_val:.4f}')
     ax1.fill_between(epochs, theoretical_L_min, observed_loss, alpha=0.3, color='orange', label='Gap')
     ax1.set_xlabel('Epoch')
     ax1.set_ylabel('Loss')
@@ -555,6 +585,17 @@ def create_summary_figure(
         ax2.plot(epochs, efficiency, 'g-', linewidth=2, marker='o', markersize=2,
                  label='Efficiency (empirical)')
         ax2.set_ylabel('Efficiency (L_min / Loss)')
+
+    # Lambda_MC efficiency curve
+    lmc_val = None
+    if lambda_mc_data is not None:
+        lmc_val = lambda_mc_data.get('lambda_mc', None)
+    if lmc_val is not None and len(observed_loss) > 0:
+        obs_arr = np.array(observed_loss)
+        lmc_eff_curve = np.where(obs_arr > 0, lmc_val / obs_arr, 0.0)
+        lmc_eff_clipped = np.clip(lmc_eff_curve, 0, 1.5)
+        ax2.plot(epochs, lmc_eff_clipped, color='purple', linestyle=':', linewidth=2,
+                 marker='o', markersize=1, label='\u039b_MC efficiency')
 
     ax2.axhline(y=1.0, color='red', linestyle='--', linewidth=2, label='100%')
     ax2.axhline(y=0.9, color='orange', linestyle=':', linewidth=1, alpha=0.7)
@@ -639,8 +680,9 @@ def generate_all_theoretical_plots(
         print("  Warning: No epochs in tracker data, skipping plots")
         return plots
 
-    # Extract Bellman data if available
+    # Extract Bellman and Lambda_MC data if available
     bellman_data = tracker_data.get('bellman_lmin', None)
+    lambda_mc_data = tracker_data.get('lambda_mc', None)
 
     # 1. Loss vs L_min
     path = checkpoint_dir / 'loss_vs_L_min.png'
@@ -650,6 +692,7 @@ def generate_all_theoretical_plots(
         theoretical_L_min=tracker_data['theoretical_L_min'],
         save_path=str(path),
         bellman_lmin=bellman_data,
+        lambda_mc=lambda_mc_data,
     )
     plots['loss_vs_L_min'] = path
     plt.close()
@@ -662,6 +705,7 @@ def generate_all_theoretical_plots(
         save_path=str(path),
         bellman_lmin=bellman_data,
         observed_loss=tracker_data['observed_loss'],
+        lambda_mc=lambda_mc_data,
     )
     plots['training_efficiency'] = path
     plt.close()
