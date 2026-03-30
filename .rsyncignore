@@ -1,0 +1,54 @@
+# ============================================================================
+# rsync exclude list for uploading to Euler
+# Usage (from Windows Terminal):
+#   rsync -avz --exclude-from=".rsyncignore" . mcostan@euler.ethz.ch:~/AZIMUTH/
+# ============================================================================
+
+# Virtual environments
+venv/
+.venv/
+ENV/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Training artifacts (checkpoints, models, data)
+controller_optimization/checkpoints/
+controller_optimization/output_dir/
+*.pt
+*.pth
+*.pkl
+*.ckpt
+
+# Sweep results and logs
+logs/
+controller_optimization/optuna_results/
+
+# Generated reports and images
+*.pdf
+*.png
+*.jpg
+*.jpeg
+*.svg
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+
+# Misc
+*.tmp
+*.bak
+*.log
+reports/
+data/
