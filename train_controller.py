@@ -1432,9 +1432,12 @@ def main(config=None):
                                     sigma2_per_process[proc_name].append(data['outputs_var'].mean().item())
 
                 F_samples_array = np.array(F_samples_all)
+                _raw_var_F = float(np.var(F_samples_array))
+                _raw_bias2 = float((np.mean(F_samples_array) - F_star_for_L_min) ** 2)
                 print(f"  Total F samples: {len(F_samples_array)} ({n_L_min_repeats} repeats × {n_scenarios} scenarios × {samples_per_scenario} samples)")
                 print(f"  Empirical E[F]: {np.mean(F_samples_array):.6f}")
-                print(f"  Empirical Var[F]: {np.var(F_samples_array):.8f}")
+                print(f"  Empirical Var[F] (RAW, pre-scale): {_raw_var_F:.10f}")
+                print(f"  Empirical Bias² (RAW, pre-scale):  {_raw_bias2:.10f}")
 
                 # ── Compute L_min from samples ──────────────────────────────
                 # L_min = Var[F] × loss_scale
@@ -1612,14 +1615,24 @@ def main(config=None):
                         theoretical_data['summary']['n_violations'] = n_violations_bellman
 
                     # ── Comprehensive comparison ──
-                    print(f"\n  {'─'*50}")
+                    print(f"\n  {'─'*60}")
                     print(f"  L_min COMPARISON TABLE")
-                    print(f"  {'─'*50}")
+                    print(f"  {'─'*60}")
+                    print(f"  [PRE-SCALE values (loss_scale={loss_scale})]")
+                    print(f"    Var[F] raw:                  {_raw_var_F:.10f}")
+                    print(f"    Bias² raw:                   {_raw_bias2:.10f}")
+                    print(f"    Var[F]+Bias² raw:            {_raw_var_F + _raw_bias2:.10f}")
+                    # Bellman pre-scale: if loss_scale != 1, the returned value is already scaled
+                    _bellman_prescale = bellman_result.L_min_bellman / loss_scale if loss_scale != 1.0 else bellman_result.L_min_bellman
+                    print(f"    Bellman L_min raw:            {_bellman_prescale:.10f}")
+                    print(f"  [POST-SCALE values]")
                     print(f"    Var[F] + Bias²:              {combined_components.Var_F + combined_components.Bias2:.6f}")
                     print(f"    Bellman L_min (reactive):     {bellman_result.L_min_bellman:.6f}")
                     print(f"    Bellman L_min (forward val.): {bellman_result.L_min_forward:.6f} "
                           f"± {bellman_result.L_min_forward_se:.6f}")
-                    print(f"  {'─'*50}")
+                    _hierarchy_ok = bellman_result.L_min_bellman <= (combined_components.Var_F + combined_components.Bias2) * 1.01
+                    print(f"  Hierarchy L_min_Bellman ≤ Var[F]+Bias²: {'✓ OK' if _hierarchy_ok else '✗ VIOLATED'}")
+                    print(f"  {'─'*60}")
                     if summary.get('final_loss', 0) > 0:
                         obs_loss = summary['final_loss']
                         print(f"    Observed loss (final):       {obs_loss:.6f}")

@@ -171,8 +171,16 @@ def estimate_noise_covariance(
             o_sampled = mu + epsilon * sigma
             residuals[:, i] = (o_sampled - mu) / sigma
 
+            # Diagnostic: verify that mu/sigma are constant (fixed actions → deterministic UP)
+            print(f"  [Sigma diag] process {i} ({proc_name}): "
+                  f"mu range=[{mu.min():.6f}, {mu.max():.6f}], "
+                  f"sigma range=[{sigma.min():.6f}, {sigma.max():.6f}], "
+                  f"residual std={residuals[:, i].std():.4f}")
+
     # Sample covariance
     Sigma_hat = np.cov(residuals.T)
+    print(f"  [Sigma diag] Sigma_hat diagonal: {np.diag(Sigma_hat)}")
+    print(f"  [Sigma diag] Sigma_hat off-diag:\n{Sigma_hat - np.diag(np.diag(Sigma_hat))}")
 
     # Regularise to ensure positive definiteness
     eigvals = np.linalg.eigvalsh(Sigma_hat)
@@ -1057,9 +1065,12 @@ def compute_bellman_lmin(
         )
         manifolds.append(M_i)
         if verbose:
+            sigma2_min = M_i[:, 1].min()
+            sigma2_max = M_i[:, 1].max()
             print(f"  {process_names[i]:12s}: {M_i.shape[0]:3d} points, "
                   f"mu=[{M_i[:,0].min():.3f}, {M_i[:,0].max():.3f}], "
-                  f"sigma2=[{M_i[:,1].min():.6f}, {M_i[:,1].max():.6f}]")
+                  f"sigma2=[{sigma2_min:.6f}, {sigma2_max:.6f}], "
+                  f"sigma2_min/scale={sigma2_min/scales[i]:.6f}")
     if verbose:
         print(f"  Done in {time.time()-t_phase:.1f}s")
 
