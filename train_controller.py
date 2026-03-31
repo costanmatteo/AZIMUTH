@@ -1595,7 +1595,7 @@ def main(config=None):
 
                     bellman_result = compute_bellman_lmin(
                         process_chain=process_chain,
-                        surrogate=surrogate,
+                        surrogate=formula_surrogate if formula_surrogate is not None else surrogate,
                         cfg=bellman_cfg,
                         loss_scale=loss_scale,
                         scenario_idx=0,
