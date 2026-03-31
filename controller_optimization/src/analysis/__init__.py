@@ -40,6 +40,11 @@ from .bellman_lmin import (
     forward_simulation,
 )
 
+from .montecarlo_lmin import (
+    MonteCarloLminResult,
+    compute_montecarlo_lmin,
+)
+
 __all__ = [
     # Core analysis
     'TheoreticalLossComponents',
@@ -73,4 +78,7 @@ __all__ = [
     'compute_manifold',
     'backward_induction',
     'forward_simulation',
+    # Monte Carlo L_min (Method 2)
+    'MonteCarloLminResult',
+    'compute_montecarlo_lmin',
 ]

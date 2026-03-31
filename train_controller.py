@@ -93,6 +93,10 @@ from controller_optimization.src.analysis.bellman_lmin import (
     BellmanConfig,
     compute_bellman_lmin,
 )
+from controller_optimization.src.analysis.montecarlo_lmin import (
+    MonteCarloLminResult,
+    compute_montecarlo_lmin,
+)
 
 
 def parse_args():
@@ -1670,6 +1674,66 @@ def main(config=None):
                     print(f"  Full traceback:")
                     traceback.print_exc()
                     print()
+
+                # ── Monte Carlo L_min (Method 2) — only for CasualiT surrogate ──
+                if isinstance(surrogate, CasualiTSurrogate):
+                    try:
+                        mc_S = cfg.get('montecarlo_lmin', {}).get('S', 50)
+                        print(f"\n  ── Monte Carlo L_min (Method 2) ──")
+                        print(f"  S={mc_S} perturbations per trajectory, "
+                              f"N={n_scenarios} trajectories")
+
+                        mc_result = compute_montecarlo_lmin(
+                            process_chain=process_chain,
+                            surrogate=surrogate,
+                            n_scenarios=n_scenarios,
+                            samples_per_scenario=1,
+                            S=mc_S,
+                            loss_scale=loss_scale,
+                            verbose=True,
+                        )
+
+                        # Save MC results
+                        mc_result.save(checkpoint_dir / 'montecarlo_lmin_result.json')
+                        theoretical_data['montecarlo_lmin'] = mc_result.to_dict()
+
+                        # ── Extended comparison table ──
+                        print(f"\n  {'─'*60}")
+                        print(f"  L_min COMPARISON TABLE (with MC Method 2)")
+                        print(f"  {'─'*60}")
+                        print(f"    Var[F] + Bias² (scaled):         {combined_components.Var_F + combined_components.Bias2:.6f}")
+                        if 'bellman_lmin' in theoretical_data:
+                            bellman_fwd = theoretical_data['bellman_lmin']['L_min_forward']
+                            bellman_bwd = theoretical_data['bellman_lmin']['L_min_bellman']
+                            print(f"    Bellman L_min (forward):          {bellman_fwd:.6f}")
+                            print(f"    Bellman L_min (backward):         {bellman_bwd:.6f}")
+                        print(f"    MC L_min (Method 2):              {mc_result.L_min_mc_scaled:.6f} "
+                              f"± {mc_result.std_error_scaled:.6f}")
+                        if summary.get('final_loss', 0) > 0:
+                            obs_loss = summary['final_loss']
+                            print(f"    Observed loss (final):            {obs_loss:.6f}")
+                            mc_eff = mc_result.L_min_mc_scaled / obs_loss * 100 if obs_loss > 0 else 0
+                            print(f"    MC efficiency:                    {mc_eff:.1f}%")
+
+                        # Agreement check: Bellman ≈ MC validates both (eq. 3.40)
+                        if 'bellman_lmin' in theoretical_data:
+                            bellman_fwd = theoretical_data['bellman_lmin']['L_min_forward']
+                            ratio = mc_result.L_min_mc_scaled / bellman_fwd if bellman_fwd > 0 else float('inf')
+                            agreement = abs(ratio - 1.0) < 0.20
+                            print(f"    MC/Bellman ratio:                 {ratio:.3f} "
+                                  f"{'✓ AGREE' if agreement else '✗ DISAGREE (prefer MC)'}")
+                            if not agreement:
+                                print(f"    → Disagreement suggests high surrogate curvature;")
+                                print(f"      Method 2 (MC) should be preferred over Method 1 (delta).")
+                        print(f"  {'─'*60}")
+                        print(f"  Saved: {checkpoint_dir / 'montecarlo_lmin_result.json'}")
+                        print(f"  ✓ Monte Carlo L_min completed\n")
+
+                    except Exception as e:
+                        import traceback
+                        print(f"\n  ✗ Monte Carlo L_min computation FAILED: {e}")
+                        traceback.print_exc()
+                        print()
 
                 # ── Generate plots and reports (after Bellman, so plots include Bellman lines) ──
                 print("  Generating theoretical analysis plots...")
