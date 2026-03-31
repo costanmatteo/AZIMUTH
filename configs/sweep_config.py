@@ -28,7 +28,7 @@ SWEEP_CONFIG = {
         'time': '00:10:00',            # Max wall time per job (HH:MM:SS)
         'ntasks': 1,
         'cpus_per_task': 1,
-        'mem_per_cpu': '2G',
+        'mem_per_cpu': '4G',
         'output_log': 'logs/sweep_%A_%a.out',
         'error_log': 'logs/sweep_%A_%a.err',
         # GPU (uncomment if needed):
