@@ -38,6 +38,8 @@ from .bellman_lmin import (
     compute_manifold,
     backward_induction,
     forward_simulation,
+    extract_adaptive_coefficients,
+    compute_eps_corrections,
 )
 
 from .montecarlo_lmin import (
@@ -78,6 +80,8 @@ __all__ = [
     'compute_manifold',
     'backward_induction',
     'forward_simulation',
+    'extract_adaptive_coefficients',
+    'compute_eps_corrections',
     # Monte Carlo L_min (Method 2)
     'MonteCarloLminResult',
     'compute_montecarlo_lmin',

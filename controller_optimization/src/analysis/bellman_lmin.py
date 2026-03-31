@@ -98,12 +98,106 @@ class BellmanLminResult:
 # Phase 1: Input estimation
 # ─────────────────────────────────────────────────────────────────────────────
 
+def extract_adaptive_coefficients(
+    process_names: List[str],
+    surrogate=None,
+) -> Dict[int, Dict[int, float]]:
+    """
+    Extract adaptive target coefficients for each process.
+
+    The surrogate computes Q_i = exp(-(o_i - τ_i)²/s_i) where τ_i depends
+    on upstream outputs:  τ_i = base_i + Σ_j c_{ij} * (o_j - baseline_j).
+
+    This function returns the c_{ij} coefficients so the Bellman can model
+    the adaptive target effect.
+
+    Returns:
+        adapt_coeffs: {process_idx: {upstream_idx: coefficient}}
+    """
+    n = len(process_names)
+    adapt_coeffs = {i: {} for i in range(n)}
+
+    if (surrogate is not None
+            and hasattr(surrogate, '_dynamic_configs')
+            and surrogate._dynamic_configs is not None):
+        # GENERIC PATH: from surrogate calibrated configs
+        proc_order = (surrogate._process_order
+                      if surrogate._process_order
+                      else list(surrogate._dynamic_configs.keys()))
+        name_to_idx = {name: idx for idx, name in enumerate(process_names)}
+        for i, name in enumerate(proc_order):
+            if i >= n:
+                break
+            cfg = surrogate._dynamic_configs.get(name, {})
+            for upstream_name, coeff in cfg.get('adaptive_coefficients', {}).items():
+                if upstream_name in name_to_idx:
+                    j = name_to_idx[upstream_name]
+                    adapt_coeffs[i][j] = coeff
+    else:
+        # LEGACY PATH: hardcoded coefficients matching surrogate.compute_reliability
+        name_to_idx = {name: idx for idx, name in enumerate(process_names)}
+        # Process 0 (laser): no upstream → no adaptive target
+        # Process 1 (plasma): τ += 0.2*(laser - 0.8)
+        if 1 < n and 'laser' in name_to_idx:
+            adapt_coeffs[1][name_to_idx['laser']] = 0.2
+        # Process 2 (galvanic): τ += 0.5*(plasma-5) + 0.4*(laser-0.5)
+        if 2 < n:
+            if 'plasma' in name_to_idx:
+                adapt_coeffs[2][name_to_idx['plasma']] = 0.5
+            if 'laser' in name_to_idx:
+                adapt_coeffs[2][name_to_idx['laser']] = 0.4
+        # Process 3 (microetch): τ += 1.5*(laser-0.5) + 0.3*(plasma-5) - 0.15*(galvanic-10)
+        if 3 < n:
+            if 'laser' in name_to_idx:
+                adapt_coeffs[3][name_to_idx['laser']] = 1.5
+            if 'plasma' in name_to_idx:
+                adapt_coeffs[3][name_to_idx['plasma']] = 0.3
+            if 'galvanic' in name_to_idx:
+                adapt_coeffs[3][name_to_idx['galvanic']] = -0.15
+
+    return adapt_coeffs
+
+
+def compute_eps_corrections(
+    adapt_coeffs: Dict[int, Dict[int, float]],
+    sigma_ref: np.ndarray,
+    n: int,
+) -> Dict[int, np.ndarray]:
+    """
+    Compute per-process eps correction vectors for adaptive targets.
+
+    For process i, the adaptive target correction relative to the fixed target
+    is:  Δτ_i = Σ_j c_{ij} * σ_j^ref * ε_j
+
+    This function returns eps_correction[i] as an array of length i, where
+    eps_correction[i][j] = c_{ij} * σ_j^ref.
+
+    Args:
+        adapt_coeffs: {process_idx: {upstream_idx: coefficient}}
+        sigma_ref: (n,) array of per-process σ at target operating point
+        n: number of processes
+
+    Returns:
+        eps_corrections: {process_idx: (i,) array} for i=1,...,n-1
+            eps_corrections[i][j] = c_{ij} * sigma_ref[j]
+            For process 0, not included (no upstream).
+    """
+    eps_corrections = {}
+    for i in range(1, n):
+        corr = np.zeros(i)
+        for j, coeff in adapt_coeffs.get(i, {}).items():
+            if j < i:
+                corr[j] = coeff * sigma_ref[j]
+        eps_corrections[i] = corr
+    return eps_corrections
+
+
 def estimate_noise_covariance(
     process_chain,
     n_samples: int = 2000,
     scenario_idx: int = 0,
     shrinkage: float = 0.01,
-) -> np.ndarray:
+) -> Tuple[np.ndarray, np.ndarray]:
     """
     Estimate the 4x4 noise covariance matrix Sigma from standardised residuals.
 
@@ -123,9 +217,11 @@ def estimate_noise_covariance(
 
     Returns:
         Sigma: (4, 4) positive-definite covariance matrix
+        sigma_ref: (4,) per-process σ at the target operating point
     """
     n_processes = len(process_chain.process_names)
     residuals = np.zeros((n_samples, n_processes))
+    sigma_ref = np.zeros(n_processes)  # σ at target operating point per process
 
     process_chain.eval()
     with torch.no_grad():
@@ -166,6 +262,9 @@ def estimate_noise_covariance(
             var = var_t.squeeze(-1).cpu().numpy()          # (n_samples,)
             sigma = np.sqrt(var + 1e-8)                    # (n_samples,)
 
+            # Store reference sigma (constant across samples since inputs are fixed)
+            sigma_ref[i] = float(sigma[0])
+
             # Sample and compute standardised residual
             epsilon = torch.randn(n_samples).numpy()
             o_sampled = mu + epsilon * sigma
@@ -197,7 +296,7 @@ def estimate_noise_covariance(
         eigvals_clip = np.maximum(eigvals_clip, 1e-6)
         Sigma = eigvecs @ np.diag(eigvals_clip) @ eigvecs.T
 
-    return Sigma
+    return Sigma, sigma_ref
 
 
 def compute_manifold(
@@ -429,6 +528,7 @@ def bellman_terminal(
     tau_i: float,
     sigma2_cond_i: float,
     cond_weights_i: np.ndarray,
+    eps_correction: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """
     Closed-form Bellman for the terminal step (last process).
@@ -449,6 +549,10 @@ def bellman_terminal(
         tau_i: adaptive target (at target trajectory operating point)
         sigma2_cond_i: conditional variance of eps_i | eps_{<i}
         cond_weights_i: (n_prev,) conditional mean weights
+        eps_correction: (n_prev,) array of adaptive target correction coefficients.
+            eps_correction[j] = c_{i,j} * sigma_ref[j], so that the adaptive
+            target shift is  Δτ_i = Σ_j eps_correction[j] * ε_j.
+            If None, no adaptive correction is applied (legacy behaviour).
 
     Returns:
         V: array of shape (N_R, N_eps, ..., N_eps) with n_prev eps dimensions
@@ -472,6 +576,14 @@ def bellman_terminal(
     eps_hat = sum(cond_weights_i[j] * grids[j] for j in range(n_prev))
     # Shape: (N_eps,) * n_prev
 
+    # Adaptive target correction: Δτ_i = Σ_j eps_correction[j] * ε_j
+    # This shifts delta by -Δτ_i at each eps grid point.
+    if eps_correction is not None and np.any(eps_correction != 0):
+        adapt_shift = sum(eps_correction[j] * grids[j] for j in range(n_prev))
+        # Shape: (N_eps,) * n_prev — same as eps_hat
+    else:
+        adapt_shift = None
+
     sqrt_cond = np.sqrt(sigma2_cond_i)
 
     # Vectorise over (R, eps_dims..., m)
@@ -490,7 +602,13 @@ def bellman_terminal(
     delta_nd = delta_m.reshape(trailing_shape)
     sigma_nd = sigma_m.reshape(trailing_shape)
 
+    # d = (delta - adaptive_shift) + sigma * eps_hat
+    # Without adaptive: d = delta + sigma * eps_hat  (original)
+    # With adaptive: delta_eff = delta - Σ c_{ij}*σ_j*ε_j  (target "forgives" upstream noise)
     d = delta_nd + sigma_nd * eps_hat_nd  # (N_R, Ne, ..., Ne, M)
+    if adapt_shift is not None:
+        adapt_shift_nd = adapt_shift.reshape((1,) + adapt_shift.shape + (1,))
+        d = d - adapt_shift_nd
 
     beta = sigma_nd * sqrt_cond
     beta2 = beta ** 2
@@ -535,6 +653,7 @@ def bellman_non_terminal(
     K: int = 1000,
     use_antithetic: bool = True,
     rng: Optional[np.random.Generator] = None,
+    eps_correction: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """
     Monte Carlo Bellman for non-terminal step (process_idx in {0,1,2}).
@@ -558,6 +677,9 @@ def bellman_non_terminal(
         K: MC samples
         use_antithetic: use antithetic variates
         rng: random generator
+        eps_correction: (process_idx,) array of adaptive target correction
+            coefficients. eps_correction[j] = c_{i,j} * sigma_ref[j].
+            If None, no adaptive correction (legacy behaviour).
 
     Returns:
         V: value function for step i
@@ -605,6 +727,7 @@ def bellman_non_terminal(
 
     if process_idx == 0:
         # i=0: state is (F*, empty) — single point, returns scalar
+        # No adaptive correction for process 0 (no upstream)
         eps_i_samples = sqrt_cond * z_all  # (K,)
         F_star = grid_R[-1]
 
@@ -639,8 +762,16 @@ def bellman_non_terminal(
             eps_hat = cond_weights_i @ eps_vals
             eps_i_samples = eps_hat + sqrt_cond * z_all  # (K,)
 
+            # Adaptive target correction: shift delta by -Σ c_{ij}*σ_j*ε_j
+            # at this specific eps grid point
+            if eps_correction is not None and np.any(eps_correction != 0):
+                adapt_shift = float(eps_correction @ eps_vals)
+                delta_eff = delta_m - adapt_shift  # (M,) shifted delta
+            else:
+                delta_eff = delta_m
+
             # d, Q independent of R: (M, K)
-            d_all = delta_m[:, None] + sigma_m[:, None] * eps_i_samples[None, :]
+            d_all = delta_eff[:, None] + sigma_m[:, None] * eps_i_samples[None, :]
             Q_all = np.exp(-(d_all ** 2) / s_i)
 
             # Vectorize over all R grid points: (N_R, M, K)
@@ -680,6 +811,7 @@ def backward_induction(
     process_names: List[str],
     cfg: BellmanConfig,
     verbose: bool = True,
+    eps_corrections: Optional[Dict[int, np.ndarray]] = None,
     **kwargs,
 ) -> Tuple[float, Dict[int, np.ndarray], np.ndarray, np.ndarray,
            Dict[int, float], Dict[int, np.ndarray], List[float],
@@ -698,6 +830,10 @@ def backward_induction(
         process_names: list of process names
         cfg: BellmanConfig
         verbose: print progress
+        eps_corrections: {process_idx: (i,) array} of adaptive target correction
+            coefficients per upstream eps dimension. If provided, the Bellman
+            models the surrogate's adaptive targets (τ_i depends on upstream
+            outputs), reducing L_min to its correct value.
         **kwargs: optional 'surrogate' for dynamic target configs (ST processes)
 
     Returns:
@@ -754,10 +890,14 @@ def backward_induction(
         print(f"    Manifold: mu=[{mu_range.min():.4f}, {mu_range.max():.4f}], "
               f"sigma2=[{sigma2_range.min():.6f}, {sigma2_range.max():.6f}]")
     t0 = time.time()
+    terminal_eps_corr = eps_corrections.get(terminal_idx) if eps_corrections else None
+    if verbose and terminal_eps_corr is not None and np.any(terminal_eps_corr != 0):
+        print(f"    Adaptive target correction: eps_correction={terminal_eps_corr}")
     V_prev, mu_opt_prev, sigma2_opt_prev = bellman_terminal(
         grid_R, grid_eps, manifolds[terminal_idx],
         w_bar[terminal_idx], scales[terminal_idx], taus[terminal_idx],
         sigma2_cond[terminal_idx], cond_weights[terminal_idx],
+        eps_correction=terminal_eps_corr,
     )
     V_functions[terminal_idx] = V_prev
     policy_mu[terminal_idx] = mu_opt_prev
@@ -780,12 +920,16 @@ def backward_induction(
             print(f"    w̄={w_bar[i]:.4f}, s={scales[i]:.4f}, "
                   f"τ={taus[i]:.4f}, σ²_cond={sigma2_cond[i]:.4f}")
         t0 = time.time()
+        step_eps_corr = eps_corrections.get(i) if eps_corrections else None
+        if verbose and step_eps_corr is not None and np.any(step_eps_corr != 0):
+            print(f"    Adaptive target correction: eps_correction={step_eps_corr}")
         V_prev, mu_opt_prev, sigma2_opt_prev = bellman_non_terminal(
             grid_R, grid_eps, V_prev, manifolds[i],
             w_bar[i], scales[i], taus[i],
             sigma2_cond[i], cond_weights[i],
             process_idx=i, K=cfg.K_mc,
             use_antithetic=cfg.use_antithetic, rng=rng,
+            eps_correction=step_eps_corr,
         )
         V_functions[i] = V_prev
         policy_mu[i] = mu_opt_prev
@@ -843,6 +987,9 @@ def forward_simulation(
     mu0_opt: Optional[float] = None,
     sigma2_0_opt: Optional[float] = None,
     verbose: bool = False,
+    adapt_coeffs: Optional[Dict[int, Dict[int, float]]] = None,
+    sigma_ref: Optional[np.ndarray] = None,
+    target_outputs_arr: Optional[np.ndarray] = None,
 ) -> Tuple[float, float]:
     """
     Forward simulation using the optimal policy from backward induction.
@@ -852,13 +999,17 @@ def forward_simulation(
     step i observes only (R_i, eps_{<i}) and commits to action a_i before
     eps_i is realized — matching the Bellman information structure.
 
+    When adapt_coeffs and sigma_ref are provided, the simulation uses dynamic
+    adaptive targets (matching the surrogate's compute_reliability), where
+    τ_i depends on the actual upstream outputs.
+
     Args:
         F_star: target reliability
         Sigma: (n, n) noise covariance
         manifolds: list of n manifold arrays
         w_bar: (n,) normalised weights
         scales: (n,) scale parameters
-        taus: list of adaptive targets
+        taus: list of adaptive targets (at target operating point)
         grid_R, grid_eps: grids from backward induction
         V_functions: {i: V_i array} for i=1,...,n-1
         sigma2_cond, cond_weights: conditional parameters
@@ -869,6 +1020,10 @@ def forward_simulation(
         mu0_opt: optimal mu for process 0 (scalar)
         sigma2_0_opt: optimal sigma2 for process 0 (scalar)
         verbose: print per-step diagnostics
+        adapt_coeffs: {process_idx: {upstream_idx: coeff}} for dynamic targets.
+            If None, uses fixed taus (legacy behaviour).
+        sigma_ref: (n,) per-process σ at target point. Required if adapt_coeffs.
+        target_outputs_arr: (n,) target output values. Required if adapt_coeffs.
 
     Returns:
         L_min_forward: mean loss
@@ -879,6 +1034,8 @@ def forward_simulation(
 
     use_policy = (policy_mu is not None and policy_sigma2 is not None
                   and mu0_opt is not None and sigma2_0_opt is not None)
+    use_dynamic_targets = (adapt_coeffs is not None and sigma_ref is not None
+                           and target_outputs_arr is not None)
 
     n = len(manifolds)
     L_chol = np.linalg.cholesky(Sigma)
@@ -916,6 +1073,8 @@ def forward_simulation(
     # State vectors — all trajectories in parallel
     R = np.full(N, F_star)                   # (N,)
     eps_hist = np.empty((N, 0))              # grows to (N, i) at step i
+    # Track actual outputs o_j for dynamic adaptive targets
+    o_hist = np.empty((N, 0)) if use_dynamic_targets else None
 
     for i in range(n):
         eps_i = EPS[:, i]                    # (N,) — realized noise
@@ -925,10 +1084,14 @@ def forward_simulation(
             # Policy depends only on (R, eps_{<i}), NOT on eps_i
             if i == 0:
                 # Process 0: single optimal action (no state dependence)
-                mu_star = mu0_opt
+                mu_star_val = mu0_opt
                 sigma_star = np.sqrt(max(sigma2_0_opt, 1e-10))
-                delta_star = mu_star - taus[i]
+                # Process 0 has no upstream → tau is always fixed
+                delta_star = mu_star_val - taus[i]
                 d = delta_star + sigma_star * eps_i          # (N,)
+                # Track actual output: o_i = mu + sigma * eps
+                if use_dynamic_targets:
+                    o_i = mu_star_val + sigma_star * eps_i     # (N,)
             else:
                 # Process i >= 1: interpolate policy at (R, eps_{<i})
                 cols = [np.clip(R, R_lo, R_hi)]
@@ -936,11 +1099,25 @@ def forward_simulation(
                     cols.append(np.clip(eps_hist[:, h], eps_lo, eps_hi))
                 points = np.column_stack(cols)
 
-                mu_star = interp_mu[i](points)               # (N,)
+                mu_star_arr = interp_mu[i](points)               # (N,)
                 sigma2_star = interp_sigma2[i](points)        # (N,)
                 sigma_star = np.sqrt(np.maximum(sigma2_star, 1e-10))
-                delta_star = mu_star - taus[i]
+
+                # Compute dynamic adaptive target: τ_i = taus[i] + Σ c_{ij}*(o_j - target_j)
+                if use_dynamic_targets:
+                    tau_i_dynamic = np.full(N, taus[i])
+                    for j, coeff in adapt_coeffs.get(i, {}).items():
+                        if j < o_hist.shape[1]:
+                            tau_i_dynamic += coeff * (o_hist[:, j] - target_outputs_arr[j])
+                    delta_star = mu_star_arr - tau_i_dynamic
+                else:
+                    delta_star = mu_star_arr - taus[i]
+
                 d = delta_star + sigma_star * eps_i           # (N,)
+
+                # Track actual output
+                if use_dynamic_targets:
+                    o_i = mu_star_arr + sigma_star * eps_i      # (N,)
 
             Q = np.exp(-(d ** 2) / scales[i])
             R = R - w_bar[i] * Q
@@ -951,9 +1128,20 @@ def forward_simulation(
             mu_m = manifolds[i][:, 0]
             sigma2_m = manifolds[i][:, 1]
             sigma_m = np.sqrt(np.maximum(sigma2_m, 1e-10))
-            delta_m = mu_m - taus[i]
 
-            d_all = delta_m[:, None] + sigma_m[:, None] * eps_i[None, :]
+            # Compute effective tau for clairvoyant mode
+            if use_dynamic_targets and i > 0:
+                # Per-trajectory dynamic target
+                tau_i_dyn = np.full(N, taus[i])
+                for j, coeff in adapt_coeffs.get(i, {}).items():
+                    if j < o_hist.shape[1]:
+                        tau_i_dyn += coeff * (o_hist[:, j] - target_outputs_arr[j])
+                delta_m_dyn = mu_m[:, None] - tau_i_dyn[None, :]  # (M, N)
+                d_all = delta_m_dyn + sigma_m[:, None] * eps_i[None, :]
+            else:
+                delta_m = mu_m - taus[i]
+                d_all = delta_m[:, None] + sigma_m[:, None] * eps_i[None, :]
+
             Q_all = np.exp(-(d_all ** 2) / scales[i])
             R_next_all = R[None, :] - w_bar[i] * Q_all
 
@@ -976,7 +1164,15 @@ def forward_simulation(
             Q_best = np.exp(-(d_best ** 2) / scales[i])
             R = R - w_bar[i] * Q_best
 
+            # Track actual output for clairvoyant mode
+            if use_dynamic_targets:
+                mu_best = mu_m[best_m]
+                sigma_best = sigma_m[best_m]
+                o_i = mu_best + sigma_best * eps_i
+
         eps_hist = np.column_stack([eps_hist, eps_i]) if eps_hist.size > 0 else eps_i[:, None]
+        if use_dynamic_targets:
+            o_hist = np.column_stack([o_hist, o_i]) if o_hist.size > 0 else o_i[:, None]
 
         if verbose:
             mode_label = 'policy' if use_policy else 'clairvoyant'
@@ -1168,7 +1364,7 @@ def compute_bellman_lmin(
     if verbose:
         print(f"\n[Phase 1a] Estimating noise covariance Sigma (n_samples=1000, fixed actions a*)...")
     t_phase = time.time()
-    Sigma = estimate_noise_covariance(
+    Sigma, sigma_ref = estimate_noise_covariance(
         process_chain, n_samples=1000, scenario_idx=scenario_idx,
         shrinkage=cfg.sigma_shrinkage,
     )
@@ -1177,6 +1373,7 @@ def compute_bellman_lmin(
         print(f"  Sigma diagonal: {np.diag(Sigma)}")
         print(f"  Sigma off-diag max: {np.max(np.abs(Sigma - np.diag(np.diag(Sigma)))):.4f}")
         print(f"  Sigma eigenvalues: {np.linalg.eigvalsh(Sigma)}")
+        print(f"  sigma_ref (per-process σ at target): {sigma_ref}")
 
     # ── Phase 1b: Compute manifolds ──
     if verbose:
@@ -1203,14 +1400,34 @@ def compute_bellman_lmin(
     if verbose:
         print(f"  Target outputs: {target_outputs}")
 
+    # ── Phase 1c: Compute adaptive target corrections ──
+    adapt_coeffs = extract_adaptive_coefficients(process_names, surrogate)
+    eps_corrections = compute_eps_corrections(adapt_coeffs, sigma_ref, n)
+    target_outputs_arr = np.array([target_outputs[name] for name in process_names])
+
+    if verbose:
+        print(f"\n[Phase 1c] Adaptive target corrections (models τ_i(o_{{<i}})):")
+        has_any = False
+        for i in range(1, n):
+            ec = eps_corrections.get(i)
+            if ec is not None and np.any(ec != 0):
+                has_any = True
+                print(f"  Process {i} ({process_names[i]}): eps_correction = {ec}")
+                for j, coeff in adapt_coeffs.get(i, {}).items():
+                    print(f"    c_{{i={i},j={j}}} = {coeff:.4f}, σ_ref[{j}] = {sigma_ref[j]:.6f}"
+                          f" → correction[{j}] = {coeff * sigma_ref[j]:.6f}")
+        if not has_any:
+            print(f"  No adaptive target corrections detected (all c_{{ij}} = 0)")
+
     # ── Phase 2: Backward induction ──
     if verbose:
-        print(f"\n[Phase 2] Running backward induction...")
+        print(f"\n[Phase 2] Running backward induction (with adaptive target corrections)...")
     (L_min_bellman, V_functions, grid_R, grid_eps,
      sigma2_cond, cond_wts, taus,
      pol_mu, pol_sigma2, mu0_opt, sigma2_0_opt) = backward_induction(
         F_star, Sigma, manifolds, w_bar, scales,
         target_outputs, process_names, cfg, verbose,
+        eps_corrections=eps_corrections,
         surrogate=surrogate,
     )
     L_min_bellman_scaled = L_min_bellman * loss_scale
@@ -1239,6 +1456,9 @@ def compute_bellman_lmin(
         mu0_opt=mu0_opt,
         sigma2_0_opt=sigma2_0_opt,
         verbose=verbose,
+        adapt_coeffs=adapt_coeffs,
+        sigma_ref=sigma_ref,
+        target_outputs_arr=target_outputs_arr,
     )
     L_min_forward_scaled = L_min_forward * loss_scale
     L_min_forward_se_scaled = L_min_forward_se * loss_scale
@@ -1261,6 +1481,9 @@ def compute_bellman_lmin(
         sigma2_cond, cond_wts,
         N=cfg.N_forward,
         # No policy → clairvoyant mode (old behaviour)
+        adapt_coeffs=adapt_coeffs,
+        sigma_ref=sigma_ref,
+        target_outputs_arr=target_outputs_arr,
     )
     if verbose:
         print(f"  Done in {time.time()-t_phase2:.1f}s")
