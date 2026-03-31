@@ -1682,12 +1682,13 @@ def main(config=None):
                         print(f"\n  ── Monte Carlo L_min (Method 2) ──")
                         print(f"  S={mc_S} perturbations per trajectory, "
                               f"N={n_scenarios} trajectories")
+                        print(f"  Dataset D: baseline trajectories (fixed actions, no controller)")
 
                         mc_result = compute_montecarlo_lmin(
                             process_chain=process_chain,
                             surrogate=surrogate,
+                            baseline_trajectories=baseline_trajectory,
                             n_scenarios=n_scenarios,
-                            samples_per_scenario=1,
                             S=mc_S,
                             loss_scale=loss_scale,
                             verbose=True,
