@@ -106,17 +106,17 @@ def plot_loss_vs_L_min(
         bellman_bwd = bellman_lmin.get('L_min_bellman', None)
         if bellman_fwd is not None:
             ax.axhline(y=bellman_fwd, color='green', linestyle='-.',
-                       linewidth=2, label=f'L_min Bellman (forward) = {bellman_fwd:.6f}')
+                       linewidth=1.2, label=f'L_min Bellman (forward) = {bellman_fwd:.6f}')
         if bellman_bwd is not None:
             ax.axhline(y=bellman_bwd, color='darkviolet', linestyle='--',
-                       linewidth=2, label=f'L_min Bellman (backward) = {bellman_bwd:.6f}')
+                       linewidth=1.2, label=f'L_min Bellman (backward) = {bellman_bwd:.6f}')
 
     # Plot MC L_min line if available
     if mc_lmin is not None:
         mc_val = mc_lmin.get('L_min_mc_scaled', None)
         if mc_val is not None:
             ax.axhline(y=mc_val, color='darkorange', linestyle=':',
-                       linewidth=2, label=f'L_min MC (Method 2) = {mc_val:.6f}')
+                       linewidth=1.2, label=f'L_min MC (Method 2) = {mc_val:.6f}')
 
     # Fill area between L_min and observed (reducible gap)
     ax.fill_between(
@@ -259,7 +259,7 @@ def plot_efficiency_over_time(
         eff_mc = np.where(obs > 0, mc_val / obs, 0.0)
         eff_mc_clipped = np.clip(eff_mc, 0, 1.5)
         ax.plot(epochs, eff_mc_clipped, color='darkorange', linestyle=':',
-                linewidth=2, label='Efficiency (MC Method 2)')
+                linewidth=1.2, label='Efficiency (MC Method 2)')
 
     # Add horizontal line at y=1 (theoretical limit)
     ax.axhline(y=1.0, color='red', linestyle='--', label=limit_label)
@@ -357,7 +357,7 @@ def plot_loss_decomposition(
         )
 
     # Add horizontal line for L_min
-    ax.axhline(y=L_min, color='red', linestyle='--', linewidth=2, label='L_min')
+    ax.axhline(y=L_min, color='red', linestyle='--', linewidth=1.2, label='L_min')
 
     # Add Bellman L_min lines if available
     if bellman_lmin is not None:
@@ -365,17 +365,17 @@ def plot_loss_decomposition(
         bellman_bwd = bellman_lmin.get('L_min_bellman')
         if bellman_fwd is not None:
             ax.axhline(y=bellman_fwd, color='green', linestyle='-.',
-                       linewidth=2, label=f'L_min Bellman (fwd) = {bellman_fwd:.4f}')
+                       linewidth=1.2, label=f'L_min Bellman (fwd) = {bellman_fwd:.4f}')
         if bellman_bwd is not None:
             ax.axhline(y=bellman_bwd, color='darkviolet', linestyle='--',
-                       linewidth=2, label=f'L_min Bellman (bwd) = {bellman_bwd:.4f}')
+                       linewidth=1.2, label=f'L_min Bellman (bwd) = {bellman_bwd:.4f}')
 
     # Add MC L_min line if available
     if mc_lmin is not None:
         mc_val = mc_lmin.get('L_min_mc_scaled')
         if mc_val is not None:
             ax.axhline(y=mc_val, color='darkorange', linestyle=':',
-                       linewidth=2, label=f'L_min MC (Method 2) = {mc_val:.4f}')
+                       linewidth=1.2, label=f'L_min MC (Method 2) = {mc_val:.4f}')
 
     # Labels
     ax.set_ylabel('Loss Value')
@@ -430,7 +430,7 @@ def plot_loss_scatter(
     max_val = max(all_vals) * 1.1
 
     # Plot diagonal line y=x (theoretical limit)
-    ax.plot([min_val, max_val], [min_val, max_val], 'r--', linewidth=2, label='y = x (Limit)')
+    ax.plot([min_val, max_val], [min_val, max_val], 'r--', linewidth=1.2, label='y = x (Limit)')
 
     # Scatter plot with color by epoch
     if epochs is not None:
@@ -518,8 +518,8 @@ def plot_empirical_vs_theoretical(
     epochs = np.array(epochs)
 
     # Left plot: E[F]
-    ax1.plot(epochs, empirical_E_F, 'b-', linewidth=2, label='Empirical E[F]', marker='o', markersize=3)
-    ax1.plot(epochs, theoretical_E_F, 'r--', linewidth=2, label='Theoretical E[F]')
+    ax1.plot(epochs, empirical_E_F, 'b-', linewidth=1.2, label='Empirical E[F]', marker='o', markersize=3)
+    ax1.plot(epochs, theoretical_E_F, 'r--', linewidth=1.2, label='Theoretical E[F]')
     ax1.set_xlabel('Epoch', fontsize=11)
     ax1.set_ylabel('E[F]', fontsize=11)
     ax1.set_title('Expected Reliability E[F]', fontsize=12)
@@ -527,8 +527,8 @@ def plot_empirical_vs_theoretical(
     ax1.grid(True, alpha=0.3)
 
     # Right plot: Var[F]
-    ax2.plot(epochs, empirical_Var_F, 'b-', linewidth=2, label='Empirical Var[F]', marker='o', markersize=3)
-    ax2.plot(epochs, theoretical_Var_F, 'r--', linewidth=2, label='Theoretical Var[F]')
+    ax2.plot(epochs, empirical_Var_F, 'b-', linewidth=1.2, label='Empirical Var[F]', marker='o', markersize=3)
+    ax2.plot(epochs, theoretical_Var_F, 'r--', linewidth=1.2, label='Theoretical Var[F]')
     ax2.set_xlabel('Epoch', fontsize=11)
     ax2.set_ylabel('Var[F]', fontsize=11)
     ax2.set_title('Variance of Reliability Var[F]', fontsize=12)
@@ -593,21 +593,21 @@ def create_summary_figure(
     ax1 = fig.add_subplot(2, 2, 1)
     ax1.spines['top'].set_visible(False)
     ax1.spines['right'].set_visible(False)
-    ax1.plot(epochs, observed_loss, 'b-', linewidth=2, label='Observed Loss', marker='o', markersize=2)
-    ax1.plot(epochs, theoretical_L_min, 'r--', linewidth=2, label='Var[F]')
+    ax1.plot(epochs, observed_loss, 'b-', linewidth=1.2, label='Observed Loss', marker='o', markersize=2)
+    ax1.plot(epochs, theoretical_L_min, 'r--', linewidth=1.2, label='Var[F]')
     if bellman_data is not None:
         bellman_fwd = bellman_data.get('L_min_forward', None)
         bellman_bwd = bellman_data.get('L_min_bellman', None)
         if bellman_fwd is not None:
-            ax1.axhline(y=bellman_fwd, color='green', linestyle='-.', linewidth=2,
+            ax1.axhline(y=bellman_fwd, color='green', linestyle='-.', linewidth=1.2,
                         label=f'L_min Bellman (fwd) = {bellman_fwd:.4f}')
         if bellman_bwd is not None:
-            ax1.axhline(y=bellman_bwd, color='darkviolet', linestyle='--', linewidth=2,
+            ax1.axhline(y=bellman_bwd, color='darkviolet', linestyle='--', linewidth=1.2,
                         label=f'L_min Bellman (bwd) = {bellman_bwd:.4f}')
     if mc_data is not None:
         mc_val = mc_data.get('L_min_mc_scaled')
         if mc_val is not None:
-            ax1.axhline(y=mc_val, color='darkorange', linestyle=':', linewidth=2,
+            ax1.axhline(y=mc_val, color='darkorange', linestyle=':', linewidth=1.2,
                         label=f'L_min MC = {mc_val:.4f}')
     ax1.fill_between(epochs, theoretical_L_min, observed_loss, alpha=0.3, color='orange', label='Gap')
     ax1.set_xlabel('Epoch')
@@ -632,14 +632,14 @@ def create_summary_figure(
         # Forward MC efficiency
         bellman_eff_fwd = np.where(obs_arr > 0, bellman_fwd / obs_arr, 0.0)
         bellman_eff_fwd_clipped = np.clip(bellman_eff_fwd, 0, 1.5)
-        ax2.plot(epochs, bellman_eff_fwd_clipped, 'g-', linewidth=2, marker='o', markersize=2,
+        ax2.plot(epochs, bellman_eff_fwd_clipped, 'g-', linewidth=1.2, marker='o', markersize=2,
                  label='Efficiency (Bellman fwd)')
         # Backward induction efficiency
         if bellman_bwd is not None:
             bellman_eff_bwd = np.where(obs_arr > 0, bellman_bwd / obs_arr, 0.0)
             bellman_eff_bwd_clipped = np.clip(bellman_eff_bwd, 0, 1.5)
             ax2.plot(epochs, bellman_eff_bwd_clipped, color='darkviolet', linestyle='--',
-                     linewidth=2, marker='o', markersize=2,
+                     linewidth=1.2, marker='o', markersize=2,
                      label='Efficiency (Bellman bwd)')
         # Var[F]-based efficiency as lighter reference
         ax2.plot(epochs, efficiency, 'b--', linewidth=1.5, alpha=0.4, marker='o', markersize=1,
@@ -650,13 +650,13 @@ def create_summary_figure(
         bellman_eff_bwd = np.where(obs_arr > 0, bellman_bwd / obs_arr, 0.0)
         bellman_eff_bwd_clipped = np.clip(bellman_eff_bwd, 0, 1.5)
         ax2.plot(epochs, bellman_eff_bwd_clipped, color='darkviolet', linestyle='--',
-                 linewidth=2, marker='o', markersize=2,
+                 linewidth=1.2, marker='o', markersize=2,
                  label='Efficiency (Bellman bwd)')
         ax2.plot(epochs, efficiency, 'b--', linewidth=1.5, alpha=0.4, marker='o', markersize=1,
                  label='Efficiency (Var[F])')
         ax2.set_ylabel('Efficiency (L_min / Loss)')
     else:
-        ax2.plot(epochs, efficiency, 'g-', linewidth=2, marker='o', markersize=2,
+        ax2.plot(epochs, efficiency, 'g-', linewidth=1.2, marker='o', markersize=2,
                  label='Efficiency(Var[F])')
         ax2.set_ylabel('Efficiency (L_min / Loss)')
 
@@ -666,10 +666,10 @@ def create_summary_figure(
         obs_arr_mc = np.array(observed_loss)
         eff_mc = np.where(obs_arr_mc > 0, mc_val_summary / obs_arr_mc, 0.0)
         eff_mc_clipped = np.clip(eff_mc, 0, 1.5)
-        ax2.plot(epochs, eff_mc_clipped, color='darkorange', linestyle=':', linewidth=2,
+        ax2.plot(epochs, eff_mc_clipped, color='darkorange', linestyle=':', linewidth=1.2,
                  marker='o', markersize=1, label='Efficiency (MC)')
 
-    ax2.axhline(y=1.0, color='red', linestyle='--', linewidth=2, label='100%')
+    ax2.axhline(y=1.0, color='red', linestyle='--', linewidth=1.2, label='100%')
     ax2.axhline(y=0.9, color='orange', linestyle=':', linewidth=1, alpha=0.7)
     ax2.set_xlabel('Epoch')
     ax2.set_title('Training Efficiency')
@@ -688,21 +688,21 @@ def create_summary_figure(
     for bar, val in zip(bars, values):
         ax3.annotate(f'{val:.4f}', xy=(bar.get_x() + bar.get_width()/2, bar.get_height()),
                     xytext=(0, 3), textcoords="offset points", ha='center', fontsize=9)
-    ax3.axhline(y=final_Var_F, color='red', linestyle='--', linewidth=2,
+    ax3.axhline(y=final_Var_F, color='red', linestyle='--', linewidth=1.2,
                 label=f'L_min (Var[F]) = {final_Var_F:.4f}')
     if bellman_data is not None:
         bellman_fwd = bellman_data.get('L_min_forward')
         bellman_bwd = bellman_data.get('L_min_bellman')
         if bellman_fwd is not None:
             ax3.axhline(y=bellman_fwd, color='green', linestyle='-.',
-                        linewidth=2, label=f'L_min Bellman (fwd) = {bellman_fwd:.4f}')
+                        linewidth=1.2, label=f'L_min Bellman (fwd) = {bellman_fwd:.4f}')
         if bellman_bwd is not None:
-            ax3.axhline(y=bellman_bwd, color='darkviolet', linestyle='--', linewidth=2,
+            ax3.axhline(y=bellman_bwd, color='darkviolet', linestyle='--', linewidth=1.2,
                         label=f'L_min Bellman (bwd) = {bellman_bwd:.4f}')
     if mc_data is not None:
         mc_val = mc_data.get('L_min_mc_scaled')
         if mc_val is not None:
-            ax3.axhline(y=mc_val, color='darkorange', linestyle=':', linewidth=2,
+            ax3.axhline(y=mc_val, color='darkorange', linestyle=':', linewidth=1.2,
                         label=f'L_min MC = {mc_val:.4f}')
     ax3.set_ylabel('Loss Value')
     ax3.set_title('Loss Decomposition (Final)')
@@ -716,7 +716,7 @@ def create_summary_figure(
                          s=30, alpha=0.7, edgecolors='black', linewidth=0.3)
     all_vals = np.concatenate([observed_loss, theoretical_L_min])
     min_val, max_val = min(all_vals) * 0.9, max(all_vals) * 1.1
-    ax4.plot([min_val, max_val], [min_val, max_val], 'r--', linewidth=2)
+    ax4.plot([min_val, max_val], [min_val, max_val], 'r--', linewidth=1.2)
     ax4.set_xlabel('Theoretical L_min')
     ax4.set_ylabel('Observed Loss')
     ax4.set_title('Loss vs L_min Scatter')
