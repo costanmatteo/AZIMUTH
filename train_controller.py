@@ -530,7 +530,8 @@ def main(config=None):
         reliability_loss_scale=cfg['training']['reliability_loss_scale'],
         device=device,
         curriculum_config=curriculum_config,
-        lr_scheduler_config=lr_scheduler_config
+        lr_scheduler_config=lr_scheduler_config,
+        gradient_clip_norm=cfg['training'].get('gradient_clip_norm', None)
     )
 
     # Set formula surrogate for comparison (when using CasualiT)

@@ -36,7 +36,8 @@ class ControllerTrainer:
     def __init__(self, process_chain, surrogate, lambda_bc=0.1,
                  learning_rate=0.001, weight_decay=0.01,
                  reliability_loss_scale=100.0, device='cpu',
-                 curriculum_config=None, lr_scheduler_config=None):
+                 curriculum_config=None, lr_scheduler_config=None,
+                 gradient_clip_norm=None):
 
         self.process_chain = process_chain
         self.surrogate = surrogate
@@ -55,6 +56,9 @@ class ControllerTrainer:
 
         # Learning rate scheduler configuration
         self.lr_scheduler_config = lr_scheduler_config
+
+        # Gradient clipping
+        self.gradient_clip_norm = gradient_clip_norm
 
         # Optimizer SOLO per policy generators (uncertainty predictors sono frozen)
         trainable_params = [p for p in process_chain.parameters() if p.requires_grad]
@@ -743,6 +747,11 @@ class ControllerTrainer:
                 with torch.no_grad():
                     F_formula = self.formula_surrogate.compute_reliability(train_trajectory)
                     epoch_F_formula_values.append(torch.mean(F_formula).item())
+
+        # Clip gradients to prevent explosions from stochastic sampling variance
+        if self.gradient_clip_norm is not None:
+            trainable_params = [p for p in self.process_chain.parameters() if p.requires_grad]
+            torch.nn.utils.clip_grad_norm_(trainable_params, self.gradient_clip_norm)
 
         # Single optimizer step after accumulating gradients from all scenarios
         self.optimizer.step()
