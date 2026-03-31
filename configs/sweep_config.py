@@ -87,7 +87,6 @@ SWEEP_CONFIG = {
     # These are passed as CLI args to every run but are not part of the grid.
     # Useful for setting a common config across the entire sweep.
     'fixed_params': {
-        'no_pdf': True,
         'quiet': True,
     },
 }
