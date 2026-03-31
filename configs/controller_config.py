@@ -234,6 +234,12 @@ CONTROLLER_CONFIG = {
         'sigma_shrinkage': 0.01, # Shrinkage for Sigma if not PD
     },
 
+    # Monte Carlo L_min (Method 2, Section 3.4.1.2)
+    # Only computed when using CasualiT (transformer) surrogate
+    'montecarlo_lmin': {
+        'S': 50,                 # MC perturbation samples per trajectory (>= 2)
+    },
+
     # Miscellaneous
     'misc': {
         'random_seed': 42,
