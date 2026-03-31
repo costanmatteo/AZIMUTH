@@ -730,6 +730,10 @@ def _page1(d, total_pages):
     lmin_fwd  = bellman.get('L_min_forward')  # forward MC (primary)
     lmin_fse  = bellman.get('L_min_forward_se')
     viol_bel  = bellman.get('n_violations', viol)
+    # Monte Carlo L_min (Method 2) data
+    mc_lmin_data = theo.get('montecarlo_lmin', {})
+    lmin_mc   = mc_lmin_data.get('L_min_mc_scaled')
+    lmin_mc_se = mc_lmin_data.get('std_error_scaled')
     # Compute gap and efficiency using forward MC L_min (primary)
     if lmin_fwd is not None and final_total != '\u2014':
         try:
@@ -802,6 +806,28 @@ def _page1(d, total_pages):
             (f"Violations (loss&lt;L_min)", f"{viol_bel} / {total_ep}",
              ST_VAL_G if viol_bel == 0 else ST_VAL_R),
         ]
+        # Add MC L_min row if available
+        if lmin_mc is not None:
+            mc_eff = None
+            if final_total != '\u2014':
+                try:
+                    _ft = float(final_total)
+                    mc_eff = float(lmin_mc) / _ft * 100 if _ft > 0 else None
+                except (TypeError, ValueError):
+                    pass
+            lmin_rows.append(
+                ("L_min MC (Method 2)",
+                 f"{float(lmin_mc):.6f} \u00b1 {float(lmin_mc_se):.6f}"
+                 if lmin_mc_se is not None else _tv(lmin_mc)))
+            if mc_eff is not None:
+                lmin_rows.append(("Efficiency (MC)", f"{mc_eff:.1f}%", ST_VAL_G))
+            # Agreement ratio MC/Bellman
+            if lmin_fwd is not None and float(lmin_fwd) > 0:
+                ratio = float(lmin_mc) / float(lmin_fwd)
+                agree = abs(ratio - 1.0) < 0.20
+                style = ST_VAL_G if agree else ST_VAL_R
+                lmin_rows.append(("MC/Bellman ratio",
+                                  f"{ratio:.3f} {'(agree)' if agree else '(DISAGREE)'}", style))
     else:
         lmin_rows = [
             ("Var[F]",                   _tv(lmin_emp)),
@@ -1311,6 +1337,7 @@ def _page3(d):
             plot_loss_vs_L_min, plot_efficiency_over_time, plot_loss_decomposition,
         )
         bellman_data = theo.get('bellman_lmin', None)
+        mc_data = theo.get('montecarlo_lmin', None)
 
         p = chk / 'loss_vs_L_min.png'
         plot_loss_vs_L_min(
@@ -1320,6 +1347,7 @@ def _page3(d):
             save_path=str(p),
             figsize=report_figsize,
             bellman_lmin=bellman_data,
+            mc_lmin=mc_data,
         )
         plt.close()
 
@@ -1331,6 +1359,7 @@ def _page3(d):
             figsize=report_figsize,
             bellman_lmin=bellman_data,
             observed_loss=theo['observed_loss'],
+            mc_lmin=mc_data,
         )
         plt.close()
 
@@ -1342,6 +1371,7 @@ def _page3(d):
             save_path=str(p),
             figsize=report_figsize,
             bellman_lmin=bellman_data,
+            mc_lmin=mc_data,
         )
         plt.close()
 

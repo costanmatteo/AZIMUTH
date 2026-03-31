@@ -60,6 +60,7 @@ def plot_loss_vs_L_min(
     title: str = "Loss vs Theoretical Minimum",
     figsize: tuple = (14, 4.8),
     bellman_lmin: Optional[Dict[str, Any]] = None,
+    mc_lmin: Optional[Dict[str, Any]] = None,
 ) -> plt.Figure:
     """
     Plot observed loss and theoretical L_min over epochs.
@@ -69,6 +70,7 @@ def plot_loss_vs_L_min(
     - Theoretical L_min curve (dashed red)
     - Shaded area showing reducible gap
     - Bellman L_min horizontal line (if available)
+    - MC L_min horizontal line (if available)
 
     Args:
         epochs: List of epoch numbers
@@ -78,6 +80,7 @@ def plot_loss_vs_L_min(
         title: Plot title
         figsize: Figure size
         bellman_lmin: Dict with Bellman results (keys: L_min_bellman, L_min_forward)
+        mc_lmin: Dict with MC L_min results (keys: L_min_mc_scaled, std_error_scaled)
 
     Returns:
         Matplotlib Figure object
@@ -108,6 +111,13 @@ def plot_loss_vs_L_min(
             ax.axhline(y=bellman_bwd, color='darkviolet', linestyle='--',
                        label=f'L_min Bellman (backward) = {bellman_bwd:.6f}')
 
+    # Plot MC L_min line if available
+    if mc_lmin is not None:
+        mc_val = mc_lmin.get('L_min_mc_scaled', None)
+        if mc_val is not None:
+            ax.axhline(y=mc_val, color='darkorange', linestyle=':',
+                       label=f'L_min MC (Method 2) = {mc_val:.6f}')
+
     # Fill area between L_min and observed (reducible gap)
     ax.fill_between(
         epochs,
@@ -123,6 +133,10 @@ def plot_loss_vs_L_min(
         extra = [v for v in [bellman_lmin.get('L_min_forward'), bellman_lmin.get('L_min_bellman')] if v is not None]
         if extra:
             all_vals = np.concatenate([all_vals, extra])
+    if mc_lmin is not None:
+        mc_val = mc_lmin.get('L_min_mc_scaled')
+        if mc_val is not None:
+            all_vals = np.concatenate([all_vals, [mc_val]])
 
     # Labels and legend
     ax.set_xlabel('Epoch')
@@ -153,6 +167,7 @@ def plot_efficiency_over_time(
     figsize: tuple = (14, 4.8),
     bellman_lmin: Optional[Dict[str, Any]] = None,
     observed_loss: Optional[List[float]] = None,
+    mc_lmin: Optional[Dict[str, Any]] = None,
 ) -> plt.Figure:
     """
     Plot efficiency over epochs.
@@ -171,6 +186,7 @@ def plot_efficiency_over_time(
         figsize: Figure size
         bellman_lmin: Dict with Bellman results (keys: L_min_bellman, L_min_forward)
         observed_loss: List of observed loss values (needed for Bellman efficiency)
+        mc_lmin: Dict with MC L_min results (keys: L_min_mc_scaled)
 
     Returns:
         Matplotlib Figure object
@@ -236,6 +252,15 @@ def plot_efficiency_over_time(
         main_eff = eff_emp_clipped
         limit_label = 'Theoretical Limit'
 
+    # MC L_min efficiency curve (if available)
+    mc_val = mc_lmin.get('L_min_mc_scaled') if mc_lmin is not None else None
+    if mc_val is not None and has_obs:
+        obs = np.array(observed_loss)
+        eff_mc = np.where(obs > 0, mc_val / obs, 0.0)
+        eff_mc_clipped = np.clip(eff_mc, 0, 1.5)
+        ax.plot(epochs, eff_mc_clipped, color='darkorange', linestyle=':',
+                linewidth=2, label='Efficiency (MC Method 2)')
+
     # Add horizontal line at y=1 (theoretical limit)
     ax.axhline(y=1.0, color='red', linestyle='--', label=limit_label)
 
@@ -278,6 +303,7 @@ def plot_loss_decomposition(
     title: str = "Loss Decomposition",
     figsize: tuple = (14, 4.8),
     bellman_lmin: Optional[Dict[str, Any]] = None,
+    mc_lmin: Optional[Dict[str, Any]] = None,
 ) -> plt.Figure:
     """
     Bar chart showing decomposition of loss into components.
@@ -296,6 +322,7 @@ def plot_loss_decomposition(
         title: Plot title
         figsize: Figure size
         bellman_lmin: Dict with Bellman results (keys: L_min_bellman, L_min_forward)
+        mc_lmin: Dict with MC L_min results (keys: L_min_mc_scaled)
 
     Returns:
         Matplotlib Figure object
@@ -342,6 +369,13 @@ def plot_loss_decomposition(
         if bellman_bwd is not None:
             ax.axhline(y=bellman_bwd, color='darkviolet', linestyle='--',
                        label=f'L_min Bellman (bwd) = {bellman_bwd:.4f}')
+
+    # Add MC L_min line if available
+    if mc_lmin is not None:
+        mc_val = mc_lmin.get('L_min_mc_scaled')
+        if mc_val is not None:
+            ax.axhline(y=mc_val, color='darkorange', linestyle=':',
+                       label=f'L_min MC (Method 2) = {mc_val:.4f}')
 
     # Labels
     ax.set_ylabel('Loss Value')
@@ -551,8 +585,9 @@ def create_summary_figure(
         final_Bias2 = 0
         final_gap = 0
 
-    # Extract Bellman data if available
+    # Extract Bellman and MC data if available
     bellman_data = tracker_data.get('bellman_lmin', None)
+    mc_data = tracker_data.get('montecarlo_lmin', None)
 
     # 1. Loss vs L_min (top left)
     ax1 = fig.add_subplot(2, 2, 1)
@@ -569,6 +604,11 @@ def create_summary_figure(
         if bellman_bwd is not None:
             ax1.axhline(y=bellman_bwd, color='darkviolet', linestyle='--', linewidth=2,
                         label=f'L_min Bellman (bwd) = {bellman_bwd:.4f}')
+    if mc_data is not None:
+        mc_val = mc_data.get('L_min_mc_scaled')
+        if mc_val is not None:
+            ax1.axhline(y=mc_val, color='darkorange', linestyle=':', linewidth=2,
+                        label=f'L_min MC = {mc_val:.4f}')
     ax1.fill_between(epochs, theoretical_L_min, observed_loss, alpha=0.3, color='orange', label='Gap')
     ax1.set_xlabel('Epoch')
     ax1.set_ylabel('Loss')
@@ -620,6 +660,15 @@ def create_summary_figure(
                  label='Efficiency(Var[F])')
         ax2.set_ylabel('Efficiency (L_min / Loss)')
 
+    # MC L_min efficiency in summary subplot 2
+    mc_val_summary = mc_data.get('L_min_mc_scaled') if mc_data is not None else None
+    if mc_val_summary is not None and len(observed_loss) > 0:
+        obs_arr_mc = np.array(observed_loss)
+        eff_mc = np.where(obs_arr_mc > 0, mc_val_summary / obs_arr_mc, 0.0)
+        eff_mc_clipped = np.clip(eff_mc, 0, 1.5)
+        ax2.plot(epochs, eff_mc_clipped, color='darkorange', linestyle=':', linewidth=2,
+                 marker='o', markersize=1, label='Efficiency (MC)')
+
     ax2.axhline(y=1.0, color='red', linestyle='--', linewidth=2, label='100%')
     ax2.axhline(y=0.9, color='orange', linestyle=':', linewidth=1, alpha=0.7)
     ax2.set_xlabel('Epoch')
@@ -650,6 +699,11 @@ def create_summary_figure(
         if bellman_bwd is not None:
             ax3.axhline(y=bellman_bwd, color='darkviolet', linestyle='--', linewidth=2,
                         label=f'L_min Bellman (bwd) = {bellman_bwd:.4f}')
+    if mc_data is not None:
+        mc_val = mc_data.get('L_min_mc_scaled')
+        if mc_val is not None:
+            ax3.axhline(y=mc_val, color='darkorange', linestyle=':', linewidth=2,
+                        label=f'L_min MC = {mc_val:.4f}')
     ax3.set_ylabel('Loss Value')
     ax3.set_title('Loss Decomposition (Final)')
     ax3.legend(loc='upper right', fontsize=7)
@@ -709,8 +763,9 @@ def generate_all_theoretical_plots(
         print("  Warning: No epochs in tracker data, skipping plots")
         return plots
 
-    # Extract Bellman data if available
+    # Extract Bellman and MC data if available
     bellman_data = tracker_data.get('bellman_lmin', None)
+    mc_data = tracker_data.get('montecarlo_lmin', None)
 
     # 1. Loss vs L_min
     path = checkpoint_dir / 'loss_vs_L_min.png'
@@ -720,6 +775,7 @@ def generate_all_theoretical_plots(
         theoretical_L_min=tracker_data['theoretical_L_min'],
         save_path=str(path),
         bellman_lmin=bellman_data,
+        mc_lmin=mc_data,
     )
     plots['loss_vs_L_min'] = path
     plt.close()
@@ -732,6 +788,7 @@ def generate_all_theoretical_plots(
         save_path=str(path),
         bellman_lmin=bellman_data,
         observed_loss=tracker_data['observed_loss'],
+        mc_lmin=mc_data,
     )
     plots['training_efficiency'] = path
     plt.close()
@@ -744,6 +801,7 @@ def generate_all_theoretical_plots(
         gap=tracker_data['gap'][-1],
         save_path=str(path),
         bellman_lmin=bellman_data,
+        mc_lmin=mc_data,
     )
     plots['loss_decomposition'] = path
     plt.close()
