@@ -106,17 +106,17 @@ def plot_loss_vs_L_min(
         bellman_bwd = bellman_lmin.get('L_min_bellman', None)
         if bellman_fwd is not None:
             ax.axhline(y=bellman_fwd, color='green', linestyle='-.',
-                       label=f'L_min Bellman (forward) = {bellman_fwd:.6f}')
+                       linewidth=2, label=f'L_min Bellman (forward) = {bellman_fwd:.6f}')
         if bellman_bwd is not None:
             ax.axhline(y=bellman_bwd, color='darkviolet', linestyle='--',
-                       label=f'L_min Bellman (backward) = {bellman_bwd:.6f}')
+                       linewidth=2, label=f'L_min Bellman (backward) = {bellman_bwd:.6f}')
 
     # Plot MC L_min line if available
     if mc_lmin is not None:
         mc_val = mc_lmin.get('L_min_mc_scaled', None)
         if mc_val is not None:
             ax.axhline(y=mc_val, color='darkorange', linestyle=':',
-                       label=f'L_min MC (Method 2) = {mc_val:.6f}')
+                       linewidth=2, label=f'L_min MC (Method 2) = {mc_val:.6f}')
 
     # Fill area between L_min and observed (reducible gap)
     ax.fill_between(
@@ -357,7 +357,7 @@ def plot_loss_decomposition(
         )
 
     # Add horizontal line for L_min
-    ax.axhline(y=L_min, color='red', linestyle='--', label='L_min')
+    ax.axhline(y=L_min, color='red', linestyle='--', linewidth=2, label='L_min')
 
     # Add Bellman L_min lines if available
     if bellman_lmin is not None:
@@ -365,17 +365,17 @@ def plot_loss_decomposition(
         bellman_bwd = bellman_lmin.get('L_min_bellman')
         if bellman_fwd is not None:
             ax.axhline(y=bellman_fwd, color='green', linestyle='-.',
-                       label=f'L_min Bellman (fwd) = {bellman_fwd:.4f}')
+                       linewidth=2, label=f'L_min Bellman (fwd) = {bellman_fwd:.4f}')
         if bellman_bwd is not None:
             ax.axhline(y=bellman_bwd, color='darkviolet', linestyle='--',
-                       label=f'L_min Bellman (bwd) = {bellman_bwd:.4f}')
+                       linewidth=2, label=f'L_min Bellman (bwd) = {bellman_bwd:.4f}')
 
     # Add MC L_min line if available
     if mc_lmin is not None:
         mc_val = mc_lmin.get('L_min_mc_scaled')
         if mc_val is not None:
             ax.axhline(y=mc_val, color='darkorange', linestyle=':',
-                       label=f'L_min MC (Method 2) = {mc_val:.4f}')
+                       linewidth=2, label=f'L_min MC (Method 2) = {mc_val:.4f}')
 
     # Labels
     ax.set_ylabel('Loss Value')
