@@ -97,6 +97,10 @@ from controller_optimization.src.analysis.montecarlo_lmin import (
     MonteCarloLminResult,
     compute_montecarlo_lmin,
 )
+from controller_optimization.src.analysis.montecarlo_lmin_analytical import (
+    MonteCarloAnalyticalLminResult,
+    compute_montecarlo_lmin_analytical,
+)
 
 
 def parse_args():
@@ -1734,6 +1738,73 @@ def main(config=None):
                         print(f"\n  ✗ Monte Carlo L_min computation FAILED: {e}")
                         traceback.print_exc()
                         print()
+
+                # ── Monte Carlo L_min (Analytical) — uses closed-form F, not f_Theta ──
+                try:
+                    mc_ana_S = cfg.get('montecarlo_lmin', {}).get('S', 50)
+                    print(f"\n  ── Monte Carlo L_min (Analytical) ──")
+                    print(f"  S={mc_ana_S} perturbations per trajectory, "
+                          f"N={n_scenarios} trajectories")
+                    print(f"  Uses closed-form F = sum(w_bar_i * Q_i), NOT f_Theta")
+
+                    mc_ana_result = compute_montecarlo_lmin_analytical(
+                        process_chain=process_chain,
+                        surrogate=surrogate,
+                        n_scenarios=n_scenarios,
+                        S=mc_ana_S,
+                        loss_scale=loss_scale,
+                        verbose=True,
+                    )
+
+                    # Save analytical MC results
+                    mc_ana_result.save(checkpoint_dir / 'montecarlo_lmin_analytical_result.json')
+                    theoretical_data['montecarlo_lmin_analytical'] = mc_ana_result.to_dict()
+
+                    # ── Comparison table ──
+                    print(f"\n  {'─'*60}")
+                    print(f"  L_min COMPARISON TABLE (Analytical vs Surrogate)")
+                    print(f"  {'─'*60}")
+                    if 'bellman_lmin' in theoretical_data:
+                        bellman_fwd = theoretical_data['bellman_lmin']['L_min_forward']
+                        bellman_bwd = theoretical_data['bellman_lmin']['L_min_bellman']
+                        print(f"    Bellman L_min (forward):          {bellman_fwd:.6f}")
+                        print(f"    Bellman L_min (backward):         {bellman_bwd:.6f}")
+                    print(f"    MC L_min (analytical):            {mc_ana_result.L_min_mc_analytical_scaled:.6f} "
+                          f"± {mc_ana_result.std_error_scaled:.6f}")
+                    if 'montecarlo_lmin' in theoretical_data:
+                        mc_surr = theoretical_data['montecarlo_lmin']['L_min_mc_scaled']
+                        print(f"    MC L_min (surrogate):             {mc_surr:.6f}")
+                    if summary.get('final_loss', 0) > 0:
+                        obs_loss = summary['final_loss']
+                        print(f"    Observed loss (final):            {obs_loss:.6f}")
+
+                    # Sanity check: analytical MC should be close to Bellman
+                    if 'bellman_lmin' in theoretical_data:
+                        bellman_fwd = theoretical_data['bellman_lmin']['L_min_forward']
+                        ratio = mc_ana_result.L_min_mc_analytical_scaled / bellman_fwd if bellman_fwd > 0 else float('inf')
+                        discrepancy = abs(ratio - 1.0)
+                        agreement = discrepancy < 0.10
+                        print(f"    MC_analytical/Bellman ratio:      {ratio:.3f} "
+                              f"{'AGREE' if agreement else 'DISAGREE'}  "
+                              f"(discrepancy {discrepancy*100:.1f}%)")
+                        if not agreement:
+                            print(f"    WARNING: Large discrepancy between MC analytical and Bellman.")
+                            print(f"    Check that UP predictions and SCM config are consistent.")
+
+                    # Sanity check: L_min > 0
+                    assert mc_ana_result.L_min_mc_analytical > 0, (
+                        f"L_min_MC_analytical should be > 0, got {mc_ana_result.L_min_mc_analytical}"
+                    )
+
+                    print(f"  {'─'*60}")
+                    print(f"  Saved: {checkpoint_dir / 'montecarlo_lmin_analytical_result.json'}")
+                    print(f"  ✓ Monte Carlo L_min (Analytical) completed\n")
+
+                except Exception as e:
+                    import traceback
+                    print(f"\n  ✗ Monte Carlo L_min (Analytical) computation FAILED: {e}")
+                    traceback.print_exc()
+                    print()
 
                 # ── Generate plots and reports (after Bellman, so plots include Bellman lines) ──
                 print("  Generating theoretical analysis plots...")

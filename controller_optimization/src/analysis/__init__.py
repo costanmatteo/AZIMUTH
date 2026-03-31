@@ -45,6 +45,11 @@ from .montecarlo_lmin import (
     compute_montecarlo_lmin,
 )
 
+from .montecarlo_lmin_analytical import (
+    MonteCarloAnalyticalLminResult,
+    compute_montecarlo_lmin_analytical,
+)
+
 __all__ = [
     # Core analysis
     'TheoreticalLossComponents',
@@ -81,4 +86,7 @@ __all__ = [
     # Monte Carlo L_min (Method 2)
     'MonteCarloLminResult',
     'compute_montecarlo_lmin',
+    # Monte Carlo L_min (Analytical)
+    'MonteCarloAnalyticalLminResult',
+    'compute_montecarlo_lmin_analytical',
 ]

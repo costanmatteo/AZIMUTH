@@ -61,6 +61,7 @@ def plot_loss_vs_L_min(
     figsize: tuple = (14, 4.8),
     bellman_lmin: Optional[Dict[str, Any]] = None,
     mc_lmin: Optional[Dict[str, Any]] = None,
+    mc_lmin_analytical: Optional[Dict[str, Any]] = None,
 ) -> plt.Figure:
     """
     Plot observed loss and theoretical L_min over epochs.
@@ -81,6 +82,8 @@ def plot_loss_vs_L_min(
         figsize: Figure size
         bellman_lmin: Dict with Bellman results (keys: L_min_bellman, L_min_forward)
         mc_lmin: Dict with MC L_min results (keys: L_min_mc_scaled, std_error_scaled)
+        mc_lmin_analytical: Dict with analytical MC L_min results
+            (keys: L_min_mc_analytical_scaled, std_error_scaled)
 
     Returns:
         Matplotlib Figure object
@@ -111,12 +114,19 @@ def plot_loss_vs_L_min(
             ax.axhline(y=bellman_bwd, color='darkviolet', linestyle='--',
                        linewidth=1.2, label=f'L_min Bellman (backward) = {bellman_bwd:.6f}')
 
-    # Plot MC L_min line if available
+    # Plot MC L_min line if available (surrogate-based)
     if mc_lmin is not None:
         mc_val = mc_lmin.get('L_min_mc_scaled', None)
         if mc_val is not None:
             ax.axhline(y=mc_val, color='darkorange', linestyle=':',
-                       linewidth=1.2, label=f'L_min MC (Method 2) = {mc_val:.6f}')
+                       linewidth=1.2, label=f'L_min MC surrogate = {mc_val:.6f}')
+
+    # Plot MC L_min analytical line if available
+    if mc_lmin_analytical is not None:
+        mc_ana_val = mc_lmin_analytical.get('L_min_mc_analytical_scaled', None)
+        if mc_ana_val is not None:
+            ax.axhline(y=mc_ana_val, color='teal', linestyle='-.',
+                       linewidth=1.2, label=f'L_min MC analytical = {mc_ana_val:.6f}')
 
     # Fill area between L_min and observed (reducible gap)
     ax.fill_between(
@@ -137,6 +147,10 @@ def plot_loss_vs_L_min(
         mc_val = mc_lmin.get('L_min_mc_scaled')
         if mc_val is not None:
             all_vals = np.concatenate([all_vals, [mc_val]])
+    if mc_lmin_analytical is not None:
+        mc_ana_val = mc_lmin_analytical.get('L_min_mc_analytical_scaled')
+        if mc_ana_val is not None:
+            all_vals = np.concatenate([all_vals, [mc_ana_val]])
 
     # Labels and legend
     ax.set_xlabel('Epoch')
@@ -766,6 +780,7 @@ def generate_all_theoretical_plots(
     # Extract Bellman and MC data if available
     bellman_data = tracker_data.get('bellman_lmin', None)
     mc_data = tracker_data.get('montecarlo_lmin', None)
+    mc_ana_data = tracker_data.get('montecarlo_lmin_analytical', None)
 
     # 1. Loss vs L_min
     path = checkpoint_dir / 'loss_vs_L_min.png'
@@ -776,6 +791,7 @@ def generate_all_theoretical_plots(
         save_path=str(path),
         bellman_lmin=bellman_data,
         mc_lmin=mc_data,
+        mc_lmin_analytical=mc_ana_data,
     )
     plots['loss_vs_L_min'] = path
     plt.close()

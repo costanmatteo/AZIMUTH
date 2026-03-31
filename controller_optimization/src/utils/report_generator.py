@@ -828,6 +828,21 @@ def _page1(d, total_pages):
                 style = ST_VAL_G if agree else ST_VAL_R
                 lmin_rows.append(("MC/Bellman ratio",
                                   f"{ratio:.3f} {'(agree)' if agree else '(DISAGREE)'}", style))
+        # Add MC L_min analytical row if available
+        mc_ana_data = theo.get('montecarlo_lmin_analytical', {})
+        lmin_mc_ana = mc_ana_data.get('L_min_mc_analytical_scaled')
+        lmin_mc_ana_se = mc_ana_data.get('std_error_scaled')
+        if lmin_mc_ana is not None:
+            lmin_rows.append(
+                ("L_min MC (analytical)",
+                 f"{float(lmin_mc_ana):.6f} \u00b1 {float(lmin_mc_ana_se):.6f}"
+                 if lmin_mc_ana_se is not None else _tv(lmin_mc_ana)))
+            if lmin_fwd is not None and float(lmin_fwd) > 0:
+                ratio_ana = float(lmin_mc_ana) / float(lmin_fwd)
+                agree_ana = abs(ratio_ana - 1.0) < 0.10
+                style_ana = ST_VAL_G if agree_ana else ST_VAL_R
+                lmin_rows.append(("MC_analytical/Bellman",
+                                  f"{ratio_ana:.3f} {'(agree)' if agree_ana else '(DISAGREE)'}", style_ana))
     else:
         lmin_rows = [
             ("Var[F]",                   _tv(lmin_emp)),
@@ -1338,6 +1353,7 @@ def _page3(d):
         )
         bellman_data = theo.get('bellman_lmin', None)
         mc_data = theo.get('montecarlo_lmin', None)
+        mc_ana_data = theo.get('montecarlo_lmin_analytical', None)
 
         p = chk / 'loss_vs_L_min.png'
         plot_loss_vs_L_min(
@@ -1348,6 +1364,7 @@ def _page3(d):
             figsize=report_figsize,
             bellman_lmin=bellman_data,
             mc_lmin=mc_data,
+            mc_lmin_analytical=mc_ana_data,
         )
         plt.close()
 
