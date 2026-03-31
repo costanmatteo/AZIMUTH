@@ -165,6 +165,11 @@ echo "Output directory: $OUTPUT_DIR/$RUN_NAME"
 echo "=============================================="
 echo ""
 
+if [ -d "$OUTPUT_DIR/$RUN_NAME" ]; then
+    echo "Removing previous run data: $OUTPUT_DIR/$RUN_NAME"
+    rm -rf "$OUTPUT_DIR/$RUN_NAME"
+fi
+
 echo "Starting training..."
 echo "Command: python train_controller.py --output_dir $OUTPUT_DIR --run_name $RUN_NAME {fixed_args_str} $ARGS"
 echo ""
