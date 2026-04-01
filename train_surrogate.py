@@ -31,6 +31,7 @@ import numpy as np
 # Add paths
 REPO_ROOT = Path(__file__).parent
 sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(REPO_ROOT / 'causaliT'))
 
 # Check for required dependencies
 try:
