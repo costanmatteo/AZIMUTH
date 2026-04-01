@@ -40,6 +40,12 @@ from .bellman_lmin import (
     forward_simulation,
 )
 
+from .lambda_grad import (
+    LambdaGradResult,
+    compute_lambda_grad,
+    compute_lambda_grad_batched,
+)
+
 __all__ = [
     # Core analysis
     'TheoreticalLossComponents',
@@ -73,4 +79,8 @@ __all__ = [
     'compute_manifold',
     'backward_induction',
     'forward_simulation',
+    # Lambda_grad
+    'LambdaGradResult',
+    'compute_lambda_grad',
+    'compute_lambda_grad_batched',
 ]
