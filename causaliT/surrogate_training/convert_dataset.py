@@ -142,6 +142,24 @@ def _format_prot(trajectories, process_names):
         feature_dims.append(inp_dim + env_dim + out_dim + out_dim)
     max_features = max(feature_dims)
 
+    # Debug: show per-process feature structure
+    print(f"  ProT format: [inputs | env | outputs | var=0]")
+    print(f"  max_features={max_features} (zero-padded)")
+    for pname, fdim in zip(process_names, feature_dims):
+        s = sample[pname]
+        inp = s['inputs']
+        env = s.get('env')
+        out = s['outputs']
+        inp_d = inp.numel() if isinstance(inp, torch.Tensor) else np.array(inp).size
+        env_d = (env.numel() if isinstance(env, torch.Tensor) else np.array(env).size) if env is not None else 0
+        out_d = out.numel() if isinstance(out, torch.Tensor) else np.array(out).size
+        layout = f"inp={inp_d}"
+        if env_d > 0:
+            layout += f" + env={env_d}"
+        layout += f" + out={out_d} + var={out_d}"
+        print(f"    {pname}: [{layout}] = {fdim} features"
+              f"{' (padded to ' + str(max_features) + ')' if fdim < max_features else ''}")
+
     # Build arrays
     X = np.zeros((n_samples, n_processes, max_features), dtype=np.float32)
     Y = np.zeros((n_samples, 1, 1), dtype=np.float32)
