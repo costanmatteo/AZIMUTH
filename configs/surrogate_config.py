@@ -22,32 +22,43 @@ _CAUSALIT_CONFIG_DIR = Path(__file__).parent.parent / 'causaliT' / 'causaliT' / 
 
 SURROGATE_CONFIG = {
     # Which YAML to use as base template
-    'base_yaml': str(_CAUSALIT_CONFIG_DIR / 'config_proT.yaml'),
+    'base_yaml': str(_CAUSALIT_CONFIG_DIR / 'config_noise_aware_example.yaml'),
 
     # Overrides (same structure as the YAML)
-    # Only keys present here will be overwritten; everything else keeps the YAML default.
     'overrides': {
 
         'experiment': {
-            'd_model_set': 32,
-            'e_layers': 2,
-            'd_layers': 1,
-            'n_heads': 4,
-            'd_ff': 64,
-            'd_qk': 8,
-            'dropout': 0.3,
-            'lr': 0.0005,
-            'batch_size': 32,
+            'd_model_set': 24,
+            'dec_layers': 1,
+            'n_heads': 1,
+            'd_ff': 48,
+            'd_qk': 32,
+            'dropout': 0.0,
+            'lr': 0.001,
+            'batch_size': 64,
             'max_epochs': 200,
+        },
+
+        'model': {
+            'model_object': 'NoiseAwareSingleCausalLayer',
         },
 
         'training': {
             'k_fold': 3,
             'seed': 42,
+            'loss_fn': 'gaussian_nll',
+            'use_scheduler': True,
+            'save_ckpt_every_n_epochs': 50,
         },
 
         'data': {
             'dataset': 'azimuth_surrogate',
+        },
+
+        'evaluation': {
+            'functions': [
+                'eval_train_metrics',
+            ],
         },
     },
 }
