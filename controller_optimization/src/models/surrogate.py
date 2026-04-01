@@ -24,6 +24,8 @@ from typing import Dict, Optional, Union
 
 sys.path.insert(0, '/home/user/AZIMUTH')
 
+from scm_ds.compute_reliability import ReliabilityFunction
+
 
 class ProTSurrogate:
     """
@@ -102,6 +104,11 @@ class ProTSurrogate:
             if dynamic:
                 self._dynamic_configs = dynamic
                 self._process_order = order
+                self._reliability_fn = ReliabilityFunction(
+                    process_configs=dynamic,
+                    process_order=order,
+                    device=device,
+                )
 
         # Convert target trajectory to tensors (all scenarios)
         self.target_trajectory_tensors = {}
@@ -179,27 +186,12 @@ class ProTSurrogate:
         quality_scores = {}
 
         if self._dynamic_configs is not None:
-            # GENERIC PATH: usa target/scale calibrati con target adattivi inter-processo.
-            # τ_i = base_target + Σ coeff_j × (Y_j - baseline_j)
-            process_names = self._process_order if self._process_order else list(outputs.keys())
-
-            for process_name in process_names:
-                if process_name not in outputs:
-                    continue
-                output_val = outputs[process_name]
-                cfg = self._dynamic_configs.get(process_name, {})
-
-                # Calcola target adattivo
-                target = cfg.get('base_target', 0.0)
-                for upstream_name, coeff in cfg.get('adaptive_coefficients', {}).items():
-                    if upstream_name in outputs:
-                        baseline = cfg['adaptive_baselines'][upstream_name]
-                        target = target + coeff * (outputs[upstream_name] - baseline)
-
-                scale = cfg.get('scale', 1.0)
-                quality_scores[process_name] = torch.exp(
-                    -((output_val - target) ** 2) / max(scale, 1e-8)
-                )
+            # DYNAMIC PATH: delegate to ReliabilityFunction from scm_ds
+            rf_trajectory = {}
+            for process_name, sample in sampled_outputs.items():
+                rf_trajectory[process_name] = {'outputs_sampled': sample}
+            return self._reliability_fn.compute_reliability(
+                rf_trajectory, return_quality_scores=return_quality_scores)
         else:
             # LEGACY PATH: logica hardcoded per processi fisici
             adaptive_targets = {}
@@ -253,10 +245,7 @@ class ProTSurrogate:
         total_weight = 0.0
 
         for process_name, quality in quality_scores.items():
-            if self._dynamic_configs is not None:
-                weight = self._dynamic_configs.get(process_name, {}).get('weight', 1.0)
-            else:
-                weight = self.PROCESS_CONFIGS.get(process_name, {}).get('weight', 1.0)
+            weight = self.PROCESS_CONFIGS.get(process_name, {}).get('weight', 1.0)
             total_weighted_quality += quality * weight
             total_weight += weight
 
