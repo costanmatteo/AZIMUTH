@@ -9,8 +9,8 @@ Legge full_trajectories.pt e produce:
 
 Uso:
     python scm_ds/convert_azimuth_trajectories.py \
-        --input data/trajectories/full_trajectories.pt \
-        --output data/causalit_dataset/
+        --input scm_ds/data_predictor/trajectories/full_trajectories.pt \
+        --output scm_ds/causalit_dataset/
 """
 
 import argparse
@@ -219,7 +219,7 @@ def main():
     parser.add_argument(
         "--input",
         type=str,
-        default="data/trajectories/full_trajectories.pt",
+        default="scm_ds/data_predictor/trajectories/full_trajectories.pt",
         help="Path al file full_trajectories.pt",
     )
     parser.add_argument(

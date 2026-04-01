@@ -92,7 +92,7 @@ def build_loaders(inputs, outputs, batch_size, seed):
 def main():
     """
     Per ogni processo in PROCESSES:
-    1. Carica dataset da data/per_process/{process_name}_dataset.pt
+    1. Carica dataset da scm_ds/data_predictor/per_process/{process_name}_dataset.pt
     2. Costruisce DataLoader (preprocessing, split, scaling)
     3. Chiama train_single_process() con i DataLoader
     4. Raccoglie metriche
@@ -126,7 +126,7 @@ def main():
     parser.add_argument(
         '--data_dir',
         type=str,
-        default='data/',
+        default='scm_ds/data_predictor/',
         help='Directory containing per-process datasets from generate_dataset.py'
     )
 

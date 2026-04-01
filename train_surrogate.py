@@ -502,7 +502,7 @@ def main():
 
         dataset_path = (args.trajectories_path
                         or config['data'].get('dataset_path',
-                                              'data/trajectories/full_trajectories.pt'))
+                                              'scm_ds/data_predictor/trajectories/full_trajectories.pt'))
         print("\n[1/4] Converting existing dataset...")
         convert_trajectories_to_causalit_format(
             trajectories_path=dataset_path,

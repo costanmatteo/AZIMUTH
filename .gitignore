@@ -57,4 +57,5 @@ Thumbs.db
 *.bak
 reports/
 data/
+scm_ds/data_predictor/
 scm_ds/causalit_dataset/

@@ -371,7 +371,7 @@ def main():
     # Resolve defaults from config
     model_type = args.model_type or config['model'].get('casualit_model', 'proT')
     trajectories_path = args.trajectories_path or config['data'].get(
-        'dataset_path', 'data/trajectories/full_trajectories.pt')
+        'dataset_path', 'scm_ds/data_predictor/trajectories/full_trajectories.pt')
     train_frac = args.train_frac or config['data'].get('train_frac', 0.70)
     val_frac = args.val_frac or config['data'].get('val_frac', 0.15)
     test_frac = args.test_frac or config['data'].get('test_frac', 0.15)
