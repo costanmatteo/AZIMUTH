@@ -403,6 +403,14 @@ def main():
     print(f"  S={s_arr.shape}, X={x_arr.shape}, Y={y_arr.shape}")
     print(f"  Saved to: {causalit_dir}/")
 
+    # Copy converted data to causaliT/data/ for training
+    import shutil
+    causalit_data_dir = REPO_ROOT / 'causaliT' / 'data' / 'azimuth_surrogate'
+    if causalit_data_dir.exists():
+        shutil.rmtree(causalit_data_dir)
+    shutil.copytree(causalit_dir, causalit_data_dir)
+    print(f"  Copied to: {causalit_data_dir}/ (ready for causaliT training)")
+
     # ── Step 5: Summary ─────────────────────────────────────────────────────
     print(f"\n[5/5] Dataset generation complete!")
     print("\n" + "=" * 70)
@@ -413,11 +421,12 @@ def main():
         print(f"  {per_process_dir / f'{pname}_dataset.pt'}")
     print(f"  {traj_path}")
     print(f"  {causalit_dir}/ (causaliT format)")
+    print(f"  {causalit_data_dir}/ (causaliT training data)")
 
     print("\n" + "=" * 70)
     print("STEP 0 COMPLETED SUCCESSFULLY!")
     print("=" * 70)
-    print(f"  {causalit_dir}/")
+    print(f"  causaliT data ready at: {causalit_data_dir}/")
     print("\nNext step: Run train_predictor.py to train uncertainty predictors")
 
 
