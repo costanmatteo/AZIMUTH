@@ -139,7 +139,7 @@ training:
 
   batch_size: ${experiment.batch_size}
   max_epochs: ${experiment.max_epochs}
-  k_fold: 5
+  k_fold: 2
   seed: 42
   save_ckpt_every_n_epochs: 50
 
