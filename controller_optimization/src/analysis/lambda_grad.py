@@ -246,6 +246,7 @@ def compute_lambda_grad_batched(
     accum_grad_sq = {name: 0.0 for name in process_names}
     accum_sigma_sq = {name: 0.0 for name in process_names}
     accum_total = 0.0
+    total_samples = 0   # count actual samples, not trajectory dicts
 
     for batch_idx, start in enumerate(range(0, N, batch_size)):
         end = min(start + batch_size, N)
@@ -260,6 +261,11 @@ def compute_lambda_grad_batched(
             batch_trajs, process_names, device,
         )
 
+        # Determine actual sample count from stacked tensor shape
+        ref_name = process_names[0]
+        batch_samples = batched_traj[ref_name]['outputs_mean'].shape[0]
+        total_samples += batch_samples
+
         # Retrieve or recompute σ²
         if predictors is not None and process_chain is not None:
             sigma_sq_tensors = _recompute_sigma_sq(
@@ -267,7 +273,7 @@ def compute_lambda_grad_batched(
             )
 
         if verbose:
-            print(f"  [Step 1] Stacked σ²_ψt:")
+            print(f"  [Step 1] Stacked σ²_ψt (batch_samples={batch_samples}):")
             for name in process_names:
                 s2 = sigma_sq_tensors[name]
                 print(f"    {name}: shape={list(s2.shape)}, "
@@ -287,7 +293,7 @@ def compute_lambda_grad_batched(
                       f"mean={o_t.mean().item():.6f}, std={o_t.std().item():.6f}")
 
         # Forward through surrogate → F̂ per sample
-        F_hat = surrogate.compute_reliability(grad_traj)  # (B,) or scalar
+        F_hat = surrogate.compute_reliability(grad_traj)  # (B_samples,) or scalar
         if F_hat.dim() == 0:
             F_hat = F_hat.unsqueeze(0)
 
@@ -298,11 +304,11 @@ def compute_lambda_grad_batched(
                   f"min={F_hat.min().item():.6f}, max={F_hat.max().item():.6f}")
 
         # Backward: ∂F̂/∂o_t for all stages simultaneously
-        # Sum over batch so we get per-element grads via the chain rule
+        # .sum() so gradients are NOT scaled by 1/B — each sample gets its true ∂F̂^(k)/∂o_t^(k)
         F_hat.sum().backward()
 
         if verbose:
-            print(f"  [Step 4] ∂F̂/∂o_t gradients:")
+            print(f"  [Step 4] ∂F̂/∂o_t gradients (via .sum().backward()):")
             for name in process_names:
                 grad = output_tensors[name].grad
                 if grad is None:
@@ -314,19 +320,21 @@ def compute_lambda_grad_batched(
 
         batch_total = 0.0
         for name in process_names:
-            o_t = output_tensors[name]              # (B, output_dim)
-            grad = o_t.grad                         # (B, output_dim)
-            s2 = sigma_sq_tensors[name]             # (B, output_dim)
+            o_t = output_tensors[name]              # (B_samples, output_dim)
+            grad = o_t.grad                         # (B_samples, output_dim)
+            s2 = sigma_sq_tensors[name]             # (B_samples, output_dim)
 
             if grad is None:
                 if verbose:
                     print(f"    {name}: grad=None → skipped")
                 continue
 
-            grad_sq_vals = (grad ** 2).sum(dim=-1)  # (B,)
-            s2_vals = s2.sum(dim=-1)                # (B,)
-            contribs = ((grad ** 2) * s2).sum(dim=-1)  # (B,)
+            # Per-sample contributions: sum over output_dim, keep batch dim
+            contribs = ((grad ** 2) * s2).sum(dim=-1)  # (B_samples,)
+            grad_sq_vals = (grad ** 2).sum(dim=-1)     # (B_samples,)
+            s2_vals = s2.sum(dim=-1)                   # (B_samples,)
 
+            # Sum over samples (will divide by total_samples at the end)
             accum_contribution[name] += contribs.sum().item()
             accum_grad_sq[name] += grad_sq_vals.sum().item()
             accum_sigma_sq[name] += s2_vals.sum().item()
@@ -334,18 +342,20 @@ def compute_lambda_grad_batched(
             batch_total += contribs.sum().item()
 
         if verbose:
-            print(f"  [Step 5] Batch {batch_idx} total contribution: {batch_total:.6e}")
+            print(f"  [Step 5] Batch {batch_idx} total (sum over {batch_samples} samples): "
+                  f"{batch_total:.6e}")
 
-    per_stage = {n: accum_contribution[n] / N for n in process_names}
-    per_stage_grad_sq = {n: accum_grad_sq[n] / N for n in process_names}
-    per_stage_sigma_sq = {n: accum_sigma_sq[n] / N for n in process_names}
-    lambda_grad = accum_total / N
+    # Average over total number of samples (not trajectory dicts)
+    per_stage = {n: accum_contribution[n] / total_samples for n in process_names}
+    per_stage_grad_sq = {n: accum_grad_sq[n] / total_samples for n in process_names}
+    per_stage_sigma_sq = {n: accum_sigma_sq[n] / total_samples for n in process_names}
+    lambda_grad = accum_total / total_samples
 
     if verbose:
         print(f"\n{'─'*70}")
         print(f"  Λ_grad DEBUG — FINAL RESULTS (batched)")
         print(f"{'─'*70}")
-        print(f"  Λ_grad(D) = {lambda_grad:.6e}")
+        print(f"  Λ_grad(D) = {lambda_grad:.6e}  (total_samples={total_samples})")
         print(f"")
         print(f"  {'Stage':<14} {'Contribution':>14} {'(∂F̂/∂o)²':>14} {'σ²_ψt':>14} {'% total':>10}")
         print(f"  {'─'*14} {'─'*14} {'─'*14} {'─'*14} {'─'*10}")
@@ -444,24 +454,33 @@ def _process_single_trajectory(
     # ── Step 3: Forward through surrogate → F̂ ───────────────────────────
     F_hat = surrogate.compute_reliability(grad_traj)
     F_hat_raw = F_hat.clone().detach()
+
+    # Determine batch size for averaging
+    # F_hat may be scalar (B=1) or vector (B samples)
     if F_hat.dim() > 0:
-        F_hat = F_hat.mean()  # collapse to scalar if batched
+        batch_size = F_hat.shape[0]
+    else:
+        batch_size = 1
 
     if verbose:
         if F_hat_raw.dim() > 0:
             print(f"  [Step 3] F̂ = surrogate(τ): shape={list(F_hat_raw.shape)}, "
+                  f"batch_size={batch_size}, "
                   f"mean={F_hat_raw.mean().item():.6f}, "
                   f"std={F_hat_raw.std().item():.6f}, "
                   f"min={F_hat_raw.min().item():.6f}, max={F_hat_raw.max().item():.6f}")
         else:
-            print(f"  [Step 3] F̂ = surrogate(τ): {F_hat.item():.6f}  (scalar)")
-        print(f"           F̂ (scalar for backward): {F_hat.item():.6f}")
+            print(f"  [Step 3] F̂ = surrogate(τ): {F_hat.item():.6f}  (scalar, batch_size=1)")
 
     # ── Step 4: Backward → ∂F̂/∂o_t for all t ────────────────────────────
-    F_hat.backward()
+    # Use .sum() NOT .mean() so that gradients are NOT scaled by 1/B.
+    # With .sum(): ∂(Σ_k F̂^(k))/∂o_t^(k) = ∂F̂^(k)/∂o_t^(k) (correct per-sample grad)
+    # With .mean(): gradients would be 1/B too small → (∂F̂/∂o)² is 1/B² too small.
+    F_scalar = F_hat.sum() if F_hat.dim() > 0 else F_hat
+    F_scalar.backward()
 
     if verbose:
-        print(f"  [Step 4] ∂F̂/∂o_t (gradients after backward):")
+        print(f"  [Step 4] ∂F̂/∂o_t (via .sum().backward() — unscaled per-sample grads):")
         for name in process_names:
             grad = output_tensors[name].grad
             if grad is None:
@@ -474,22 +493,35 @@ def _process_single_trajectory(
                       f"norm={grad.norm().item():.6e}")
 
     # ── Step 5: Accumulate per-stage ─────────────────────────────────────
+    # grad has shape (B, output_dim) with correct per-sample values.
+    # Compute per-sample contributions, then AVERAGE over B.
     for name in process_names:
-        grad = output_tensors[name].grad       # (batch, output_dim) or (output_dim,)
+        grad = output_tensors[name].grad       # (B, output_dim) or (output_dim,)
         s2 = sigma_sq_per_stage[name]
 
         if grad is None:
             # Surrogate does not depend on this stage's output
             contribution[name] = 0.0
             grad_sq_out[name] = 0.0
-            sigma_sq_out[name] = s2.sum().item()
+            sigma_sq_out[name] = s2.mean().item() if s2.dim() > 0 else s2.item()
             if verbose:
                 print(f"    {name}: grad=None → contribution=0")
             continue
 
-        g2 = (grad ** 2).sum().item()
-        s2_val = s2.sum().item()
-        contrib = ((grad ** 2) * s2).sum().item()
+        # Per-sample: sum over output_dim, then average over batch
+        # (grad**2 * s2) shape: (B, output_dim) → sum dim=-1 → (B,) → mean → scalar
+        if grad.dim() > 1:
+            per_sample_contrib = ((grad ** 2) * s2).sum(dim=-1)   # (B,)
+            per_sample_g2 = (grad ** 2).sum(dim=-1)               # (B,)
+            per_sample_s2 = s2.sum(dim=-1)                        # (B,)
+            contrib = per_sample_contrib.mean().item()
+            g2 = per_sample_g2.mean().item()
+            s2_val = per_sample_s2.mean().item()
+        else:
+            # Single sample, no batch dim
+            contrib = ((grad ** 2) * s2).sum().item()
+            g2 = (grad ** 2).sum().item()
+            s2_val = s2.sum().item()
 
         contribution[name] = contrib
         grad_sq_out[name] = g2
@@ -497,7 +529,7 @@ def _process_single_trajectory(
 
     if verbose:
         traj_total = sum(contribution.values())
-        print(f"  [Step 5] Per-stage contributions (this trajectory):")
+        print(f"  [Step 5] Per-stage contributions (batch-averaged, B={batch_size}):")
         print(f"    {'Stage':<14} {'(∂F̂/∂o)²·σ²':>14} {'(∂F̂/∂o)²':>14} {'σ²_ψt':>14}")
         print(f"    {'─'*14} {'─'*14} {'─'*14} {'─'*14}")
         for name in process_names:
@@ -760,148 +792,106 @@ def run_lambda_grad_diagnostics(
     print(f"  └──────────────────────────────────────────────────────────")
 
     # ── Check 4 — Gradient finite-difference validation ─────────────────
-    print(f"\n  ┌─ CHECK 4: Gradient vs finite-difference (last stage) ─────")
+    print(f"\n  ┌─ CHECK 4: Gradient vs finite-difference (single sample) ──")
+    print(f"  │ Uses sample [0] only to avoid batch-averaging confusion.")
     print(f"  │ Perturb o_t by ±ε={epsilon}, compare ΔF̂/(2ε) vs ∂F̂/∂o_t")
     print(f"  │")
 
-    target_stage = process_names[-1]
     traj = trajectories[0]  # use first trajectory
 
-    # --- Autograd gradient ---
-    output_tensors: Dict[str, torch.Tensor] = {}
-    grad_traj: Dict[str, Dict[str, torch.Tensor]] = {}
+    # Extract single sample [0] from the batch for clean comparison
+    def _single_sample(data_dict, idx=0):
+        """Extract sample idx from a stage dict, keeping 2-D shape [1, dim]."""
+        out = {}
+        for k, v in data_dict.items():
+            if isinstance(v, torch.Tensor) and v.dim() > 1:
+                out[k] = v[idx:idx+1].detach().to(device)
+            elif isinstance(v, torch.Tensor):
+                out[k] = v.unsqueeze(0).detach().to(device)
+            else:
+                out[k] = v
+        return out
+
+    single_traj = {name: _single_sample(traj[name]) for name in process_names}
+
+    # --- Autograd gradient on single sample ---
+    output_tensors_s: Dict[str, torch.Tensor] = {}
+    grad_traj_s: Dict[str, Dict[str, torch.Tensor]] = {}
     for name in process_names:
-        data = traj[name]
+        data = single_traj[name]
         o_t_source = data.get('outputs_sampled', data['outputs_mean'])
-        o_t = o_t_source.detach().clone().to(device).requires_grad_(True)
-        output_tensors[name] = o_t
-        grad_traj[name] = {
-            'inputs': data['inputs'].detach().to(device),
+        o_t = o_t_source.detach().clone().requires_grad_(True)
+        output_tensors_s[name] = o_t
+        grad_traj_s[name] = {
+            'inputs': data['inputs'],
             'outputs_mean': o_t,
-            'outputs_var': data['outputs_var'].detach().to(device),
+            'outputs_var': data['outputs_var'],
             'outputs_sampled': o_t,
         }
 
-    F_hat = surrogate.compute_reliability(grad_traj)
-    if F_hat.dim() > 0:
-        F_hat = F_hat.mean()
-    F_hat_val = F_hat.item()
-    F_hat.backward()
+    F_hat_s = surrogate.compute_reliability(grad_traj_s)
+    # For a single sample F̂ may be scalar or [1] — both fine
+    if F_hat_s.dim() > 0:
+        F_hat_s = F_hat_s.squeeze()
+    F_hat_val = F_hat_s.item()
+    F_hat_s.backward()
 
-    autograd = output_tensors[target_stage].grad  # (batch, output_dim)
-    if autograd is None:
-        print(f"  │   ⚠ grad is None for {target_stage} — surrogate does not depend on it")
-        print(f"  └──────────────────────────────────────────────────────────")
-        print(f"{'='*75}\n")
-        return
+    # --- Finite-difference and comparison for each stage ---
+    for check_stage in process_names:
+        ag = output_tensors_s[check_stage].grad
+        if ag is None:
+            print(f"  │   {check_stage}: grad=None — surrogate independent of this output")
+            continue
+        ag_val = ag.squeeze().item() if ag.numel() == 1 else ag.mean().item()
 
-    # --- Finite difference: F̂(o+ε) ---
-    grad_traj_plus: Dict[str, Dict[str, torch.Tensor]] = {}
-    for name in process_names:
-        data = traj[name]
-        o_t_source = data.get('outputs_sampled', data['outputs_mean'])
-        o_t_p = o_t_source.detach().clone().to(device)
-        if name == target_stage:
-            o_t_p = o_t_p + epsilon
-        grad_traj_plus[name] = {
-            'inputs': data['inputs'].detach().to(device),
-            'outputs_mean': o_t_p,
-            'outputs_var': data['outputs_var'].detach().to(device),
-            'outputs_sampled': o_t_p,
-        }
-
-    with torch.no_grad():
-        F_plus = surrogate.compute_reliability(grad_traj_plus)
-        if F_plus.dim() > 0:
-            F_plus = F_plus.mean()
-
-    # --- Finite difference: F̂(o-ε) ---
-    grad_traj_minus: Dict[str, Dict[str, torch.Tensor]] = {}
-    for name in process_names:
-        data = traj[name]
-        o_t_source = data.get('outputs_sampled', data['outputs_mean'])
-        o_t_m = o_t_source.detach().clone().to(device)
-        if name == target_stage:
-            o_t_m = o_t_m - epsilon
-        grad_traj_minus[name] = {
-            'inputs': data['inputs'].detach().to(device),
-            'outputs_mean': o_t_m,
-            'outputs_var': data['outputs_var'].detach().to(device),
-            'outputs_sampled': o_t_m,
-        }
-
-    with torch.no_grad():
-        F_minus = surrogate.compute_reliability(grad_traj_minus)
-        if F_minus.dim() > 0:
-            F_minus = F_minus.mean()
-
-    fd_grad = (F_plus.item() - F_minus.item()) / (2 * epsilon)
-
-    # Compare element-wise (use mean of autograd over batch for comparison)
-    autograd_mean = autograd.mean().item()
-    abs_err = abs(fd_grad - autograd_mean)
-    rel_err = abs_err / (abs(autograd_mean) + 1e-12) * 100
-
-    print(f"  │   Stage: {target_stage}")
-    print(f"  │   F̂(o)        = {F_hat_val:.8f}")
-    print(f"  │   F̂(o+ε)      = {F_plus.item():.8f}")
-    print(f"  │   F̂(o−ε)      = {F_minus.item():.8f}")
-    print(f"  │   FD gradient  = (F̂⁺ − F̂⁻)/(2ε) = {fd_grad:.8e}")
-    print(f"  │   Autograd     = mean(∂F̂/∂o_t)   = {autograd_mean:.8e}")
-    print(f"  │   Abs error    = {abs_err:.8e}")
-    print(f"  │   Rel error    = {rel_err:.2f}%")
-    if rel_err < 5.0:
-        print(f"  │   → ✓ Gradient is correct")
-    elif rel_err < 20.0:
-        print(f"  │   → ~ Acceptable (non-linearity or batch averaging)")
-    else:
-        print(f"  │   → ⚠ MISMATCH — check surrogate differentiability")
-
-    # Also check a couple other stages with the same method
-    for check_stage in process_names[:-1]:
-        ot_check: Dict[str, Dict[str, torch.Tensor]] = {}
+        # F̂(o + ε)
+        traj_p: Dict[str, Dict[str, torch.Tensor]] = {}
+        traj_m: Dict[str, Dict[str, torch.Tensor]] = {}
         for name in process_names:
-            data = traj[name]
-            o_src = data.get('outputs_sampled', data['outputs_mean'])
-            o_val = o_src.detach().clone().to(device)
-            if name == check_stage:
-                o_val = o_val + epsilon
-            ot_check[name] = {
-                'inputs': data['inputs'].detach().to(device),
-                'outputs_mean': o_val,
-                'outputs_var': data['outputs_var'].detach().to(device),
-                'outputs_sampled': o_val,
+            data = single_traj[name]
+            o_src = data.get('outputs_sampled', data['outputs_mean']).detach().clone()
+            o_p = o_src + epsilon if name == check_stage else o_src.clone()
+            o_m = o_src - epsilon if name == check_stage else o_src.clone()
+            traj_p[name] = {
+                'inputs': data['inputs'], 'outputs_mean': o_p,
+                'outputs_var': data['outputs_var'], 'outputs_sampled': o_p,
             }
-        with torch.no_grad():
-            Fp = surrogate.compute_reliability(ot_check)
-            if Fp.dim() > 0:
-                Fp = Fp.mean()
-
-        ot_check2: Dict[str, Dict[str, torch.Tensor]] = {}
-        for name in process_names:
-            data = traj[name]
-            o_src = data.get('outputs_sampled', data['outputs_mean'])
-            o_val = o_src.detach().clone().to(device)
-            if name == check_stage:
-                o_val = o_val - epsilon
-            ot_check2[name] = {
-                'inputs': data['inputs'].detach().to(device),
-                'outputs_mean': o_val,
-                'outputs_var': data['outputs_var'].detach().to(device),
-                'outputs_sampled': o_val,
+            traj_m[name] = {
+                'inputs': data['inputs'], 'outputs_mean': o_m,
+                'outputs_var': data['outputs_var'], 'outputs_sampled': o_m,
             }
-        with torch.no_grad():
-            Fm = surrogate.compute_reliability(ot_check2)
-            if Fm.dim() > 0:
-                Fm = Fm.mean()
 
-        fd = (Fp.item() - Fm.item()) / (2 * epsilon)
-        ag = output_tensors[check_stage].grad
-        ag_mean = ag.mean().item() if ag is not None else 0.0
-        err = abs(fd - ag_mean) / (abs(ag_mean) + 1e-12) * 100
-        status = "✓" if err < 5.0 else ("~" if err < 20.0 else "⚠")
-        print(f"  │   {check_stage}: FD={fd:.6e}, autograd={ag_mean:.6e}, "
-              f"rel_err={err:.1f}% {status}")
+        with torch.no_grad():
+            Fp = surrogate.compute_reliability(traj_p)
+            Fm = surrogate.compute_reliability(traj_m)
+            if Fp.dim() > 0: Fp = Fp.squeeze()
+            if Fm.dim() > 0: Fm = Fm.squeeze()
+
+        fd_val = (Fp.item() - Fm.item()) / (2 * epsilon)
+        abs_err = abs(fd_val - ag_val)
+        rel_err = abs_err / (abs(ag_val) + 1e-12) * 100
+
+        if check_stage == process_names[-1]:
+            # Detailed output for last stage
+            print(f"  │   Stage: {check_stage}")
+            print(f"  │   F̂(o)        = {F_hat_val:.8f}")
+            print(f"  │   F̂(o+ε)      = {Fp.item():.8f}")
+            print(f"  │   F̂(o−ε)      = {Fm.item():.8f}")
+            print(f"  │   FD gradient  = (F̂⁺ − F̂⁻)/(2ε) = {fd_val:.8e}")
+            print(f"  │   Autograd     = ∂F̂/∂o_t         = {ag_val:.8e}")
+            print(f"  │   Abs error    = {abs_err:.8e}")
+            print(f"  │   Rel error    = {rel_err:.2f}%")
+            if rel_err < 5.0:
+                print(f"  │   → ✓ Gradient is correct")
+            elif rel_err < 20.0:
+                print(f"  │   → ~ Acceptable (non-linearity at this ε)")
+            else:
+                print(f"  │   → ⚠ MISMATCH — check surrogate differentiability")
+        else:
+            # Compact output for other stages
+            status = "✓" if rel_err < 5.0 else ("~" if rel_err < 20.0 else "⚠")
+            print(f"  │   {check_stage}: FD={fd_val:.6e}, autograd={ag_val:.6e}, "
+                  f"rel_err={rel_err:.1f}% {status}")
 
     print(f"  └──────────────────────────────────────────────────────────")
     print(f"{'='*75}\n")
