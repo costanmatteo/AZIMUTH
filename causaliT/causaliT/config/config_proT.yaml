@@ -107,7 +107,7 @@ model:
     activation: "gelu"
     norm: "batch"
     use_final_norm: True
-    device: "cuda"
+    device: "cpu"
 
     out_dim: 1
     d_ff: ${experiment.d_ff}
