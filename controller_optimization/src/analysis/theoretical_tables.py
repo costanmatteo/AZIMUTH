@@ -269,6 +269,55 @@ def generate_validation_table(
     return "\n".join(lines)
 
 
+def generate_lambda_grad_table(
+    lambda_grad_data: Dict[str, Any],
+) -> str:
+    """
+    Generate table showing Λ_grad per-stage decomposition.
+
+    Args:
+        lambda_grad_data: Dict from LambdaGradResult.to_dict()
+
+    Returns formatted ASCII table string.
+    """
+    lines = []
+    lines.append("")
+    lines.append("TABELLA Λ_grad — Approssimazione Delta Method di L_min")
+    lines.append("=" * 75)
+
+    lg_val = lambda_grad_data.get('lambda_grad', 0)
+    n_traj = lambda_grad_data.get('n_trajectories', 0)
+    lines.append(f"Λ_grad(D) = {format_value(lg_val)}  (N = {n_traj} traiettorie)")
+    lines.append("")
+
+    lines.append(f"{'Stage':<15} {'Contributo':>14} {'(∂F̂/∂o)²':>14} {'σ²_ψt':>14}")
+    lines.append("-" * 75)
+
+    per_stage = lambda_grad_data.get('per_stage', {})
+    per_stage_grad_sq = lambda_grad_data.get('per_stage_grad_sq', {})
+    per_stage_sigma_sq = lambda_grad_data.get('per_stage_sigma_sq', {})
+    process_names = lambda_grad_data.get('process_names', list(per_stage.keys()))
+
+    for name in process_names:
+        contrib = per_stage.get(name, 0)
+        g2 = per_stage_grad_sq.get(name, 0)
+        s2 = per_stage_sigma_sq.get(name, 0)
+        lines.append(
+            f"{name:<15} {format_value(contrib):>14} "
+            f"{format_value(g2):>14} {format_value(s2):>14}"
+        )
+
+    lines.append("-" * 75)
+    lines.append(f"{'TOTALE':<15} {format_value(lg_val):>14}")
+    lines.append("=" * 75)
+    lines.append("")
+    lines.append("Λ_grad ≈ L_min (approssimazione al primo ordine via Delta Method)")
+    lines.append("Contributo_t = (∂F̂/∂o_t)² · σ²_ψt  — amplificazione del rumore allo stage t")
+    lines.append("")
+
+    return "\n".join(lines)
+
+
 def generate_full_report(
     tracker_data: Dict[str, Any],
     process_params: Optional[Dict[str, Dict[str, float]]] = None,
@@ -324,6 +373,11 @@ def generate_full_report(
 
     # Validation table
     lines.append(generate_validation_table(summary, z_score_E_F, z_score_Var_F))
+
+    # Lambda_grad table (if available)
+    lambda_grad_data = tracker_data.get('lambda_grad')
+    if lambda_grad_data is not None:
+        lines.append(generate_lambda_grad_table(lambda_grad_data))
 
     # Footer
     lines.append("")

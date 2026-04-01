@@ -730,6 +730,9 @@ def _page1(d, total_pages):
     lmin_fwd  = bellman.get('L_min_forward')  # forward MC (primary)
     lmin_fse  = bellman.get('L_min_forward_se')
     viol_bel  = bellman.get('n_violations', viol)
+    # Lambda_grad (Delta Method approximation of L_min)
+    lg_data   = theo.get('lambda_grad', {})
+    lg_val    = lg_data.get('lambda_grad')  # scalar Λ_grad(D)
     # Compute gap and efficiency using forward MC L_min (primary)
     if lmin_fwd is not None and final_total != '\u2014':
         try:
@@ -792,6 +795,7 @@ def _page1(d, total_pages):
              f"{float(lmin_fwd):.6f} \u00b1 {float(lmin_fse):.6f}"
              if lmin_fse is not None else _tv(lmin_fwd)),
             ("L_min Bellman (backward)",  _tv(lmin_bel) if lmin_bel is not None else '\u2014'),
+            ("\u039b_grad (Delta Method)", _tv(lg_val) if lg_val is not None else '\u2014'),
             ("Gap (obs \u2212 L_min fwd)",  _tv(gap_bel) if gap_bel is not None else '\u2014'),
             ("Efficiency (forward)",
              f"{eff_bel:.1f}%" if eff_bel is not None else '\u2014',
@@ -805,6 +809,7 @@ def _page1(d, total_pages):
     else:
         lmin_rows = [
             ("Var[F]",                   _tv(lmin_emp)),
+            ("\u039b_grad (Delta Method)", _tv(lg_val) if lg_val is not None else '\u2014'),
             ("Gap (reducible)",          _tv(gap_red)),
             ("Efficiency",               f"{float(eff)*100:.1f}%" if eff != '\u2014' else '\u2014',
              ST_VAL_G),
@@ -1311,6 +1316,7 @@ def _page3(d):
             plot_loss_vs_L_min, plot_efficiency_over_time, plot_loss_decomposition,
         )
         bellman_data = theo.get('bellman_lmin', None)
+        lambda_grad_data = theo.get('lambda_grad', None)
 
         p = chk / 'loss_vs_L_min.png'
         plot_loss_vs_L_min(
@@ -1320,6 +1326,7 @@ def _page3(d):
             save_path=str(p),
             figsize=report_figsize,
             bellman_lmin=bellman_data,
+            lambda_grad=lambda_grad_data,
         )
         plt.close()
 
@@ -1331,6 +1338,7 @@ def _page3(d):
             figsize=report_figsize,
             bellman_lmin=bellman_data,
             observed_loss=theo['observed_loss'],
+            lambda_grad=lambda_grad_data,
         )
         plt.close()
 
@@ -1342,6 +1350,7 @@ def _page3(d):
             save_path=str(p),
             figsize=report_figsize,
             bellman_lmin=bellman_data,
+            lambda_grad=lambda_grad_data,
         )
         plt.close()
 

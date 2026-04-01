@@ -93,6 +93,9 @@ from controller_optimization.src.analysis.bellman_lmin import (
     BellmanConfig,
     compute_bellman_lmin,
 )
+from controller_optimization.src.analysis.lambda_grad import (
+    compute_lambda_grad,
+)
 
 
 def parse_args():
@@ -1670,6 +1673,47 @@ def main(config=None):
                     print(f"  Full traceback:")
                     traceback.print_exc()
                     print()
+
+                # ── Lambda_grad (Delta Method approximation of L_min) ──
+                try:
+                    print(f"\n  ── Λ_grad (Delta Method) ──")
+                    # Collect trajectories from the process chain (reuse L_min sampling)
+                    n_lg_samples = min(200, samples_per_scenario * n_scenarios)
+                    lg_trajectories = []
+                    process_chain.eval()
+                    with torch.no_grad():
+                        for scenario_idx in range(n_scenarios):
+                            trajectory = process_chain.forward(
+                                batch_size=n_lg_samples // n_scenarios,
+                                scenario_idx=scenario_idx
+                            )
+                            lg_trajectories.append(trajectory)
+
+                    lambda_grad_result = compute_lambda_grad(
+                        trajectories=lg_trajectories,
+                        surrogate=surrogate,
+                        device=device,
+                    )
+
+                    theoretical_data['lambda_grad'] = lambda_grad_result.to_dict()
+
+                    # Apply loss_scale to match other L_min metrics
+                    if loss_scale != 1.0:
+                        theoretical_data['lambda_grad']['lambda_grad'] *= loss_scale
+                        for name in lambda_grad_result.process_names:
+                            theoretical_data['lambda_grad']['per_stage'][name] *= loss_scale
+
+                    print(f"  Λ_grad(D) = {theoretical_data['lambda_grad']['lambda_grad']:.6f}  "
+                          f"(N = {lambda_grad_result.n_trajectories} trajectories)")
+                    for name in lambda_grad_result.process_names:
+                        contrib = theoretical_data['lambda_grad']['per_stage'][name]
+                        print(f"    {name}: {contrib:.6f}")
+                    print(f"  ✓ Λ_grad completed — results will appear in plots and report\n")
+
+                except Exception as e:
+                    print(f"\n  ✗ Λ_grad computation FAILED: {e}")
+                    import traceback
+                    traceback.print_exc()
 
                 # ── Generate plots and reports (after Bellman, so plots include Bellman lines) ──
                 print("  Generating theoretical analysis plots...")

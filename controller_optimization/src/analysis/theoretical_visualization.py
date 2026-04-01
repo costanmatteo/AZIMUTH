@@ -60,6 +60,7 @@ def plot_loss_vs_L_min(
     title: str = "Loss vs Theoretical Minimum",
     figsize: tuple = (14, 4.8),
     bellman_lmin: Optional[Dict[str, Any]] = None,
+    lambda_grad: Optional[Dict[str, Any]] = None,
 ) -> plt.Figure:
     """
     Plot observed loss and theoretical L_min over epochs.
@@ -108,6 +109,13 @@ def plot_loss_vs_L_min(
             ax.axhline(y=bellman_bwd, color='darkviolet', linestyle='--',
                        label=f'L_min Bellman (backward) = {bellman_bwd:.6f}')
 
+    # Plot Lambda_grad line if available
+    if lambda_grad is not None:
+        lg_val = lambda_grad.get('lambda_grad')
+        if lg_val is not None:
+            ax.axhline(y=lg_val, color='darkorange', linestyle=':',
+                       label=f'Λ_grad (Delta Method) = {lg_val:.6f}')
+
     # Fill area between L_min and observed (reducible gap)
     ax.fill_between(
         epochs,
@@ -123,6 +131,8 @@ def plot_loss_vs_L_min(
         extra = [v for v in [bellman_lmin.get('L_min_forward'), bellman_lmin.get('L_min_bellman')] if v is not None]
         if extra:
             all_vals = np.concatenate([all_vals, extra])
+    if lambda_grad is not None and lambda_grad.get('lambda_grad') is not None:
+        all_vals = np.concatenate([all_vals, [lambda_grad['lambda_grad']]])
 
     # Labels and legend
     ax.set_xlabel('Epoch')
@@ -153,6 +163,7 @@ def plot_efficiency_over_time(
     figsize: tuple = (14, 4.8),
     bellman_lmin: Optional[Dict[str, Any]] = None,
     observed_loss: Optional[List[float]] = None,
+    lambda_grad: Optional[Dict[str, Any]] = None,
 ) -> plt.Figure:
     """
     Plot efficiency over epochs.
@@ -236,6 +247,16 @@ def plot_efficiency_over_time(
         main_eff = eff_emp_clipped
         limit_label = 'Theoretical Limit'
 
+    # Plot Lambda_grad efficiency if available
+    if lambda_grad is not None and has_obs:
+        lg_val = lambda_grad.get('lambda_grad')
+        if lg_val is not None:
+            obs = np.array(observed_loss)
+            eff_lg = np.where(obs > 0, lg_val / obs, 0.0)
+            eff_lg_clipped = np.clip(eff_lg, 0, 1.5)
+            ax.plot(epochs, eff_lg_clipped, color='darkorange', linestyle=':',
+                    label='Efficiency (Λ_grad)')
+
     # Add horizontal line at y=1 (theoretical limit)
     ax.axhline(y=1.0, color='red', linestyle='--', label=limit_label)
 
@@ -278,6 +299,7 @@ def plot_loss_decomposition(
     title: str = "Loss Decomposition",
     figsize: tuple = (14, 4.8),
     bellman_lmin: Optional[Dict[str, Any]] = None,
+    lambda_grad: Optional[Dict[str, Any]] = None,
 ) -> plt.Figure:
     """
     Bar chart showing decomposition of loss into components.
@@ -342,6 +364,13 @@ def plot_loss_decomposition(
         if bellman_bwd is not None:
             ax.axhline(y=bellman_bwd, color='darkviolet', linestyle='--',
                        label=f'L_min Bellman (bwd) = {bellman_bwd:.4f}')
+
+    # Add Lambda_grad line if available
+    if lambda_grad is not None:
+        lg_val = lambda_grad.get('lambda_grad')
+        if lg_val is not None:
+            ax.axhline(y=lg_val, color='darkorange', linestyle=':',
+                       label=f'Λ_grad (Delta) = {lg_val:.4f}')
 
     # Labels
     ax.set_ylabel('Loss Value')
@@ -709,8 +738,9 @@ def generate_all_theoretical_plots(
         print("  Warning: No epochs in tracker data, skipping plots")
         return plots
 
-    # Extract Bellman data if available
+    # Extract Bellman and Lambda_grad data if available
     bellman_data = tracker_data.get('bellman_lmin', None)
+    lambda_grad_data = tracker_data.get('lambda_grad', None)
 
     # 1. Loss vs L_min
     path = checkpoint_dir / 'loss_vs_L_min.png'
@@ -720,6 +750,7 @@ def generate_all_theoretical_plots(
         theoretical_L_min=tracker_data['theoretical_L_min'],
         save_path=str(path),
         bellman_lmin=bellman_data,
+        lambda_grad=lambda_grad_data,
     )
     plots['loss_vs_L_min'] = path
     plt.close()
@@ -732,6 +763,7 @@ def generate_all_theoretical_plots(
         save_path=str(path),
         bellman_lmin=bellman_data,
         observed_loss=tracker_data['observed_loss'],
+        lambda_grad=lambda_grad_data,
     )
     plots['training_efficiency'] = path
     plt.close()
@@ -744,6 +776,7 @@ def generate_all_theoretical_plots(
         gap=tracker_data['gap'][-1],
         save_path=str(path),
         bellman_lmin=bellman_data,
+        lambda_grad=lambda_grad_data,
     )
     plots['loss_decomposition'] = path
     plt.close()

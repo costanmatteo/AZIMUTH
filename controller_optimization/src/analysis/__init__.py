@@ -25,6 +25,7 @@ from .theoretical_tables import (
     generate_decomposition_table,
     generate_efficiency_table,
     generate_validation_table,
+    generate_lambda_grad_table,
     generate_full_report,
     save_report_txt,
     save_report_json
@@ -68,6 +69,7 @@ __all__ = [
     'generate_decomposition_table',
     'generate_efficiency_table',
     'generate_validation_table',
+    'generate_lambda_grad_table',
     'generate_full_report',
     'save_report_txt',
     'save_report_json',
