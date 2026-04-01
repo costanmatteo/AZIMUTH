@@ -60,6 +60,10 @@ def build_config(cli_overrides=None):
     if cli_overrides:
         config = OmegaConf.merge(config, OmegaConf.create(cli_overrides))
 
+    # Derive d_model_enc/d_model_dec for ProT based on embedding composition mode
+    from causaliT.training.experiment_control import update_config
+    config = update_config(config)
+
     return config
 
 
