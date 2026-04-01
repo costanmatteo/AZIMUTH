@@ -22,43 +22,37 @@ _CAUSALIT_CONFIG_DIR = Path(__file__).parent.parent / 'causaliT' / 'causaliT' / 
 
 SURROGATE_CONFIG = {
     # Which YAML to use as base template
-    'base_yaml': str(_CAUSALIT_CONFIG_DIR / 'config_stage_causaliT_dyconex.yaml'),
+    'base_yaml': str(_CAUSALIT_CONFIG_DIR / 'config_noise_aware_example.yaml'),
 
     # Overrides (same structure as the YAML)
     'overrides': {
 
         'experiment': {
-            'd_model_set': 100,
-            'd1_layers': 1,
-            'd2_layers': 1,
+            'd_model_set': 24,
+            'dec_layers': 1,
             'n_heads': 1,
-            'd_ff': 200,
-            'd_qk': 100,
-            'dropout': 0.1,
-            'lr': 0.0001,
-            'batch_size': 50,
-            'max_epochs': 500,
-            'loss_weight_x': 1.0,
-            'loss_weight_y': 1.0,
+            'd_ff': 48,
+            'd_qk': 32,
+            'dropout': 0.0,
+            'lr': 0.001,
+            'batch_size': 64,
+            'max_epochs': 200,
         },
 
         'model': {
-            'model_object': 'StageCausaliT',
+            'model_object': 'NoiseAwareSingleCausalLayer',
         },
 
         'training': {
-            'k_fold': 5,
+            'k_fold': 3,
             'seed': 42,
-            'loss_fn': 'mse',
-            'use_scheduler': False,
-            'save_ckpt_every_n_epochs': 100,
+            'loss_fn': 'gaussian_nll',
+            'use_scheduler': True,
+            'save_ckpt_every_n_epochs': 50,
         },
 
         'data': {
             'dataset': 'azimuth_surrogate',
-            'filename_input': 'ds.npz',
-            'train_file': None,
-            'test_file': None,
         },
 
         'evaluation': {
