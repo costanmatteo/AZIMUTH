@@ -44,6 +44,7 @@ import numpy as np
 # Add project root to path
 REPO_ROOT = Path(__file__).parent
 sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(REPO_ROOT / 'causaliT'))
 
 from configs.processes_config import (
     PROCESSES, get_filtered_processes, ST_DATASET_CONFIG, _build_st_processes, DATASET_MODE
