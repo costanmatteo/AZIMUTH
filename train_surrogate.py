@@ -203,7 +203,7 @@ def main():
 
     # Copy best checkpoint
     import shutil
-    best_ckpt_src = Path(save_dir) / 'k_0' / 'best_checkpoint.ckpt'
+    best_ckpt_src = Path(save_dir) / 'k_0' / 'checkpoints' / 'best_checkpoint.ckpt'
     best_ckpt_dst = Path(save_dir) / 'best_model.ckpt'
     if best_ckpt_src.exists():
         shutil.copy2(best_ckpt_src, best_ckpt_dst)
