@@ -225,7 +225,7 @@ def main():
     parser.add_argument(
         "--output",
         type=str,
-        default="data/causalit_dataset",
+        default="scm_ds/causalit_dataset",
         help="Directory di output per il dataset causaliT",
     )
     args = parser.parse_args()
