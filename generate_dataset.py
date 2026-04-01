@@ -7,8 +7,8 @@ usando gli SCM da scm_ds/, e calcola F con ReliabilityFunction.
 Usa: python generate_dataset.py [--n_samples 2000 --seed 42 ...]
 
 Output:
-- scm_ds/data_predictor/per_process/{process_name}_dataset.pt  → {inputs, outputs} per processo
-- scm_ds/data_predictor/trajectories/full_trajectories.pt      → traiettorie complete + F
+- scm_ds/predictor_dataset/per_process/{process_name}_dataset.pt  → {inputs, outputs} per processo
+- scm_ds/predictor_dataset/trajectories/full_trajectories.pt      → traiettorie complete + F
 """
 
 import sys
@@ -164,7 +164,7 @@ def main():
                         help='Override n_samples (default: from processes_config)')
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed for reproducibility')
-    parser.add_argument('--output_dir', type=str, default='scm_ds/data_predictor/',
+    parser.add_argument('--output_dir', type=str, default='scm_ds/predictor_dataset/',
                         help='Base output directory')
 
     # ST dataset complexity overrides

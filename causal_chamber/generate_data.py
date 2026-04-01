@@ -547,7 +547,7 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description='Generate observational and interventional datasets from SCMs',
     )
-    parser.add_argument('--output_dir', type=str, default='scm_ds/data_predictor/causal_chamber',
+    parser.add_argument('--output_dir', type=str, default='scm_ds/predictor_dataset/causal_chamber',
                         help='Output directory')
     parser.add_argument('--n_obs', type=int, default=5000,
                         help='Number of observational samples per process')
