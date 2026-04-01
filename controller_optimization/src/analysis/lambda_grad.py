@@ -329,7 +329,10 @@ def compute_lambda_grad_batched(
                     print(f"    {name}: grad=None → skipped")
                 continue
 
-            # Per-sample contributions: sum over output_dim, keep batch dim
+            # Per-sample contributions: sum over output_dim, keep batch dim.
+            # All current processes have output_dim=1, so this is trivial.
+            # For multi-output stages this assumes independent noise dims
+            # (no cross-covariance terms).
             contribs = ((grad ** 2) * s2).sum(dim=-1)  # (B_samples,)
             grad_sq_vals = (grad ** 2).sum(dim=-1)     # (B_samples,)
             s2_vals = s2.sum(dim=-1)                   # (B_samples,)
@@ -495,6 +498,13 @@ def _process_single_trajectory(
     # ── Step 5: Accumulate per-stage ─────────────────────────────────────
     # grad has shape (B, output_dim) with correct per-sample values.
     # Compute per-sample contributions, then AVERAGE over B.
+    #
+    # NOTE on .sum(dim=-1): currently all processes have output_dim=1,
+    # so this sum is trivially correct (collapses [B,1] → [B]).
+    # If a future process has output_dim>1 (multi-output), .sum(dim=-1)
+    # assumes the noise dimensions are independent — i.e. the cross-terms
+    # (∂F̂/∂o_t^d1)(∂F̂/∂o_t^d2)·Cov(d1,d2) are zero.  For correlated
+    # multi-output stages, this would need a full covariance treatment.
     for name in process_names:
         grad = output_tensors[name].grad       # (B, output_dim) or (output_dim,)
         s2 = sigma_sq_per_stage[name]
@@ -507,6 +517,12 @@ def _process_single_trajectory(
             if verbose:
                 print(f"    {name}: grad=None → contribution=0")
             continue
+
+        # Warn if multi-output (not currently expected)
+        out_dim = grad.shape[-1] if grad.dim() > 1 else 1
+        if out_dim > 1 and verbose:
+            print(f"    ⚠ {name}: output_dim={out_dim} > 1 — "
+                  f".sum(dim=-1) assumes independent noise dimensions")
 
         # Per-sample: sum over output_dim, then average over batch
         # (grad**2 * s2) shape: (B, output_dim) → sum dim=-1 → (B,) → mean → scalar
