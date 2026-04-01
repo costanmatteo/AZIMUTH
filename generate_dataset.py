@@ -375,8 +375,36 @@ def main():
           f"min={np.min(F_values):.4f}, max={np.max(F_values):.4f}")
     print(f"  Saved to: {traj_path}")
 
-    # ── Step 4: Summary ─────────────────────────────────────────────────────
-    print(f"\n[4/4] Dataset generation complete!")
+    # ── Step 4: Convert to causaliT format ───────────────────────────────
+    print(f"\n[4/4] Converting to causaliT format...")
+    from scm_ds.convert_azimuth_trajectories import (
+        extract_process_info, build_arrays, build_masks, build_metadata,
+    )
+
+    causalit_dir = REPO_ROOT / 'scm_ds' / 'causalit_dataset'
+    causalit_dir.mkdir(parents=True, exist_ok=True)
+
+    process_names, process_dims = extract_process_info(full_trajectories)
+    s_arr, x_arr, y_arr, s_labels, x_labels, t_labels = build_arrays(
+        full_trajectories, process_names, process_dims
+    )
+    np.savez_compressed(str(causalit_dir / 'ds.npz'), s=s_arr, x=x_arr, y=y_arr)
+
+    import json as _json
+    metadata = build_metadata(s_labels, x_labels, t_labels)
+    with open(causalit_dir / 'dataset_metadata.json', 'w', encoding='utf-8') as f:
+        _json.dump(metadata, f, indent=2, sort_keys=True, ensure_ascii=False)
+
+    import pandas as _pd
+    masks = build_masks(process_names, process_dims, s_labels, x_labels, t_labels)
+    for fname, df in masks.items():
+        df.to_csv(causalit_dir / fname)
+
+    print(f"  S={s_arr.shape}, X={x_arr.shape}, Y={y_arr.shape}")
+    print(f"  Saved to: {causalit_dir}/")
+
+    # ── Step 5: Summary ─────────────────────────────────────────────────────
+    print(f"\n[5/5] Dataset generation complete!")
     print("\n" + "=" * 70)
     print("GENERATED FILES")
     print("=" * 70)
@@ -384,10 +412,12 @@ def main():
         pname = proc['name']
         print(f"  {per_process_dir / f'{pname}_dataset.pt'}")
     print(f"  {traj_path}")
+    print(f"  {causalit_dir}/ (causaliT format)")
 
     print("\n" + "=" * 70)
     print("STEP 0 COMPLETED SUCCESSFULLY!")
     print("=" * 70)
+    print(f"  {causalit_dir}/")
     print("\nNext step: Run train_predictor.py to train uncertainty predictors")
 
 
