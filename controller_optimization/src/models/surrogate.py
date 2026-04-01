@@ -441,11 +441,17 @@ def create_surrogate(config: Dict,
                 f"Train the model first using causaliT training pipeline."
             )
 
-        # Load and wrap CasualiT model
+        # Load and wrap CasualiT model.
+        # process_configs and use_deterministic_sampling are forwarded so
+        # the internal ProTSurrogate (for F* and F_baseline) is configured
+        # identically to the reliability_function path.
         return CasualiTSurrogate(
             checkpoint_path=checkpoint_path,
             target_trajectory=target_trajectory,
             device=device,
+            use_deterministic_sampling=use_deterministic,
+            process_configs=process_configs,
+            n_scenarios=n_scenarios,
         )
 
     else:
@@ -471,16 +477,22 @@ class CasualiTSurrogate:
     def __init__(self,
                  checkpoint_path: str,
                  target_trajectory: Dict,
-                 device: str = 'cpu'):
+                 device: str = 'cpu',
+                 use_deterministic_sampling: bool = True,
+                 process_configs: list = None,
+                 n_scenarios: int = None):
         """
         Args:
             checkpoint_path: Path to trained model checkpoint
             target_trajectory: Target trajectory for F* computation
             device: Torch device
+            use_deterministic_sampling: Passed to internal ProTSurrogate
+            process_configs: Process configs, passed to internal ProTSurrogate
+            n_scenarios: Override number of scenarios
         """
         self.device = device
         self.checkpoint_path = checkpoint_path
-        self.n_scenarios = None
+        self.n_scenarios = n_scenarios
         self.process_chain = None  # Set via set_process_chain() after creation
 
         # Load the trained model from causaliT
@@ -496,22 +508,31 @@ class CasualiTSurrogate:
             if self.n_scenarios is None:
                 self.n_scenarios = data['inputs'].shape[0]
 
-        # F_star will be computed after process_chain is set
-        self.F_star = None
+        # Internal ProTSurrogate for F_star and F_baseline.
+        # Only F_actual uses the CausaliT model; F_star (noise=0) and
+        # F_baseline are always computed with the mathematical formula,
+        # exactly as when type='reliability_function'.
+        self._formula_surrogate = ProTSurrogate(
+            target_trajectory=target_trajectory,
+            device=device,
+            use_deterministic_sampling=use_deterministic_sampling,
+            process_configs=process_configs,
+            n_scenarios=self.n_scenarios,
+        )
+        self.F_star = self._formula_surrogate.F_star
 
     def set_process_chain(self, process_chain):
         """
         Set the ProcessChain reference for format conversion.
 
         Must be called before compute_reliability() can be used.
-        After setting, computes F_star from scenario 0.
+        F_star is NOT recomputed here — it always comes from the internal
+        ProTSurrogate (mathematical formula, noise=0).
 
         Args:
             process_chain: ProcessChain instance
         """
         self.process_chain = process_chain
-        # Compute F_star from scenario 0 (single scalar)
-        self.F_star = self._compute_F_star_from_scenario_0()
 
     def _load_model(self, checkpoint_path: str, device: str):
         """
@@ -669,34 +690,24 @@ class CasualiTSurrogate:
             # SingleCausalLayer predicts X, not Y directly - return mean as proxy
             return pred_x.mean(dim=(1, 2))
 
-    def _compute_F_star_from_scenario_0(self) -> float:
+    def compute_formula_reliability(self, trajectory, return_quality_scores=False):
         """
-        Compute F* from scenario 0 using the CausalIT model.
+        Compute reliability using the mathematical formula (ProTSurrogate).
+
+        Used for F_baseline. F_star and F_baseline always use the formula,
+        only F_actual uses the CausaliT model.
+
+        Args:
+            trajectory: Same format as compute_reliability()
+            return_quality_scores: If True, also return per-process quality scores
 
         Returns:
-            float: F_star value (single scalar)
+            Same as ProTSurrogate.compute_reliability()
         """
-        if self.process_chain is None:
-            return 1.0  # Placeholder - will be recomputed when process_chain is set
-
-        with torch.no_grad():
-            scenario_traj = {}
-            for process_name, data in self.target_trajectory_tensors.items():
-                scenario_traj[process_name] = {
-                    'inputs': data['inputs'][0:1],  # Scenario 0 (always present)
-                    'outputs_mean': data['outputs'][0:1],
-                    'outputs_var': torch.zeros_like(data['outputs'][0:1]),
-                    'outputs_sampled': data['outputs'][0:1],
-                }
-
-            F_star = self.compute_reliability(scenario_traj)
-            if isinstance(F_star, torch.Tensor):
-                F_star = F_star.item()
-
-        return F_star
+        return self._formula_surrogate.compute_reliability(
+            trajectory, return_quality_scores=return_quality_scores
+        )
 
     def compute_target_reliability(self) -> float:
-        """Return F* (single scalar)."""
-        if self.F_star is None:
-            return 1.0  # Placeholder before process_chain is set
+        """Return F* (single scalar, always from mathematical formula)."""
         return float(self.F_star)

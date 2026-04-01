@@ -1507,14 +1507,15 @@ class ControllerTrainer:
         """
         from controller_optimization.src.utils.model_utils import convert_numpy_to_tensor
 
-        # F* già calcolato
+        # F* già calcolato (always from formula, even when surrogate is CausaliT)
         F_star = self.surrogate.F_star
 
-        # F' = evaluate baseline trajectory
+        # F' = evaluate baseline trajectory (always with formula)
+        baseline_fn = self.formula_surrogate if self.formula_surrogate is not None else self.surrogate
         with torch.no_grad():
             self.process_chain.eval()
             baseline_tensor = convert_numpy_to_tensor(baseline_trajectory, device=self.device)
-            F_baseline = self.surrogate.compute_reliability(baseline_tensor).item()
+            F_baseline = baseline_fn.compute_reliability(baseline_tensor).item()
 
         # F = evaluate actual trajectory (con policy generators)
         with torch.no_grad():

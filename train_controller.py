@@ -610,7 +610,9 @@ def main(config=None):
         print("\n[5.5/9] Theoretical analysis disabled (skipping L_min calculations)")
 
     # 5.6. Precompute baseline reliabilities per scenario (for gap closure during training)
+    # F_baseline always uses the mathematical formula, even when surrogate is CausaliT.
     print("\n[5.6/9] Precomputing baseline reliabilities per scenario...")
+    baseline_surrogate_fn = formula_surrogate if formula_surrogate is not None else surrogate
     F_baseline_pretrain = []
     with torch.no_grad():
         for scenario_idx in range(n_scenarios):
@@ -621,7 +623,7 @@ def main(config=None):
                     'outputs': data['outputs'][scenario_idx:scenario_idx+1]
                 }
             baseline_scenario_tensor = convert_numpy_to_tensor(baseline_scenario, device=device)
-            F_bl = surrogate.compute_reliability(baseline_scenario_tensor).item()
+            F_bl = baseline_surrogate_fn.compute_reliability(baseline_scenario_tensor).item()
             F_baseline_pretrain.append(F_bl)
     trainer.set_baseline_reliabilities(F_baseline_pretrain)
 
@@ -690,10 +692,10 @@ def main(config=None):
             # Convert to tensors
             baseline_scenario_tensor = convert_numpy_to_tensor(baseline_scenario, device=device)
 
-            # Compute reliability for baseline
-            F_baseline_i = surrogate.compute_reliability(baseline_scenario_tensor).item()
+            # Compute reliability for baseline (always formula)
+            F_baseline_i = baseline_surrogate_fn.compute_reliability(baseline_scenario_tensor).item()
 
-            # Compute formula-based baseline (if using CasualiT)
+            # Compute formula-based baseline separately (for CasualiT comparison plots)
             F_formula_baseline_i = None
             if formula_surrogate is not None:
                 F_formula_baseline_i = formula_surrogate.compute_reliability(baseline_scenario_tensor).item()
@@ -792,9 +794,10 @@ def main(config=None):
                     'outputs': data['outputs'][scenario_idx:scenario_idx+1]
                 }
             baseline_tensor = convert_numpy_to_tensor(baseline_scenario, device=device)
-            F_baseline_sc = surrogate.compute_reliability(baseline_tensor).item()
+            # F_baseline always uses formula
+            F_baseline_sc = baseline_surrogate_fn.compute_reliability(baseline_tensor).item()
 
-            # Formula-based F (if CasualiT)
+            # Formula-based F (for CasualiT comparison plots)
             F_formula_baseline_sc = None
             F_formula_actual_sc = None
             if formula_surrogate is not None:
@@ -863,8 +866,8 @@ def main(config=None):
             # Convert to tensors
             baseline_test_tensor = convert_numpy_to_tensor(baseline_test_scenario, device=device)
 
-            # Compute F_baseline for this test scenario
-            F_baseline_test_i = surrogate.compute_reliability(baseline_test_tensor).item()
+            # Compute F_baseline for this test scenario (always formula)
+            F_baseline_test_i = baseline_surrogate_fn.compute_reliability(baseline_test_tensor).item()
             F_baseline_test_values.append(F_baseline_test_i)
 
             # Run controller on test scenario
