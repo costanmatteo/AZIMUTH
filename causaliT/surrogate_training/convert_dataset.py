@@ -88,7 +88,7 @@ def convert_trajectories_to_causalit_format(
     output_path.mkdir(parents=True, exist_ok=True)
 
     if model_type == 'proT':
-        _save_prot(X, Y, train_idx, val_idx, test_idx, output_path)
+        _save_prot(X, Y, train_idx, val_idx, test_idx, output_path, process_names)
     else:
         _save_stage_causal(S, Xint, Y, train_idx, val_idx, test_idx, output_path,
                            var_metadata, process_names)
@@ -272,18 +272,42 @@ def _to_numpy_flat(t):
     return np.atleast_1d(np.array(t, dtype=np.float32)).flatten()
 
 
-def _save_prot(X, Y, train_idx, val_idx, test_idx, output_path):
-    """Save ProT-format data as .npy files."""
+def _save_prot(X, Y, train_idx, val_idx, test_idx, output_path, process_names):
+    """Save ProT-format data for the Lightning pipeline.
+
+    Saves:
+    - ds.npz: combined dataset with keys 'x' and 'y' (used by ProcessDataModule k-fold)
+    - dataset_metadata.json: metadata required by the Lightning trainer
+    - Per-split .npy files for reference
+    """
+    import json
+
+    # Combined file for Lightning k-fold
+    np.savez(output_path / 'ds.npz', x=X, y=Y)
+
+    # Per-split files for reference / pre-split mode
     for split_name, idx in [('train', train_idx), ('val', val_idx), ('test', test_idx)]:
         np.save(output_path / f'{split_name}_X.npy', X[idx])
         np.save(output_path / f'{split_name}_Y.npy', Y[idx])
 
-    # Save metadata for compatibility with existing SurrogateTrainer
-    np.savez(output_path / 'train_metadata.npz',
-             n_samples=len(train_idx),
-             source='full_trajectories.pt')
+    # dataset_metadata.json (required by Lightning trainer for ProT config)
+    n_samples, n_processes, n_features = X.shape
+    metadata = {
+        'name': 'surrogate_prot',
+        'description': f'ProT data from process chain trajectories ({", ".join(process_names)})',
+        'variable_info': {
+            'n_processes': n_processes,
+            'n_features': n_features,
+            'n_source': n_processes,   # encoder sequence length
+            'n_input': 0,              # not used by ProT
+            'n_target': 1,             # decoder sequence length (F)
+            'process_names': process_names,
+        },
+    }
+    with open(output_path / 'dataset_metadata.json', 'w') as f:
+        json.dump(metadata, f, indent=2)
 
-    print(f"  Saved ProT format: {{split}}_X.npy, {{split}}_Y.npy")
+    print(f"  Saved ProT format: ds.npz, dataset_metadata.json, {{split}}_X.npy")
 
 
 def _save_stage_causal(S, X, Y, train_idx, val_idx, test_idx, output_path,

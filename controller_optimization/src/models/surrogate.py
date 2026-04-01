@@ -517,9 +517,8 @@ class CasualiTSurrogate:
         """
         Load a trained CausalIT model from checkpoint.
 
-        Supports two checkpoint formats:
-        - PyTorch Lightning checkpoints (from trainer.save_checkpoint)
-        - Plain torch.save checkpoints (from train_surrogate.py SimpleSurrogateModel)
+        Loads PyTorch Lightning checkpoints produced by the causaliT training
+        pipeline (trainer.save_checkpoint).
 
         Args:
             checkpoint_path: Path to .ckpt file
@@ -532,30 +531,6 @@ class CasualiTSurrogate:
         model_type = checkpoint_data.get('model_type', 'proT')
 
         is_pl_checkpoint = 'pytorch-lightning_version' in checkpoint_data
-        # SimpleSurrogateModel checkpoints use 'model_state_dict' key
-        is_simple_surrogate = 'model_state_dict' in checkpoint_data
-
-        if is_simple_surrogate:
-            # Checkpoint saved by train_surrogate.py (SimpleSurrogateModel)
-            from train_surrogate import SimpleSurrogateModel
-            config = checkpoint_data['config']
-            model = SimpleSurrogateModel(config)
-            # input_proj is None at init; infer n_features from saved weights
-            state = checkpoint_data['model_state_dict']
-            if 'input_proj.weight' in state:
-                n_features = state['input_proj.weight'].shape[1]
-                model.set_input_dim(n_features)
-            model.load_state_dict(state)
-            self._simple_surrogate_needs_input_dim = False
-            print(f"  CasualiTSurrogate loaded SimpleSurrogateModel from {checkpoint_path}")
-            model.eval()
-            # NOTE: Do NOT use requires_grad_(False) here. Freezing parameters
-            # blocks gradient flow through the model (including w.r.t. inputs).
-            # The surrogate parameters are not in the controller's optimizer,
-            # so they won't be updated. But we need the computation graph intact
-            # for gradients to flow from F back to the controller.
-            model.to(device)
-            return model, model_type
 
         # CausaliT Lightning forecaster classes
         if model_type == 'proT':
@@ -587,9 +562,12 @@ class CasualiTSurrogate:
             model = forecaster_cls(config)
             model.load_state_dict(state_dict, strict=False)
 
-        self._simple_surrogate_needs_input_dim = False
         model.eval()
-        # NOTE: Do NOT use requires_grad_(False) - see comment above.
+        # NOTE: Do NOT use requires_grad_(False) here. Freezing parameters
+        # blocks gradient flow through the model (including w.r.t. inputs).
+        # The surrogate parameters are not in the controller's optimizer,
+        # so they won't be updated. But we need the computation graph intact
+        # for gradients to flow from F back to the controller.
         model.to(device)
         print(f"  CasualiTSurrogate loaded model_type='{model_type}' from {checkpoint_path}")
 
@@ -631,58 +609,10 @@ class CasualiTSurrogate:
         return F
 
     def _inference_prot(self, trajectory: Dict) -> torch.Tensor:
-        """Run inference for ProT (TransformerForecaster or SimpleSurrogateModel)."""
-        from train_surrogate import SimpleSurrogateModel
-        if isinstance(self.model, SimpleSurrogateModel):
-            return self._inference_simple_surrogate(trajectory)
-
-        # TransformerForecaster: forward(data_input, data_trg) -> (output, ...)
+        """Run inference for ProT (TransformerForecaster)."""
         X, Y = self.process_chain.trajectory_to_prot_format(trajectory)
         forecast_output, _, _, _ = self.model.forward(data_input=X, data_trg=Y)
         return forecast_output.squeeze()
-
-    def _inference_simple_surrogate(self, trajectory: Dict) -> torch.Tensor:
-        """
-        Run inference for SimpleSurrogateModel (from train_surrogate.py).
-
-        Builds input as [inputs, outputs_sampled] per process, matching
-        the [inputs, outputs] format used by convert_dataset.py.
-        outputs_sampled is the reparameterized sample from the uncertainty
-        predictor distribution, consistent with ProTSurrogate's analytical path.
-        """
-        process_names = self.process_chain.process_names
-        features_list = []
-        batch_size = None
-
-        for pname in process_names:
-            if pname not in trajectory:
-                continue
-            data = trajectory[pname]
-            # Use full inputs (control + environmental variables),
-            # matching the [inputs, env, outputs] format from convert_dataset.py
-            inputs = data['inputs']
-            if batch_size is None:
-                batch_size = inputs.shape[0]
-            # Use sampled outputs (reparameterization trick), fall back to mean
-            outputs = data.get('outputs_sampled', data.get('outputs_mean'))
-            step_features = torch.cat([
-                inputs.view(batch_size, -1),
-                outputs.view(batch_size, -1),
-            ], dim=-1)
-            features_list.append(step_features)
-
-        # Pad to same feature dimension and stack
-        max_features = max(f.shape[-1] for f in features_list)
-        padded = []
-        for f in features_list:
-            if f.shape[-1] < max_features:
-                padding = torch.zeros(batch_size, max_features - f.shape[-1],
-                                      dtype=torch.float32, device=self.device)
-                f = torch.cat([f, padding], dim=-1)
-            padded.append(f)
-
-        X = torch.stack(padded, dim=1)  # (batch, n_processes, features)
-        return self.model(X)
 
     def _inference_stage_causal(self, trajectory: Dict) -> torch.Tensor:
         """

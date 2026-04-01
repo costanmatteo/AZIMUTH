@@ -11,7 +11,7 @@ Data Generation:
 - F is computed using the mathematical formula (ProTSurrogate / ReliabilityFunction)
 
 Model Architecture:
-- 'proT': SimpleSurrogateModel (transformer encoder, sequence-to-scalar)
+- 'proT': TransformerForecaster (ProT encoder-decoder, sequence-to-scalar)
 - 'StageCausaliT': StageCausalForecaster (dual decoder: S->X, X->Y)
 - 'SingleCausalLayer': SingleCausalForecaster (single decoder: S->X)
 """
