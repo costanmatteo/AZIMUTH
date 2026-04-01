@@ -223,7 +223,7 @@ def main():
     from uncertainty_predictor.src.data.preprocessing import generate_scm_data
 
     # Import ReliabilityFunction
-    from scm_ds.reliability_function import ReliabilityFunction
+    from scm_ds import ReliabilityFunction
 
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)

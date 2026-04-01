@@ -18,7 +18,7 @@ import torch
 import numpy as np
 from typing import Dict, Tuple, Optional, Union
 
-from ..configs.process_targets import PROCESS_CONFIGS, PROCESS_ORDER
+from .process_targets import PROCESS_CONFIGS, PROCESS_ORDER
 
 
 class ReliabilityFunction:
@@ -100,7 +100,6 @@ class ReliabilityFunction:
             # Compute quality score: Q = exp(-(output - target)² / scale)
             scale = config.get('scale', 1.0)
 
-            # Handle target being scalar or tensor
             if isinstance(target, (int, float)):
                 quality = torch.exp(-((output - target) ** 2) / scale)
             else:
@@ -121,28 +120,17 @@ class ReliabilityFunction:
                                  config: Dict) -> Union[float, torch.Tensor]:
         """
         Compute adaptive target for a process based on upstream outputs.
-
-        Args:
-            process_name: Name of current process
-            outputs: Dict of all process outputs
-            config: Process configuration
-
-        Returns:
-            Adaptive target value (scalar or tensor matching batch size)
         """
         base_target = config.get('base_target', 0.0)
 
-        # Check for adaptive coefficients
         adaptive_coeffs = config.get('adaptive_coefficients', {})
         adaptive_baselines = config.get('adaptive_baselines', {})
 
         if not adaptive_coeffs:
             return base_target
 
-        # Start with base target
         target = base_target
 
-        # Add adaptive adjustments from upstream processes
         for upstream_name, coeff in adaptive_coeffs.items():
             if upstream_name in outputs:
                 baseline = adaptive_baselines.get(upstream_name, 0.0)
@@ -154,12 +142,6 @@ class ReliabilityFunction:
     def _compute_weighted_average(self, quality_scores: Dict[str, torch.Tensor]) -> torch.Tensor:
         """
         Compute weighted average of quality scores.
-
-        Args:
-            quality_scores: Dict mapping process_name to Q_i tensor
-
-        Returns:
-            F: Weighted average reliability
         """
         total_weighted_quality = 0.0
         total_weight = 0.0
@@ -172,7 +154,6 @@ class ReliabilityFunction:
         if total_weight > 0:
             F = total_weighted_quality / total_weight
         else:
-            # Fallback (should never happen)
             F = torch.tensor(0.0, device=self.device)
 
         return F
@@ -180,16 +161,7 @@ class ReliabilityFunction:
     def compute_target_reliability(self, target_trajectory: Dict) -> torch.Tensor:
         """
         Compute F* (target reliability) for a target trajectory.
-
-        This is the "ideal" reliability that the controller should achieve.
-
-        Args:
-            target_trajectory: Target trajectory with 'inputs' and 'outputs' keys
-
-        Returns:
-            F_star: Target reliability value
         """
-        # Convert target trajectory format to standard format
         trajectory = {}
         for process_name, data in target_trajectory.items():
             outputs = data.get('outputs', data.get('outputs_mean'))
@@ -198,7 +170,7 @@ class ReliabilityFunction:
 
             trajectory[process_name] = {
                 'outputs_mean': outputs,
-                'outputs_sampled': outputs,  # For target, sampled = mean
+                'outputs_sampled': outputs,
             }
 
         return self.compute_reliability(trajectory)
@@ -209,59 +181,6 @@ def compute_reliability(trajectory: Dict,
                        device: str = 'cpu') -> Union[torch.Tensor, Tuple[torch.Tensor, Dict]]:
     """
     Convenience function to compute reliability F.
-
-    Args:
-        trajectory: Process chain trajectory
-        return_quality_scores: If True, also return per-process scores
-        device: Torch device
-
-    Returns:
-        F: Reliability score
-        quality_scores: Per-process Q_i (if return_quality_scores=True)
     """
     rf = ReliabilityFunction(device=device)
     return rf.compute_reliability(trajectory, return_quality_scores=return_quality_scores)
-
-
-if __name__ == '__main__':
-    # Test the reliability function
-    print("Testing ReliabilityFunction...")
-
-    rf = ReliabilityFunction()
-
-    # Create test trajectory
-    trajectory = {
-        'laser': {
-            'outputs_mean': torch.tensor([[0.8]]),
-        },
-        'plasma': {
-            'outputs_mean': torch.tensor([[3.0]]),
-        },
-        'galvanic': {
-            'outputs_mean': torch.tensor([[10.0]]),
-        },
-        'microetch': {
-            'outputs_mean': torch.tensor([[20.0]]),
-        },
-    }
-
-    F, scores = rf.compute_reliability(trajectory, return_quality_scores=True)
-    print(f"Reliability F: {F.item():.6f}")
-    print("Quality scores:")
-    for name, score in scores.items():
-        print(f"  {name}: {score.item():.6f}")
-
-    # Test gradient flow
-    trajectory_grad = {
-        'laser': {'outputs_mean': torch.tensor([[0.8]], requires_grad=True)},
-        'plasma': {'outputs_mean': torch.tensor([[3.0]], requires_grad=True)},
-    }
-
-    F_grad = rf.compute_reliability(trajectory_grad)
-    F_grad.backward()
-
-    print(f"\nGradient test:")
-    print(f"  laser grad: {trajectory_grad['laser']['outputs_mean'].grad}")
-    print(f"  plasma grad: {trajectory_grad['plasma']['outputs_mean'].grad}")
-
-    print("\n✓ ReliabilityFunction test passed!")
