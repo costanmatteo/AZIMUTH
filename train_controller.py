@@ -1693,6 +1693,7 @@ def main(config=None):
                         trajectories=lg_trajectories,
                         surrogate=surrogate,
                         device=device,
+                        verbose=True,
                     )
 
                     theoretical_data['lambda_grad'] = lambda_grad_result.to_dict()
