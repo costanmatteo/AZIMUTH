@@ -48,7 +48,7 @@ from causal_chamber.ground_truth import (
     get_ground_truth_edges, get_all_observable_vars,
     get_ground_truth_adjacency_parent_convention,
 )
-from reliability_function import ReliabilityFunction
+from scm_ds.reliability_function import ReliabilityFunction
 
 
 # ---------------------------------------------------------------------------
