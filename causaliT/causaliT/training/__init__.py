@@ -29,7 +29,6 @@ def __getattr__(name):
         return getattr(module, _map[name][1])
     raise AttributeError(f"module 'causaliT.training' has no attribute {name!r}")
 
-
 __all__ = [
     'TransformerForecaster',
     'StageCausalForecaster',

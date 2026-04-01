@@ -35,7 +35,6 @@ def __getattr__(name):
         return ProcessDataModule
     raise AttributeError(f"module 'causaliT' has no attribute {name!r}")
 
-
 __all__ = [
     # Paths
     'ROOT_DIR',
