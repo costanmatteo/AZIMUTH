@@ -611,3 +611,297 @@ def _prepare_grad_trajectory(
         }
 
     return grad_traj, output_tensors
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Diagnostics
+# ─────────────────────────────────────────────────────────────────────────────
+
+def run_lambda_grad_diagnostics(
+    trajectories: List[Dict[str, Dict[str, torch.Tensor]]],
+    surrogate,
+    device: str = 'cpu',
+    n_sample: int = 5,
+    epsilon: float = 0.01,
+) -> None:
+    """
+    Run 4 diagnostic checks on the data feeding Λ_grad and print results.
+
+    Check 1 — σ² scale:
+        Print raw outputs_var for *n_sample* trajectories.
+        Compute std(outputs_mean) / sqrt(mean(outputs_var)) per stage.
+        Should be ≈ 1 if the predictor is well calibrated.
+
+    Check 2 — Predictor calibration ratio κ:
+        κ = mean((o_t − μ_t)²) / mean(σ²_t).
+        κ ≈ 1 ideal, κ >> 1 overconfident, κ << 1 underconfident.
+
+    Check 3 — Is outputs_var variance or std?
+        Compare sqrt(outputs_var) to outputs_mean scale
+        and infer whether the stored value is σ² or σ.
+
+    Check 4 — Gradient finite-difference check:
+        Perturb o_t by ±ε for the last stage and compare
+        (F̂(o+ε) − F̂(o−ε)) / (2ε)  vs  ∂F̂/∂o_t from backward.
+    """
+    if not trajectories:
+        print("  No trajectories — skipping diagnostics.")
+        return
+
+    process_names = list(trajectories[0].keys())
+    N = len(trajectories)
+    n_show = min(n_sample, N)
+
+    print(f"\n{'='*75}")
+    print(f"  Λ_grad DIAGNOSTICS  (N={N} trajectories, {len(process_names)} stages)")
+    print(f"{'='*75}")
+
+    # ── Check 1 — σ² scale ──────────────────────────────────────────────
+    print(f"\n  ┌─ CHECK 1: σ² scale ────────────────────────────────────────")
+
+    # Print raw values for first n_show trajectories
+    for i in range(n_show):
+        traj = trajectories[i]
+        print(f"  │ Trajectory {i}:")
+        for name in process_names:
+            var = traj[name]['outputs_var']
+            mean = traj[name]['outputs_mean']
+            # Show first few values per sample
+            n_vals = min(3, var.shape[0]) if var.dim() > 0 else 1
+            var_flat = var.reshape(-1)[:n_vals]
+            mean_flat = mean.reshape(-1)[:n_vals]
+            print(f"  │   {name}: outputs_var={[f'{v:.6e}' for v in var_flat.tolist()]}, "
+                  f"outputs_mean={[f'{v:.6f}' for v in mean_flat.tolist()]}")
+
+    # Aggregate ratio: std(outputs_mean) / sqrt(mean(outputs_var))
+    print(f"  │")
+    print(f"  │ Scale ratio  std(o_mean) / sqrt(mean(o_var))  per stage:")
+    for name in process_names:
+        all_means = []
+        all_vars = []
+        for traj in trajectories:
+            all_means.append(traj[name]['outputs_mean'].detach().reshape(-1))
+            all_vars.append(traj[name]['outputs_var'].detach().reshape(-1))
+        all_means_t = torch.cat(all_means)
+        all_vars_t = torch.cat(all_vars)
+        std_of_mean = all_means_t.std().item()
+        sqrt_mean_var = (all_vars_t.mean()).sqrt().item()
+        ratio = std_of_mean / sqrt_mean_var if sqrt_mean_var > 0 else float('inf')
+        print(f"  │   {name}: std(μ)={std_of_mean:.6e}, sqrt(mean(σ²))={sqrt_mean_var:.6e}, "
+              f"ratio={ratio:.4f}  {'✓' if 0.2 < ratio < 5.0 else '⚠ OUT OF RANGE'}")
+    print(f"  └──────────────────────────────────────────────────────────")
+
+    # ── Check 2 — Calibration κ ─────────────────────────────────────────
+    print(f"\n  ┌─ CHECK 2: Predictor calibration κ ──────────────────────────")
+    print(f"  │ κ = mean((o_t − μ_t)²) / mean(σ²_t)")
+    print(f"  │ Ideal: κ ≈ 1.0  |  κ >> 1: overconfident  |  κ << 1: underconfident")
+    print(f"  │")
+    for name in process_names:
+        all_residuals_sq = []
+        all_sigma_sq = []
+        for traj in trajectories:
+            data = traj[name]
+            o_t = data.get('outputs_sampled', data['outputs_mean']).detach().reshape(-1)
+            mu_t = data['outputs_mean'].detach().reshape(-1)
+            s2_t = data['outputs_var'].detach().reshape(-1)
+            all_residuals_sq.append((o_t - mu_t) ** 2)
+            all_sigma_sq.append(s2_t)
+        residuals_sq = torch.cat(all_residuals_sq)
+        sigma_sq = torch.cat(all_sigma_sq)
+        mean_res_sq = residuals_sq.mean().item()
+        mean_sigma_sq = sigma_sq.mean().item()
+        kappa = mean_res_sq / mean_sigma_sq if mean_sigma_sq > 0 else float('inf')
+        if kappa < 0.1:
+            status = "⚠ UNDERCONFIDENT (σ² too large)"
+        elif kappa > 10.0:
+            status = "⚠ OVERCONFIDENT (σ² too small)"
+        elif 0.5 < kappa < 2.0:
+            status = "✓ well calibrated"
+        else:
+            status = "~ marginal"
+        print(f"  │   {name}: mean((o−μ)²)={mean_res_sq:.6e}, mean(σ²)={mean_sigma_sq:.6e}, "
+              f"κ={kappa:.4f}  {status}")
+    print(f"  └──────────────────────────────────────────────────────────")
+
+    # ── Check 3 — σ² vs σ ───────────────────────────────────────────────
+    print(f"\n  ┌─ CHECK 3: Is outputs_var storing σ² or σ? ────────────────")
+    print(f"  │ Compare sqrt(outputs_var) and |outputs_mean| scale")
+    print(f"  │")
+    for name in process_names:
+        all_vars = []
+        all_means = []
+        for traj in trajectories:
+            all_vars.append(traj[name]['outputs_var'].detach().reshape(-1))
+            all_means.append(traj[name]['outputs_mean'].detach().reshape(-1))
+        vars_t = torch.cat(all_vars)
+        means_t = torch.cat(all_means)
+
+        raw_var_mean = vars_t.mean().item()
+        sqrt_var_mean = vars_t.mean().sqrt().item()
+        abs_mean = means_t.abs().mean().item()
+
+        # If outputs_var is actually σ (not σ²), then raw value ~ scale of mean
+        # If outputs_var is σ², then sqrt ~ scale of mean (or much smaller)
+        coeff_var_if_variance = sqrt_var_mean / abs_mean if abs_mean > 0 else float('inf')
+        coeff_var_if_std = raw_var_mean / abs_mean if abs_mean > 0 else float('inf')
+
+        print(f"  │   {name}:")
+        print(f"  │     mean(outputs_var) = {raw_var_mean:.6e}")
+        print(f"  │     sqrt(mean(o_var)) = {sqrt_var_mean:.6e}")
+        print(f"  │     mean(|o_mean|)    = {abs_mean:.6e}")
+        print(f"  │     If σ²: CV = sqrt(σ²)/|μ| = {coeff_var_if_variance:.4f}")
+        print(f"  │     If σ:  CV = σ/|μ|        = {coeff_var_if_std:.4f}")
+        if coeff_var_if_variance < 2.0 and coeff_var_if_std > 2.0:
+            print(f"  │     → Likely σ² (variance) ✓")
+        elif coeff_var_if_std < 2.0 and coeff_var_if_variance < 0.01:
+            print(f"  │     → Likely σ (std dev) ⚠  — Λ_grad may need squaring!")
+        else:
+            print(f"  │     → Ambiguous — inspect predictor output head")
+    print(f"  └──────────────────────────────────────────────────────────")
+
+    # ── Check 4 — Gradient finite-difference validation ─────────────────
+    print(f"\n  ┌─ CHECK 4: Gradient vs finite-difference (last stage) ─────")
+    print(f"  │ Perturb o_t by ±ε={epsilon}, compare ΔF̂/(2ε) vs ∂F̂/∂o_t")
+    print(f"  │")
+
+    target_stage = process_names[-1]
+    traj = trajectories[0]  # use first trajectory
+
+    # --- Autograd gradient ---
+    output_tensors: Dict[str, torch.Tensor] = {}
+    grad_traj: Dict[str, Dict[str, torch.Tensor]] = {}
+    for name in process_names:
+        data = traj[name]
+        o_t_source = data.get('outputs_sampled', data['outputs_mean'])
+        o_t = o_t_source.detach().clone().to(device).requires_grad_(True)
+        output_tensors[name] = o_t
+        grad_traj[name] = {
+            'inputs': data['inputs'].detach().to(device),
+            'outputs_mean': o_t,
+            'outputs_var': data['outputs_var'].detach().to(device),
+            'outputs_sampled': o_t,
+        }
+
+    F_hat = surrogate.compute_reliability(grad_traj)
+    if F_hat.dim() > 0:
+        F_hat = F_hat.mean()
+    F_hat_val = F_hat.item()
+    F_hat.backward()
+
+    autograd = output_tensors[target_stage].grad  # (batch, output_dim)
+    if autograd is None:
+        print(f"  │   ⚠ grad is None for {target_stage} — surrogate does not depend on it")
+        print(f"  └──────────────────────────────────────────────────────────")
+        print(f"{'='*75}\n")
+        return
+
+    # --- Finite difference: F̂(o+ε) ---
+    grad_traj_plus: Dict[str, Dict[str, torch.Tensor]] = {}
+    for name in process_names:
+        data = traj[name]
+        o_t_source = data.get('outputs_sampled', data['outputs_mean'])
+        o_t_p = o_t_source.detach().clone().to(device)
+        if name == target_stage:
+            o_t_p = o_t_p + epsilon
+        grad_traj_plus[name] = {
+            'inputs': data['inputs'].detach().to(device),
+            'outputs_mean': o_t_p,
+            'outputs_var': data['outputs_var'].detach().to(device),
+            'outputs_sampled': o_t_p,
+        }
+
+    with torch.no_grad():
+        F_plus = surrogate.compute_reliability(grad_traj_plus)
+        if F_plus.dim() > 0:
+            F_plus = F_plus.mean()
+
+    # --- Finite difference: F̂(o-ε) ---
+    grad_traj_minus: Dict[str, Dict[str, torch.Tensor]] = {}
+    for name in process_names:
+        data = traj[name]
+        o_t_source = data.get('outputs_sampled', data['outputs_mean'])
+        o_t_m = o_t_source.detach().clone().to(device)
+        if name == target_stage:
+            o_t_m = o_t_m - epsilon
+        grad_traj_minus[name] = {
+            'inputs': data['inputs'].detach().to(device),
+            'outputs_mean': o_t_m,
+            'outputs_var': data['outputs_var'].detach().to(device),
+            'outputs_sampled': o_t_m,
+        }
+
+    with torch.no_grad():
+        F_minus = surrogate.compute_reliability(grad_traj_minus)
+        if F_minus.dim() > 0:
+            F_minus = F_minus.mean()
+
+    fd_grad = (F_plus.item() - F_minus.item()) / (2 * epsilon)
+
+    # Compare element-wise (use mean of autograd over batch for comparison)
+    autograd_mean = autograd.mean().item()
+    abs_err = abs(fd_grad - autograd_mean)
+    rel_err = abs_err / (abs(autograd_mean) + 1e-12) * 100
+
+    print(f"  │   Stage: {target_stage}")
+    print(f"  │   F̂(o)        = {F_hat_val:.8f}")
+    print(f"  │   F̂(o+ε)      = {F_plus.item():.8f}")
+    print(f"  │   F̂(o−ε)      = {F_minus.item():.8f}")
+    print(f"  │   FD gradient  = (F̂⁺ − F̂⁻)/(2ε) = {fd_grad:.8e}")
+    print(f"  │   Autograd     = mean(∂F̂/∂o_t)   = {autograd_mean:.8e}")
+    print(f"  │   Abs error    = {abs_err:.8e}")
+    print(f"  │   Rel error    = {rel_err:.2f}%")
+    if rel_err < 5.0:
+        print(f"  │   → ✓ Gradient is correct")
+    elif rel_err < 20.0:
+        print(f"  │   → ~ Acceptable (non-linearity or batch averaging)")
+    else:
+        print(f"  │   → ⚠ MISMATCH — check surrogate differentiability")
+
+    # Also check a couple other stages with the same method
+    for check_stage in process_names[:-1]:
+        ot_check: Dict[str, Dict[str, torch.Tensor]] = {}
+        for name in process_names:
+            data = traj[name]
+            o_src = data.get('outputs_sampled', data['outputs_mean'])
+            o_val = o_src.detach().clone().to(device)
+            if name == check_stage:
+                o_val = o_val + epsilon
+            ot_check[name] = {
+                'inputs': data['inputs'].detach().to(device),
+                'outputs_mean': o_val,
+                'outputs_var': data['outputs_var'].detach().to(device),
+                'outputs_sampled': o_val,
+            }
+        with torch.no_grad():
+            Fp = surrogate.compute_reliability(ot_check)
+            if Fp.dim() > 0:
+                Fp = Fp.mean()
+
+        ot_check2: Dict[str, Dict[str, torch.Tensor]] = {}
+        for name in process_names:
+            data = traj[name]
+            o_src = data.get('outputs_sampled', data['outputs_mean'])
+            o_val = o_src.detach().clone().to(device)
+            if name == check_stage:
+                o_val = o_val - epsilon
+            ot_check2[name] = {
+                'inputs': data['inputs'].detach().to(device),
+                'outputs_mean': o_val,
+                'outputs_var': data['outputs_var'].detach().to(device),
+                'outputs_sampled': o_val,
+            }
+        with torch.no_grad():
+            Fm = surrogate.compute_reliability(ot_check2)
+            if Fm.dim() > 0:
+                Fm = Fm.mean()
+
+        fd = (Fp.item() - Fm.item()) / (2 * epsilon)
+        ag = output_tensors[check_stage].grad
+        ag_mean = ag.mean().item() if ag is not None else 0.0
+        err = abs(fd - ag_mean) / (abs(ag_mean) + 1e-12) * 100
+        status = "✓" if err < 5.0 else ("~" if err < 20.0 else "⚠")
+        print(f"  │   {check_stage}: FD={fd:.6e}, autograd={ag_mean:.6e}, "
+              f"rel_err={err:.1f}% {status}")
+
+    print(f"  └──────────────────────────────────────────────────────────")
+    print(f"{'='*75}\n")

@@ -45,6 +45,7 @@ from .lambda_grad import (
     LambdaGradResult,
     compute_lambda_grad,
     compute_lambda_grad_batched,
+    run_lambda_grad_diagnostics,
 )
 
 __all__ = [
@@ -85,4 +86,5 @@ __all__ = [
     'LambdaGradResult',
     'compute_lambda_grad',
     'compute_lambda_grad_batched',
+    'run_lambda_grad_diagnostics',
 ]

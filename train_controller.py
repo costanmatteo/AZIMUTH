@@ -95,6 +95,7 @@ from controller_optimization.src.analysis.bellman_lmin import (
 )
 from controller_optimization.src.analysis.lambda_grad import (
     compute_lambda_grad,
+    run_lambda_grad_diagnostics,
 )
 
 
@@ -1688,6 +1689,13 @@ def main(config=None):
                                 scenario_idx=scenario_idx
                             )
                             lg_trajectories.append(trajectory)
+
+                    # Run diagnostics before computation
+                    run_lambda_grad_diagnostics(
+                        trajectories=lg_trajectories,
+                        surrogate=surrogate,
+                        device=device,
+                    )
 
                     lambda_grad_result = compute_lambda_grad(
                         trajectories=lg_trajectories,
