@@ -88,7 +88,7 @@ def convert_trajectories_to_causalit_format(
     output_path.mkdir(parents=True, exist_ok=True)
 
     if model_type == 'proT':
-        _save_prot(X, Y, train_idx, val_idx, test_idx, output_path)
+        _save_prot(X, Y, train_idx, val_idx, test_idx, output_path, process_names)
     else:
         _save_stage_causal(S, Xint, Y, train_idx, val_idx, test_idx, output_path,
                            var_metadata, process_names)
@@ -118,7 +118,8 @@ def _format_prot(trajectories, process_names):
     """
     Format for ProT (TransformerForecaster).
 
-    For each trajectory: concatenate [inputs, env, outputs] per process.
+    For each trajectory: concatenate [inputs, env, outputs, var=0] per process.
+    var is zero because SCM data is deterministic given the seed.
     Features are zero-padded to the max dimension across processes.
 
     Returns:
@@ -138,8 +139,26 @@ def _format_prot(trajectories, process_names):
         inp_dim = inp.numel() if isinstance(inp, torch.Tensor) else np.array(inp).size
         env_dim = (env.numel() if isinstance(env, torch.Tensor) else np.array(env).size) if env is not None else 0
         out_dim = out.numel() if isinstance(out, torch.Tensor) else np.array(out).size
-        feature_dims.append(inp_dim + env_dim + out_dim)
+        feature_dims.append(inp_dim + env_dim + out_dim + out_dim)
     max_features = max(feature_dims)
+
+    # Debug: show per-process feature structure
+    print(f"  ProT format: [inputs | env | outputs | var=0]")
+    print(f"  max_features={max_features} (zero-padded)")
+    for pname, fdim in zip(process_names, feature_dims):
+        s = sample[pname]
+        inp = s['inputs']
+        env = s.get('env')
+        out = s['outputs']
+        inp_d = inp.numel() if isinstance(inp, torch.Tensor) else np.array(inp).size
+        env_d = (env.numel() if isinstance(env, torch.Tensor) else np.array(env).size) if env is not None else 0
+        out_d = out.numel() if isinstance(out, torch.Tensor) else np.array(out).size
+        layout = f"inp={inp_d}"
+        if env_d > 0:
+            layout += f" + env={env_d}"
+        layout += f" + out={out_d} + var={out_d}"
+        print(f"    {pname}: [{layout}] = {fdim} features"
+              f"{' (padded to ' + str(max_features) + ')' if fdim < max_features else ''}")
 
     # Build arrays
     X = np.zeros((n_samples, n_processes, max_features), dtype=np.float32)
@@ -153,7 +172,9 @@ def _format_prot(trajectories, process_names):
             env = traj[pname].get('env')
             if env is not None:
                 parts.append(_to_numpy_flat(env))
-            parts.append(_to_numpy_flat(traj[pname]['outputs']))
+            out = _to_numpy_flat(traj[pname]['outputs'])
+            parts.append(out)
+            parts.append(np.zeros_like(out))
             features = np.concatenate(parts)
             X[i, j, :len(features)] = features
         Y[i, 0, 0] = traj_data['F']
@@ -251,18 +272,42 @@ def _to_numpy_flat(t):
     return np.atleast_1d(np.array(t, dtype=np.float32)).flatten()
 
 
-def _save_prot(X, Y, train_idx, val_idx, test_idx, output_path):
-    """Save ProT-format data as .npy files."""
+def _save_prot(X, Y, train_idx, val_idx, test_idx, output_path, process_names):
+    """Save ProT-format data for the Lightning pipeline.
+
+    Saves:
+    - ds.npz: combined dataset with keys 'x' and 'y' (used by ProcessDataModule k-fold)
+    - dataset_metadata.json: metadata required by the Lightning trainer
+    - Per-split .npy files for reference
+    """
+    import json
+
+    # Combined file for Lightning k-fold
+    np.savez(output_path / 'ds.npz', x=X, y=Y)
+
+    # Per-split files for reference / pre-split mode
     for split_name, idx in [('train', train_idx), ('val', val_idx), ('test', test_idx)]:
         np.save(output_path / f'{split_name}_X.npy', X[idx])
         np.save(output_path / f'{split_name}_Y.npy', Y[idx])
 
-    # Save metadata for compatibility with existing SurrogateTrainer
-    np.savez(output_path / 'train_metadata.npz',
-             n_samples=len(train_idx),
-             source='full_trajectories.pt')
+    # dataset_metadata.json (required by Lightning trainer for ProT config)
+    n_samples, n_processes, n_features = X.shape
+    metadata = {
+        'name': 'surrogate_prot',
+        'description': f'ProT data from process chain trajectories ({", ".join(process_names)})',
+        'variable_info': {
+            'n_processes': n_processes,
+            'n_features': n_features,
+            'n_source': n_processes,   # encoder sequence length
+            'n_input': 0,              # not used by ProT
+            'n_target': 1,             # decoder sequence length (F)
+            'process_names': process_names,
+        },
+    }
+    with open(output_path / 'dataset_metadata.json', 'w') as f:
+        json.dump(metadata, f, indent=2)
 
-    print(f"  Saved ProT format: {{split}}_X.npy, {{split}}_Y.npy")
+    print(f"  Saved ProT format: ds.npz, dataset_metadata.json, {{split}}_X.npy")
 
 
 def _save_stage_causal(S, X, Y, train_idx, val_idx, test_idx, output_path,
@@ -326,7 +371,7 @@ def main():
     # Resolve defaults from config
     model_type = args.model_type or config['model'].get('casualit_model', 'proT')
     trajectories_path = args.trajectories_path or config['data'].get(
-        'dataset_path', 'data/trajectories/full_trajectories.pt')
+        'dataset_path', 'scm_ds/predictor_dataset/trajectories/full_trajectories.pt')
     train_frac = args.train_frac or config['data'].get('train_frac', 0.70)
     val_frac = args.val_frac or config['data'].get('val_frac', 0.15)
     test_frac = args.test_frac or config['data'].get('test_frac', 0.15)

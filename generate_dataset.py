@@ -7,8 +7,8 @@ usando gli SCM da scm_ds/, e calcola F con ReliabilityFunction.
 Usa: python generate_dataset.py [--n_samples 2000 --seed 42 ...]
 
 Output:
-- data/per_process/{process_name}_dataset.pt  → {inputs, outputs} per processo
-- data/trajectories/full_trajectories.pt      → traiettorie complete + F
+- scm_ds/predictor_dataset/per_process/{process_name}_dataset.pt  → {inputs, outputs} per processo
+- scm_ds/predictor_dataset/trajectories/full_trajectories.pt      → traiettorie complete + F
 """
 
 import sys
@@ -164,7 +164,7 @@ def main():
                         help='Override n_samples (default: from processes_config)')
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed for reproducibility')
-    parser.add_argument('--output_dir', type=str, default='data/',
+    parser.add_argument('--output_dir', type=str, default='scm_ds/predictor_dataset/',
                         help='Base output directory')
 
     # ST dataset complexity overrides
@@ -223,7 +223,7 @@ def main():
     from uncertainty_predictor.src.data.preprocessing import generate_scm_data
 
     # Import ReliabilityFunction
-    from reliability_function import ReliabilityFunction
+    from scm_ds import ReliabilityFunction
 
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -375,8 +375,44 @@ def main():
           f"min={np.min(F_values):.4f}, max={np.max(F_values):.4f}")
     print(f"  Saved to: {traj_path}")
 
-    # ── Step 4: Summary ─────────────────────────────────────────────────────
-    print(f"\n[4/4] Dataset generation complete!")
+    # ── Step 4: Convert to causaliT format ───────────────────────────────
+    print(f"\n[4/4] Converting to causaliT format...")
+    from scm_ds.convert_azimuth_trajectories import (
+        extract_process_info, build_arrays, build_masks, build_metadata,
+    )
+
+    causalit_dir = REPO_ROOT / 'scm_ds' / 'causalit_dataset'
+    causalit_dir.mkdir(parents=True, exist_ok=True)
+
+    process_names, process_dims = extract_process_info(full_trajectories)
+    s_arr, x_arr, y_arr, s_labels, x_labels, t_labels = build_arrays(
+        full_trajectories, process_names, process_dims
+    )
+    np.savez_compressed(str(causalit_dir / 'ds.npz'), s=s_arr, x=x_arr, y=y_arr)
+
+    import json as _json
+    metadata = build_metadata(s_labels, x_labels, t_labels)
+    with open(causalit_dir / 'dataset_metadata.json', 'w', encoding='utf-8') as f:
+        _json.dump(metadata, f, indent=2, sort_keys=True, ensure_ascii=False)
+
+    import pandas as _pd
+    masks = build_masks(process_names, process_dims, s_labels, x_labels, t_labels)
+    for fname, df in masks.items():
+        df.to_csv(causalit_dir / fname)
+
+    print(f"  S={s_arr.shape}, X={x_arr.shape}, Y={y_arr.shape}")
+    print(f"  Saved to: {causalit_dir}/")
+
+    # Copy converted data to causaliT/data/ for training
+    import shutil
+    causalit_data_dir = REPO_ROOT / 'causaliT' / 'data' / 'azimuth_surrogate'
+    if causalit_data_dir.exists():
+        shutil.rmtree(causalit_data_dir)
+    shutil.copytree(causalit_dir, causalit_data_dir)
+    print(f"  Copied to: {causalit_data_dir}/ (ready for causaliT training)")
+
+    # ── Step 5: Summary ─────────────────────────────────────────────────────
+    print(f"\n[5/5] Dataset generation complete!")
     print("\n" + "=" * 70)
     print("GENERATED FILES")
     print("=" * 70)
@@ -384,10 +420,13 @@ def main():
         pname = proc['name']
         print(f"  {per_process_dir / f'{pname}_dataset.pt'}")
     print(f"  {traj_path}")
+    print(f"  {causalit_dir}/ (causaliT format)")
+    print(f"  {causalit_data_dir}/ (causaliT training data)")
 
     print("\n" + "=" * 70)
     print("STEP 0 COMPLETED SUCCESSFULLY!")
     print("=" * 70)
+    print(f"  causaliT data ready at: {causalit_data_dir}/")
     print("\nNext step: Run train_predictor.py to train uncertainty predictors")
 
 

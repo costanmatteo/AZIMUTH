@@ -44,6 +44,7 @@ import numpy as np
 # Add project root to path
 REPO_ROOT = Path(__file__).parent
 sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(REPO_ROOT / 'causaliT'))
 
 from configs.processes_config import (
     PROCESSES, get_filtered_processes, ST_DATASET_CONFIG, _build_st_processes, DATASET_MODE
@@ -83,7 +84,7 @@ from controller_optimization.src.utils.model_utils import convert_numpy_to_tenso
 from controller_optimization.src.utils.scm_validation import validate_all_processes
 from controller_optimization.src.analysis import (
     TheoreticalLossTracker,
-    compute_empirical_L_min,
+    compute_loss_decomposition,
     generate_all_theoretical_plots,
     generate_full_report,
     save_report_txt,
@@ -92,6 +93,10 @@ from controller_optimization.src.analysis import (
 from controller_optimization.src.analysis.bellman_lmin import (
     BellmanConfig,
     compute_bellman_lmin,
+)
+from controller_optimization.src.analysis.lambda_grad import (
+    compute_lambda_grad,
+    run_lambda_grad_diagnostics,
 )
 
 
@@ -1398,7 +1403,7 @@ def main(config=None):
                 # samples_per_scenario as training, so L_min reflects the
                 # actual training distribution.
                 # With single F*, all scenarios share the same target.
-                print("  Running validation sampling (empirical L_min)...")
+                print("  Running validation sampling (loss decomposition)...")
                 training_batch_size = cfg['training']['batch_size']
                 samples_per_scenario = max(1, training_batch_size // n_scenarios)
                 n_L_min_repeats = 500  # Number of independent "epoch-like" repetitions
@@ -1432,22 +1437,25 @@ def main(config=None):
                                     sigma2_per_process[proc_name].append(data['outputs_var'].mean().item())
 
                 F_samples_array = np.array(F_samples_all)
+                _raw_var_F = float(np.var(F_samples_array))
+                _raw_bias2 = float((np.mean(F_samples_array) - F_star_for_L_min) ** 2)
                 print(f"  Total F samples: {len(F_samples_array)} ({n_L_min_repeats} repeats × {n_scenarios} scenarios × {samples_per_scenario} samples)")
                 print(f"  Empirical E[F]: {np.mean(F_samples_array):.6f}")
-                print(f"  Empirical Var[F]: {np.var(F_samples_array):.8f}")
+                print(f"  Empirical Var[F] (RAW, pre-scale): {_raw_var_F:.10f}")
+                print(f"  Empirical Bias² (RAW, pre-scale):  {_raw_bias2:.10f}")
 
                 # ── Compute L_min from samples ──────────────────────────────
-                # L_min = (Var[F] + (E[F] - F*)²) × loss_scale
+                # L_min = Var[F] × loss_scale
                 # Uses single F* consistently with training loss
                 loss_scale = cfg['training']['reliability_loss_scale']
 
-                combined_components = compute_empirical_L_min(
+                combined_components = compute_loss_decomposition(
                     F_samples=F_samples_array,
                     F_star=F_star_for_L_min,
                     loss_scale=loss_scale
                 )
 
-                print(f"\n  Empirical L_min = Var[F] + Bias² (from {len(F_samples_array)} samples, single F*):")
+                print(f"\n  Loss decomposition (from {len(F_samples_array)} samples, single F*):")
                 print(f"    L_min:            {combined_components.L_min:.6f}")
                 print(f"    Var[F] component: {combined_components.Var_F:.6f}")
                 print(f"    Bias² component:  {combined_components.Bias2:.6f}")
@@ -1500,13 +1508,13 @@ def main(config=None):
                 # ── Build theoretical_data dict ─────────────────────────────
                 theoretical_data = theoretical_tracker.to_dict()
 
-                # Store empirical combined L_min (same structure as before)
+                # Store loss decomposition (same structure as before)
                 theoretical_data['combined_L_min'] = combined_components.to_dict()
                 theoretical_data['per_process_L_min'] = {}  # not computed analytically
-                theoretical_data['l_min_method'] = 'empirical'
+                theoretical_data['l_min_method'] = 'variance_decomposition'
                 theoretical_data['n_validation_samples'] = int(len(F_samples_array))
 
-                # Override tracker's per-epoch L_min with the empirical value
+                # Override tracker's per-epoch L_min with the Var[F] value
                 # (constant across epochs — measured at end of training)
                 correct_L_min = combined_components.L_min
                 correct_Var_F = combined_components.Var_F
@@ -1560,14 +1568,14 @@ def main(config=None):
 
                 # Print empirical summary
                 summary = theoretical_data.get('summary', {})
-                print(f"\n  THEORETICAL ANALYSIS SUMMARY (empirical):")
+                print(f"\n  THEORETICAL ANALYSIS SUMMARY (Var[F]):")
                 print(f"    Final Loss:   {summary.get('final_loss', 0):.6f}")
                 print(f"    L_min:        {summary.get('final_L_min', 0):.6f}")
                 print(f"    Gap:          {summary.get('final_gap', 0):.6f}")
                 print(f"    Efficiency:   {summary.get('final_efficiency', 0)*100:.1f}%")
                 print(f"    Violations:   {summary.get('n_violations', 0)}/{summary.get('total_epochs', 0)}")
 
-                print("  ✓ Theoretical analysis completed (empirical L_min)")
+                print("  ✓ Theoretical analysis completed (L_min = Var[F])")
 
                 # ── Bellman backward-induction L_min ──────────────────────
                 try:
@@ -1601,32 +1609,43 @@ def main(config=None):
                     bellman_result.save(checkpoint_dir / 'bellman_lmin_result.json')
                     theoretical_data['bellman_lmin'] = bellman_result.to_dict()
 
-                    # Compute Bellman-based violations (loss < L_min_bellman)
-                    bellman_lmin_val = bellman_result.L_min_bellman
+                    # Compute violations using forward MC L_min (primary benchmark)
+                    bellman_lmin_val = bellman_result.L_min_forward
                     observed_losses = theoretical_data.get('observed_loss', [])
                     n_violations_bellman = sum(1 for obs in observed_losses if obs < bellman_lmin_val * 0.99)
                     theoretical_data['bellman_lmin']['n_violations'] = n_violations_bellman
 
-                    # Update summary violations to use Bellman reference
+                    # Update summary violations to use forward MC reference
                     if 'summary' in theoretical_data:
                         theoretical_data['summary']['n_violations'] = n_violations_bellman
 
                     # ── Comprehensive comparison ──
-                    print(f"\n  {'─'*50}")
+                    print(f"\n  {'─'*60}")
                     print(f"  L_min COMPARISON TABLE")
-                    print(f"  {'─'*50}")
-                    print(f"    Empirical L_min (Var+Bias²): {combined_components.L_min:.6f}")
-                    print(f"    Bellman L_min (reactive):     {bellman_result.L_min_bellman:.6f}")
-                    print(f"    Bellman L_min (forward val.): {bellman_result.L_min_forward:.6f} "
+                    print(f"  {'─'*60}")
+                    print(f"  [PRE-SCALE values (loss_scale={loss_scale})]")
+                    print(f"    Var[F] raw:                  {_raw_var_F:.10f}")
+                    print(f"    Bias² raw:                   {_raw_bias2:.10f}")
+                    print(f"    Var[F]+Bias² raw:            {_raw_var_F + _raw_bias2:.10f}")
+                    _fwd_prescale = bellman_result.L_min_forward / loss_scale if loss_scale != 1.0 else bellman_result.L_min_forward
+                    _bwd_prescale = bellman_result.L_min_bellman / loss_scale if loss_scale != 1.0 else bellman_result.L_min_bellman
+                    print(f"    Bellman L_min fwd raw:        {_fwd_prescale:.10f}")
+                    print(f"    Bellman L_min bwd raw:        {_bwd_prescale:.10f}")
+                    print(f"  [POST-SCALE values]")
+                    print(f"    Var[F] + Bias²:              {combined_components.Var_F + combined_components.Bias2:.6f}")
+                    print(f"    Bellman L_min (forward, PRIMARY): {bellman_result.L_min_forward:.6f} "
                           f"± {bellman_result.L_min_forward_se:.6f}")
-                    print(f"  {'─'*50}")
+                    print(f"    Bellman L_min (backward, info):   {bellman_result.L_min_bellman:.6f}")
+                    _hierarchy_ok = bellman_result.L_min_forward <= (combined_components.Var_F + combined_components.Bias2) * 1.01
+                    print(f"  Hierarchy L_min_forward ≤ Var[F]+Bias²: {'✓ OK' if _hierarchy_ok else '✗ VIOLATED'}")
+                    print(f"  {'─'*60}")
                     if summary.get('final_loss', 0) > 0:
                         obs_loss = summary['final_loss']
                         print(f"    Observed loss (final):       {obs_loss:.6f}")
-                        gap_bellman = obs_loss - bellman_result.L_min_bellman
-                        eff_bellman = bellman_result.L_min_bellman / obs_loss * 100 if obs_loss > 0 else 0
-                        print(f"    Gap (obs - Bellman):          {gap_bellman:.6f}")
-                        print(f"    Bellman efficiency:           {eff_bellman:.1f}%")
+                        gap_fwd = obs_loss - bellman_result.L_min_forward
+                        eff_fwd = bellman_result.L_min_forward / obs_loss * 100 if obs_loss > 0 else 0
+                        print(f"    Gap (obs - forward):          {gap_fwd:.6f}")
+                        print(f"    Bellman efficiency (forward):  {eff_fwd:.1f}%")
                     print(f"  {'─'*50}")
                     print(f"  Sigma (noise covariance diagonal): "
                           f"{[f'{s:.4f}' for s in bellman_result.Sigma.diagonal().tolist()]}")
@@ -1651,11 +1670,60 @@ def main(config=None):
                         print(f"  HINT: Reduce N_eps or M_actions to lower memory usage.")
                         print(f"        Current peak: ~{_mem_est*4:.0f} MB (with intermediates)")
                     print(f"  Consequence: Bellman lines will NOT appear in theoretical plots.")
-                    print(f"  The empirical L_min plots will still be generated normally.")
+                    print(f"  The Var[F] L_min plots will still be generated normally.")
                     print(f"  {'─'*50}")
                     print(f"  Full traceback:")
                     traceback.print_exc()
                     print()
+
+                # ── Lambda_grad (Delta Method approximation of L_min) ──
+                try:
+                    print(f"\n  ── Λ_grad (Delta Method) ──")
+                    # Collect trajectories from the process chain (reuse L_min sampling)
+                    n_lg_samples = min(200, samples_per_scenario * n_scenarios)
+                    lg_trajectories = []
+                    process_chain.eval()
+                    with torch.no_grad():
+                        for scenario_idx in range(n_scenarios):
+                            trajectory = process_chain.forward(
+                                batch_size=n_lg_samples // n_scenarios,
+                                scenario_idx=scenario_idx
+                            )
+                            lg_trajectories.append(trajectory)
+
+                    # Run diagnostics before computation
+                    run_lambda_grad_diagnostics(
+                        trajectories=lg_trajectories,
+                        surrogate=surrogate,
+                        device=device,
+                    )
+
+                    lambda_grad_result = compute_lambda_grad(
+                        trajectories=lg_trajectories,
+                        surrogate=surrogate,
+                        device=device,
+                        verbose=True,
+                    )
+
+                    theoretical_data['lambda_grad'] = lambda_grad_result.to_dict()
+
+                    # Apply loss_scale to match other L_min metrics
+                    if loss_scale != 1.0:
+                        theoretical_data['lambda_grad']['lambda_grad'] *= loss_scale
+                        for name in lambda_grad_result.process_names:
+                            theoretical_data['lambda_grad']['per_stage'][name] *= loss_scale
+
+                    print(f"  Λ_grad(D) = {theoretical_data['lambda_grad']['lambda_grad']:.6f}  "
+                          f"(N = {lambda_grad_result.n_trajectories} trajectories)")
+                    for name in lambda_grad_result.process_names:
+                        contrib = theoretical_data['lambda_grad']['per_stage'][name]
+                        print(f"    {name}: {contrib:.6f}")
+                    print(f"  ✓ Λ_grad completed — results will appear in plots and report\n")
+
+                except Exception as e:
+                    print(f"\n  ✗ Λ_grad computation FAILED: {e}")
+                    import traceback
+                    traceback.print_exc()
 
                 # ── Generate plots and reports (after Bellman, so plots include Bellman lines) ──
                 print("  Generating theoretical analysis plots...")
@@ -1680,7 +1748,7 @@ def main(config=None):
 
         else:
             print("\n[8.6/9] Theoretical loss analysis SKIPPED (theoretical_analysis.enabled = False)")
-            print("  To enable empirical L_min + Bellman backward-induction L_min:")
+            print("  To enable L_min (Var[F]) + Bellman backward-induction L_min:")
             print("  Set 'theoretical_analysis': {'enabled': True} in your config.")
             print("  This will add L_min plots and Bellman lines to the PDF report.")
 

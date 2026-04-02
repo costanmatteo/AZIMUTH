@@ -1,10 +1,10 @@
 """
-Empirical Loss Analysis for Reliability-based Controller Optimization.
+Loss Decomposition for Reliability-based Controller Optimization.
 
-Computes the minimum achievable loss (L_min) empirically from stochastic
-forward passes through the process chain.
+Computes the loss decomposition from stochastic forward passes through
+the process chain.
 
-L_min = (Var[F] + (E[F] - F*)²) × loss_scale
+L_min = Var[F] × loss_scale
 
 Where F samples are collected by running N forward passes with the
 reparameterization trick (o = μ + ε·σ, ε ~ N(0,1)).
@@ -46,15 +46,15 @@ class TheoreticalLossComponents:
         }
 
 
-def compute_empirical_L_min(
+def compute_loss_decomposition(
     F_samples: np.ndarray,
     F_star: float,
     loss_scale: float = 1.0
 ) -> TheoreticalLossComponents:
     """
-    Compute L_min empirically from forward-pass samples.
+    Compute loss decomposition from forward-pass samples.
 
-        L_min = (Var(F_samples) + (mean(F_samples) - F*)²) × loss_scale
+        L_min = Var(F_samples) × loss_scale
 
     Args:
         F_samples: Array of F values from N stochastic forward passes.
@@ -78,7 +78,7 @@ def compute_empirical_L_min(
     E_F2 = float(np.mean(F_samples**2))
     Var_F = float(np.var(F_samples))
     Bias2 = (E_F - F_star) ** 2
-    L_min = (Var_F + Bias2) * loss_scale
+    L_min = Var_F * loss_scale
 
     return TheoreticalLossComponents(
         L_min=L_min,
@@ -98,8 +98,8 @@ class TheoreticalLossTracker:
     """
     Tracks loss analysis throughout training.
 
-    Collects observed loss per epoch. L_min is computed empirically
-    at the end of training and backfilled.
+    Collects observed loss per epoch. L_min is computed via loss
+    decomposition at the end of training and backfilled.
     """
 
     # Process parameters (informational, from surrogate.PROCESS_CONFIGS)
@@ -143,7 +143,7 @@ class TheoreticalLossTracker:
         Record observed loss for this epoch.
 
         L_min, gap, and efficiency are placeholder zeros here.
-        They get backfilled after training with the empirical L_min.
+        They get backfilled after training with the L_min from decomposition.
 
         Args:
             epoch: Current epoch number

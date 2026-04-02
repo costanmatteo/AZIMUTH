@@ -74,13 +74,13 @@ echo "=============================================="
 echo ""
 
 echo "Starting training..."
-echo "Command: python train_controller.py --output_dir $OUTPUT_DIR --run_name $RUN_NAME --no_pdf --quiet $ARGS"
+echo "Command: python train_controller.py --output_dir $OUTPUT_DIR --run_name $RUN_NAME --quiet $ARGS"
 echo ""
 
 python train_controller.py \
     --output_dir "$OUTPUT_DIR" \
     --run_name "$RUN_NAME" \
-    --no_pdf --quiet \
+    --quiet \
     $ARGS
 
 if [ $? -eq 0 ]; then

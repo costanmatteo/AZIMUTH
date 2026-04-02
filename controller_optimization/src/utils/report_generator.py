@@ -724,22 +724,34 @@ def _page1(d, total_pages):
     pct_str  = theo.get('decomp_pct', '\u2014')
     total_ep = epochs if isinstance(epochs, int) else '?'
 
-    # Bellman backward-induction data (overrides empirical when available)
+    # Bellman data — forward MC is the primary benchmark, backward is informational
     bellman   = theo.get('bellman_lmin', {})
-    lmin_bel  = bellman.get('L_min_bellman')
-    lmin_fwd  = bellman.get('L_min_forward')
+    lmin_bel  = bellman.get('L_min_bellman')  # backward (informational)
+    lmin_fwd  = bellman.get('L_min_forward')  # forward MC (primary)
     lmin_fse  = bellman.get('L_min_forward_se')
     viol_bel  = bellman.get('n_violations', viol)
-    # Compute Bellman-based gap and efficiency
-    if lmin_bel is not None and final_total != '\u2014':
+    # Lambda_grad (Delta Method approximation of L_min)
+    lg_data   = theo.get('lambda_grad', {})
+    lg_val    = lg_data.get('lambda_grad')  # scalar Λ_grad(D)
+    # Compute gap and efficiency using forward MC L_min (primary)
+    if lmin_fwd is not None and final_total != '\u2014':
         try:
             _ft = float(final_total)
-            gap_bel = _ft - float(lmin_bel)
-            eff_bel = float(lmin_bel) / _ft * 100 if _ft > 0 else 0.0
+            gap_bel = _ft - float(lmin_fwd)
+            eff_bel = float(lmin_fwd) / _ft * 100 if _ft > 0 else 0.0
         except (TypeError, ValueError):
             gap_bel, eff_bel = None, None
     else:
         gap_bel, eff_bel = None, None
+    # Compute efficiency using backward induction L_min
+    if lmin_bel is not None and final_total != '\u2014':
+        try:
+            _ft = float(final_total)
+            eff_bel_bwd = float(lmin_bel) / _ft * 100 if _ft > 0 else 0.0
+        except (TypeError, ValueError):
+            eff_bel_bwd = None
+    else:
+        eff_bel_bwd = None
 
     # overfitting data
     ttg  = adv.get('train_test_gap')       or adv.get('overfitting')    or {}
@@ -777,22 +789,27 @@ def _page1(d, total_pages):
         ("BC",          _tv(final_bc)    if final_bc  != '\u2014' else '\u2014'),
         ("Best total",  _tv(best_loss),   ST_VAL_G),
     ]
-    if lmin_bel is not None:
+    if lmin_fwd is not None:
         lmin_rows = [
-            ("L_min Bellman",             _tv(lmin_bel)),
-            ("L_min forward val.",
+            ("L_min Bellman (forward)",
              f"{float(lmin_fwd):.6f} \u00b1 {float(lmin_fse):.6f}"
-             if lmin_fwd is not None else '\u2014'),
-            ("Gap (obs \u2212 Bellman)",  _tv(gap_bel) if gap_bel is not None else '\u2014'),
-            ("Efficiency",
+             if lmin_fse is not None else _tv(lmin_fwd)),
+            ("L_min Bellman (backward)",  _tv(lmin_bel) if lmin_bel is not None else '\u2014'),
+            ("\u039b_grad (Delta Method)", _tv(lg_val) if lg_val is not None else '\u2014'),
+            ("Gap (obs \u2212 L_min fwd)",  _tv(gap_bel) if gap_bel is not None else '\u2014'),
+            ("Efficiency (forward)",
              f"{eff_bel:.1f}%" if eff_bel is not None else '\u2014',
+             ST_VAL_G),
+            ("Efficiency (backward)",
+             f"{eff_bel_bwd:.1f}%" if eff_bel_bwd is not None else '\u2014',
              ST_VAL_G),
             (f"Violations (loss&lt;L_min)", f"{viol_bel} / {total_ep}",
              ST_VAL_G if viol_bel == 0 else ST_VAL_R),
         ]
     else:
         lmin_rows = [
-            ("L_min empirical",          _tv(lmin_emp)),
+            ("Var[F]",                   _tv(lmin_emp)),
+            ("\u039b_grad (Delta Method)", _tv(lg_val) if lg_val is not None else '\u2014'),
             ("Gap (reducible)",          _tv(gap_red)),
             ("Efficiency",               f"{float(eff)*100:.1f}%" if eff != '\u2014' else '\u2014',
              ST_VAL_G),
@@ -800,7 +817,7 @@ def _page1(d, total_pages):
              ST_VAL_G if viol == 0 else ST_VAL_R),
         ]
     decomp_rows = [
-        ("L_min empirical (Var+Bias\u00b2)", _tv(lmin_emp)),
+        ("Var[F]",                            _tv(lmin_emp)),
         ("Var(F) \u2014 irreducible",        _tv(var_f)),
         ("Bias\u00b2 \u2014 irreducible",    _tv(bias2)),
         ("Gap \u2014 reducible",             _tv(gap_r)),
@@ -1299,6 +1316,7 @@ def _page3(d):
             plot_loss_vs_L_min, plot_efficiency_over_time, plot_loss_decomposition,
         )
         bellman_data = theo.get('bellman_lmin', None)
+        lambda_grad_data = theo.get('lambda_grad', None)
 
         p = chk / 'loss_vs_L_min.png'
         plot_loss_vs_L_min(
@@ -1308,6 +1326,7 @@ def _page3(d):
             save_path=str(p),
             figsize=report_figsize,
             bellman_lmin=bellman_data,
+            lambda_grad=lambda_grad_data,
         )
         plt.close()
 
@@ -1319,6 +1338,7 @@ def _page3(d):
             figsize=report_figsize,
             bellman_lmin=bellman_data,
             observed_loss=theo['observed_loss'],
+            lambda_grad=lambda_grad_data,
         )
         plt.close()
 
@@ -1329,6 +1349,8 @@ def _page3(d):
             gap=theo['gap'][-1],
             save_path=str(p),
             figsize=report_figsize,
+            bellman_lmin=bellman_data,
+            lambda_grad=lambda_grad_data,
         )
         plt.close()
 

@@ -6,7 +6,7 @@ Nature Machine Intelligence, 2025), adapted for validating CausaliT
 attention-based causal discovery against SCM ground truth.
 
 This module is independent: it imports from scm_ds, causaliT,
-reliability_function, and uncertainty_predictor, but does not modify them.
+and uncertainty_predictor, but does not modify them.
 """
 
 __version__ = '0.1.0'

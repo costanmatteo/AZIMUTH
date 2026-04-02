@@ -48,7 +48,7 @@ from causal_chamber.ground_truth import (
     get_ground_truth_edges, get_all_observable_vars,
     get_ground_truth_adjacency_parent_convention,
 )
-from reliability_function import ReliabilityFunction
+from scm_ds import ReliabilityFunction
 
 
 # ---------------------------------------------------------------------------
@@ -547,7 +547,7 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description='Generate observational and interventional datasets from SCMs',
     )
-    parser.add_argument('--output_dir', type=str, default='data/causal_chamber',
+    parser.add_argument('--output_dir', type=str, default='scm_ds/predictor_dataset/causal_chamber',
                         help='Output directory')
     parser.add_argument('--n_obs', type=int, default=5000,
                         help='Number of observational samples per process')

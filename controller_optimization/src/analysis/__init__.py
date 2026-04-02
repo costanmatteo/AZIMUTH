@@ -3,7 +3,7 @@
 from .theoretical_loss_analysis import (
     TheoreticalLossComponents,
     TheoreticalLossTracker,
-    compute_empirical_L_min,
+    compute_loss_decomposition,
     run_validation_sampling,
     compute_z_score,
     format_status
@@ -25,6 +25,7 @@ from .theoretical_tables import (
     generate_decomposition_table,
     generate_efficiency_table,
     generate_validation_table,
+    generate_lambda_grad_table,
     generate_full_report,
     save_report_txt,
     save_report_json
@@ -40,11 +41,18 @@ from .bellman_lmin import (
     forward_simulation,
 )
 
+from .lambda_grad import (
+    LambdaGradResult,
+    compute_lambda_grad,
+    compute_lambda_grad_batched,
+    run_lambda_grad_diagnostics,
+)
+
 __all__ = [
     # Core analysis
     'TheoreticalLossComponents',
     'TheoreticalLossTracker',
-    'compute_empirical_L_min',
+    'compute_loss_decomposition',
     'run_validation_sampling',
     'compute_z_score',
     'format_status',
@@ -62,6 +70,7 @@ __all__ = [
     'generate_decomposition_table',
     'generate_efficiency_table',
     'generate_validation_table',
+    'generate_lambda_grad_table',
     'generate_full_report',
     'save_report_txt',
     'save_report_json',
@@ -73,4 +82,9 @@ __all__ = [
     'compute_manifold',
     'backward_induction',
     'forward_simulation',
+    # Lambda_grad
+    'LambdaGradResult',
+    'compute_lambda_grad',
+    'compute_lambda_grad_batched',
+    'run_lambda_grad_diagnostics',
 ]

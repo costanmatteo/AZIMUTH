@@ -60,6 +60,7 @@ def plot_loss_vs_L_min(
     title: str = "Loss vs Theoretical Minimum",
     figsize: tuple = (14, 4.8),
     bellman_lmin: Optional[Dict[str, Any]] = None,
+    lambda_grad: Optional[Dict[str, Any]] = None,
 ) -> plt.Figure:
     """
     Plot observed loss and theoretical L_min over epochs.
@@ -73,7 +74,7 @@ def plot_loss_vs_L_min(
     Args:
         epochs: List of epoch numbers
         observed_loss: List of observed loss values
-        theoretical_L_min: List of L_min values (Var[F] + Bias²)
+        theoretical_L_min: List of L_min values (Var[F])
         save_path: Path to save figure (optional)
         title: Plot title
         figsize: Figure size
@@ -94,15 +95,26 @@ def plot_loss_vs_L_min(
     # Plot observed loss
     ax.plot(epochs, observed, 'b-', label='Observed Loss')
 
-    # Plot theoretical L_min (empirical)
-    ax.plot(epochs, theoretical, 'r--', label='L_min (empirical)')
+    # Plot theoretical L_min (Var[F])
+    ax.plot(epochs, theoretical, 'r--', label='Var[F]')
 
     # Plot Bellman L_min lines if available
     if bellman_lmin is not None:
-        bellman_val = bellman_lmin.get('L_min_bellman', None)
-        if bellman_val is not None:
-            ax.axhline(y=bellman_val, color='green', linestyle='-.',
-                       label='L_min Bellman')
+        bellman_fwd = bellman_lmin.get('L_min_forward', None)
+        bellman_bwd = bellman_lmin.get('L_min_bellman', None)
+        if bellman_fwd is not None:
+            ax.axhline(y=bellman_fwd, color='green', linestyle='-.',
+                       label=f'L_min Bellman (forward) = {bellman_fwd:.6f}')
+        if bellman_bwd is not None:
+            ax.axhline(y=bellman_bwd, color='darkviolet', linestyle='--',
+                       label=f'L_min Bellman (backward) = {bellman_bwd:.6f}')
+
+    # Plot Lambda_grad line if available
+    if lambda_grad is not None:
+        lg_val = lambda_grad.get('lambda_grad')
+        if lg_val is not None:
+            ax.axhline(y=lg_val, color='darkorange', linestyle=':',
+                       label=f'Λ_grad (Delta Method) = {lg_val:.6f}')
 
     # Fill area between L_min and observed (reducible gap)
     ax.fill_between(
@@ -116,9 +128,11 @@ def plot_loss_vs_L_min(
 
     all_vals = np.concatenate([observed, theoretical])
     if bellman_lmin is not None:
-        extra = [v for v in [bellman_lmin.get('L_min_bellman')] if v is not None]
+        extra = [v for v in [bellman_lmin.get('L_min_forward'), bellman_lmin.get('L_min_bellman')] if v is not None]
         if extra:
             all_vals = np.concatenate([all_vals, extra])
+    if lambda_grad is not None and lambda_grad.get('lambda_grad') is not None:
+        all_vals = np.concatenate([all_vals, [lambda_grad['lambda_grad']]])
 
     # Labels and legend
     ax.set_xlabel('Epoch')
@@ -149,6 +163,7 @@ def plot_efficiency_over_time(
     figsize: tuple = (14, 4.8),
     bellman_lmin: Optional[Dict[str, Any]] = None,
     observed_loss: Optional[List[float]] = None,
+    lambda_grad: Optional[Dict[str, Any]] = None,
 ) -> plt.Figure:
     """
     Plot efficiency over epochs.
@@ -157,11 +172,11 @@ def plot_efficiency_over_time(
     L_min_Bellman / Loss_observed — so efficiency=1 means loss
     has reached the absolute theoretical minimum.
 
-    Without Bellman, falls back to L_min_empirical / Loss_observed.
+    Without Bellman, falls back to Var[F] / Loss_observed.
 
     Args:
         epochs: List of epoch numbers
-        efficiency: List of empirical efficiency values (L_min_emp / Loss)
+        efficiency: List of efficiency values (Var[F] / Loss)
         save_path: Path to save figure (optional)
         title: Plot title
         figsize: Figure size
@@ -180,33 +195,67 @@ def plot_efficiency_over_time(
     eff_empirical = np.array(efficiency)
 
     # Determine if we can compute Bellman-based efficiency
-    bellman_val = None
+    bellman_fwd = None
+    bellman_bwd = None
     if bellman_lmin is not None:
-        bellman_val = bellman_lmin.get('L_min_bellman', None)
+        bellman_fwd = bellman_lmin.get('L_min_forward', None)
+        bellman_bwd = bellman_lmin.get('L_min_bellman', None)
 
-    if bellman_val is not None and observed_loss is not None and len(observed_loss) == len(epochs):
-        # Primary: Bellman-based efficiency
+    has_obs = observed_loss is not None and len(observed_loss) == len(epochs)
+
+    if bellman_fwd is not None and has_obs:
         obs = np.array(observed_loss)
-        eff_bellman = np.where(obs > 0, bellman_val / obs, 0.0)
-        eff_bellman_clipped = np.clip(eff_bellman, 0, 1.5)
+        # Forward MC efficiency
+        eff_bellman_fwd = np.where(obs > 0, bellman_fwd / obs, 0.0)
+        eff_bellman_fwd_clipped = np.clip(eff_bellman_fwd, 0, 1.5)
+        ax.plot(epochs, eff_bellman_fwd_clipped, 'g-',
+                label='Efficiency (Bellman forward)')
 
-        ax.plot(epochs, eff_bellman_clipped, 'g-',
-                label='Efficiency (Bellman)')
+        # Backward induction efficiency
+        if bellman_bwd is not None:
+            eff_bellman_bwd = np.where(obs > 0, bellman_bwd / obs, 0.0)
+            eff_bellman_bwd_clipped = np.clip(eff_bellman_bwd, 0, 1.5)
+            ax.plot(epochs, eff_bellman_bwd_clipped, color='darkviolet', linestyle='--',
+                    label='Efficiency (Bellman backward)')
 
-        # Secondary: empirical efficiency as dashed reference
+        # Var[F]-based efficiency as lighter reference
         eff_emp_clipped = np.clip(eff_empirical, 0, 1.5)
-        ax.plot(epochs, eff_emp_clipped, 'b--', alpha=0.5,
-                label='Efficiency (empirical)')
+        ax.plot(epochs, eff_emp_clipped, 'b--', alpha=0.4,
+                label='Efficiency (Var[F])')
 
-        main_eff = eff_bellman_clipped
+        main_eff = eff_bellman_fwd_clipped
+        limit_label = 'Theoretical Limit'
+    elif bellman_bwd is not None and has_obs:
+        # Only backward available (no forward)
+        obs = np.array(observed_loss)
+        eff_bellman_bwd = np.where(obs > 0, bellman_bwd / obs, 0.0)
+        eff_bellman_bwd_clipped = np.clip(eff_bellman_bwd, 0, 1.5)
+        ax.plot(epochs, eff_bellman_bwd_clipped, color='darkviolet', linestyle='--',
+                label='Efficiency (Bellman backward)')
+
+        eff_emp_clipped = np.clip(eff_empirical, 0, 1.5)
+        ax.plot(epochs, eff_emp_clipped, 'b--', alpha=0.4,
+                label='Efficiency (Var[F])')
+
+        main_eff = eff_bellman_bwd_clipped
         limit_label = 'Theoretical Limit'
     else:
-        # Fallback: empirical efficiency only
+        # Fallback: Var[F]-based efficiency only
         eff_emp_clipped = np.clip(eff_empirical, 0, 1.5)
         ax.plot(epochs, eff_emp_clipped, 'g-',
-                label='Efficiency (empirical)')
+                label='Efficiency(Var[F])')
         main_eff = eff_emp_clipped
         limit_label = 'Theoretical Limit'
+
+    # Plot Lambda_grad efficiency if available
+    if lambda_grad is not None and has_obs:
+        lg_val = lambda_grad.get('lambda_grad')
+        if lg_val is not None:
+            obs = np.array(observed_loss)
+            eff_lg = np.where(obs > 0, lg_val / obs, 0.0)
+            eff_lg_clipped = np.clip(eff_lg, 0, 1.5)
+            ax.plot(epochs, eff_lg_clipped, color='darkorange', linestyle=':',
+                    label='Efficiency (Λ_grad)')
 
     # Add horizontal line at y=1 (theoretical limit)
     ax.axhline(y=1.0, color='red', linestyle='--', label=limit_label)
@@ -248,7 +297,9 @@ def plot_loss_decomposition(
     loss_scale: float = 100.0,
     save_path: Optional[str] = None,
     title: str = "Loss Decomposition",
-    figsize: tuple = (14, 4.8)
+    figsize: tuple = (14, 4.8),
+    bellman_lmin: Optional[Dict[str, Any]] = None,
+    lambda_grad: Optional[Dict[str, Any]] = None,
 ) -> plt.Figure:
     """
     Bar chart showing decomposition of loss into components.
@@ -266,6 +317,7 @@ def plot_loss_decomposition(
         save_path: Path to save figure
         title: Plot title
         figsize: Figure size
+        bellman_lmin: Dict with Bellman results (keys: L_min_bellman, L_min_forward)
 
     Returns:
         Matplotlib Figure object
@@ -301,6 +353,24 @@ def plot_loss_decomposition(
 
     # Add horizontal line for L_min
     ax.axhline(y=L_min, color='red', linestyle='--', label='L_min')
+
+    # Add Bellman L_min lines if available
+    if bellman_lmin is not None:
+        bellman_fwd = bellman_lmin.get('L_min_forward')
+        bellman_bwd = bellman_lmin.get('L_min_bellman')
+        if bellman_fwd is not None:
+            ax.axhline(y=bellman_fwd, color='green', linestyle='-.',
+                       label=f'L_min Bellman (fwd) = {bellman_fwd:.4f}')
+        if bellman_bwd is not None:
+            ax.axhline(y=bellman_bwd, color='darkviolet', linestyle='--',
+                       label=f'L_min Bellman (bwd) = {bellman_bwd:.4f}')
+
+    # Add Lambda_grad line if available
+    if lambda_grad is not None:
+        lg_val = lambda_grad.get('lambda_grad')
+        if lg_val is not None:
+            ax.axhline(y=lg_val, color='darkorange', linestyle=':',
+                       label=f'Λ_grad (Delta) = {lg_val:.4f}')
 
     # Labels
     ax.set_ylabel('Loss Value')
@@ -518,12 +588,16 @@ def create_summary_figure(
     ax1.spines['top'].set_visible(False)
     ax1.spines['right'].set_visible(False)
     ax1.plot(epochs, observed_loss, 'b-', linewidth=2, label='Observed Loss', marker='o', markersize=2)
-    ax1.plot(epochs, theoretical_L_min, 'r--', linewidth=2, label='L_min (empirical)')
+    ax1.plot(epochs, theoretical_L_min, 'r--', linewidth=2, label='Var[F]')
     if bellman_data is not None:
-        bellman_val = bellman_data.get('L_min_bellman', None)
-        if bellman_val is not None:
-            ax1.axhline(y=bellman_val, color='green', linestyle='-.', linewidth=2,
-                        label=f'L_min Bellman = {bellman_val:.4f}')
+        bellman_fwd = bellman_data.get('L_min_forward', None)
+        bellman_bwd = bellman_data.get('L_min_bellman', None)
+        if bellman_fwd is not None:
+            ax1.axhline(y=bellman_fwd, color='green', linestyle='-.', linewidth=2,
+                        label=f'L_min Bellman (fwd) = {bellman_fwd:.4f}')
+        if bellman_bwd is not None:
+            ax1.axhline(y=bellman_bwd, color='darkviolet', linestyle='--', linewidth=2,
+                        label=f'L_min Bellman (bwd) = {bellman_bwd:.4f}')
     ax1.fill_between(epochs, theoretical_L_min, observed_loss, alpha=0.3, color='orange', label='Gap')
     ax1.set_xlabel('Epoch')
     ax1.set_ylabel('Loss')
@@ -536,24 +610,43 @@ def create_summary_figure(
     ax2.spines['top'].set_visible(False)
     ax2.spines['right'].set_visible(False)
 
-    bellman_val = None
+    bellman_fwd = None
+    bellman_bwd = None
     if bellman_data is not None:
-        bellman_val = bellman_data.get('L_min_bellman', None)
+        bellman_fwd = bellman_data.get('L_min_forward', None)
+        bellman_bwd = bellman_data.get('L_min_bellman', None)
 
-    if bellman_val is not None and len(observed_loss) > 0:
-        # Primary: Bellman-based efficiency per epoch
+    if bellman_fwd is not None and len(observed_loss) > 0:
         obs_arr = np.array(observed_loss)
-        bellman_eff_curve = np.where(obs_arr > 0, bellman_val / obs_arr, 0.0)
-        bellman_eff_clipped = np.clip(bellman_eff_curve, 0, 1.5)
-        ax2.plot(epochs, bellman_eff_clipped, 'g-', linewidth=2, marker='o', markersize=2,
-                 label=f'Efficiency (Bellman)')
-        # Empirical as dashed reference
-        ax2.plot(epochs, efficiency, 'b--', linewidth=1.5, alpha=0.5, marker='o', markersize=1,
-                 label='Efficiency (empirical)')
-        ax2.set_ylabel('Efficiency (L_min Bellman / Loss)')
+        # Forward MC efficiency
+        bellman_eff_fwd = np.where(obs_arr > 0, bellman_fwd / obs_arr, 0.0)
+        bellman_eff_fwd_clipped = np.clip(bellman_eff_fwd, 0, 1.5)
+        ax2.plot(epochs, bellman_eff_fwd_clipped, 'g-', linewidth=2, marker='o', markersize=2,
+                 label='Efficiency (Bellman fwd)')
+        # Backward induction efficiency
+        if bellman_bwd is not None:
+            bellman_eff_bwd = np.where(obs_arr > 0, bellman_bwd / obs_arr, 0.0)
+            bellman_eff_bwd_clipped = np.clip(bellman_eff_bwd, 0, 1.5)
+            ax2.plot(epochs, bellman_eff_bwd_clipped, color='darkviolet', linestyle='--',
+                     linewidth=2, marker='o', markersize=2,
+                     label='Efficiency (Bellman bwd)')
+        # Var[F]-based efficiency as lighter reference
+        ax2.plot(epochs, efficiency, 'b--', linewidth=1.5, alpha=0.4, marker='o', markersize=1,
+                 label='Efficiency (Var[F])')
+        ax2.set_ylabel('Efficiency (L_min / Loss)')
+    elif bellman_bwd is not None and len(observed_loss) > 0:
+        obs_arr = np.array(observed_loss)
+        bellman_eff_bwd = np.where(obs_arr > 0, bellman_bwd / obs_arr, 0.0)
+        bellman_eff_bwd_clipped = np.clip(bellman_eff_bwd, 0, 1.5)
+        ax2.plot(epochs, bellman_eff_bwd_clipped, color='darkviolet', linestyle='--',
+                 linewidth=2, marker='o', markersize=2,
+                 label='Efficiency (Bellman bwd)')
+        ax2.plot(epochs, efficiency, 'b--', linewidth=1.5, alpha=0.4, marker='o', markersize=1,
+                 label='Efficiency (Var[F])')
+        ax2.set_ylabel('Efficiency (L_min / Loss)')
     else:
         ax2.plot(epochs, efficiency, 'g-', linewidth=2, marker='o', markersize=2,
-                 label='Efficiency (empirical)')
+                 label='Efficiency(Var[F])')
         ax2.set_ylabel('Efficiency (L_min / Loss)')
 
     ax2.axhline(y=1.0, color='red', linestyle='--', linewidth=2, label='100%')
@@ -575,11 +668,17 @@ def create_summary_figure(
     for bar, val in zip(bars, values):
         ax3.annotate(f'{val:.4f}', xy=(bar.get_x() + bar.get_width()/2, bar.get_height()),
                     xytext=(0, 3), textcoords="offset points", ha='center', fontsize=9)
-    ax3.axhline(y=final_Var_F + final_Bias2, color='red', linestyle='--', linewidth=2,
-                label=f'L_min emp = {final_Var_F + final_Bias2:.4f}')
-    if bellman_data is not None and bellman_data.get('L_min_bellman') is not None:
-        ax3.axhline(y=bellman_data['L_min_bellman'], color='green', linestyle='-.',
-                    linewidth=2, label=f'L_min Bellman = {bellman_data["L_min_bellman"]:.4f}')
+    ax3.axhline(y=final_Var_F, color='red', linestyle='--', linewidth=2,
+                label=f'L_min (Var[F]) = {final_Var_F:.4f}')
+    if bellman_data is not None:
+        bellman_fwd = bellman_data.get('L_min_forward')
+        bellman_bwd = bellman_data.get('L_min_bellman')
+        if bellman_fwd is not None:
+            ax3.axhline(y=bellman_fwd, color='green', linestyle='-.',
+                        linewidth=2, label=f'L_min Bellman (fwd) = {bellman_fwd:.4f}')
+        if bellman_bwd is not None:
+            ax3.axhline(y=bellman_bwd, color='darkviolet', linestyle='--', linewidth=2,
+                        label=f'L_min Bellman (bwd) = {bellman_bwd:.4f}')
     ax3.set_ylabel('Loss Value')
     ax3.set_title('Loss Decomposition (Final)')
     ax3.legend(loc='upper right', fontsize=7)
@@ -639,8 +738,9 @@ def generate_all_theoretical_plots(
         print("  Warning: No epochs in tracker data, skipping plots")
         return plots
 
-    # Extract Bellman data if available
+    # Extract Bellman and Lambda_grad data if available
     bellman_data = tracker_data.get('bellman_lmin', None)
+    lambda_grad_data = tracker_data.get('lambda_grad', None)
 
     # 1. Loss vs L_min
     path = checkpoint_dir / 'loss_vs_L_min.png'
@@ -650,6 +750,7 @@ def generate_all_theoretical_plots(
         theoretical_L_min=tracker_data['theoretical_L_min'],
         save_path=str(path),
         bellman_lmin=bellman_data,
+        lambda_grad=lambda_grad_data,
     )
     plots['loss_vs_L_min'] = path
     plt.close()
@@ -662,6 +763,7 @@ def generate_all_theoretical_plots(
         save_path=str(path),
         bellman_lmin=bellman_data,
         observed_loss=tracker_data['observed_loss'],
+        lambda_grad=lambda_grad_data,
     )
     plots['training_efficiency'] = path
     plt.close()
@@ -672,7 +774,9 @@ def generate_all_theoretical_plots(
         Var_F=tracker_data['theoretical_Var_F'][-1],
         Bias2=tracker_data['theoretical_Bias2'][-1],
         gap=tracker_data['gap'][-1],
-        save_path=str(path)
+        save_path=str(path),
+        bellman_lmin=bellman_data,
+        lambda_grad=lambda_grad_data,
     )
     plots['loss_decomposition'] = path
     plt.close()
