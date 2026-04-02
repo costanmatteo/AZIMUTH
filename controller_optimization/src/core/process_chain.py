@@ -18,7 +18,7 @@ import numpy as np
 REPO_ROOT = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from controller_optimization.src.utils.model_utils import (
+from controller_optimization.src.io.model_utils import (
     load_uncertainty_predictor,
     load_preprocessor
 )
@@ -77,7 +77,7 @@ class ProcessChain(nn.Module):
                 'n_non_controllable': number of non-controllable inputs,
             }
         """
-        from controller_optimization.configs.processes_config import get_controllable_inputs
+        from configs.processes_config import get_controllable_inputs
 
         input_labels = process_config['input_labels']
         controllable = get_controllable_inputs(process_config)
@@ -868,8 +868,8 @@ if __name__ == '__main__':
     print("Note: This requires trained uncertainty predictors.")
     print("Run train_processes.py first if not already done.")
 
-    from controller_optimization.configs.processes_config import PROCESSES
-    from controller_optimization.src.utils.target_generation import generate_target_trajectory
+    from configs.processes_config import PROCESSES
+    from controller_optimization.src.core.target_generation import generate_target_trajectory
 
     # Generate target trajectory
     target_traj = generate_target_trajectory(PROCESSES, n_samples=1, seed=42)

@@ -24,10 +24,10 @@ from tqdm import tqdm
 REPO_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from controller_optimization.configs.processes_config import get_filtered_processes
-from controller_optimization.src.utils.target_generation import generate_target_trajectory
-from controller_optimization.src.utils.process_chain import ProcessChain
-from controller_optimization.src.models.surrogate import ProTSurrogate
+from configs.processes_config import get_filtered_processes
+from controller_optimization.src.core.target_generation import generate_target_trajectory
+from controller_optimization.src.core.process_chain import ProcessChain
+from controller_optimization.src.integration.surrogate import ProTSurrogate
 
 
 def suppress_stdout():

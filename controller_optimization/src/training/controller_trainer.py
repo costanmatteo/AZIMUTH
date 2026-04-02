@@ -408,7 +408,7 @@ class ControllerTrainer:
         fixed_seed = 42  # Single fixed seed for reproducibility across epochs
 
         with torch.no_grad():
-            from controller_optimization.src.utils.metrics import convert_trajectory_to_numpy
+            from controller_optimization.src.evaluation.metrics import convert_trajectory_to_numpy
 
             rng_state = torch.get_rng_state()
 
@@ -1025,7 +1025,7 @@ class ControllerTrainer:
         for epoch in range(1, epochs + 1):
             # Disable debug after first epoch to avoid flooding output
             if epoch == 2:
-                from controller_optimization.src.utils.process_chain import ProcessChain
+                from controller_optimization.src.core.process_chain import ProcessChain
                 ProcessChain.enable_debug(False)
                 self._debug_gradients = False  # Also disable gradient debug
                 self._debug_bc_loss = False  # Also disable BC loss debug
@@ -1505,7 +1505,7 @@ class ControllerTrainer:
                 'target_gap': float,     # (F_star - F_actual) / F_star
             }
         """
-        from controller_optimization.src.utils.model_utils import convert_numpy_to_tensor
+        from controller_optimization.src.io.model_utils import convert_numpy_to_tensor
 
         # F* già calcolato
         F_star = self.surrogate.F_star

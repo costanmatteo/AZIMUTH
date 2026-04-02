@@ -14,7 +14,7 @@ Example of INVALID configuration:
 This creates a logical contradiction.
 """
 
-from controller_optimization.configs.processes_config import get_controllable_inputs
+from configs.processes_config import get_controllable_inputs
 
 
 class SCMValidationError(Exception):
@@ -119,7 +119,7 @@ def validate_all_processes(processes_config_list):
     Raises:
         SCMValidationError: If validation fails for any process
     """
-    from controller_optimization.src.utils.target_generation import get_scm_dataset
+    from controller_optimization.src.core.target_generation import get_scm_dataset
 
     print("Validating SCM causal consistency for all processes...")
 

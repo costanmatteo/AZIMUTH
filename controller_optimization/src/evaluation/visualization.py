@@ -173,8 +173,8 @@ def plot_trajectory_comparison(target_trajectory, baseline_trajectory,
 
     Un subplot separato per ogni singolo input e output di ogni processo.
     """
-    from controller_optimization.src.utils.metrics import convert_trajectory_to_numpy
-    from controller_optimization.configs.processes_config import get_process_by_name
+    from controller_optimization.src.evaluation.metrics import convert_trajectory_to_numpy
+    from configs.processes_config import get_process_by_name
 
     # Convert to numpy
     target = convert_trajectory_to_numpy(target_trajectory)
@@ -581,7 +581,7 @@ def plot_training_progression(progression_path, save_path=None):
         progression_path (str): Path to training_progression.npz file
         save_path (str): Path to save figure
     """
-    from controller_optimization.configs.processes_config import get_process_by_name
+    from configs.processes_config import get_process_by_name
 
     # Load progression data
     data = np.load(progression_path, allow_pickle=True)

@@ -1140,7 +1140,7 @@ def compute_bellman_lmin(
     if hasattr(surrogate, '_dynamic_configs') and surrogate._dynamic_configs is not None:
         proc_configs = surrogate._dynamic_configs
     else:
-        from controller_optimization.src.models.surrogate import ProTSurrogate
+        from controller_optimization.src.integration.surrogate import ProTSurrogate
         proc_configs = ProTSurrogate.PROCESS_CONFIGS
 
     weights = np.array([proc_configs[name]['weight'] for name in process_names])

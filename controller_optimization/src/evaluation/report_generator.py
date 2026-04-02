@@ -1312,7 +1312,7 @@ def _page3(d):
         import matplotlib
         matplotlib.use('Agg')
         import matplotlib.pyplot as plt
-        from controller_optimization.src.analysis.theoretical_visualization import (
+        from controller_optimization.src.evaluation.analysis.theoretical_visualization import (
             plot_loss_vs_L_min, plot_efficiency_over_time, plot_loss_decomposition,
         )
         bellman_data = theo.get('bellman_lmin', None)
