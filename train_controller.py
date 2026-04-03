@@ -454,7 +454,7 @@ def main(config=None):
         print(f"    Trainable parameters: {trainable_params:,}")
 
         # Enable debug mode for first epoch only
-        ProcessChain.enable_debug(True)
+        process_chain.enable_debug(True)
 
     except FileNotFoundError as e:
         print(f"\n✗ Error: {e}")
