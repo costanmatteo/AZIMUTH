@@ -14,7 +14,7 @@ Example of INVALID configuration:
 This creates a logical contradiction.
 """
 
-from controller_optimization.configs.processes_config import get_controllable_inputs
+from configs.processes_config import get_controllable_inputs
 
 
 class SCMValidationError(Exception):

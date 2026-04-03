@@ -58,7 +58,7 @@ class ProcessChain(nn.Module):
                 'n_non_controllable': number of non-controllable inputs,
             }
         """
-        from controller_optimization.configs.processes_config import get_controllable_inputs
+        from configs.processes_config import get_controllable_inputs
 
         input_labels = process_config['input_labels']
         controllable = get_controllable_inputs(process_config)
