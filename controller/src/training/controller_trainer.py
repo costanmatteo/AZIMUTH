@@ -272,6 +272,419 @@ class ControllerTrainer:
 
         return lambda_bc, reliability_weight, phase
 
+    def _compute_normalization_stats(self):
+        """
+        Compute normalization statistics (min, max) for each process's CONTROLLABLE inputs
+        from the target trajectories to scale BC loss to [0,1] range.
+
+        Only controllable inputs are included since BC loss should not penalize
+        non-controllable inputs (the controller cannot change them).
+        """
+        self.input_stats = {}
+
+        for process_name, data in self.surrogate.target_trajectory_tensors.items():
+            inputs = data['inputs']  # Shape: (n_scenarios, seq_len, input_dim)
+
+            # Filter to controllable inputs only
+            ctrl_idx = self.controllable_indices[process_name]
+            if len(ctrl_idx) > 0:
+                inputs = inputs[..., ctrl_idx]
+
+            # Compute min and max across all scenarios and timesteps
+            # reshape(-1) ensures 1D even with a single controllable dimension
+            input_min = inputs.min(dim=0)[0].min(dim=0)[0].reshape(-1)  # Shape: (n_controllable,)
+            input_max = inputs.max(dim=0)[0].max(dim=0)[0].reshape(-1)  # Shape: (n_controllable,)
+            input_range = input_max - input_min
+
+            # For constant dimensions (range ≈ 0), use |target_value| as scale
+            # instead of near-zero range which would cause normalization to explode.
+            # This gives a relative-deviation penalty: loss ∝ (Δ / |target|)²
+            RANGE_THRESHOLD = 1e-4
+            is_constant = input_range < RANGE_THRESHOLD
+
+            if is_constant.any():
+                # Fallback scale: max(|target_value|, 1.0) to avoid division issues near zero
+                fallback_scale = torch.clamp(torch.abs(input_min), min=1.0)
+                input_range = torch.where(is_constant, fallback_scale, input_range)
+
+                const_indices = [i for i, c in enumerate(is_constant.tolist()) if c]
+                const_values = [input_min[i].item() for i in const_indices]
+                const_scales = [fallback_scale[i].item() for i in const_indices]
+                print(f"  INFO [{process_name}]: constant controllable dims {const_indices} "
+                      f"(values={const_values}) — using fallback scale {const_scales}")
+
+            # Small epsilon for float precision safety
+            input_range = input_range + 1e-8
+
+            self.input_stats[process_name] = {
+                'min': input_min.to(self.device),
+                'range': input_range.to(self.device),
+            }
+
+        print(f"  Input normalization stats computed for {len(self.input_stats)} processes (controllable inputs only)")
+
+    def compute_loss(self, trajectory, scenario_idx, reliability_weight=1.0, lambda_bc=None,
+                     return_quality_scores=False):
+        """
+        Calcola loss totale per uno specifico scenario.
+
+        Args:
+            trajectory (dict): Output trajectory from process_chain.forward()
+            scenario_idx (int): Index of the scenario being evaluated
+            reliability_weight (float): Weight for reliability loss (0.0 = ignore, 1.0 = full)
+            lambda_bc (float): Behavior cloning weight (if None, uses self.lambda_bc)
+            return_quality_scores (bool): If True, also return per-process quality scores
+
+        Returns:
+            If return_quality_scores=False:
+                total_loss, reliability_loss, bc_loss, F
+            If return_quality_scores=True:
+                total_loss, reliability_loss, bc_loss, F, quality_scores
+        """
+        # Use provided lambda_bc or fall back to instance value
+        if lambda_bc is None:
+            lambda_bc = self.lambda_bc
+
+        # Reliability loss: scale * (F - F*)^2
+        # Scale prevents vanishing gradients when delta F is small (~0.1)
+        F, quality_scores = self.surrogate.compute_reliability(trajectory, return_quality_scores=True)
+
+        # Debug: verify F is in the computation graph (first call only)
+        if hasattr(self, '_debug_F_graph') and self._debug_F_graph:
+            self._debug_F_graph = False
+            print(f"\n{'='*60}", flush=True)
+            print(f"SURROGATE GRADIENT DEBUG", flush=True)
+            print(f"{'='*60}", flush=True)
+            print(f"  F.requires_grad = {F.requires_grad}", flush=True)
+            print(f"  F.grad_fn       = {F.grad_fn}", flush=True)
+            print(f"  F.shape         = {F.shape}", flush=True)
+            print(f"  F.mean()        = {F.mean().item():.6f}", flush=True)
+            print(f"  F*              = {self.surrogate.F_star:.6f}", flush=True)
+            if F.requires_grad and F.grad_fn is not None:
+                print(f"  STATUS: OK - Gradients WILL flow to controller", flush=True)
+            else:
+                print(f"  STATUS: BROKEN - F is detached, reliability loss has NO gradient effect!", flush=True)
+            print(f"{'='*60}\n", flush=True)
+
+        F_star_tensor = torch.tensor(self.surrogate.F_star, dtype=torch.float32, device=self.device)
+        reliability_loss = self.reliability_loss_scale * (F - F_star_tensor) ** 2
+
+        # Behavior cloning loss: mean( ||a_ctrl - a_ctrl*||^2 ) across all processes
+        # Only compares CONTROLLABLE inputs (non-controllable can't be changed by the controller)
+        # Inputs are normalized using precomputed stats (with fallback scale for constant dims)
+        bc_loss = torch.tensor(0.0, device=self.device)
+        n_processes = len(trajectory.keys())
+
+        for process_name in trajectory.keys():
+            ctrl_idx = self.controllable_indices[process_name]
+            if len(ctrl_idx) == 0:
+                continue
+
+            actual_inputs = trajectory[process_name]['inputs'][..., ctrl_idx]
+            # Target trajectory may have only 1 sample (adaptive calibration targets).
+            # Always use sample 0 for BC reference; clamp scenario_idx for legacy cases.
+            target_all = self.surrogate.target_trajectory_tensors[process_name]['inputs']
+            target_idx = min(scenario_idx, target_all.shape[0] - 1)
+            target_inputs_scenario = target_all[target_idx:target_idx+1][..., ctrl_idx]
+
+            # Normalize inputs using precomputed stats
+            # Non-constant dims: normalized by actual range → [0,1]
+            # Constant dims: normalized by max(|target|, 1.0) → relative deviation penalty
+            stats = self.input_stats[process_name]
+            actual_inputs_norm = (actual_inputs - stats['min']) / stats['range']
+            target_inputs_norm = (target_inputs_scenario - stats['min']) / stats['range']
+
+            # DEBUG: Print BC loss details on first call
+            if hasattr(self, '_debug_bc_loss') and self._debug_bc_loss:
+                print(f"\n  BC Loss Debug [{process_name}] (controllable only):")
+                print(f"    controllable_indices: {ctrl_idx}")
+                print(f"    actual_inputs (raw): {actual_inputs[0].tolist()}")
+                print(f"    target_inputs (raw): {target_inputs_scenario[0].tolist()}")
+                print(f"    stats['min']: {stats['min'].tolist()}")
+                print(f"    stats['range']: {stats['range'].tolist()}")
+                print(f"    actual_inputs_norm: {actual_inputs_norm[0].tolist()}")
+                print(f"    target_inputs_norm: {target_inputs_norm[0].tolist()}")
+                print(f"    MSE per dim: {((actual_inputs_norm - target_inputs_norm) ** 2).mean(dim=0).tolist()}")
+
+            # Compute MSE on normalized controllable inputs
+            bc_loss = bc_loss + torch.mean((actual_inputs_norm - target_inputs_norm) ** 2)
+
+        # Average BC loss across processes (not sum!)
+        bc_loss = bc_loss / n_processes
+
+        # Total loss with dynamic weights
+        # reliability_weight controls if reliability loss is active (0.0 during warm-up)
+        total_loss = reliability_weight * torch.mean(reliability_loss) + lambda_bc * bc_loss
+
+        if return_quality_scores:
+            return total_loss, torch.mean(reliability_loss).item(), bc_loss.item(), torch.mean(F).item(), quality_scores
+        return total_loss, torch.mean(reliability_loss).item(), bc_loss.item(), torch.mean(F).item()
+
+    def _split_trajectory(self, trajectory, train_size, val_size):
+        """
+        Split a trajectory into training and validation portions.
+
+        Args:
+            trajectory (dict): Trajectory from process_chain.forward()
+            train_size (int): Number of samples for training
+            val_size (int): Number of samples for validation
+
+        Returns:
+            tuple: (train_trajectory, val_trajectory)
+        """
+        train_trajectory = {}
+        val_trajectory = {}
+
+        for process_name, data in trajectory.items():
+            train_trajectory[process_name] = {
+                'inputs': data['inputs'][:train_size],
+                'outputs_mean': data['outputs_mean'][:train_size],
+                'outputs_var': data['outputs_var'][:train_size],
+                'outputs_sampled': data['outputs_sampled'][:train_size],
+            }
+            val_trajectory[process_name] = {
+                'inputs': data['inputs'][train_size:train_size+val_size],
+                'outputs_mean': data['outputs_mean'][train_size:train_size+val_size],
+                'outputs_var': data['outputs_var'][train_size:train_size+val_size],
+                'outputs_sampled': data['outputs_sampled'][train_size:train_size+val_size],
+            }
+
+        return train_trajectory, val_trajectory
+
+    def set_validation_data(self, validation_surrogate, validation_process_chain):
+        """
+        Set cross-scenario validation data for computing validation loss during training.
+
+        This allows tracking train vs validation loss to detect overfitting
+        across different operating conditions.
+
+        Args:
+            validation_surrogate (ProTSurrogate): Surrogate for test scenarios
+            validation_process_chain (ProcessChain): Process chain for test scenarios
+                (will have trained policy weights copied from main chain)
+        """
+        self.validation_surrogate = validation_surrogate
+        self.validation_process_chain = validation_process_chain
+        print(f"  Cross-scenario validation data set: {validation_surrogate.n_scenarios} test scenarios")
+
+    def set_within_scenario_validation(self, enabled=True, split_fraction=0.2):
+        """
+        Configure within-scenario validation (train/val split within same scenarios).
+
+        This splits each batch of samples into training and validation portions.
+        The validation samples are NEVER used for gradient updates, preventing data leakage.
+
+        Args:
+            enabled (bool): Enable within-scenario validation
+            split_fraction (float): Fraction of samples to use as validation (0.0 to 0.5)
+                                   E.g., 0.2 = 20% validation, 80% training
+        """
+        self.within_scenario_validation_enabled = enabled
+        self.within_scenario_split = max(0.0, min(0.5, split_fraction))  # Clamp to [0, 0.5]
+
+        if enabled:
+            print(f"  Within-scenario validation: ENABLED")
+            print(f"    Split: {self.within_scenario_split*100:.0f}% validation, {(1-self.within_scenario_split)*100:.0f}% training")
+        else:
+            print(f"  Within-scenario validation: DISABLED")
+
+    def set_baseline_reliabilities(self, F_baseline_per_scenario):
+        """
+        Store precomputed F_baseline per scenario for gap closure computation during training.
+
+        Args:
+            F_baseline_per_scenario (array-like): F' for each scenario, shape (n_scenarios,)
+        """
+        self.F_baseline_per_scenario = np.array(F_baseline_per_scenario)
+        print(f"  Baseline reliabilities set for {len(self.F_baseline_per_scenario)} scenarios")
+        print(f"    F' range: [{self.F_baseline_per_scenario.min():.6f}, {self.F_baseline_per_scenario.max():.6f}]")
+
+    def compute_correlation_matrix(self):
+        """
+        Compute correlation matrix between process quality scores from Q_history.
+
+        Uses the quality scores (Qᵢ) collected during training to estimate
+        empirical correlations ρᵢⱼ between processes. These correlations
+        are used to compute a more accurate L_min that accounts for
+        correlated process errors.
+
+        Formula:
+            ρᵢⱼ = Cov(Qᵢ, Qⱼ) / (σᵢ × σⱼ)
+
+        Returns:
+            Dict[Tuple[str, str], float]: Correlation matrix as dict mapping
+                (process_i, process_j) to correlation coefficient ρᵢⱼ.
+                Returns empty dict if not enough data.
+        """
+        if not self.Q_history:
+            return {}
+
+        process_names = list(self.Q_history.keys())
+
+        # Need at least 2 processes and some data points
+        if len(process_names) < 2:
+            return {}
+
+        # Check all processes have same length
+        n_samples = len(self.Q_history[process_names[0]])
+        if n_samples < 10:  # Need minimum samples for meaningful correlation
+            return {}
+
+        for name in process_names:
+            if len(self.Q_history[name]) != n_samples:
+                print(f"  Warning: Inconsistent Q_history lengths, skipping correlation")
+                return {}
+
+        # Compute correlation matrix
+        correlation_matrix = {}
+
+        for i, name_i in enumerate(process_names):
+            for j, name_j in enumerate(process_names):
+                if i >= j:  # Only upper triangle, correlation is symmetric
+                    continue
+
+                Q_i = np.array(self.Q_history[name_i])
+                Q_j = np.array(self.Q_history[name_j])
+
+                # Compute Pearson correlation
+                # Handle edge case where one array has no variance
+                std_i = np.std(Q_i)
+                std_j = np.std(Q_j)
+
+                if std_i < 1e-10 or std_j < 1e-10:
+                    rho = 0.0  # No correlation if no variance
+                else:
+                    rho = np.corrcoef(Q_i, Q_j)[0, 1]
+                    # Handle NaN from corrcoef
+                    if np.isnan(rho):
+                        rho = 0.0
+
+                # Store both directions (symmetric)
+                correlation_matrix[(name_i, name_j)] = rho
+                correlation_matrix[(name_j, name_i)] = rho
+
+        return correlation_matrix
+
+    def get_correlation_summary(self):
+        """
+        Get a summary of the correlation matrix for logging.
+
+        Returns:
+            str: Formatted string with correlation summary
+        """
+        corr_matrix = self.compute_correlation_matrix()
+
+        if not corr_matrix:
+            return "  No correlation data available"
+
+        lines = ["  Process Correlation Matrix:"]
+        process_names = list(self.Q_history.keys())
+
+        # Header
+        header = "    " + " ".join(f"{name[:6]:>8}" for name in process_names)
+        lines.append(header)
+
+        # Matrix rows
+        for name_i in process_names:
+            row = f"    {name_i[:6]:>6}"
+            for name_j in process_names:
+                if name_i == name_j:
+                    row += f"{'1.000':>8}"
+                else:
+                    rho = corr_matrix.get((name_i, name_j), 0.0)
+                    row += f"{rho:>8.3f}"
+            lines.append(row)
+
+        return "\n".join(lines)
+
+    def save_checkpoint(self, path, epoch):
+        """Save model checkpoint."""
+        path = Path(path)
+
+        # Save each policy generator separately
+        for i, policy in enumerate(self.process_chain.policy_generators):
+            policy_path = path.parent / f'policy_{i}.pth'
+            torch.save(policy.state_dict(), policy_path)
+
+        # Save training state
+        state = {
+            'epoch': epoch,
+            'best_F': self.best_F,
+            'best_loss': self.best_loss,
+            'history': self.history,
+        }
+
+        state_path = path.parent / 'training_state.json'
+        with open(state_path, 'w') as f:
+            json.dump(state, f, indent=2, default=lambda o: float(o) if hasattr(o, 'item') else str(o))
+
+    def load_checkpoint(self, checkpoint_dir):
+        """
+        Load best model checkpoint.
+
+        Args:
+            checkpoint_dir (Path or str): Directory containing policy checkpoints
+        """
+        checkpoint_dir = Path(checkpoint_dir)
+
+        # Load each policy generator
+        for i, policy in enumerate(self.process_chain.policy_generators):
+            policy_path = checkpoint_dir / f'policy_{i}.pth'
+            if not policy_path.exists():
+                raise FileNotFoundError(f"Policy checkpoint not found: {policy_path}")
+
+            policy.load_state_dict(torch.load(policy_path, map_location=self.device))
+
+        print(f"  ✓ Loaded best model from {checkpoint_dir}")
+
+    def compute_final_metrics(self, baseline_trajectory):
+        """
+        Calcola metriche finali confrontando:
+        - a* (target trajectory): F*
+        - a' (baseline trajectory): F'
+        - a (actual trajectory con controller): F
+
+        Args:
+            baseline_trajectory (dict): Baseline trajectory da generate_baseline_trajectory()
+
+        Returns:
+            dict: {
+                'F_star': float,         # Reliability target
+                'F_baseline': float,     # Reliability baseline (no controller)
+                'F_actual': float,       # Reliability con controller
+                'improvement': float,    # (F_actual - F_baseline) / F_baseline
+                'target_gap': float,     # (F_star - F_actual) / F_star
+            }
+        """
+        from controller_optimization.src.utils.model_utils import convert_numpy_to_tensor
+
+        # F* già calcolato
+        F_star = self.surrogate.F_star
+
+        # F' = evaluate baseline trajectory
+        with torch.no_grad():
+            self.process_chain.eval()
+            baseline_tensor = convert_numpy_to_tensor(baseline_trajectory, device=self.device)
+            F_baseline = self.surrogate.compute_reliability(baseline_tensor).item()
+
+        # F = evaluate actual trajectory (con policy generators)
+        with torch.no_grad():
+            self.process_chain.eval()
+            actual_trajectory = self.process_chain.forward(batch_size=1)
+            F_actual = self.surrogate.compute_reliability(actual_trajectory).item()
+
+        # Calcola metriche comparative
+        improvement = (F_actual - F_baseline) / abs(F_baseline) if F_baseline != 0 else 0
+        target_gap = abs(F_star - F_actual) / F_star if F_star != 0 else 0
+
+        return {
+            'F_star': F_star,
+            'F_baseline': F_baseline,
+            'F_actual': F_actual,
+            'improvement': improvement,
+            'target_gap': target_gap,
+        }
+
     def train_epoch(self, batch_size=32, reliability_weight=1.0, lambda_bc=None):
         """
         Training per un epoch ACROSS ALL SCENARIOS with gradient accumulation.
