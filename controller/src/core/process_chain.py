@@ -290,3 +290,427 @@ class ProcessChain(nn.Module):
             # Set debug name for this policy generator
             policy.debug_name = f"{processes_config[i]['name']}->{processes_config[i + 1]['name']}"
             self.policy_generators.append(policy)
+
+    def train(self, mode=True):
+        """Override train() to keep frozen UncertaintyPredictors in eval() mode.
+
+        nn.Module.train() recursively sets ALL submodules to training mode.
+        This reactivates dropout in the frozen UncertaintyPredictors (dropout_rate=0.2),
+        causing their mean/variance predictions to fluctuate randomly during training.
+        Since L_min is computed in eval() mode (deterministic predictions), the dropout
+        noise can produce training loss values below L_min — a theoretical impossibility.
+
+        Fix: only set PolicyGenerators (and ScenarioEncoder) to train mode;
+        UncertaintyPredictors always stay in eval() mode.
+        """
+        # Set self.training flag without recursion
+        self.training = mode
+
+        # PolicyGenerators: respect train/eval mode (they have trainable dropout)
+        for policy in self.policy_generators:
+            policy.train(mode)
+
+        # ScenarioEncoder: respect train/eval mode (if present)
+        if hasattr(self, 'scenario_encoder') and self.scenario_encoder is not None:
+            self.scenario_encoder.train(mode)
+
+        # UncertaintyPredictors: ALWAYS eval (frozen, dropout must stay off)
+        for predictor in self.uncertainty_predictors:
+            predictor.eval()
+
+        return self
+
+    def get_initial_inputs(self, batch_size=1, scenario_idx=None):
+        """
+        Get initial inputs a1 for the first process.
+
+        Controllable inputs come from the target trajectory (always sample 0).
+        Non-controllable inputs (env params) come from baseline_trajectories[scenario_idx]
+        if available, otherwise from target_trajectory[scenario_idx].
+
+        Args:
+            batch_size (int): Number of parallel samples
+            scenario_idx (int, optional): Which scenario's env params to use.
+                                         If None, uses scenario 0.
+
+        Returns:
+            torch.Tensor: Initial inputs for first process
+        """
+        if scenario_idx is None:
+            scenario_idx = 0
+
+        first_process_name = self.process_names[0]
+        info = self.controllable_info_per_process[0]
+
+        if self.baseline_trajectories is not None:
+            # Target always has 1 sample — use sample 0 for controllable inputs
+            target_inputs = self.target_trajectory[first_process_name]['inputs'][0].copy()  # (input_dim,)
+            # Non-controllable inputs from baseline scenario
+            baseline_inputs = self.baseline_trajectories[first_process_name]['inputs'][scenario_idx]
+
+            # Override non-controllable with baseline env params
+            for idx in info['non_controllable_indices']:
+                target_inputs[idx] = baseline_inputs[idx]
+
+            initial_inputs = np.tile(target_inputs, (batch_size, 1))
+        else:
+            # Legacy: use target trajectory directly
+            target_inputs_all = self.target_trajectory[first_process_name]['inputs']
+            target_idx = min(scenario_idx, target_inputs_all.shape[0] - 1)
+            target_inputs = target_inputs_all[target_idx]  # (input_dim,)
+            initial_inputs = np.tile(target_inputs, (batch_size, 1))
+
+        return torch.tensor(initial_inputs, dtype=torch.float32, device=self.device)
+
+    def scale_inputs(self, inputs, process_idx):
+        """
+        Scale inputs using preprocessor (DIFFERENTIABLE VERSION).
+
+        Uses PyTorch operations to maintain gradient flow.
+        For StandardScaler: scaled = (x - mean) / scale
+        """
+        scaler = self.preprocessors[process_idx].input_scaler
+
+        # Get scaler parameters as tensors (on same device as inputs)
+        mean = torch.tensor(scaler.mean_, dtype=torch.float32, device=self.device)
+        scale = torch.tensor(scaler.scale_, dtype=torch.float32, device=self.device)
+
+        # Differentiable scaling
+        inputs_scaled = (inputs - mean) / scale
+
+        return inputs_scaled
+
+    def unscale_outputs(self, outputs, process_idx):
+        """
+        Unscale outputs using preprocessor (DIFFERENTIABLE VERSION).
+
+        Uses PyTorch operations to maintain gradient flow.
+        For StandardScaler: unscaled = x * scale + mean
+        """
+        scaler = self.preprocessors[process_idx].output_scaler
+
+        # Get scaler parameters as tensors (on same device as outputs)
+        mean = torch.tensor(scaler.mean_, dtype=torch.float32, device=self.device)
+        scale = torch.tensor(scaler.scale_, dtype=torch.float32, device=self.device)
+
+        # Differentiable unscaling
+        outputs_unscaled = outputs * scale + mean
+
+        return outputs_unscaled
+
+    def unscale_variance(self, variance, process_idx):
+        """Unscale variance (variance scales with scale^2)."""
+        output_scale = self.preprocessors[process_idx].output_scaler.scale_
+        scale_squared = torch.tensor(output_scale ** 2, dtype=torch.float32, device=self.device)
+        return variance * scale_squared
+
+    def _merge_controllable_inputs(self, controllable_outputs, process_idx, scenario_idx, batch_size):
+        """
+        Merges controllable inputs from policy with non-controllable inputs.
+
+        Non-controllable values come from baseline_trajectories[scenario_idx] if
+        available, otherwise from target_trajectory.
+
+        Args:
+            controllable_outputs: Tensor with ONLY controllable inputs from policy generator
+                                 Shape: (batch_size, n_controllable)
+            process_idx: Index of the current process
+            scenario_idx: Index of the scenario (for retrieving env params)
+            batch_size: Batch size
+
+        Returns:
+            Tensor with all inputs in correct order
+            Shape: (batch_size, input_dim)
+        """
+        process_name = self.process_names[process_idx]
+        process_config = self.processes_config[process_idx]
+        info = self.controllable_info_per_process[process_idx]
+
+        input_dim = process_config['input_dim']
+        controllable_indices = info['controllable_indices']
+        non_controllable_indices = info['non_controllable_indices']
+
+        # If all inputs are controllable, return as-is (no merging needed)
+        if info['n_non_controllable'] == 0:
+            return controllable_outputs
+
+        # Source non-controllable values from baseline (env params) or target
+        if self.baseline_trajectories is not None:
+            source_inputs = self.baseline_trajectories[process_name]['inputs'][scenario_idx]
+        else:
+            target_inputs_all = self.target_trajectory[process_name]['inputs']
+            target_idx = min(scenario_idx, target_inputs_all.shape[0] - 1)
+            source_inputs = target_inputs_all[target_idx]
+
+        # Create full input tensor
+        full_inputs = torch.zeros(batch_size, input_dim, dtype=torch.float32, device=self.device)
+
+        # Place controllable outputs in their correct positions
+        for out_idx, input_idx in enumerate(controllable_indices):
+            full_inputs[:, input_idx] = controllable_outputs[:, out_idx]
+
+        # Place non-controllable values from source in their positions
+        for input_idx in non_controllable_indices:
+            full_inputs[:, input_idx] = source_inputs[input_idx]
+
+        return full_inputs
+
+    def _get_non_controllable_inputs(self, process_idx, scenario_idx, batch_size):
+        """
+        Get non-controllable inputs (env params) for a process.
+
+        Sources from baseline_trajectories[scenario_idx] if available,
+        otherwise from target_trajectory.
+
+        Args:
+            process_idx: Index of the process
+            scenario_idx: Index of the scenario (for retrieving env params)
+            batch_size: Batch size
+
+        Returns:
+            Tensor with non-controllable inputs, shape: (batch_size, n_non_controllable)
+            Returns None if there are no non-controllable inputs
+        """
+        process_name = self.process_names[process_idx]
+        info = self.controllable_info_per_process[process_idx]
+
+        n_non_controllable = info['n_non_controllable']
+
+        if n_non_controllable == 0:
+            return None
+
+        non_controllable_indices = info['non_controllable_indices']
+
+        # Source from baseline (env params) or target
+        if self.baseline_trajectories is not None:
+            source_inputs = self.baseline_trajectories[process_name]['inputs'][scenario_idx]
+        else:
+            target_inputs_all = self.target_trajectory[process_name]['inputs']
+            target_idx = min(scenario_idx, target_inputs_all.shape[0] - 1)
+            source_inputs = target_inputs_all[target_idx]
+
+        non_controllable_values = torch.tensor(
+            [source_inputs[idx] for idx in non_controllable_indices],
+            dtype=torch.float32,
+            device=self.device
+        )
+
+        non_controllable_batch = non_controllable_values.unsqueeze(0).expand(batch_size, -1)
+
+        return non_controllable_batch
+
+    def _extract_structural_params(self, scenario_idx):
+        """
+        Estrae parametri strutturali (non-controllabili) per uno scenario specifico.
+
+        Sources from baseline_trajectories if available, otherwise from target.
+
+        Args:
+            scenario_idx (int): Index dello scenario
+
+        Returns:
+            torch.Tensor: Parametri strutturali, shape (n_structural_params,)
+        """
+        structural_values = []
+
+        for i, process_config in enumerate(self.processes_config):
+            process_name = process_config['name']
+            info = self._get_controllable_info(process_config)
+
+            # Source from baseline (env params) or target
+            if self.baseline_trajectories is not None:
+                source_inputs = self.baseline_trajectories[process_name]['inputs'][scenario_idx]
+            else:
+                target_inputs_all = self.target_trajectory[process_name]['inputs']
+                target_idx = min(scenario_idx, target_inputs_all.shape[0] - 1)
+                source_inputs = target_inputs_all[target_idx]
+
+            for idx in info['non_controllable_indices']:
+                structural_values.append(source_inputs[idx])
+
+        if len(structural_values) == 0:
+            return torch.tensor([0.0], dtype=torch.float32, device=self.device)
+
+        return torch.tensor(structural_values, dtype=torch.float32, device=self.device)
+
+    def _debug_forward_step(self, step: int, **kwargs):
+        """Print debug info for a single forward step."""
+        print(f"\n[{step}] " + " | ".join(f"{k}={v}" for k, v in kwargs.items()))
+
+    def forward(self, batch_size=1, scenario_idx=0):
+        """
+        Forward pass attraverso tutta la catena per uno scenario specifico.
+
+        Args:
+            batch_size (int): Number of parallel samples
+            scenario_idx (int): Which scenario's structural conditions to use (default: 0)
+
+        Returns:
+            trajectory (dict): {
+                'laser': {
+                    'inputs': tensor,
+                    'outputs_mean': tensor (predicted mean),
+                    'outputs_var': tensor (predicted variance),
+                    'outputs_sampled': tensor (sampled from N(mean, var))
+                },
+                'plasma': {...},
+                ...
+            }
+        """
+
+        trajectory = {}
+
+        # a1 è fisso dalla target trajectory (per lo scenario specifico)
+        current_inputs = self.get_initial_inputs(batch_size, scenario_idx)
+
+        if self.debug:
+            self._debug_forward_step(0,
+                scenario=scenario_idx,
+                batch=batch_size,
+                initial_inputs=current_inputs[0].tolist())
+
+        # Extract and encode scenario structural parameters (if encoder is enabled)
+        if self.use_scenario_encoder:
+            structural_params = self._extract_structural_params(scenario_idx)  # Shape: (n_params,)
+            # Add batch dimension and replicate for batch
+            structural_params = structural_params.unsqueeze(0).repeat(batch_size, 1)  # (batch_size, n_params)
+            # Encode to embedding
+            scenario_embedding = self.scenario_encoder(structural_params)  # (batch_size, embedding_dim)
+            if self.debug:
+                self._debug_forward_step(0,
+                    scenario_embedding_mean=f"{scenario_embedding.mean().item():.4f}",
+                    scenario_embedding_std=f"{scenario_embedding.std().item():.4f}")
+        else:
+            scenario_embedding = None
+
+        for i, process_name in enumerate(self.process_names):
+            if self.debug:
+                self._debug_forward_step(1,
+                    step=i,
+                    process=process_name)
+
+            # 1. Se i > 0: policy generator produce inputs
+            if i > 0:
+                # Get non-controllable inputs for the current process (environmental conditions)
+                non_controllable_inputs = self._get_non_controllable_inputs(i, scenario_idx, batch_size)
+
+                if self.debug:
+                    nc_info = self.controllable_info_per_process[i]
+                    nc_shape = non_controllable_inputs.shape if non_controllable_inputs is not None else None
+                    nc_labels = nc_info['non_controllable_labels'] if non_controllable_inputs is not None else None
+                    self._debug_forward_step(1,
+                        policy=f"{self.process_names[i-1]}->{process_name}",
+                        prev_mean_shape=str(prev_outputs_mean.shape),
+                        prev_mean_mean=f"{prev_outputs_mean.mean().item():.6f}",
+                        prev_var_mean=f"{prev_outputs_var.mean().item():.6f}",
+                        non_controllable_shape=str(nc_shape),
+                        non_controllable_labels=str(nc_labels))
+
+                # Concatenate: [prev_outputs_mean, prev_outputs_var, non_controllable_inputs, scenario_embedding]
+                policy_input_parts = [
+                    prev_outputs_mean,
+                    prev_outputs_var
+                ]
+
+                # Add non-controllable inputs (environmental conditions) if present
+                if non_controllable_inputs is not None:
+                    policy_input_parts.append(non_controllable_inputs)
+
+                # Add scenario embedding if encoder is enabled
+                if self.use_scenario_encoder:
+                    policy_input_parts.append(scenario_embedding)
+
+                policy_input = torch.cat(policy_input_parts, dim=1)
+
+                if self.debug:
+                    self._debug_forward_step(2,
+                        policy_input_shape=str(policy_input.shape),
+                        mean=f"{policy_input.mean().item():.6f}",
+                        std=f"{policy_input.std().item():.6f}",
+                        min=f"{policy_input.min().item():.6f}",
+                        max=f"{policy_input.max().item():.6f}")
+
+                # Policy outputs ONLY controllable inputs
+                controllable_outputs = self.policy_generators[i - 1](policy_input)
+                process_info = self.controllable_info_per_process[i]
+
+                if self.debug:
+                    self._debug_forward_step(2,
+                        controllable_labels=str(process_info['controllable_labels']),
+                        sample=controllable_outputs[0].tolist())
+
+                # Merge controllable outputs with non-controllable values from target
+                current_inputs = self._merge_controllable_inputs(
+                    controllable_outputs, i, scenario_idx, batch_size
+                )
+
+                if self.debug:
+                    self._debug_forward_step(3,
+                        merged_shape=str(current_inputs.shape),
+                        sample=current_inputs[0].tolist())
+
+            # 2. Scale inputs
+            scaled_inputs = self.scale_inputs(current_inputs, i)
+
+            if self.debug:
+                self._debug_forward_step(4,
+                    process=process_name,
+                    scaled_mean=f"{scaled_inputs.mean().item():.6f}",
+                    scaled_std=f"{scaled_inputs.std().item():.6f}")
+
+            # 3. Uncertainty predictor (frozen)
+            outputs_mean_scaled, outputs_var_scaled = self.uncertainty_predictors[i](scaled_inputs)
+
+            if self.debug:
+                self._debug_forward_step(5,
+                    mean_scaled=f"{outputs_mean_scaled.mean().item():.6f}",
+                    var_scaled=f"{outputs_var_scaled.mean().item():.6f}")
+
+            # 4. Unscale outputs
+            outputs_mean = self.unscale_outputs(outputs_mean_scaled, i)
+            outputs_var = self.unscale_variance(outputs_var_scaled, i)
+
+            if self.debug:
+                self._debug_forward_step(6,
+                    outputs_mean=f"{outputs_mean.mean().item():.6f}",
+                    outputs_var=f"{outputs_var.mean().item():.6f}",
+                    sample_mean=outputs_mean[0].tolist(),
+                    sample_var=outputs_var[0].tolist())
+
+            # 5. Sample from distribution using reparameterization trick
+            # This makes the actual trajectory stochastic based on predicted uncertainty
+            std = torch.sqrt(outputs_var + 1e-8)
+            epsilon = torch.randn_like(outputs_mean)
+            outputs_sampled = outputs_mean + epsilon * std
+
+            if self.debug:
+                self._debug_forward_step(7,
+                    std_mean=f"{std.mean().item():.6f}",
+                    epsilon_mean=f"{epsilon.mean().item():.6f}",
+                    sampled_mean=f"{outputs_sampled.mean().item():.6f}",
+                    sample=outputs_sampled[0].tolist())
+
+            # 6. Store in trajectory
+            trajectory[process_name] = {
+                'inputs': current_inputs,
+                'outputs_mean': outputs_mean,
+                'outputs_var': outputs_var,
+                'outputs_sampled': outputs_sampled  # Actual sampled outputs
+            }
+
+            # 7. Update per prossima iterazione
+            # Use sampled outputs as feedback for next policy generator
+            # This propagates uncertainty through the chain
+            prev_inputs = current_inputs
+            prev_outputs_mean = outputs_sampled  # Use sampled outputs instead of mean
+            prev_outputs_var = outputs_var
+
+            if self.debug:
+                self._debug_forward_step(8,
+                    prev_outputs_mean=prev_outputs_mean[0].tolist(),
+                    prev_outputs_var=prev_outputs_var[0].tolist())
+
+        if self.debug:
+            self._debug_forward_step(9, status="FORWARD PASS COMPLETE")
+
+        return trajectory
