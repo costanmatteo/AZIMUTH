@@ -88,7 +88,7 @@ SEED_B=$(echo "$PARAMS" | grep -oP 'seed_baseline=\K[^ ]+')
 
 # Config-specific directories (shared across seed pairs with same ST config)
 CONFIG_SUFFIX="n${ST_N}_m${ST_M}_p${ST_NPROC}_r${ST_RHO}"
-CONFIG_DIR="controller_optimization/checkpoints/complexity_sweep/${CONFIG_SUFFIX}"
+CONFIG_DIR="checkpoints/complexity_sweep/${CONFIG_SUFFIX}"
 DATA_DIR="${CONFIG_DIR}/generate_dataset"
 UP_DIR="${CONFIG_DIR}/train_predictor"
 SURROGATE_DIR="${CONFIG_DIR}/train_surrogate"

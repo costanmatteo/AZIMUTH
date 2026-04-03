@@ -698,7 +698,7 @@ def build_page1_html(s: dict, now: datetime,
 
   <div class="footer">
     <span>auto-generated &nbsp;&#183;&nbsp; {sweep_dir} &nbsp;&#183;&nbsp; sweep_report.pdf &nbsp;&#183;&nbsp; all runs table on next page</span>
-    <span>controller_optimization &middot; generate_sweep_report.py</span>
+    <span>AZIMUTH &middot; generate_sweep_report.py</span>
   </div>
 </div>
 """
@@ -777,7 +777,7 @@ def build_page2_html(df: pd.DataFrame, now: datetime, sweep_dir: str) -> str:
 
   <div class="footer">
     <span>auto-generated &nbsp;&#183;&nbsp; {sweep_dir} &nbsp;&#183;&nbsp; sweep_report.pdf</span>
-    <span>controller_optimization &middot; generate_sweep_report.py</span>
+    <span>AZIMUTH &middot; generate_sweep_report.py</span>
   </div>
 </div>
 """
@@ -863,7 +863,7 @@ def generate_sweep_report(sweep_dir: Path, output_path: Path | None = None):
 
 def main():
     parser = argparse.ArgumentParser(description='Generate sweep report PDF')
-    parser.add_argument('--sweep_dir', default='controller_optimization/checkpoints/sweep',
+    parser.add_argument('--sweep_dir', default='checkpoints/sweep',
                         help='Directory containing sweep run results')
     parser.add_argument('--output', default=None,
                         help='Output PDF path (default: <sweep_dir>/sweep_report.pdf)')

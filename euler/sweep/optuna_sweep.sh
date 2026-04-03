@@ -44,8 +44,8 @@
 #   tail -f logs/optuna_<jobid>_<taskid>.out  # Follow output
 #
 # Results:
-#   - Database: controller_optimization/optuna_results/controller_hpo/study.db
-#   - Report: controller_optimization/optuna_results/controller_hpo/
+#   - Database: optuna_results/controller_hpo/study.db
+#   - Report: optuna_results/controller_hpo/
 # ============================================================================
 
 # Exit on error
@@ -98,11 +98,11 @@ python -c "import optuna" 2>/dev/null || {
 # Create study if it doesn't exist (only first job does this)
 if [ "$SLURM_ARRAY_TASK_ID" -eq 0 ]; then
     echo "Task 0: Checking if study exists..."
-    python controller_optimization/optuna_tuning.py \
+    python optuna_tuning.py \
         --study-name "$STUDY_NAME" \
         --status 2>/dev/null || {
         echo "Creating new study..."
-        python controller_optimization/optuna_tuning.py \
+        python optuna_tuning.py \
             --create-study \
             --study-name "$STUDY_NAME"
     }
@@ -115,7 +115,7 @@ fi
 sleep $((SLURM_ARRAY_TASK_ID % 10))
 
 # Build command
-CMD="python controller_optimization/optuna_tuning.py"
+CMD="python optuna_tuning.py"
 CMD="$CMD --study-name $STUDY_NAME"
 CMD="$CMD --single-trial"
 CMD="$CMD --device cpu"
