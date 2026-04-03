@@ -1604,9 +1604,10 @@ def main(config=None):
                     import time as _time
                     _t0 = _time.time()
 
+                    _surrogate_for_bellman = formula_surrogate if formula_surrogate is not None else surrogate
                     bellman_result = compute_bellman_lmin(
                         process_chain=process_chain,
-                        surrogate=surrogate,
+                        surrogate=_surrogate_for_bellman,
                         cfg=bellman_cfg,
                         loss_scale=loss_scale,
                         scenario_idx=0,
