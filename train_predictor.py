@@ -29,7 +29,7 @@ from configs.processes_config import (
     PROCESSES, DATASET_MODE, get_process_by_name,
     ST_DATASET_CONFIG, _build_st_processes,
 )
-from controller_optimization.src.training.process_trainer import (
+from uncertainty_predictor.src.training.process_trainer import (
     train_single_process, DataPreprocessor
 )
 
