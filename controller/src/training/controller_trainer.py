@@ -359,14 +359,17 @@ class ControllerTrainer:
             print(f"  F.grad_fn       = {F.grad_fn}", flush=True)
             print(f"  F.shape         = {F.shape}", flush=True)
             print(f"  F.mean()        = {F.mean().item():.6f}", flush=True)
-            print(f"  F*              = {self.surrogate.F_star:.6f}", flush=True)
+            _f_star_debug = self.formula_surrogate.F_star if self.formula_surrogate is not None else self.surrogate.F_star
+            print(f"  F*              = {_f_star_debug:.6f} ({'formula' if self.formula_surrogate is not None else 'surrogate'})", flush=True)
             if F.requires_grad and F.grad_fn is not None:
                 print(f"  STATUS: OK - Gradients WILL flow to controller", flush=True)
             else:
                 print(f"  STATUS: BROKEN - F is detached, reliability loss has NO gradient effect!", flush=True)
             print(f"{'='*60}\n", flush=True)
 
-        F_star_tensor = torch.tensor(self.surrogate.F_star, dtype=torch.float32, device=self.device)
+        # Use formula surrogate F* when available (CasualiT mode)
+        F_star_val = self.formula_surrogate.F_star if self.formula_surrogate is not None else self.surrogate.F_star
+        F_star_tensor = torch.tensor(F_star_val, dtype=torch.float32, device=self.device)
         reliability_loss = self.reliability_loss_scale * (F - F_star_tensor) ** 2
 
         # Behavior cloning loss: mean( ||a_ctrl - a_ctrl*||^2 ) across all processes
@@ -658,14 +661,15 @@ class ControllerTrainer:
         """
         from controller.src.io.utils import convert_numpy_to_tensor
 
-        # F* già calcolato
-        F_star = self.surrogate.F_star
+        # F* and F_baseline from formula surrogate when available (CasualiT mode)
+        baseline_surrogate = self.formula_surrogate if self.formula_surrogate is not None else self.surrogate
+        F_star = baseline_surrogate.F_star
 
         # F' = evaluate baseline trajectory
         with torch.no_grad():
             self.process_chain.eval()
             baseline_tensor = convert_numpy_to_tensor(baseline_trajectory, device=self.device)
-            F_baseline = self.surrogate.compute_reliability(baseline_tensor).item()
+            F_baseline = baseline_surrogate.compute_reliability(baseline_tensor).item()
 
         # F = evaluate actual trajectory (con policy generators)
         with torch.no_grad():
@@ -848,7 +852,8 @@ class ControllerTrainer:
                 print(f"\nF Tensor Check:")
                 F_tensor = F if torch.is_tensor(F) else torch.tensor(F)
                 print(f"  F.requires_grad={F_tensor.requires_grad}, F.grad_fn={F_tensor.grad_fn}")
-                print(f"  F value={F_tensor.mean().item():.6f}, F*={self.surrogate.F_star:.6f}")
+                _f_star_ref = self.formula_surrogate.F_star if self.formula_surrogate is not None else self.surrogate.F_star
+                print(f"  F value={F_tensor.mean().item():.6f}, F*={_f_star_ref:.6f}")
                 if F_tensor.requires_grad:
                     print(f"  -> Reliability loss WILL produce gradients for controller")
                 else:
@@ -885,7 +890,8 @@ class ControllerTrainer:
         if self.F_baseline_per_scenario is not None:
             gc_values = []
             for s_idx, F_i in epoch_F_per_scenario.items():
-                denom = self.surrogate.F_star - self.F_baseline_per_scenario[s_idx]
+                _f_star = self.formula_surrogate.F_star if self.formula_surrogate is not None else self.surrogate.F_star
+                denom = _f_star - self.F_baseline_per_scenario[s_idx]
                 if abs(denom) > 1e-6:
                     gc_values.append((F_i - self.F_baseline_per_scenario[s_idx]) / denom)
             self._epoch_gap_closure = float(np.mean(gc_values)) if gc_values else 0.0
@@ -1039,7 +1045,8 @@ class ControllerTrainer:
             print(f"  Samples per scenario: {max(1, batch_size // n_scenarios)}")
             print(f"  Patience: {patience}")
             print(f"  Save dir: {save_dir}")
-            print(f"  F* (target): {self.surrogate.F_star:.6f}")
+            _f_star = self.formula_surrogate.F_star if self.formula_surrogate is not None else self.surrogate.F_star
+            print(f"  F* (target): {_f_star:.6f}")
 
             if self.curriculum_config['enabled']:
                 print(f"\n  CURRICULUM LEARNING STRATEGY:")
@@ -1134,7 +1141,8 @@ class ControllerTrainer:
                 print(f"  F (actual):       {avg_F:.6f}")
                 if self._epoch_avg_F_formula is not None:
                     print(f"  F (formula):      {self._epoch_avg_F_formula:.6f}")
-                print(f"  F* (target):      {self.surrogate.F_star:.6f}")
+                _f_star = self.formula_surrogate.F_star if self.formula_surrogate is not None else self.surrogate.F_star
+                print(f"  F* (target):      {_f_star:.6f}")
                 if self._epoch_gap_closure is not None:
                     print(f"  Gap Closure:      {self._epoch_gap_closure:.4f}")
                 # Print cross-scenario validation metrics if available
@@ -1283,7 +1291,8 @@ class ControllerTrainer:
             print(f"{'='*70}")
             print(f"  Best F: {self.best_F:.6f}")
             print(f"  Final F: {self.history['F_values'][-1]:.6f}")
-            print(f"  Target F*: {self.surrogate.F_star:.6f}")
+            _f_star = self.formula_surrogate.F_star if self.formula_surrogate is not None else self.surrogate.F_star
+            print(f"  Target F*: {_f_star:.6f}")
 
         return self.history
 
@@ -1366,7 +1375,7 @@ class ControllerTrainer:
             'F_actual_per_sample': F_actual_array,
             'F_actual_mean': np.mean(F_actual_array),
             'F_actual_std': np.std(F_actual_array),
-            'F_star_mean': self.surrogate.F_star,
+            'F_star_mean': self.formula_surrogate.F_star if self.formula_surrogate is not None else self.surrogate.F_star,
             'F_star_std': 0.0,
             'trajectories': trajectories
         }
@@ -1475,7 +1484,7 @@ class ControllerTrainer:
                     'outputs': data['outputs'][t_idx:t_idx+1].cpu().numpy()
                 }
 
-            F_star = self.surrogate.F_star
+            F_star = self.formula_surrogate.F_star if self.formula_surrogate is not None else self.surrogate.F_star
 
             # Backward-compatible fields (scenario 0)
             trajectories_0 = [per_scenario[0]]

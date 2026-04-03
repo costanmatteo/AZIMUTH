@@ -499,8 +499,13 @@ def main(config=None):
         print(f"  Surrogate type: reliability_function (mathematical formula)")
 
     print(f"  Sampling mode: {'DETERMINISTIC (mean)' if use_deterministic_sampling else 'STOCHASTIC (reparameterization trick)'}")
-    F_star_value = surrogate.F_star  # Single scalar from scenario 0
-    print(f"  ✓ Surrogate initialized")
+    # When using CasualiT, F* and F_baseline are computed via the formula surrogate
+    if formula_surrogate is not None:
+        F_star_value = formula_surrogate.F_star
+        print(f"  ✓ Surrogate initialized (F* from formula surrogate)")
+    else:
+        F_star_value = surrogate.F_star  # Single scalar from scenario 0
+        print(f"  ✓ Surrogate initialized")
     print(f"    F* = {F_star_value:.6f} (from scenario 0)")
     print(f"    n_scenarios = {surrogate.n_scenarios} (should match n_train={n_train})")
     assert surrogate.n_scenarios == n_train, (
@@ -622,7 +627,8 @@ def main(config=None):
                     'outputs': data['outputs'][scenario_idx:scenario_idx+1]
                 }
             baseline_scenario_tensor = convert_numpy_to_tensor(baseline_scenario, device=device)
-            F_bl = surrogate.compute_reliability(baseline_scenario_tensor).item()
+            baseline_surrogate = formula_surrogate if formula_surrogate is not None else surrogate
+            F_bl = baseline_surrogate.compute_reliability(baseline_scenario_tensor).item()
             F_baseline_pretrain.append(F_bl)
     trainer.set_baseline_reliabilities(F_baseline_pretrain)
 
@@ -691,21 +697,22 @@ def main(config=None):
             # Convert to tensors
             baseline_scenario_tensor = convert_numpy_to_tensor(baseline_scenario, device=device)
 
-            # Compute reliability for baseline
-            F_baseline_i = surrogate.compute_reliability(baseline_scenario_tensor).item()
+            # Compute reliability for baseline (use formula surrogate when CasualiT)
+            baseline_surrogate = formula_surrogate if formula_surrogate is not None else surrogate
+            F_baseline_i = baseline_surrogate.compute_reliability(baseline_scenario_tensor).item()
 
-            # Compute formula-based baseline (if using CasualiT)
-            F_formula_baseline_i = None
+            # Compute CasualiT-based baseline for comparison (if using CasualiT)
+            F_casualit_baseline_i = None
             if formula_surrogate is not None:
-                F_formula_baseline_i = formula_surrogate.compute_reliability(baseline_scenario_tensor).item()
+                F_casualit_baseline_i = surrogate.compute_reliability(baseline_scenario_tensor).item()
 
             # If plotting all samples, replicate for each sample in the batch
             # Otherwise, just add once per scenario
             n_replicas = eval_batch_size if plot_all_samples else 1
             for _ in range(n_replicas):
                 F_baseline_values.append(F_baseline_i)
-                if F_formula_baseline_i is not None:
-                    F_formula_baseline_values.append(F_formula_baseline_i)
+                if F_casualit_baseline_i is not None:
+                    F_formula_baseline_values.append(F_casualit_baseline_i)
 
     F_baseline_array = np.array(F_baseline_values)
     F_baseline_mean = np.mean(F_baseline_array)
@@ -793,14 +800,16 @@ def main(config=None):
                     'outputs': data['outputs'][scenario_idx:scenario_idx+1]
                 }
             baseline_tensor = convert_numpy_to_tensor(baseline_scenario, device=device)
-            F_baseline_sc = surrogate.compute_reliability(baseline_tensor).item()
+            # F baseline from formula surrogate when CasualiT
+            baseline_surrogate = formula_surrogate if formula_surrogate is not None else surrogate
+            F_baseline_sc = baseline_surrogate.compute_reliability(baseline_tensor).item()
 
-            # Formula-based F (if CasualiT)
+            # CasualiT-based F for comparison (if using CasualiT)
             F_formula_baseline_sc = None
             F_formula_actual_sc = None
             if formula_surrogate is not None:
-                F_formula_baseline_sc = formula_surrogate.compute_reliability(baseline_tensor).item()
-                F_formula_actual_sc = formula_surrogate.compute_reliability(best_trajectory).item()
+                F_formula_baseline_sc = surrogate.compute_reliability(baseline_tensor).item()
+                F_formula_actual_sc = surrogate.compute_reliability(best_trajectory).item()
 
             trajectory_values_for_report_list.append({
                 'target_trajectory': target_trajectory,
@@ -864,8 +873,9 @@ def main(config=None):
             # Convert to tensors
             baseline_test_tensor = convert_numpy_to_tensor(baseline_test_scenario, device=device)
 
-            # Compute F_baseline for this test scenario
-            F_baseline_test_i = surrogate.compute_reliability(baseline_test_tensor).item()
+            # Compute F_baseline for this test scenario (formula surrogate when CasualiT)
+            baseline_surrogate = formula_surrogate if formula_surrogate is not None else surrogate
+            F_baseline_test_i = baseline_surrogate.compute_reliability(baseline_test_tensor).item()
             F_baseline_test_values.append(F_baseline_test_i)
 
             # Run controller on test scenario
@@ -873,12 +883,12 @@ def main(config=None):
             F_actual_test_i = surrogate.compute_reliability(actual_test_trajectory).item()
             F_actual_test_values.append(F_actual_test_i)
 
-            # Compute formula-based F for test scenarios (if using CasualiT)
+            # Compute CasualiT-based F for test scenarios (if using CasualiT)
             if formula_surrogate is not None:
                 F_formula_baseline_test_values.append(
-                    formula_surrogate.compute_reliability(baseline_test_tensor).item())
+                    surrogate.compute_reliability(baseline_test_tensor).item())
                 F_formula_actual_test_values.append(
-                    formula_surrogate.compute_reliability(actual_test_trajectory).item())
+                    surrogate.compute_reliability(actual_test_trajectory).item())
 
     # F* is the same for test scenarios (single scalar)
     F_star_test_array = np.full(n_test, F_star_value)
@@ -1413,7 +1423,7 @@ def main(config=None):
                 sigma2_per_process = {proc_name: [] for proc_name in active_processes}
 
                 # Use single F* for L_min computation (same as training loss target)
-                F_star_for_L_min = surrogate.F_star  # Single scalar
+                F_star_for_L_min = formula_surrogate.F_star if formula_surrogate is not None else surrogate.F_star
 
                 print(f"    n_scenarios:          {n_scenarios}")
                 print(f"    samples_per_scenario: {samples_per_scenario}")
