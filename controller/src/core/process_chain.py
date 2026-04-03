@@ -533,9 +533,9 @@ class ProcessChain(nn.Module):
 
         return torch.tensor(structural_values, dtype=torch.float32, device=self.device)
 
-    def _debug_forward_step(self, step: int, **kwargs):
+    def _debug_forward_step(self, phase: int, **kwargs):
         """Print debug info for a single forward step."""
-        print(f"\n[{step}] " + " | ".join(f"{k}={v}" for k, v in kwargs.items()))
+        print(f"\n[{phase}] " + " | ".join(f"{k}={v}" for k, v in kwargs.items()))
 
     def forward(self, batch_size=1, scenario_idx=0):
         """
