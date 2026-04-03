@@ -148,6 +148,44 @@ class ControllerTrainer:
             print(f"    Lambda BC: {self.curriculum_config['lambda_bc_start']} → {self.curriculum_config['lambda_bc_end']}")
             print(f"    Reliability weight curve: {self.curriculum_config['reliability_weight_curve']}")
 
+    def _create_scheduler(self):
+        """Create learning rate scheduler from config dict.
+
+        Supported types: step, exponential, cosine, reduce_on_plateau.
+        Returns None if no scheduler is configured.
+        """
+        cfg = self.lr_scheduler_config
+        if cfg is None:
+            return None
+
+        sched_type = cfg.get('type', 'step')
+
+        if sched_type == 'step':
+            return torch_lr_scheduler.StepLR(
+                self.optimizer,
+                step_size=cfg.get('step_size', 50),
+                gamma=cfg.get('gamma', 0.5)
+            )
+        elif sched_type == 'exponential':
+            return torch_lr_scheduler.ExponentialLR(
+                self.optimizer,
+                gamma=cfg.get('gamma', 0.99)
+            )
+        elif sched_type == 'cosine':
+            return torch_lr_scheduler.CosineAnnealingLR(
+                self.optimizer,
+                T_max=cfg.get('T_max', 1500),
+                eta_min=cfg.get('eta_min', 0)
+            )
+        elif sched_type == 'reduce_on_plateau':
+            return torch_lr_scheduler.ReduceLROnPlateau(
+                self.optimizer,
+                factor=cfg.get('factor', 0.5),
+                patience=cfg.get('patience', 10)
+            )
+        else:
+            raise ValueError(f"Unknown lr_scheduler type: {sched_type}")
+
     def set_formula_surrogate(self, formula_surrogate):
         """
         Set a ProTSurrogate (mathematical formula) for comparison during training.
