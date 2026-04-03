@@ -29,7 +29,7 @@ from configs.processes_config import (
     PROCESSES, DATASET_MODE, get_process_by_name,
     ST_DATASET_CONFIG, _build_st_processes,
 )
-from controller_optimization.src.training.process_trainer import (
+from uncertainty_predictor.src.training.process_trainer import (
     train_single_process, DataPreprocessor
 )
 
@@ -403,7 +403,7 @@ def main():
     if args.checkpoint_base_dir is not None:
         summary_path = Path(args.checkpoint_base_dir) / 'processes_training_summary.json'
     else:
-        summary_path = Path('controller_optimization/checkpoints/processes_training_summary.json')
+        summary_path = Path('uncertainty_predictor/checkpoints/processes_training_summary.json')
     summary_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Custom encoder to handle numpy float32/int types
@@ -436,7 +436,7 @@ def main():
 
         report_paths = [data['report_path'] for data in summary_data]
         proc_names = [data['process'] for data in summary_data]
-        combined_report_path = Path('controller_optimization/checkpoints/combined_training_report.pdf')
+        combined_report_path = Path('uncertainty_predictor/checkpoints/combined_training_report.pdf')
 
         try:
             combined_path = combine_process_reports(

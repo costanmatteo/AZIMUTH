@@ -216,6 +216,112 @@ def main():
     if results_df is not None:
         print(f"  Results:\n{results_df.to_string()}")
 
+    # ── Generate PDF report ───────────────────────────────────────────────
+    try:
+        _generate_report(config, results_df, save_dir, data_dir, dataset_name)
+    except Exception as e:
+        print(f"\nWarning: Report generation failed: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+def _generate_report(config, results_df, save_dir, data_dir, dataset_name):
+    """Build history/eval dicts from training artifacts and generate the PDF report."""
+    import pandas as pd
+    from addition_to_causaliT.surrogate_training.report_generator import generate_surrogate_training_report
+
+    fold_dir = Path(save_dir) / 'k_0'
+
+    # --- Training history from CSV logger ---
+    csv_metrics_path = list(fold_dir.glob('logs/csv/*/metrics.csv'))
+    history = {}
+    if csv_metrics_path:
+        df_log = pd.read_csv(csv_metrics_path[0])
+        history['train_loss'] = df_log['train_loss'].dropna().tolist() if 'train_loss' in df_log else []
+        history['val_loss'] = df_log['val_loss'].dropna().tolist() if 'val_loss' in df_log else []
+        history['train_mae'] = df_log['train_mae'].dropna().tolist() if 'train_mae' in df_log else []
+        history['val_mae'] = df_log['val_mae'].dropna().tolist() if 'val_mae' in df_log else []
+        history['learning_rate'] = df_log['lr-Adam'].dropna().tolist() if 'lr-Adam' in df_log else []
+        history['final_epoch'] = len(history['train_loss'])
+        history['final_train_loss'] = history['train_loss'][-1] if history['train_loss'] else 0.0
+        history['final_val_loss'] = history['val_loss'][-1] if history['val_loss'] else 0.0
+        history['final_train_mae'] = history['train_mae'][-1] if history['train_mae'] else 0.0
+        history['final_val_mae'] = history['val_mae'][-1] if history['val_mae'] else 0.0
+
+    # --- Best epoch from best_metrics.json ---
+    best_metrics_path = fold_dir / 'best_metrics.json'
+    if best_metrics_path.exists():
+        import json as _json
+        with open(best_metrics_path) as f:
+            best = _json.load(f)
+        history['best_epoch'] = best.get('best_epoch', 0)
+        history['best_val_loss'] = best.get('val_loss', history.get('final_val_loss', 0.0))
+    else:
+        history['best_epoch'] = history.get('final_epoch', 0)
+        history['best_val_loss'] = history.get('final_val_loss', 0.0)
+
+    # --- Eval results from results_df (fold 0) ---
+    eval_results = {}
+    if results_df is not None and len(results_df) > 0:
+        row = results_df.iloc[0]
+        eval_results['test_mse'] = float(row.get('test_loss', 0.0))
+        eval_results['test_mae'] = float(row.get('test_mae', 0.0))
+        eval_results['test_rmse'] = float(row.get('test_loss', 0.0)) ** 0.5
+        eval_results['test_r2'] = float(row.get('test_r2_Y', row.get('test_r2', 0.0)))
+
+    # Predictions/targets arrays (if evaluation saved them)
+    pred_path = fold_dir / 'eval_predictions.npz'
+    if pred_path.exists():
+        pred_data = np.load(pred_path)
+        eval_results['predictions'] = pred_data.get('predictions', np.array([]))
+        eval_results['targets'] = pred_data.get('targets', np.array([]))
+    else:
+        eval_results['predictions'] = np.array([])
+        eval_results['targets'] = np.array([])
+
+    # --- Dataset split sizes ---
+    ds_path = Path(data_dir) / dataset_name / 'ds.npz'
+    if ds_path.exists():
+        ds = np.load(ds_path)
+        n_total = ds['x'].shape[0] if 'x' in ds else ds['s'].shape[0]
+        input_dim = ds['x'].shape[1] if 'x' in ds else 0
+    else:
+        n_total = 0
+        input_dim = 0
+
+    # Read split sizes from data index tracker if available
+    idx_path = fold_dir / 'data_indices.json'
+    if idx_path.exists():
+        import json as _json
+        with open(idx_path) as f:
+            idx_data = _json.load(f)
+        n_train = len(idx_data.get('train_indices', []))
+        n_val = len(idx_data.get('val_indices', []))
+        n_test = len(idx_data.get('test_indices', []))
+    else:
+        # Fallback: estimate from config ratios
+        test_ratio = config.get('data', {}).get('test_size', 0.15)
+        n_test = int(n_total * test_ratio)
+        n_train_val = n_total - n_test
+        n_val = int(n_train_val * 0.2)
+        n_train = n_train_val - n_val
+
+    # --- Model params ---
+    total_params = int(results_df.iloc[0].get('trainable_params', 0)) if results_df is not None and len(results_df) > 0 else 0
+
+    generate_surrogate_training_report(
+        config=dict(config) if not isinstance(config, dict) else config,
+        history=history,
+        eval_results=eval_results,
+        input_dim=input_dim,
+        output_dim=1,
+        total_params=total_params,
+        n_train=n_train,
+        n_val=n_val,
+        n_test=n_test,
+        checkpoint_dir=save_dir,
+    )
+
 
 if __name__ == '__main__':
     main()

@@ -73,7 +73,7 @@ SWEEP_CONFIG = {
     # OUTPUT
     # =========================================================================
     'output': {
-        'output_dir': 'controller_optimization/checkpoints/sweep',
+        'output_dir': 'checkpoints/sweep',
         'params_file': 'euler/sweep/sweep_params.txt',
         'sweep_script': 'euler/sweep/sweep.sh',
         # Run name template: use {param_name} placeholders

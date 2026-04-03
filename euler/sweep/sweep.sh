@@ -60,7 +60,7 @@ for PARAM in $PARAMS; do
     ARGS="$ARGS --$KEY $VALUE"
 done
 
-OUTPUT_DIR="controller_optimization/checkpoints/sweep"
+OUTPUT_DIR="checkpoints/sweep"
 
 echo "=============================================="
 echo "SLURM Job ID:     $SLURM_JOB_ID"

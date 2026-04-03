@@ -42,7 +42,7 @@ echo ""
 
 # ── Cleanup previous sweep ─────────────────────────────────────────────────
 echo "[cleanup] Removing previous sweep results..."
-rm -rf controller_optimization/checkpoints/sweep
+rm -rf checkpoints/sweep
 rm -f logs/sweep_*.out logs/sweep_*.err
 rm -f euler/sweep/sweep_params.txt
 echo "  Done."

@@ -61,7 +61,7 @@ COMPLEXITY_SWEEP_CONFIG = {
     # OUTPUT
     # =========================================================================
     'output': {
-        'output_dir': 'controller_optimization/checkpoints/complexity_sweep',
+        'output_dir': 'checkpoints/complexity_sweep',
         'params_file': 'euler/complexity_sweep/complexity_sweep_params.txt',
         'sweep_script': 'euler/complexity_sweep/complexity_sweep.sh',
         'report_dir': None,  # None = same as output_dir

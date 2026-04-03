@@ -18,17 +18,12 @@ import numpy as np
 REPO_ROOT = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from controller_optimization.src.utils.model_utils import (
+from controller.src.models.uncertainty_predictor.loader import (
     load_uncertainty_predictor,
     load_preprocessor
 )
-from controller_optimization.src.models.policy_generator import (
-    PolicyGenerator,
-    create_small_policy_generator,
-    create_medium_policy_generator,
-    create_large_policy_generator
-)
-from controller_optimization.src.models.scenario_encoder import ScenarioEncoder
+from controller.src.models.policy_generator.policy_generator import PolicyGenerator
+from controller.src.models.policy_generator.scenario_encoder import ScenarioEncoder
 
 
 class ProcessChain(nn.Module):
@@ -39,25 +34,11 @@ class ProcessChain(nn.Module):
     a1 (fisso) → UncertPred1 → (o1, σ1²) → Policy1 → a2 → UncertPred2 → (o2, σ2²) → ...
     """
 
-    # Class-level debug flag
-    debug = False
-
-    @classmethod
-    def enable_debug(cls, enable=True):
+    def enable_debug(self, enable: bool = True):
         """Enable/disable debug mode for ProcessChain and all PolicyGenerators."""
-        cls.debug = enable
-        PolicyGenerator.debug = enable
-        print(f"Debug mode {'ENABLED' if enable else 'DISABLED'} for ProcessChain and PolicyGenerator")
-
-    def debug_all_gradients(self):
-        """Print gradient statistics for all policy generators."""
-        for i, policy in enumerate(self.policy_generators):
-            policy.debug_gradients()
-
-    def debug_all_weights(self):
-        """Print weight statistics for all policy generators."""
-        for i, policy in enumerate(self.policy_generators):
-            policy.debug_weights()
+        self.debug = enable
+        for policy in self.policy_generators:
+            policy.debug = enable
 
     @staticmethod
     def _get_controllable_info(process_config):
@@ -77,7 +58,7 @@ class ProcessChain(nn.Module):
                 'n_non_controllable': number of non-controllable inputs,
             }
         """
-        from controller_optimization.configs.processes_config import get_controllable_inputs
+        from configs.processes_config import get_controllable_inputs
 
         input_labels = process_config['input_labels']
         controllable = get_controllable_inputs(process_config)
@@ -122,71 +103,8 @@ class ProcessChain(nn.Module):
 
         return total
 
-    def _extract_structural_params(self, scenario_idx):
-        """
-        Estrae parametri strutturali (non-controllabili) per uno scenario specifico.
-
-        Sources from baseline_trajectories if available, otherwise from target.
-
-        Args:
-            scenario_idx (int): Index dello scenario
-
-        Returns:
-            torch.Tensor: Parametri strutturali, shape (n_structural_params,)
-        """
-        structural_values = []
-
-        for i, process_config in enumerate(self.processes_config):
-            process_name = process_config['name']
-            info = self._get_controllable_info(process_config)
-
-            # Source from baseline (env params) or target
-            if self.baseline_trajectories is not None:
-                source_inputs = self.baseline_trajectories[process_name]['inputs'][scenario_idx]
-            else:
-                target_inputs_all = self.target_trajectory[process_name]['inputs']
-                target_idx = min(scenario_idx, target_inputs_all.shape[0] - 1)
-                source_inputs = target_inputs_all[target_idx]
-
-            for idx in info['non_controllable_indices']:
-                structural_values.append(source_inputs[idx])
-
-        if len(structural_values) == 0:
-            return torch.tensor([0.0], dtype=torch.float32, device=self.device)
-
-        return torch.tensor(structural_values, dtype=torch.float32, device=self.device)
-
-    def train(self, mode=True):
-        """Override train() to keep frozen UncertaintyPredictors in eval() mode.
-
-        nn.Module.train() recursively sets ALL submodules to training mode.
-        This reactivates dropout in the frozen UncertaintyPredictors (dropout_rate=0.2),
-        causing their mean/variance predictions to fluctuate randomly during training.
-        Since L_min is computed in eval() mode (deterministic predictions), the dropout
-        noise can produce training loss values below L_min — a theoretical impossibility.
-
-        Fix: only set PolicyGenerators (and ScenarioEncoder) to train mode;
-        UncertaintyPredictors always stay in eval() mode.
-        """
-        # Set self.training flag without recursion
-        self.training = mode
-
-        # PolicyGenerators: respect train/eval mode (they have trainable dropout)
-        for policy in self.policy_generators:
-            policy.train(mode)
-
-        # ScenarioEncoder: respect train/eval mode (if present)
-        if hasattr(self, 'scenario_encoder') and self.scenario_encoder is not None:
-            self.scenario_encoder.train(mode)
-
-        # UncertaintyPredictors: ALWAYS eval (frozen, dropout must stay off)
-        for predictor in self.uncertainty_predictors:
-            predictor.eval()
-
-        return self
-
     def __init__(self, processes_config, target_trajectory, policy_config=None, device='cpu',
-                 baseline_trajectories=None):
+                 baseline_trajectories=None, debug: bool = False):
         """
         Args:
             processes_config (list): Lista da PROCESSES
@@ -196,10 +114,12 @@ class ProcessChain(nn.Module):
             baseline_trajectories (dict, optional): Baseline trajectories with different env params.
                 If provided, non-controllable inputs (env params) are sourced from baselines
                 instead of the target trajectory. Shape: (n_baselines, input_dim) per process.
+            debug (bool): Enable debug mode
         """
         super(ProcessChain, self).__init__()
 
         self.device = device
+        self.debug = debug
         self.process_names = [p['name'] for p in processes_config]
 
         self.processes_config = processes_config
@@ -327,22 +247,33 @@ class ProcessChain(nn.Module):
 
             # Create policy generator with bounds - output size is n_controllable, not full input_dim
             if policy_config['architecture'] == 'small':
-                policy = create_small_policy_generator(
-                    policy_input_size, n_controllable,
-                    output_min=output_min, output_max=output_max
+                policy = PolicyGenerator(
+                    input_size=policy_input_size,
+                    output_size=n_controllable,
+                    hidden_sizes=[32, 16],
+                    dropout_rate=0.05,
+                    output_min=output_min,
+                    output_max=output_max
                 )
             elif policy_config['architecture'] == 'medium':
-                policy = create_medium_policy_generator(
-                    policy_input_size, n_controllable,
-                    output_min=output_min, output_max=output_max
+                policy = PolicyGenerator(
+                    input_size=policy_input_size,
+                    output_size=n_controllable,
+                    hidden_sizes=[64, 32],
+                    dropout_rate=0.1,
+                    output_min=output_min,
+                    output_max=output_max
                 )
             elif policy_config['architecture'] == 'large':
-                policy = create_large_policy_generator(
-                    policy_input_size, n_controllable,
-                    output_min=output_min, output_max=output_max
+                policy = PolicyGenerator(
+                    input_size=policy_input_size,
+                    output_size=n_controllable,
+                    hidden_sizes=[128, 64, 32],
+                    dropout_rate=0.15,
+                    output_min=output_min,
+                    output_max=output_max
                 )
             elif policy_config['architecture'] == 'custom':
-                from controller_optimization.src.models.policy_generator import PolicyGenerator
                 policy = PolicyGenerator(
                     input_size=policy_input_size,
                     output_size=n_controllable,
@@ -359,6 +290,35 @@ class ProcessChain(nn.Module):
             # Set debug name for this policy generator
             policy.debug_name = f"{processes_config[i]['name']}->{processes_config[i + 1]['name']}"
             self.policy_generators.append(policy)
+
+    def train(self, mode=True):
+        """Override train() to keep frozen UncertaintyPredictors in eval() mode.
+
+        nn.Module.train() recursively sets ALL submodules to training mode.
+        This reactivates dropout in the frozen UncertaintyPredictors (dropout_rate=0.2),
+        causing their mean/variance predictions to fluctuate randomly during training.
+        Since L_min is computed in eval() mode (deterministic predictions), the dropout
+        noise can produce training loss values below L_min — a theoretical impossibility.
+
+        Fix: only set PolicyGenerators (and ScenarioEncoder) to train mode;
+        UncertaintyPredictors always stay in eval() mode.
+        """
+        # Set self.training flag without recursion
+        self.training = mode
+
+        # PolicyGenerators: respect train/eval mode (they have trainable dropout)
+        for policy in self.policy_generators:
+            policy.train(mode)
+
+        # ScenarioEncoder: respect train/eval mode (if present)
+        if hasattr(self, 'scenario_encoder') and self.scenario_encoder is not None:
+            self.scenario_encoder.train(mode)
+
+        # UncertaintyPredictors: ALWAYS eval (frozen, dropout must stay off)
+        for predictor in self.uncertainty_predictors:
+            predictor.eval()
+
+        return self
 
     def get_initial_inputs(self, batch_size=1, scenario_idx=None):
         """
@@ -539,6 +499,44 @@ class ProcessChain(nn.Module):
 
         return non_controllable_batch
 
+    def _extract_structural_params(self, scenario_idx):
+        """
+        Estrae parametri strutturali (non-controllabili) per uno scenario specifico.
+
+        Sources from baseline_trajectories if available, otherwise from target.
+
+        Args:
+            scenario_idx (int): Index dello scenario
+
+        Returns:
+            torch.Tensor: Parametri strutturali, shape (n_structural_params,)
+        """
+        structural_values = []
+
+        for i, process_config in enumerate(self.processes_config):
+            process_name = process_config['name']
+            info = self._get_controllable_info(process_config)
+
+            # Source from baseline (env params) or target
+            if self.baseline_trajectories is not None:
+                source_inputs = self.baseline_trajectories[process_name]['inputs'][scenario_idx]
+            else:
+                target_inputs_all = self.target_trajectory[process_name]['inputs']
+                target_idx = min(scenario_idx, target_inputs_all.shape[0] - 1)
+                source_inputs = target_inputs_all[target_idx]
+
+            for idx in info['non_controllable_indices']:
+                structural_values.append(source_inputs[idx])
+
+        if len(structural_values) == 0:
+            return torch.tensor([0.0], dtype=torch.float32, device=self.device)
+
+        return torch.tensor(structural_values, dtype=torch.float32, device=self.device)
+
+    def _debug_forward_step(self, phase: int, **kwargs):
+        """Print debug info for a single forward step."""
+        print(f"\n[{phase}] " + " | ".join(f"{k}={v}" for k, v in kwargs.items()))
+
     def forward(self, batch_size=1, scenario_idx=0):
         """
         Forward pass attraverso tutta la catena per uno scenario specifico.
@@ -565,11 +563,11 @@ class ProcessChain(nn.Module):
         # a1 è fisso dalla target trajectory (per lo scenario specifico)
         current_inputs = self.get_initial_inputs(batch_size, scenario_idx)
 
-        if ProcessChain.debug:
-            print(f"\n{'='*80}")
-            print(f"PROCESS CHAIN FORWARD PASS - Scenario {scenario_idx}, Batch {batch_size}")
-            print(f"{'='*80}")
-            print(f"Initial inputs (laser): {current_inputs[0].tolist()}")
+        if self.debug:
+            self._debug_forward_step(0,
+                scenario=scenario_idx,
+                batch=batch_size,
+                initial_inputs=current_inputs[0].tolist())
 
         # Extract and encode scenario structural parameters (if encoder is enabled)
         if self.use_scenario_encoder:
@@ -578,32 +576,35 @@ class ProcessChain(nn.Module):
             structural_params = structural_params.unsqueeze(0).repeat(batch_size, 1)  # (batch_size, n_params)
             # Encode to embedding
             scenario_embedding = self.scenario_encoder(structural_params)  # (batch_size, embedding_dim)
-            if ProcessChain.debug:
-                print(f"Scenario embedding: mean={scenario_embedding.mean().item():.4f}, std={scenario_embedding.std().item():.4f}")
+            if self.debug:
+                self._debug_forward_step(0,
+                    scenario_embedding_mean=f"{scenario_embedding.mean().item():.4f}",
+                    scenario_embedding_std=f"{scenario_embedding.std().item():.4f}")
         else:
             scenario_embedding = None
 
         for i, process_name in enumerate(self.process_names):
-            if ProcessChain.debug:
-                print(f"\n{'-'*80}")
-                print(f"STEP {i}: Process '{process_name}'")
-                print(f"{'-'*80}")
+            if self.debug:
+                self._debug_forward_step(1,
+                    step=i,
+                    process=process_name)
 
             # 1. Se i > 0: policy generator produce inputs
             if i > 0:
                 # Get non-controllable inputs for the current process (environmental conditions)
                 non_controllable_inputs = self._get_non_controllable_inputs(i, scenario_idx, batch_size)
 
-                if ProcessChain.debug:
-                    print(f"\n[1] POLICY GENERATOR {i-1}: {self.process_names[i-1]} -> {process_name}")
-                    print(f"    Policy input components:")
-                    print(f"      prev_outputs_mean: shape={prev_outputs_mean.shape}, mean={prev_outputs_mean.mean().item():.6f}, std={prev_outputs_mean.std().item():.6f}")
-                    print(f"      prev_outputs_var: shape={prev_outputs_var.shape}, mean={prev_outputs_var.mean().item():.6f}, std={prev_outputs_var.std().item():.6f}")
-                    if non_controllable_inputs is not None:
-                        nc_info = self.controllable_info_per_process[i]
-                        print(f"      non_controllable_inputs: shape={non_controllable_inputs.shape}, labels={nc_info['non_controllable_labels']}")
-                        print(f"        values: {non_controllable_inputs[0].tolist()}")
-                    print(f"      Sample values (first batch): prev_mean={prev_outputs_mean[0].tolist()}, prev_var={prev_outputs_var[0].tolist()}")
+                if self.debug:
+                    nc_info = self.controllable_info_per_process[i]
+                    nc_shape = non_controllable_inputs.shape if non_controllable_inputs is not None else None
+                    nc_labels = nc_info['non_controllable_labels'] if non_controllable_inputs is not None else None
+                    self._debug_forward_step(1,
+                        policy=f"{self.process_names[i-1]}->{process_name}",
+                        prev_mean_shape=str(prev_outputs_mean.shape),
+                        prev_mean_mean=f"{prev_outputs_mean.mean().item():.6f}",
+                        prev_var_mean=f"{prev_outputs_var.mean().item():.6f}",
+                        non_controllable_shape=str(nc_shape),
+                        non_controllable_labels=str(nc_labels))
 
                 # Concatenate: [prev_outputs_mean, prev_outputs_var, non_controllable_inputs, scenario_embedding]
                 policy_input_parts = [
@@ -621,61 +622,60 @@ class ProcessChain(nn.Module):
 
                 policy_input = torch.cat(policy_input_parts, dim=1)
 
-                if ProcessChain.debug:
-                    print(f"    Concatenated policy_input: shape={policy_input.shape}")
-                    print(f"      mean={policy_input.mean().item():.6f}, std={policy_input.std().item():.6f}")
-                    print(f"      min={policy_input.min().item():.6f}, max={policy_input.max().item():.6f}")
+                if self.debug:
+                    self._debug_forward_step(2,
+                        policy_input_shape=str(policy_input.shape),
+                        mean=f"{policy_input.mean().item():.6f}",
+                        std=f"{policy_input.std().item():.6f}",
+                        min=f"{policy_input.min().item():.6f}",
+                        max=f"{policy_input.max().item():.6f}")
 
                 # Policy outputs ONLY controllable inputs
                 controllable_outputs = self.policy_generators[i - 1](policy_input)
                 process_info = self.controllable_info_per_process[i]
 
-                if ProcessChain.debug:
-                    print(f"\n[2] POLICY OUTPUT (controllable inputs only):")
-                    for dim_idx, label in enumerate(process_info['controllable_labels']):
-                        vals = controllable_outputs[:, dim_idx]
-                        print(f"      {label}: mean={vals.mean().item():.6f}, std={vals.std().item():.6f}, min={vals.min().item():.6f}, max={vals.max().item():.6f}")
-                    print(f"      Sample (first batch): {controllable_outputs[0].tolist()}")
+                if self.debug:
+                    self._debug_forward_step(2,
+                        controllable_labels=str(process_info['controllable_labels']),
+                        sample=controllable_outputs[0].tolist())
 
                 # Merge controllable outputs with non-controllable values from target
                 current_inputs = self._merge_controllable_inputs(
                     controllable_outputs, i, scenario_idx, batch_size
                 )
 
-                if ProcessChain.debug:
-                    print(f"\n[3] MERGED INPUTS (controllable + non-controllable from target):")
-                    for dim_idx in range(current_inputs.shape[1]):
-                        label = self.processes_config[i]['input_labels'][dim_idx]
-                        source = "policy" if dim_idx in process_info['controllable_indices'] else "target"
-                        vals = current_inputs[:, dim_idx]
-                        print(f"      {label} [{source}]: mean={vals.mean().item():.6f}, std={vals.std().item():.6f}, min={vals.min().item():.6f}, max={vals.max().item():.6f}")
-                    print(f"      Sample (first batch): {current_inputs[0].tolist()}")
+                if self.debug:
+                    self._debug_forward_step(3,
+                        merged_shape=str(current_inputs.shape),
+                        sample=current_inputs[0].tolist())
 
             # 2. Scale inputs
             scaled_inputs = self.scale_inputs(current_inputs, i)
 
-            if ProcessChain.debug:
-                print(f"\n[4] SCALED INPUTS for UncertaintyPredictor:")
-                print(f"      mean={scaled_inputs.mean().item():.6f}, std={scaled_inputs.std().item():.6f}")
-                print(f"      min={scaled_inputs.min().item():.6f}, max={scaled_inputs.max().item():.6f}")
+            if self.debug:
+                self._debug_forward_step(4,
+                    process=process_name,
+                    scaled_mean=f"{scaled_inputs.mean().item():.6f}",
+                    scaled_std=f"{scaled_inputs.std().item():.6f}")
 
             # 3. Uncertainty predictor (frozen)
             outputs_mean_scaled, outputs_var_scaled = self.uncertainty_predictors[i](scaled_inputs)
 
-            if ProcessChain.debug:
-                print(f"\n[5] UNCERTAINTY PREDICTOR OUTPUT (scaled):")
-                print(f"      mean_scaled: mean={outputs_mean_scaled.mean().item():.6f}, std={outputs_mean_scaled.std().item():.6f}")
-                print(f"      var_scaled: mean={outputs_var_scaled.mean().item():.6f}, std={outputs_var_scaled.std().item():.6f}")
+            if self.debug:
+                self._debug_forward_step(5,
+                    mean_scaled=f"{outputs_mean_scaled.mean().item():.6f}",
+                    var_scaled=f"{outputs_var_scaled.mean().item():.6f}")
 
             # 4. Unscale outputs
             outputs_mean = self.unscale_outputs(outputs_mean_scaled, i)
             outputs_var = self.unscale_variance(outputs_var_scaled, i)
 
-            if ProcessChain.debug:
-                print(f"\n[6] UNSCALED OUTPUTS:")
-                print(f"      outputs_mean: mean={outputs_mean.mean().item():.6f}, std={outputs_mean.std().item():.6f}, min={outputs_mean.min().item():.6f}, max={outputs_mean.max().item():.6f}")
-                print(f"      outputs_var: mean={outputs_var.mean().item():.6f}, std={outputs_var.std().item():.6f}")
-                print(f"      Sample (first batch): mean={outputs_mean[0].tolist()}, var={outputs_var[0].tolist()}")
+            if self.debug:
+                self._debug_forward_step(6,
+                    outputs_mean=f"{outputs_mean.mean().item():.6f}",
+                    outputs_var=f"{outputs_var.mean().item():.6f}",
+                    sample_mean=outputs_mean[0].tolist(),
+                    sample_var=outputs_var[0].tolist())
 
             # 5. Sample from distribution using reparameterization trick
             # This makes the actual trajectory stochastic based on predicted uncertainty
@@ -683,12 +683,12 @@ class ProcessChain(nn.Module):
             epsilon = torch.randn_like(outputs_mean)
             outputs_sampled = outputs_mean + epsilon * std
 
-            if ProcessChain.debug:
-                print(f"\n[7] SAMPLED OUTPUTS (reparameterization):")
-                print(f"      std: mean={std.mean().item():.6f}")
-                print(f"      epsilon: mean={epsilon.mean().item():.6f}, std={epsilon.std().item():.6f}")
-                print(f"      outputs_sampled: mean={outputs_sampled.mean().item():.6f}, std={outputs_sampled.std().item():.6f}")
-                print(f"      Sample (first batch): {outputs_sampled[0].tolist()}")
+            if self.debug:
+                self._debug_forward_step(7,
+                    std_mean=f"{std.mean().item():.6f}",
+                    epsilon_mean=f"{epsilon.mean().item():.6f}",
+                    sampled_mean=f"{outputs_sampled.mean().item():.6f}",
+                    sample=outputs_sampled[0].tolist())
 
             # 6. Store in trajectory
             trajectory[process_name] = {
@@ -705,15 +705,13 @@ class ProcessChain(nn.Module):
             prev_outputs_mean = outputs_sampled  # Use sampled outputs instead of mean
             prev_outputs_var = outputs_var
 
-            if ProcessChain.debug:
-                print(f"\n[8] STORED FOR NEXT ITERATION:")
-                print(f"      prev_outputs_mean (=outputs_sampled): {prev_outputs_mean[0].tolist()}")
-                print(f"      prev_outputs_var: {prev_outputs_var[0].tolist()}")
+            if self.debug:
+                self._debug_forward_step(8,
+                    prev_outputs_mean=prev_outputs_mean[0].tolist(),
+                    prev_outputs_var=prev_outputs_var[0].tolist())
 
-        if ProcessChain.debug:
-            print(f"\n{'='*80}")
-            print(f"FORWARD PASS COMPLETE")
-            print(f"{'='*80}\n")
+        if self.debug:
+            self._debug_forward_step(9, status="FORWARD PASS COMPLETE")
 
         return trajectory
 
@@ -800,88 +798,12 @@ class ProcessChain(nn.Module):
         X, Y = self.trajectory_to_prot_format(trajectory)
         return X, Y, trajectory
 
-    def evaluate_trajectory(self, trajectory_type='target'):
-        """
-        Genera trajectory senza training (per evaluation).
+    def debug_all_gradients(self):
+        """Print gradient statistics for all policy generators."""
+        for i, policy in enumerate(self.policy_generators):
+            policy.debug_gradients()
 
-        Args:
-            trajectory_type (str): 'target' (usa a*) o 'baseline' (usa a' con noise)
-
-        Returns:
-            trajectory (dict): Trajectory completa
-        """
-        # This is used during evaluation, not training
-        # Simply use fixed inputs from target trajectory
-        with torch.no_grad():
-            trajectory = {}
-
-            for i, process_name in enumerate(self.process_names):
-                # Use target inputs
-                target_inputs = self.target_trajectory[process_name]['inputs']
-                current_inputs = torch.tensor(target_inputs, dtype=torch.float32, device=self.device)
-
-                # Scale inputs
-                scaled_inputs = self.scale_inputs(current_inputs, i)
-
-                # Uncertainty predictor
-                outputs_mean_scaled, outputs_var_scaled = self.uncertainty_predictors[i](scaled_inputs)
-
-                # Unscale outputs
-                outputs_mean = self.unscale_outputs(outputs_mean_scaled, i)
-                outputs_var = self.unscale_variance(outputs_var_scaled, i)
-
-                # Sample from distribution
-                std = torch.sqrt(outputs_var + 1e-8)
-                epsilon = torch.randn_like(outputs_mean)
-                outputs_sampled = outputs_mean + epsilon * std
-
-                trajectory[process_name] = {
-                    'inputs': current_inputs,
-                    'outputs_mean': outputs_mean,
-                    'outputs_var': outputs_var,
-                    'outputs_sampled': outputs_sampled
-                }
-
-        return trajectory
-
-
-if __name__ == '__main__':
-    # Test ProcessChain (requires trained models)
-    print("Testing ProcessChain...")
-    print("Note: This requires trained uncertainty predictors.")
-    print("Run train_processes.py first if not already done.")
-
-    from controller_optimization.configs.processes_config import PROCESSES
-    from controller_optimization.src.utils.target_generation import generate_target_trajectory
-
-    # Generate target trajectory
-    target_traj = generate_target_trajectory(PROCESSES, n_samples=1, seed=42)
-
-    try:
-        # Create process chain
-        chain = ProcessChain(
-            processes_config=PROCESSES,
-            target_trajectory=target_traj,
-            device='cpu'
-        )
-
-        print(f"\nProcessChain created successfully!")
-        print(f"  Processes: {chain.process_names}")
-        print(f"  Uncertainty predictors: {len(chain.uncertainty_predictors)}")
-        print(f"  Policy generators: {len(chain.policy_generators)}")
-
-        # Test forward pass
-        trajectory = chain.forward(batch_size=4)
-
-        print(f"\nForward pass test:")
-        for process_name, data in trajectory.items():
-            print(f"  {process_name}:")
-            print(f"    Inputs shape: {data['inputs'].shape}")
-            print(f"    Outputs mean shape: {data['outputs_mean'].shape}")
-            print(f"    Outputs var shape: {data['outputs_var'].shape}")
-
-        print("\n✓ ProcessChain test passed!")
-
-    except FileNotFoundError as e:
-        print(f"\n✗ Error: {e}")
-        print("Please run train_processes.py first to train uncertainty predictors.")
+    def debug_all_weights(self):
+        """Print weight statistics for all policy generators."""
+        for i, policy in enumerate(self.policy_generators):
+            policy.debug_weights()

@@ -41,7 +41,7 @@ echo ""
 
 # ── Cleanup previous sweep ─────────────────────────────────────────────────
 echo "[cleanup] Removing previous complexity sweep results..."
-rm -rf controller_optimization/checkpoints/complexity_sweep
+rm -rf checkpoints/complexity_sweep
 rm -f logs/complexity_*.out logs/complexity_*.err
 rm -f euler/complexity_sweep/complexity_sweep_params.txt
 echo "  Done."
