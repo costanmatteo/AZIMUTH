@@ -11,7 +11,7 @@ import numpy as np
 import importlib.util
 
 # Add uncertainty_predictor to path
-REPO_ROOT = Path(__file__).parent.parent.parent.parent
+REPO_ROOT = Path(__file__).parent.parent.parent.parent.parent
 UNCERTAINTY_PREDICTOR_PATH = REPO_ROOT / 'uncertainty_predictor'
 
 # CRITICAL: Add uncertainty_predictor to sys.path FIRST
