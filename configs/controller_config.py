@@ -121,7 +121,7 @@ CONTROLLER_CONFIG = {
         'reliability_loss_scale': 100.0,  # Scale factor for reliability loss (F - F*)^2
         'patience': 50,
         'device': 'auto',
-        'checkpoint_dir': 'controller/checkpoints/controller',
+        'checkpoint_dir': 'checkpoints/controller',
 
         # Optimizer settings
         'optimizer': 'adam',  # 'adam', 'adamw', 'sgd'
