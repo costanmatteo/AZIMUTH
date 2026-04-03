@@ -717,79 +717,60 @@ class ProcessChain(nn.Module):
 
     def trajectory_to_prot_format(self, trajectory: dict) -> tuple:
         """
-        Convert trajectory dict to ProT input format for direct use with causaliT.
+        Convert trajectory dict to causaliT input format matching build_arrays().
 
-        This allows using causaliT TransformerForecaster directly without a wrapper,
-        as ProcessChain outputs data in the format ProT expects.
+        Produces the same [value, var_id] token format used during surrogate
+        training (see scm_ds/convert_azimuth_trajectories.py::build_arrays).
 
-        ProT expects:
-            X: (batch, seq_len, features) - encoder input (process sequence)
-            Y: (batch, seq_len, features) - decoder input/target
+        Each scalar output of each process becomes one token in X:
+            X[:, k, :] = [output_value, var_id]   (var_id is 1-based, local to X)
 
-        The trajectory is encoded as a sequence where each step is a process:
-            - Each process contributes: [inputs, outputs_sampled]
-            - Sequence length = number of processes
-            - Features are padded to max feature dimension across processes
-            - Feature dim per process = input_dim + output_dim
-
-        Note: if 'outputs_sampled' is not available in the trajectory data,
-        falls back to 'outputs_mean'.
+        Falls back to 'outputs_mean' when 'outputs_sampled' is not present.
 
         Args:
             trajectory: Dict from forward() with structure:
                 {process_name: {'inputs', 'outputs_mean', 'outputs_var', 'outputs_sampled'}}
 
         Returns:
-            X: (batch, n_processes, features) - encoder input
-            Y: (batch, 1, 1) - decoder input placeholder for F prediction
+            X: (batch, n_output_vars, 2) - one [value, var_id] per output variable
+            Y: (batch, 1, 2) - decoder target placeholder [0.0, var_id]
 
         Example:
             >>> trajectory = process_chain.forward(batch_size=32, scenario_idx=0)
             >>> X, Y = process_chain.trajectory_to_prot_format(trajectory)
-            >>> # X shape: (32, 4, max_features) for 4 processes
-            >>> # Y shape: (32, 1, 1) placeholder for F
+            >>> # 3 processes, 1 output each → X shape: (32, 3, 2)
+            >>> # Y shape: (32, 1, 2)
         """
-        features_list = []
+        tokens = []
         batch_size = None
+        var_id = 1  # 1-based, local to X group
 
-        # Process in order defined in the chain
         for process_name in self.process_names:
             if process_name not in trajectory:
                 continue
 
             data = trajectory[process_name]
-
-            # Get batch size from first process
-            inputs = data['inputs']
             if batch_size is None:
-                batch_size = inputs.shape[0]
+                batch_size = data['inputs'].shape[0]
 
             # Get sampled outputs (fallback to mean if not available)
-            outputs = data.get('outputs_sampled', data['outputs_mean'])
+            outputs = data.get('outputs_sampled', data['outputs_mean'])  # (batch, output_dim)
+            output_dim = outputs.shape[-1]
 
-            # Concatenate features for this process step: [inputs, outputs_sampled]
-            step_features = torch.cat([
-                inputs.view(batch_size, -1),
-                outputs.view(batch_size, -1),
-            ], dim=-1)
+            # One token per scalar output
+            for d in range(output_dim):
+                value = outputs[:, d:d+1]  # (batch, 1) — keeps grad
+                vid = torch.full((batch_size, 1), var_id, dtype=torch.float32,
+                                 device=self.device)
+                tokens.append(torch.cat([value, vid], dim=-1))  # (batch, 2)
+                var_id += 1
 
-            features_list.append(step_features)
+        # Stack tokens: (batch, n_output_vars, 2)
+        X = torch.stack(tokens, dim=1)
 
-        # Pad all steps to same feature dimension
-        max_features = max(f.shape[-1] for f in features_list)
-        padded = []
-        for f in features_list:
-            if f.shape[-1] < max_features:
-                padding = torch.zeros(batch_size, max_features - f.shape[-1],
-                                     dtype=torch.float32, device=self.device)
-                f = torch.cat([f, padding], dim=-1)
-            padded.append(f)
-
-        # Stack to create sequence: (batch, n_processes, features)
-        X = torch.stack(padded, dim=1)
-
-        # Decoder input placeholder (F prediction target)
-        Y = torch.zeros(batch_size, 1, 1, dtype=torch.float32, device=self.device)
+        # Decoder target placeholder: [0.0, var_id] (same convention as build_arrays y_ids)
+        Y = torch.zeros(batch_size, 1, 2, dtype=torch.float32, device=self.device)
+        Y[:, 0, 1] = 1.0  # y_ids = [1.0]
 
         return X, Y
 
