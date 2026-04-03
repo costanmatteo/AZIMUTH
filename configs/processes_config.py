@@ -89,7 +89,7 @@ _PHYSICAL_PROCESSES = [
         'output_labels': ['ActualPower'],
         'controllable_inputs': ['PowerTarget'],  # AmbientTemp is environmental (non-controllable)
         'uncertainty_predictor': PHYSICAL_UNCERTAINTY_PREDICTORS['laser'],
-        'checkpoint_dir': 'controller_optimization/checkpoints/laser',
+        'checkpoint_dir': 'uncertainty_predictor/checkpoints/laser',
     },
 
     {
@@ -102,7 +102,7 @@ _PHYSICAL_PROCESSES = [
         'output_labels': ['RemovalRate'],
         'controllable_inputs': ['RF_Power'],
         'uncertainty_predictor': PHYSICAL_UNCERTAINTY_PREDICTORS['plasma'],
-        'checkpoint_dir': 'controller_optimization/checkpoints/plasma',
+        'checkpoint_dir': 'uncertainty_predictor/checkpoints/plasma',
     },
 
     {
@@ -115,7 +115,7 @@ _PHYSICAL_PROCESSES = [
         'output_labels': ['Thickness'],
         'controllable_inputs': ['CurrentDensity', 'Duration'],
         'uncertainty_predictor': PHYSICAL_UNCERTAINTY_PREDICTORS['galvanic'],
-        'checkpoint_dir': 'controller_optimization/checkpoints/galvanic',
+        'checkpoint_dir': 'uncertainty_predictor/checkpoints/galvanic',
     },
 
     {
@@ -128,7 +128,7 @@ _PHYSICAL_PROCESSES = [
         'output_labels': ['RemovalDepth'],
         'controllable_inputs': ['Concentration', 'Duration'],
         'uncertainty_predictor': PHYSICAL_UNCERTAINTY_PREDICTORS['microetch'],
-        'checkpoint_dir': 'controller_optimization/checkpoints/microetch',
+        'checkpoint_dir': 'uncertainty_predictor/checkpoints/microetch',
     },
 ]
 
@@ -218,7 +218,7 @@ def _build_st_processes(st_dataset_config):
 
             'uncertainty_predictor': copy.deepcopy(up_config),
 
-            'checkpoint_dir': f'controller_optimization/checkpoints/st_{i}',
+            'checkpoint_dir': f'uncertainty_predictor/checkpoints/st_{i}',
         }
 
         # Target adattivo inter-processo:
