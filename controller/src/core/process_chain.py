@@ -714,3 +714,113 @@ class ProcessChain(nn.Module):
             self._debug_forward_step(9, status="FORWARD PASS COMPLETE")
 
         return trajectory
+
+    def trajectory_to_prot_format(self, trajectory: dict) -> tuple:
+        """
+        Convert trajectory dict to ProT input format for direct use with causaliT.
+
+        This allows using causaliT TransformerForecaster directly without a wrapper,
+        as ProcessChain outputs data in the format ProT expects.
+
+        ProT expects:
+            X: (batch, seq_len, features) - encoder input (process sequence)
+            Y: (batch, seq_len, features) - decoder input/target
+
+        The trajectory is encoded as a sequence where each step is a process:
+            - Each process contributes: [inputs, outputs_mean, outputs_var]
+            - Sequence length = number of processes
+            - Features are padded to max feature dimension across processes
+
+        Args:
+            trajectory: Dict from forward() with structure:
+                {process_name: {'inputs', 'outputs_mean', 'outputs_var', 'outputs_sampled'}}
+
+        Returns:
+            X: (batch, n_processes, features) - encoder input
+            Y: (batch, 1, 1) - decoder input placeholder for F prediction
+
+        Example:
+            >>> trajectory = process_chain.forward(batch_size=32, scenario_idx=0)
+            >>> X, Y = process_chain.trajectory_to_prot_format(trajectory)
+            >>> # X shape: (32, 4, max_features) for 4 processes
+            >>> # Y shape: (32, 1, 1) placeholder for F
+        """
+        features_list = []
+        batch_size = None
+
+        # Process in order defined in the chain
+        for process_name in self.process_names:
+            if process_name not in trajectory:
+                continue
+
+            data = trajectory[process_name]
+
+            # Get batch size from first process
+            inputs = data['inputs']
+            if batch_size is None:
+                batch_size = inputs.shape[0]
+
+            # Get outputs
+            outputs_mean = data['outputs_mean']
+            outputs_var = data['outputs_var']
+
+            # Concatenate features for this process step: [inputs, outputs_mean, outputs_var]
+            step_features = torch.cat([
+                inputs.view(batch_size, -1),
+                outputs_mean.view(batch_size, -1),
+                outputs_var.view(batch_size, -1),
+            ], dim=-1)
+
+            features_list.append(step_features)
+
+        # Pad all steps to same feature dimension
+        max_features = max(f.shape[-1] for f in features_list)
+        padded = []
+        for f in features_list:
+            if f.shape[-1] < max_features:
+                padding = torch.zeros(batch_size, max_features - f.shape[-1],
+                                     dtype=torch.float32, device=self.device)
+                f = torch.cat([f, padding], dim=-1)
+            padded.append(f)
+
+        # Stack to create sequence: (batch, n_processes, features)
+        X = torch.stack(padded, dim=1)
+
+        # Decoder input placeholder (F prediction target)
+        Y = torch.zeros(batch_size, 1, 1, dtype=torch.float32, device=self.device)
+
+        return X, Y
+
+    def forward_prot(self, batch_size: int = 1, scenario_idx: int = 0) -> tuple:
+        """
+        Forward pass that directly outputs ProT format for causaliT.
+
+        Combines forward() + trajectory_to_prot_format() for convenience.
+
+        Args:
+            batch_size: Number of parallel samples
+            scenario_idx: Which scenario's structural conditions to use
+
+        Returns:
+            X: (batch, n_processes, features) - encoder input for ProT
+            Y: (batch, 1, 1) - decoder input placeholder
+            trajectory: Original trajectory dict (for debugging/other uses)
+
+        Example:
+            >>> X, Y, traj = process_chain.forward_prot(batch_size=32, scenario_idx=0)
+            >>> # Feed X, Y directly to TransformerForecaster
+            >>> forecast_output, _, _, _ = model.forward(data_input=X, data_trg=Y)
+        """
+        trajectory = self.forward(batch_size=batch_size, scenario_idx=scenario_idx)
+        X, Y = self.trajectory_to_prot_format(trajectory)
+        return X, Y, trajectory
+
+    def debug_all_gradients(self):
+        """Print gradient statistics for all policy generators."""
+        for i, policy in enumerate(self.policy_generators):
+            policy.debug_gradients()
+
+    def debug_all_weights(self):
+        """Print weight statistics for all policy generators."""
+        for i, policy in enumerate(self.policy_generators):
+            policy.debug_weights()
