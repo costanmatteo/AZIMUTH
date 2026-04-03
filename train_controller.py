@@ -83,7 +83,7 @@ from controller.src.io.utils import convert_numpy_to_tensor
 from controller.src.io.scm_validation import validate_all_processes
 from controller.src.evaluation.analysis.theoretical_loss_analysis import (
     TheoreticalLossTracker,
-    compute_empirical_L_min,
+    compute_loss_decomposition,
 )
 from controller.src.evaluation.analysis.theoretical_visualization import generate_all_theoretical_plots
 from controller.src.evaluation.analysis.theoretical_tables import (
