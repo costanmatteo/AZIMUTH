@@ -656,7 +656,7 @@ class ControllerTrainer:
                 'target_gap': float,     # (F_star - F_actual) / F_star
             }
         """
-        from controller_optimization.src.utils.model_utils import convert_numpy_to_tensor
+        from controller.src.io.utils import convert_numpy_to_tensor
 
         # F* già calcolato
         F_star = self.surrogate.F_star
