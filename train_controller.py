@@ -97,7 +97,6 @@ from controller.src.evaluation.analysis.bellman_lmin import (
 )
 from controller.src.evaluation.analysis.lambda_grad import (
     compute_lambda_grad,
-    run_lambda_grad_diagnostics,
 )
 
 
@@ -1702,16 +1701,16 @@ def main(config=None):
                             )
                             lg_trajectories.append(trajectory)
 
-                    # Run diagnostics before computation
-                    run_lambda_grad_diagnostics(
-                        trajectories=lg_trajectories,
-                        surrogate=surrogate,
-                        device=device,
-                    )
+                    predictors = {
+                        process_chain.process_names[i]: process_chain.uncertainty_predictors[i]
+                        for i in range(len(process_chain.process_names))
+                    }
 
                     lambda_grad_result = compute_lambda_grad(
                         trajectories=lg_trajectories,
                         surrogate=surrogate,
+                        predictors=predictors,
+                        process_chain=process_chain,
                         device=device,
                         verbose=True,
                     )
