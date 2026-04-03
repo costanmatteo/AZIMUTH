@@ -228,7 +228,7 @@ def main():
 def _generate_report(config, results_df, save_dir, data_dir, dataset_name):
     """Build history/eval dicts from training artifacts and generate the PDF report."""
     import pandas as pd
-    from surrogate_report_generator import generate_surrogate_training_report
+    from addition_to_causaliT.surrogate_training.report_generator import generate_surrogate_training_report
 
     fold_dir = Path(save_dir) / 'k_0'
 
