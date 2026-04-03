@@ -50,15 +50,14 @@ from configs.processes_config import (
     PROCESSES, get_filtered_processes, ST_DATASET_CONFIG, _build_st_processes, DATASET_MODE
 )
 from configs.controller_config import CONTROLLER_CONFIG
-from controller_optimization.src.utils.target_generation import (
+from controller.src.core.target_generation import (
     generate_target_trajectory,
     generate_baseline_trajectories,
-    generate_baseline_trajectory
 )
-from controller_optimization.src.utils.process_chain import ProcessChain
-from controller_optimization.src.models.surrogate import ProTSurrogate, CasualiTSurrogate, create_surrogate
-from controller_optimization.src.training.controller_trainer import ControllerTrainer
-from controller_optimization.src.utils.metrics import (
+from controller.src.core.process_chain import ProcessChain
+from controller.src.models.surrogate.surrogate import ProTSurrogate, CasualiTSurrogate, create_surrogate
+from controller.src.training.controller_trainer import ControllerTrainer
+from controller.src.evaluation.metrics import (
     compute_final_metrics,
     compute_process_wise_metrics,
     convert_trajectory_to_numpy,
@@ -68,7 +67,7 @@ from controller_optimization.src.utils.metrics import (
     compute_train_test_gap,
     compute_scenario_diversity
 )
-from controller_optimization.src.utils.visualization import (
+from controller.src.evaluation.visualization import (
     plot_training_history,
     plot_trajectory_comparison,
     plot_reliability_comparison,
@@ -79,22 +78,24 @@ from controller_optimization.src.utils.visualization import (
     plot_loss_chart,
     generate_process_evolution_plots
 )
-from controller_optimization.src.utils.report_generator import generate_controller_report, get_report_chart_sizes
-from controller_optimization.src.utils.model_utils import convert_numpy_to_tensor
-from controller_optimization.src.utils.scm_validation import validate_all_processes
-from controller_optimization.src.analysis import (
+from controller.src.evaluation.report_generator import generate_controller_report, get_report_chart_sizes
+from controller.src.io.utils import convert_numpy_to_tensor
+from controller.src.io.scm_validation import validate_all_processes
+from controller.src.evaluation.analysis.theoretical_loss_analysis import (
     TheoreticalLossTracker,
-    compute_loss_decomposition,
-    generate_all_theoretical_plots,
+    compute_empirical_L_min,
+)
+from controller.src.evaluation.analysis.theoretical_visualization import generate_all_theoretical_plots
+from controller.src.evaluation.analysis.theoretical_tables import (
     generate_full_report,
     save_report_txt,
     save_report_json
 )
-from controller_optimization.src.analysis.bellman_lmin import (
+from controller.src.evaluation.analysis.bellman_lmin import (
     BellmanConfig,
     compute_bellman_lmin,
 )
-from controller_optimization.src.analysis.lambda_grad import (
+from controller.src.evaluation.analysis.lambda_grad import (
     compute_lambda_grad,
     run_lambda_grad_diagnostics,
 )
@@ -1333,7 +1334,7 @@ def main(config=None):
                         print(f"    Warning: Could not remove {plot_path.name}: {e}")
         else:
             try:
-                from controller_optimization.src.utils.embedding_visualization import generate_all_embedding_plots
+                from controller.src.evaluation.embedding_visualization import generate_all_embedding_plots
 
                 # Load embedding data
                 embedding_path = checkpoint_dir / 'embeddings.json'
