@@ -25,7 +25,7 @@ SWEEP_CONFIG = {
     'slurm': {
         'job_name': 'ctrl_sweep',
         'account': 'es_mohr',
-        'time': '00:10:00',            # Max wall time per job (HH:MM:SS)
+        'time': '01:00:00',            # Max wall time per job (HH:MM:SS)
         'ntasks': 1,
         'cpus_per_task': 1,
         'mem_per_cpu': '2G',
