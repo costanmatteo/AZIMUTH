@@ -121,6 +121,7 @@ def compute_stats(df: pd.DataFrame) -> dict:
     gd_te = gb_te - gc_te
 
     wins = (gc_tr.abs() < gb_tr.abs()).sum()
+    wins_te = (gc_te.abs() < gb_te.abs()).sum()
 
     # derived columns stored back into df for plotting / table
     df = df.copy()
@@ -139,6 +140,8 @@ def compute_stats(df: pd.DataFrame) -> dict:
         'n_runs':         len(df),
         'wins':           wins,
         'win_rate':       100.0 * wins / len(df),
+        'wins_te':        wins_te,
+        'win_rate_te':    100.0 * wins_te / len(df),
         # train
         'gb_tr_min':  gb_tr.min(),  'gb_tr_med':  gb_tr.median(),  'gb_tr_max':  gb_tr.max(),
         'gc_tr_min':  gc_tr.min(),  'gc_tr_med':  gc_tr.median(),  'gc_tr_max':  gc_tr.max(),
@@ -578,13 +581,23 @@ def build_page1_html(s: dict, now: datetime,
       <div class="kpi-s">valid runs</div>
     </div>
     <div class="kpi">
-      <div class="kpi-l">Controller wins</div>
+      <div class="kpi-l">Controller wins (train)</div>
       <div class="kpi-v g">{s['wins']}/{n}</div>
       <div class="kpi-s">win rate {s['win_rate']:.1f}%</div>
     </div>
     <div class="kpi">
+      <div class="kpi-l">Controller wins (test)</div>
+      <div class="kpi-v g">{s['wins_te']}/{n}</div>
+      <div class="kpi-s">win rate {s['win_rate_te']:.1f}%</div>
+    </div>
+    <div class="kpi">
       <div class="kpi-l">Median gap &#916; (train)</div>
       <div class="kpi-v g">{_sign(s['gd_tr_med'])}</div>
+      <div class="kpi-s">F&#8722;F' improvement</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-l">Median gap &#916; (test)</div>
+      <div class="kpi-v g">{_sign(s['gd_te_med'])}</div>
       <div class="kpi-s">F&#8722;F' improvement</div>
     </div>
     <div class="kpi">
