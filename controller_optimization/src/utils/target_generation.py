@@ -62,6 +62,13 @@ def get_scm_dataset(process_config):
     elif scm_type == 'microetch':
         return ds_scm_microetch
     elif scm_type == 'st':
+        # Prefer the pre-built instance stored in the process config
+        # (set by _build_st_processes in processes_config.py).
+        # This avoids rebuilding an identical SCM from scratch.
+        if '_scm_instance' in process_config:
+            return process_config['_scm_instance']
+        # Fallback: rebuild and cache (handles cases where process config
+        # was created without _scm_instance, e.g. CLI overrides)
         process_name = process_config['name']
         if process_name not in _st_scm_cache:
             from scm_ds.datasets_st import STConfig, build_st_scm
