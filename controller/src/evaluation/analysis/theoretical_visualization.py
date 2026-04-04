@@ -61,6 +61,7 @@ def plot_loss_vs_L_min(
     figsize: tuple = (14, 4.8),
     bellman_lmin: Optional[Dict[str, Any]] = None,
     lambda_grad: Optional[Dict[str, Any]] = None,
+    lambda_mc: Optional[Dict[str, Any]] = None,
 ) -> plt.Figure:
     """
     Plot observed loss and theoretical L_min over epochs.
@@ -79,6 +80,7 @@ def plot_loss_vs_L_min(
         title: Plot title
         figsize: Figure size
         bellman_lmin: Dict with Bellman results (keys: L_min_bellman, L_min_forward)
+        lambda_mc: Dict with Λ_MC results (keys: lambda_mc)
 
     Returns:
         Matplotlib Figure object
@@ -116,6 +118,13 @@ def plot_loss_vs_L_min(
             ax.axhline(y=lg_val, color='darkorange', linestyle=':',
                        label=f'Λ_grad (Delta Method) = {lg_val:.6f}')
 
+    # Plot Lambda_MC line if available
+    if lambda_mc is not None:
+        lmc_val = lambda_mc.get('lambda_mc')
+        if lmc_val is not None:
+            ax.axhline(y=lmc_val, color='darkgreen', linestyle=':',
+                       label=f'Λ_MC (Monte Carlo) = {lmc_val:.6f}')
+
     # Fill area between L_min and observed (reducible gap)
     ax.fill_between(
         epochs,
@@ -133,6 +142,8 @@ def plot_loss_vs_L_min(
             all_vals = np.concatenate([all_vals, extra])
     if lambda_grad is not None and lambda_grad.get('lambda_grad') is not None:
         all_vals = np.concatenate([all_vals, [lambda_grad['lambda_grad']]])
+    if lambda_mc is not None and lambda_mc.get('lambda_mc') is not None:
+        all_vals = np.concatenate([all_vals, [lambda_mc['lambda_mc']]])
 
     # Labels and legend
     ax.set_xlabel('Epoch')
@@ -164,6 +175,7 @@ def plot_efficiency_over_time(
     bellman_lmin: Optional[Dict[str, Any]] = None,
     observed_loss: Optional[List[float]] = None,
     lambda_grad: Optional[Dict[str, Any]] = None,
+    lambda_mc: Optional[Dict[str, Any]] = None,
 ) -> plt.Figure:
     """
     Plot efficiency over epochs.
@@ -182,6 +194,7 @@ def plot_efficiency_over_time(
         figsize: Figure size
         bellman_lmin: Dict with Bellman results (keys: L_min_bellman, L_min_forward)
         observed_loss: List of observed loss values (needed for Bellman efficiency)
+        lambda_mc: Dict with Λ_MC results (keys: lambda_mc)
 
     Returns:
         Matplotlib Figure object
@@ -257,6 +270,16 @@ def plot_efficiency_over_time(
             ax.plot(epochs, eff_lg_clipped, color='darkorange', linestyle=':',
                     label='Efficiency (Λ_grad)')
 
+    # Plot Lambda_MC efficiency if available
+    if lambda_mc is not None and has_obs:
+        lmc_val = lambda_mc.get('lambda_mc')
+        if lmc_val is not None:
+            obs = np.array(observed_loss)
+            eff_lmc = np.where(obs > 0, lmc_val / obs, 0.0)
+            eff_lmc_clipped = np.clip(eff_lmc, 0, 1.5)
+            ax.plot(epochs, eff_lmc_clipped, color='darkgreen', linestyle=':',
+                    label='Efficiency (Λ_MC)')
+
     # Add horizontal line at y=1 (theoretical limit)
     ax.axhline(y=1.0, color='red', linestyle='--', label=limit_label)
 
@@ -300,6 +323,7 @@ def plot_loss_decomposition(
     figsize: tuple = (14, 4.8),
     bellman_lmin: Optional[Dict[str, Any]] = None,
     lambda_grad: Optional[Dict[str, Any]] = None,
+    lambda_mc: Optional[Dict[str, Any]] = None,
 ) -> plt.Figure:
     """
     Bar chart showing decomposition of loss into components.
@@ -318,6 +342,7 @@ def plot_loss_decomposition(
         title: Plot title
         figsize: Figure size
         bellman_lmin: Dict with Bellman results (keys: L_min_bellman, L_min_forward)
+        lambda_mc: Dict with Λ_MC results (keys: lambda_mc)
 
     Returns:
         Matplotlib Figure object
@@ -371,6 +396,13 @@ def plot_loss_decomposition(
         if lg_val is not None:
             ax.axhline(y=lg_val, color='darkorange', linestyle=':',
                        label=f'Λ_grad (Delta) = {lg_val:.4f}')
+
+    # Add Lambda_MC line if available
+    if lambda_mc is not None:
+        lmc_val = lambda_mc.get('lambda_mc')
+        if lmc_val is not None:
+            ax.axhline(y=lmc_val, color='darkgreen', linestyle=':',
+                       label=f'Λ_MC (Monte Carlo) = {lmc_val:.4f}')
 
     # Labels
     ax.set_ylabel('Loss Value')
@@ -738,9 +770,10 @@ def generate_all_theoretical_plots(
         print("  Warning: No epochs in tracker data, skipping plots")
         return plots
 
-    # Extract Bellman and Lambda_grad data if available
+    # Extract Bellman, Lambda_grad and Lambda_MC data if available
     bellman_data = tracker_data.get('bellman_lmin', None)
     lambda_grad_data = tracker_data.get('lambda_grad', None)
+    lambda_mc_data = tracker_data.get('lambda_mc', None)
 
     # 1. Loss vs L_min
     path = checkpoint_dir / 'loss_vs_L_min.png'
@@ -751,6 +784,7 @@ def generate_all_theoretical_plots(
         save_path=str(path),
         bellman_lmin=bellman_data,
         lambda_grad=lambda_grad_data,
+        lambda_mc=lambda_mc_data,
     )
     plots['loss_vs_L_min'] = path
     plt.close()
@@ -764,6 +798,7 @@ def generate_all_theoretical_plots(
         bellman_lmin=bellman_data,
         observed_loss=tracker_data['observed_loss'],
         lambda_grad=lambda_grad_data,
+        lambda_mc=lambda_mc_data,
     )
     plots['training_efficiency'] = path
     plt.close()
@@ -777,6 +812,7 @@ def generate_all_theoretical_plots(
         save_path=str(path),
         bellman_lmin=bellman_data,
         lambda_grad=lambda_grad_data,
+        lambda_mc=lambda_mc_data,
     )
     plots['loss_decomposition'] = path
     plt.close()

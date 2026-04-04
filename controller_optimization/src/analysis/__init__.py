@@ -51,6 +51,11 @@ from controller.src.evaluation.analysis.lambda_grad import (
     compute_lambda_grad_batched,
 )
 
+from controller.src.evaluation.analysis.lambda_mc import (
+    LambdaMCResult,
+    compute_lambda_mc,
+)
+
 __all__ = [
     # Core analysis
     'TheoreticalLossComponents',
@@ -89,4 +94,7 @@ __all__ = [
     'LambdaGradResult',
     'compute_lambda_grad',
     'compute_lambda_grad_batched',
+    # Lambda_MC
+    'LambdaMCResult',
+    'compute_lambda_mc',
 ]

@@ -3,3 +3,4 @@ from .theoretical_visualization import generate_all_theoretical_plots
 from .theoretical_tables import generate_full_report, save_report_txt, save_report_json
 from .bellman_lmin import BellmanConfig, compute_bellman_lmin
 from .lambda_grad import compute_lambda_grad, compute_lambda_grad_batched, LambdaGradResult
+from .lambda_mc import LambdaMCResult, compute_lambda_mc

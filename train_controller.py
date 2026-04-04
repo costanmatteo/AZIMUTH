@@ -1736,6 +1736,52 @@ def main(config=None):
                     import traceback
                     traceback.print_exc()
 
+                # ── Lambda_MC (Monte Carlo Method 2 — no linearity assumption) ──
+                try:
+                    print(f"\n  ── Λ_MC (Monte Carlo, Method 2) ──")
+                    from controller.src.evaluation.analysis.lambda_mc import compute_lambda_mc
+
+                    lambda_mc_result = compute_lambda_mc(
+                        trajectories=lg_trajectories,  # same trajectories used for lambda_grad
+                        surrogate=surrogate,
+                        device=device,
+                        n_samples=30,
+                        verbose=True,
+                    )
+
+                    theoretical_data['lambda_mc'] = lambda_mc_result.to_dict()
+
+                    # Apply loss_scale to match other L_min metrics
+                    if loss_scale != 1.0:
+                        theoretical_data['lambda_mc']['lambda_mc'] *= loss_scale
+                        for name in lambda_mc_result.process_names:
+                            theoretical_data['lambda_mc']['per_stage'][name] *= loss_scale
+
+                    lmc = theoretical_data['lambda_mc']['lambda_mc']
+                    print(f"  Λ_MC(D) = {lmc:.6f}  "
+                          f"(N={lambda_mc_result.n_trajectories}, S={lambda_mc_result.n_samples})")
+                    for name in lambda_mc_result.process_names:
+                        print(f"    {name}: {theoretical_data['lambda_mc']['per_stage'][name]:.6f}")
+
+                    # Diagnostic: compare with Λ_grad
+                    if 'lambda_grad' in theoretical_data:
+                        lg = theoretical_data['lambda_grad']['lambda_grad']
+                        ratio = lmc / lg if lg > 0 else float('inf')
+                        if 0.8 < ratio < 1.2:
+                            verdict = "linear approx valid (Λ_grad reliable)"
+                        elif ratio < 0.8:
+                            verdict = "Λ_grad OVERestimates — nonlinearity significant, prefer Λ_MC"
+                        else:
+                            verdict = "Λ_MC > Λ_grad — check n_samples or surrogate"
+                        print(f"  Λ_MC / Λ_grad = {ratio:.3f}  ({verdict})")
+
+                    print(f"  ✓ Λ_MC completed\n")
+
+                except Exception as e:
+                    print(f"\n  ✗ Λ_MC computation FAILED: {e}")
+                    import traceback
+                    traceback.print_exc()
+
                 # ── Generate plots and reports (after Bellman, so plots include Bellman lines) ──
                 print("  Generating theoretical analysis plots...")
                 theoretical_plots = generate_all_theoretical_plots(
