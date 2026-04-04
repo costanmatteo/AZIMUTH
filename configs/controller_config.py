@@ -237,6 +237,17 @@ CONTROLLER_CONFIG = {
         'sigma_shrinkage': 0.01, # Shrinkage for Sigma if not PD
     },
 
+    # Lambda_MC (Monte Carlo complexity metric, Method 2)
+    'lambda_mc': {
+        'n_samples': 50,   # S — number of MC perturbations per trajectory
+                           # Controls estimation accuracy of Λ_MC.
+                           # Higher S → lower variance of the estimate.
+                           # S=30: ~4% std error (fast, acceptable for monitoring)
+                           # S=50: ~3% std error (recommended default)
+                           # S=100: ~1% std error (recommended for final results)
+                           # Beyond S=100: diminishing returns
+    },
+
     # Miscellaneous
     'misc': {
         'random_seed': 42,

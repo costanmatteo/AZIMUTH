@@ -1741,11 +1741,16 @@ def main(config=None):
                     print(f"\n  ── Λ_MC (Monte Carlo, Method 2) ──")
                     from controller.src.evaluation.analysis.lambda_mc import compute_lambda_mc
 
+                    lmc_cfg = cfg.get('lambda_mc', {})
+                    n_samples_mc = lmc_cfg.get('n_samples', 50)
+                    print(f"  n_samples (S) = {n_samples_mc} "
+                          f"(std error ≈ {100/((n_samples_mc-1)**0.5):.1f}%)")
+
                     lambda_mc_result = compute_lambda_mc(
                         trajectories=lg_trajectories,  # same trajectories used for lambda_grad
                         surrogate=surrogate,
                         device=device,
-                        n_samples=30,
+                        n_samples=n_samples_mc,
                         verbose=True,
                     )
 
