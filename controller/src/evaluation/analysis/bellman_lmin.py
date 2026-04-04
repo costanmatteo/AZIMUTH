@@ -36,19 +36,18 @@ class BellmanConfig:
     """Configuration for backward induction grid."""
     # Grid sizes — memory budget for terminal step:
     #   (N_R × N_eps³ × M) elements × 8 bytes
-    #   N_R=50, N_eps=16, M=50 → 102.4M elements ≈ 820 MB (peak, transient)
-    #   N_R=50, N_eps=20, M=50 → 200M elements ≈ 1.6 GB (approaching limit)
-    N_R: int = 50           # Grid points for remaining reliability R
-    N_eps: int = 16         # Grid points per noise dimension (8 too coarse)
+    #   N_R=200, N_eps=30, M=100 → 540M elements ≈ 4.3 GB (peak, transient)
+    N_R: int = 200          # Grid points for remaining reliability R
+    N_eps: int = 30         # Grid points per noise dimension
     eps_range: float = 3.0  # Noise range: [-eps_range, +eps_range]
     R_min: float = -0.1     # Lower bound of R grid
     # R_max is set to F* dynamically
 
     # Manifold resolution
-    M_actions: int = 50     # Number of action candidates per process
+    M_actions: int = 100    # Number of action candidates per process
 
     # Monte Carlo
-    K_mc: int = 500         # MC samples for non-terminal steps
+    K_mc: int = 1000        # MC samples for non-terminal steps
     use_antithetic: bool = True  # Antithetic variates
 
     # Forward validation
