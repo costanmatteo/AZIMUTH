@@ -109,6 +109,9 @@ CONTROLLER_CONFIG = {
         'use_batchnorm': False,
         'use_scenario_encoder': False,  # Enable scenario context encoding
         'scenario_embedding_dim': 16,  # Dimension of scenario embedding vector
+        'observation_mode': 'mean_var',  # 'mean_var' or 'sample'
+        # 'mean_var': controller receives [outputs_mean, outputs_var] from previous UP
+        # 'sample':   controller receives [outputs_sampled] = mean + eps*sqrt(var)
     },
 
     # Training parameters
