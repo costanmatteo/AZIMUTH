@@ -53,6 +53,11 @@ class BellmanConfig:
     # Forward validation
     N_forward: int = 5000   # Forward simulation trajectories
 
+    # Modelling fidelity level
+    level: int = 3              # 1 = fixed σ², Σ=I
+                                # 2 = action-dependent σ², Σ=I
+                                # 3 = action-dependent σ², full Σ (default)
+
     # Regularisation
     sigma_shrinkage: float = 0.01  # Shrinkage for Sigma if not PD
 
@@ -73,6 +78,7 @@ class BellmanLminResult:
     scales: np.ndarray          # Scale parameters
     n_manifold_points: List[int]  # Number of M_i points per process
     computation_time_s: float   # Wall-clock time
+    level: int = 3              # Modelling fidelity level used
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -85,6 +91,7 @@ class BellmanLminResult:
             'scales': self.scales.tolist(),
             'n_manifold_points': self.n_manifold_points,
             'computation_time_s': self.computation_time_s,
+            'level': self.level,
         }
 
     def save(self, path: Path):
@@ -708,13 +715,37 @@ def backward_induction(
         mu0_opt, sigma2_0_opt: optimal action for initial step (scalars)
     """
     n = len(process_names)
+
+    # ── Apply level-dependent transformations ──
+    level = cfg.level
+    if verbose:
+        level_desc = {1: 'fixed σ², Σ=I', 2: 'free σ², Σ=I', 3: 'free σ², full Σ'}
+        print(f"  Bellman level: {level}  ({level_desc.get(level, 'unknown')})")
+
+    if level == 1:
+        # Level 1: fixed variance + independent noise
+        Sigma = np.eye(n)
+        manifolds_effective = []
+        for m in manifolds:
+            sigma2_mean = float(np.mean(m[:, 1]))
+            m_new = m.copy()
+            m_new[:, 1] = sigma2_mean
+            manifolds_effective.append(m_new)
+    elif level == 2:
+        # Level 2: action-dependent variance + independent noise
+        Sigma = np.eye(n)
+        manifolds_effective = manifolds
+    else:
+        # Level 3: action-dependent variance + correlated noise (full)
+        manifolds_effective = manifolds
+
     grid_R, grid_eps = build_grids(F_star, cfg, w_bar=w_bar)
 
     if verbose:
         print(f"  R grid: [{grid_R[0]:.4f}, {grid_R[-1]:.4f}]  "
               f"(R_min = F*-sum(w̄)-margin = {F_star:.4f}-{float(np.sum(w_bar)):.4f}-0.05)")
 
-    # Precompute conditional parameters
+    # Precompute conditional parameters (uses possibly-overridden Sigma)
     sigma2_cond, cond_weights = precompute_conditional_params(Sigma, n)
 
     if verbose:
@@ -748,13 +779,13 @@ def backward_induction(
         print(f"\n  [Step {n-1}/{n-1}] Terminal step (process '{process_names[terminal_idx]}') — closed-form...")
         print(f"    w̄={w_bar[terminal_idx]:.4f}, s={scales[terminal_idx]:.4f}, "
               f"τ={taus[terminal_idx]:.4f}, σ²_cond={sigma2_cond[terminal_idx]:.4f}")
-        mu_range = manifolds[terminal_idx][:, 0]
-        sigma2_range = manifolds[terminal_idx][:, 1]
+        mu_range = manifolds_effective[terminal_idx][:, 0]
+        sigma2_range = manifolds_effective[terminal_idx][:, 1]
         print(f"    Manifold: mu=[{mu_range.min():.4f}, {mu_range.max():.4f}], "
               f"sigma2=[{sigma2_range.min():.6f}, {sigma2_range.max():.6f}]")
     t0 = time.time()
     V_prev, mu_opt_prev, sigma2_opt_prev = bellman_terminal(
-        grid_R, grid_eps, manifolds[terminal_idx],
+        grid_R, grid_eps, manifolds_effective[terminal_idx],
         w_bar[terminal_idx], scales[terminal_idx], taus[terminal_idx],
         sigma2_cond[terminal_idx], cond_weights[terminal_idx],
     )
@@ -780,7 +811,7 @@ def backward_induction(
                   f"τ={taus[i]:.4f}, σ²_cond={sigma2_cond[i]:.4f}")
         t0 = time.time()
         V_prev, mu_opt_prev, sigma2_opt_prev = bellman_non_terminal(
-            grid_R, grid_eps, V_prev, manifolds[i],
+            grid_R, grid_eps, V_prev, manifolds_effective[i],
             w_bar[i], scales[i], taus[i],
             sigma2_cond[i], cond_weights[i],
             process_idx=i, K=cfg.K_mc,
@@ -802,7 +833,7 @@ def backward_induction(
               f"τ={taus[0]:.4f}, σ²_cond={sigma2_cond[0]:.4f}")
     t0 = time.time()
     L_min, mu0_opt, sigma2_0_opt = bellman_non_terminal(
-        grid_R, grid_eps, V_prev, manifolds[0],
+        grid_R, grid_eps, V_prev, manifolds_effective[0],
         w_bar[0], scales[0], taus[0],
         sigma2_cond[0], None,
         process_idx=0, K=cfg.K_mc,
@@ -1197,6 +1228,22 @@ def compute_bellman_lmin(
     if verbose:
         print(f"  Done in {time.time()-t_phase:.1f}s")
 
+    # ── Apply level-dependent transformations (before backward + forward) ──
+    level = cfg.level
+    if level == 1:
+        Sigma = np.eye(n)
+        manifolds_effective = []
+        for m in manifolds:
+            sigma2_mean = float(np.mean(m[:, 1]))
+            m_new = m.copy()
+            m_new[:, 1] = sigma2_mean
+            manifolds_effective.append(m_new)
+    elif level == 2:
+        Sigma = np.eye(n)
+        manifolds_effective = manifolds
+    else:
+        manifolds_effective = manifolds
+
     # ── Get target outputs for adaptive targets ──
     target_outputs = get_target_outputs(process_chain, scenario_idx)
     if verbose:
@@ -1208,7 +1255,7 @@ def compute_bellman_lmin(
     (L_min_bellman, V_functions, grid_R, grid_eps,
      sigma2_cond, cond_wts, taus,
      pol_mu, pol_sigma2, mu0_opt, sigma2_0_opt) = backward_induction(
-        F_star, Sigma, manifolds, w_bar, scales,
+        F_star, Sigma, manifolds_effective, w_bar, scales,
         target_outputs, process_names, cfg, verbose,
         surrogate=surrogate,
     )
@@ -1229,7 +1276,7 @@ def compute_bellman_lmin(
     t_phase = time.time()
 
     L_min_forward, L_min_forward_se = forward_simulation(
-        F_star, Sigma, manifolds, w_bar, scales, taus,
+        F_star, Sigma, manifolds_effective, w_bar, scales, taus,
         grid_R, grid_eps, V_functions,
         sigma2_cond, cond_wts,
         N=cfg.N_forward,
@@ -1255,7 +1302,7 @@ def compute_bellman_lmin(
         print(f"\n[Phase 3b] Forward simulation — clairvoyant (diagnostic, N={cfg.N_forward})...")
     t_phase2 = time.time()
     L_clairv, L_clairv_se = forward_simulation(
-        F_star, Sigma, manifolds, w_bar, scales, taus,
+        F_star, Sigma, manifolds_effective, w_bar, scales, taus,
         grid_R, grid_eps, V_functions,
         sigma2_cond, cond_wts,
         N=cfg.N_forward,
@@ -1296,6 +1343,7 @@ def compute_bellman_lmin(
         Sigma=Sigma,
         w_bar=w_bar,
         scales=scales,
-        n_manifold_points=[m.shape[0] for m in manifolds],
+        n_manifold_points=[m.shape[0] for m in manifolds_effective],
         computation_time_s=computation_time,
+        level=cfg.level,
     )

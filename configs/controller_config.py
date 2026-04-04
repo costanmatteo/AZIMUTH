@@ -235,6 +235,9 @@ CONTROLLER_CONFIG = {
         'use_antithetic': True,  # Antithetic variates
         'N_forward': 20000,      # Forward simulation trajectories
         'sigma_shrinkage': 0.01, # Shrinkage for Sigma if not PD
+        'level': 3,              # 1 = fixed variance + independent noise
+                                 # 2 = action-dependent variance + independent noise
+                                 # 3 = action-dependent variance + correlated noise (full)
     },
 
     # Lambda_MC (Monte Carlo complexity metric, Method 2)
