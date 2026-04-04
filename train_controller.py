@@ -1687,20 +1687,100 @@ def main(config=None):
                     traceback.print_exc()
                     print()
 
-                # ── Lambda_grad (Delta Method approximation of L_min) ──
-                try:
-                    print(f"\n  ── Λ_grad (Delta Method) ──")
-                    # Collect trajectories from the process chain (reuse L_min sampling)
-                    n_lg_samples = min(200, samples_per_scenario * n_scenarios)
+                def _load_scm_trajectories_for_lambda(
+                    process_chain, device, n_max=200
+                ):
+                    """
+                    Load original SCM dataset trajectories and convert them to the
+                    format expected by compute_lambda_grad and compute_lambda_mc.
+
+                    Loads from scm_ds/predictor_dataset/trajectories/full_trajectories.pt.
+                    For each trajectory, passes the original inputs through the frozen
+                    uncertainty predictors to obtain (mu_t, sigma2_t), keeping the
+                    observed outputs o_t^(i) as outputs_sampled.
+
+                    Returns list of trajectory dicts in compute_lambda_grad format.
+                    """
+                    from pathlib import Path
+                    traj_path = Path('scm_ds/predictor_dataset/trajectories/full_trajectories.pt')
+                    if not traj_path.exists():
+                        raise FileNotFoundError(
+                            f"SCM dataset trajectories not found at {traj_path}. "
+                            f"Run generate_dataset.py first."
+                        )
+
+                    raw_trajs = torch.load(traj_path, map_location='cpu')
+                    process_names = process_chain.process_names
+
+                    # Subsample if needed
+                    if len(raw_trajs) > n_max:
+                        indices = torch.randperm(len(raw_trajs))[:n_max].tolist()
+                        raw_trajs = [raw_trajs[i] for i in indices]
+
                     lg_trajectories = []
                     process_chain.eval()
                     with torch.no_grad():
-                        for scenario_idx in range(n_scenarios):
-                            trajectory = process_chain.forward(
-                                batch_size=n_lg_samples // n_scenarios,
-                                scenario_idx=scenario_idx
-                            )
-                            lg_trajectories.append(trajectory)
+                        for raw in raw_trajs:
+                            traj_data = raw['trajectory']
+                            converted = {}
+
+                            for proc_idx, proc_name in enumerate(process_names):
+                                pdata = traj_data[proc_name]
+
+                                # Concatenate controllable inputs + env → full input vector
+                                inputs = pdata['inputs']   # tensor (input_dim,)
+                                env    = pdata['env']       # tensor (env_dim,)
+                                if inputs.dim() == 1:
+                                    inputs = inputs.unsqueeze(0)   # (1, input_dim)
+                                if env.dim() == 1:
+                                    env = env.unsqueeze(0)         # (1, env_dim)
+                                full_inputs = torch.cat([inputs, env], dim=1).to(device)
+                                # shape: (1, input_dim + env_dim)
+
+                                # Pass through uncertainty predictor (frozen)
+                                scaled_inputs = process_chain.scale_inputs(full_inputs, proc_idx)
+                                mu_scaled, var_scaled = process_chain.uncertainty_predictors[proc_idx](
+                                    scaled_inputs
+                                )
+                                mu_t    = process_chain.unscale_outputs(mu_scaled, proc_idx)
+                                sigma2_t = process_chain.unscale_variance(var_scaled, proc_idx)
+
+                                # Observed output from dataset
+                                o_t = pdata['outputs']
+                                if o_t.dim() == 1:
+                                    o_t = o_t.unsqueeze(0)   # (1, output_dim)
+                                o_t = o_t.to(device)
+
+                                converted[proc_name] = {
+                                    'inputs':          full_inputs,   # (1, full_input_dim)
+                                    'outputs_mean':    mu_t,          # (1, output_dim) from UP
+                                    'outputs_var':     sigma2_t,      # (1, output_dim) from UP
+                                    'outputs_sampled': o_t,           # (1, output_dim) original
+                                }
+
+                            lg_trajectories.append(converted)
+
+                    return lg_trajectories
+
+                # NOTE: Λ(D) is defined on the original SCM dataset D, NOT on controller
+                # rollouts. See thesis Section 3.4.1: "Given a dataset of observed
+                # trajectories D = {τ^(i)}, ..." — the actions a_t^(i) are fixed from
+                # the dataset; only the outputs are perturbed by the uncertainty predictors.
+
+                # ── Lambda_grad (Delta Method approximation of L_min) ──
+                try:
+                    print(f"\n  ── Λ_grad (Delta Method) ──")
+                    # Load SCM dataset trajectories (thesis-correct: Λ(D) uses original dataset)
+                    try:
+                        lg_trajectories = _load_scm_trajectories_for_lambda(
+                            process_chain=process_chain,
+                            device=device,
+                            n_max=min(200, samples_per_scenario * n_scenarios),
+                        )
+                        print(f"  Loaded {len(lg_trajectories)} SCM dataset trajectories for Λ(D)")
+                    except FileNotFoundError as e:
+                        print(f"  ✗ Cannot compute Λ: {e}")
+                        lg_trajectories = []
 
                     predictors = {
                         process_chain.process_names[i]: process_chain.uncertainty_predictors[i]
