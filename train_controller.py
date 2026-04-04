@@ -65,7 +65,8 @@ from controller.src.evaluation.metrics import (
     compute_gap_closure,
     compute_success_rate,
     compute_train_test_gap,
-    compute_scenario_diversity
+    compute_scenario_diversity,
+    detect_overfitting
 )
 from controller.src.evaluation.visualization import (
     plot_training_history,
@@ -1051,6 +1052,27 @@ def main(config=None):
         else:
             print(f"    → Val F > Train F: val split slightly easier (no concern)")
 
+    # ── Comprehensive overfitting diagnosis ──
+    overfitting_diagnosis = detect_overfitting(
+        history,
+        train_test_gap_metrics=train_test_gap_metrics,
+    )
+
+    print(f"\n{'='*70}")
+    print("OVERFITTING DIAGNOSIS")
+    print(f"{'='*70}")
+    print(f"  Detected:   {overfitting_diagnosis['overfitting_detected']}")
+    print(f"  Severity:   {overfitting_diagnosis['severity']}")
+    print(f"  Signals:    {overfitting_diagnosis['n_signals_fired']}/{overfitting_diagnosis['n_signals_total']} fired")
+    if overfitting_diagnosis['epoch_of_divergence'] is not None:
+        print(f"  First div.: epoch {overfitting_diagnosis['epoch_of_divergence']}")
+    for sig in overfitting_diagnosis['signals']:
+        marker = 'X' if sig['fired'] else ' '
+        print(f"  [{marker}] {sig['name']}: {sig['detail']}")
+    print(f"\n  Summary: {overfitting_diagnosis['summary']}")
+    print(f"  Recommendation: {overfitting_diagnosis['recommendation']}")
+    print(f"{'='*70}")
+
     # Scenario diversity (train only, test separately)
     train_structural_conditions = {}
     test_structural_conditions = {}
@@ -1313,6 +1335,7 @@ def main(config=None):
             'within_scenario_gap': within_scenario_gap_metrics,
             'diversity_train': diversity_train,
             'diversity_test': diversity_test,
+            'overfitting_diagnosis': overfitting_diagnosis,
             **formula_advanced_metrics,  # formula_* keys (empty dict if not using CasualiT)
         }
 
@@ -2035,6 +2058,9 @@ def main(config=None):
             # Scenario diversity
             'diversity_train': diversity_train,
             'diversity_test': diversity_test,
+
+            # Overfitting diagnosis
+            'overfitting_diagnosis': overfitting_diagnosis,
         },
 
         # Training history

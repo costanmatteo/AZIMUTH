@@ -474,3 +474,271 @@ def compute_final_metrics(target_trajectory, baseline_trajectory, actual_traject
             'actual': process_metrics_actual,
         }
     }
+
+
+def detect_overfitting(history, train_test_gap_metrics=None, tolerance=0.005,
+                       trend_window=20, severity_thresholds=None):
+    """
+    Comprehensive overfitting diagnosis from training history.
+
+    Combines multiple signals to determine whether the controller is overfitting:
+      1. Within-scenario divergence: train-split F vs val-split F
+      2. Cross-scenario divergence: train loss vs cross-scenario validation loss
+      3. Train-test gap: final evaluation F on train vs test scenarios
+      4. Validation loss trend: is val loss rising while train loss falls?
+
+    Args:
+        history (dict): Training history from ControllerTrainer (keys like
+            'total_loss', 'F_values', 'val_within_total_loss', 'val_within_F_values',
+            'val_total_loss', 'val_F_values', 'reliability_weight', etc.)
+        train_test_gap_metrics (dict or None): Output of compute_train_test_gap().
+            If provided, the train_test_gap signal is included.
+        tolerance (float): Absolute gap below which train/val differences are
+            considered negligible (default 0.005).
+        trend_window (int): Number of trailing epochs used to detect a rising
+            validation-loss trend (default 20).
+        severity_thresholds (dict or None): Override default severity bands.
+            Keys: 'mild', 'moderate' (floats). Gaps above 'moderate' are 'severe'.
+
+    Returns:
+        dict with keys:
+            'overfitting_detected' (bool): True if at least one signal fires.
+            'severity' (str): 'none' | 'mild' | 'moderate' | 'severe'
+            'signals' (list[dict]): Individual signal results, each with:
+                'name', 'fired' (bool), 'detail' (str), 'value' (float or None)
+            'summary' (str): Human-readable one-paragraph diagnosis.
+            'recommendation' (str): Actionable suggestion.
+            'epoch_of_divergence' (int or None): Earliest epoch where divergence
+                was detected across all signals.
+    """
+    if severity_thresholds is None:
+        severity_thresholds = {'mild': 0.005, 'moderate': 0.02}
+
+    signals = []
+    divergence_epochs = []
+
+    # ------------------------------------------------------------------
+    # Signal 1 — Within-scenario: train-split F vs val-split F
+    # ------------------------------------------------------------------
+    within_F_train = np.array(history.get('F_values', []))
+    within_F_val = np.array(history.get('val_within_F_values', []))
+
+    if len(within_F_train) > 0 and len(within_F_val) > 0:
+        n = min(len(within_F_train), len(within_F_val))
+        # Use last `trend_window` epochs for a stable estimate
+        tail = min(trend_window, n)
+        gap = float(np.mean(within_F_train[-tail:]) - np.mean(within_F_val[-tail:]))
+
+        # Find first epoch where gap exceeds tolerance persistently
+        gaps_full = within_F_train[:n] - within_F_val[:n]
+        div_mask = gaps_full > tolerance
+        first_div = int(np.argmax(div_mask)) + 1 if np.any(div_mask) else None
+
+        fired = gap > tolerance
+        signals.append({
+            'name': 'within_scenario_F_gap',
+            'fired': fired,
+            'value': round(gap, 6),
+            'detail': (f"Train-split F exceeds val-split F by {gap:.6f} "
+                       f"(last {tail} epochs). "
+                       f"{'Divergence at epoch ' + str(first_div) + '.' if first_div else 'No persistent divergence.'}"),
+        })
+        if first_div is not None and fired:
+            divergence_epochs.append(first_div)
+    else:
+        signals.append({
+            'name': 'within_scenario_F_gap',
+            'fired': False,
+            'value': None,
+            'detail': 'Within-scenario validation not available.',
+        })
+
+    # ------------------------------------------------------------------
+    # Signal 2 — Within-scenario loss divergence (val loss > train loss)
+    # ------------------------------------------------------------------
+    train_loss = np.array(history.get('total_loss', []))
+    val_within_loss = np.array(history.get('val_within_total_loss', []))
+
+    if len(train_loss) > 0 and len(val_within_loss) > 0:
+        n = min(len(train_loss), len(val_within_loss))
+        tail = min(trend_window, n)
+        gap_loss = float(np.mean(val_within_loss[-tail:]) - np.mean(train_loss[-tail:]))
+
+        div_mask = val_within_loss[:n] > train_loss[:n]
+        first_div = int(np.argmax(div_mask)) + 1 if np.any(div_mask) else None
+
+        fired = gap_loss > tolerance
+        signals.append({
+            'name': 'within_scenario_loss_gap',
+            'fired': fired,
+            'value': round(gap_loss, 6),
+            'detail': (f"Val loss exceeds train loss by {gap_loss:.6f} "
+                       f"(last {tail} epochs). "
+                       f"{'Divergence at epoch ' + str(first_div) + '.' if first_div else ''}"),
+        })
+        if first_div is not None and fired:
+            divergence_epochs.append(first_div)
+    else:
+        signals.append({
+            'name': 'within_scenario_loss_gap',
+            'fired': False,
+            'value': None,
+            'detail': 'Within-scenario validation loss not available.',
+        })
+
+    # ------------------------------------------------------------------
+    # Signal 3 — Cross-scenario loss divergence
+    # ------------------------------------------------------------------
+    val_cross_loss = np.array(history.get('val_total_loss', []))
+
+    if len(train_loss) > 0 and len(val_cross_loss) > 0:
+        n = min(len(train_loss), len(val_cross_loss))
+        tail = min(trend_window, n)
+        gap_cross = float(np.mean(val_cross_loss[-tail:]) - np.mean(train_loss[-tail:]))
+
+        div_mask = val_cross_loss[:n] > train_loss[:n]
+        first_div = int(np.argmax(div_mask)) + 1 if np.any(div_mask) else None
+
+        fired = gap_cross > tolerance
+        signals.append({
+            'name': 'cross_scenario_loss_gap',
+            'fired': fired,
+            'value': round(gap_cross, 6),
+            'detail': (f"Cross-scenario val loss exceeds train loss by {gap_cross:.6f} "
+                       f"(last {tail} epochs). "
+                       f"{'Divergence at epoch ' + str(first_div) + '.' if first_div else ''}"),
+        })
+        if first_div is not None and fired:
+            divergence_epochs.append(first_div)
+    else:
+        signals.append({
+            'name': 'cross_scenario_loss_gap',
+            'fired': False,
+            'value': None,
+            'detail': 'Cross-scenario validation not available.',
+        })
+
+    # ------------------------------------------------------------------
+    # Signal 4 — Validation loss rising trend (late training)
+    # ------------------------------------------------------------------
+    # Pick the best available validation loss series
+    val_series = None
+    val_label = ''
+    if len(val_within_loss) > 0:
+        val_series = val_within_loss
+        val_label = 'within-scenario'
+    elif len(val_cross_loss) > 0:
+        val_series = val_cross_loss
+        val_label = 'cross-scenario'
+
+    if val_series is not None and len(val_series) >= trend_window:
+        tail_vals = val_series[-trend_window:]
+        # Simple linear regression slope
+        x = np.arange(trend_window, dtype=float)
+        slope = float(np.polyfit(x, tail_vals, 1)[0])
+
+        fired = slope > 0
+        signals.append({
+            'name': 'val_loss_rising_trend',
+            'fired': fired,
+            'value': round(slope, 8),
+            'detail': (f"Validation loss ({val_label}) slope over last {trend_window} epochs: "
+                       f"{slope:+.8f} per epoch. "
+                       f"{'Rising — possible late overfitting.' if fired else 'Stable or decreasing.'}"),
+        })
+    else:
+        signals.append({
+            'name': 'val_loss_rising_trend',
+            'fired': False,
+            'value': None,
+            'detail': f'Not enough epochs for trend analysis (need >= {trend_window}).',
+        })
+
+    # ------------------------------------------------------------------
+    # Signal 5 — Train-test gap from final evaluation
+    # ------------------------------------------------------------------
+    if train_test_gap_metrics is not None:
+        ttg = train_test_gap_metrics.get('train_test_gap', 0.0)
+        # Negative ttg means controller is worse on test → overfitting
+        fired = ttg < -tolerance
+        signals.append({
+            'name': 'train_test_gap',
+            'fired': fired,
+            'value': round(ttg, 6),
+            'detail': (f"Train-test gap = {ttg:+.6f}. "
+                       f"{'Controller performs worse on unseen test scenarios.' if fired else 'Consistent across train/test.'}"),
+        })
+    else:
+        signals.append({
+            'name': 'train_test_gap',
+            'fired': False,
+            'value': None,
+            'detail': 'Train-test gap metrics not provided.',
+        })
+
+    # ------------------------------------------------------------------
+    # Aggregate
+    # ------------------------------------------------------------------
+    fired_signals = [s for s in signals if s['fired']]
+    overfitting_detected = len(fired_signals) > 0
+    n_fired = len(fired_signals)
+
+    # Compute max absolute gap across fired numeric signals
+    max_gap = 0.0
+    for s in fired_signals:
+        v = s['value']
+        if v is not None:
+            max_gap = max(max_gap, abs(v))
+
+    # Severity: based on number of signals AND magnitude
+    if not overfitting_detected:
+        severity = 'none'
+    elif max_gap > severity_thresholds['moderate'] or n_fired >= 3:
+        severity = 'severe'
+    elif max_gap > severity_thresholds['mild'] or n_fired >= 2:
+        severity = 'moderate'
+    else:
+        severity = 'mild'
+
+    epoch_of_divergence = min(divergence_epochs) if divergence_epochs else None
+
+    # Build human-readable summary
+    if not overfitting_detected:
+        summary = ("No overfitting detected. Train and validation metrics are consistent "
+                   "across all available signals.")
+        recommendation = "Training looks healthy. No changes needed."
+    else:
+        fired_names = [s['name'] for s in fired_signals]
+        summary = (f"Overfitting detected ({severity}): {n_fired}/{len(signals)} signals fired "
+                   f"({', '.join(fired_names)}). "
+                   f"Max gap magnitude: {max_gap:.6f}."
+                   + (f" First divergence at epoch {epoch_of_divergence}."
+                      if epoch_of_divergence else ""))
+
+        if severity == 'mild':
+            recommendation = ("Mild overfitting — consider increasing dropout, reducing model "
+                              "capacity (hidden_sizes), or adding more training scenarios (n_train).")
+        elif severity == 'moderate':
+            recommendation = ("Moderate overfitting — try: (1) increase n_train for more scenario "
+                              "diversity, (2) increase dropout or weight_decay, (3) reduce epochs "
+                              "or lower patience, (4) enable cross_scenario validation for early "
+                              "stopping on unseen conditions.")
+        else:
+            recommendation = ("Severe overfitting — the controller memorises training conditions. "
+                              "Strongly recommended: (1) increase n_train significantly, "
+                              "(2) reduce model capacity (smaller hidden_sizes), "
+                              "(3) increase weight_decay and dropout, "
+                              "(4) enable cross_scenario_enabled for early stopping, "
+                              "(5) consider reducing batch_size or epochs.")
+
+    return {
+        'overfitting_detected': overfitting_detected,
+        'severity': severity,
+        'signals': signals,
+        'summary': summary,
+        'recommendation': recommendation,
+        'epoch_of_divergence': epoch_of_divergence,
+        'n_signals_fired': n_fired,
+        'n_signals_total': len(signals),
+        'max_gap': round(max_gap, 6),
+    }

@@ -887,6 +887,32 @@ def _page1(d, total_pages):
     F.append(kv_table(intra_rows, TW * 0.5, key_frac=0.42))
     F.append(Spacer(1, 7))
 
+    # ── Overfitting diagnosis block ──
+    diag = adv.get('overfitting_diagnosis') or {}
+    if diag:
+        sev = diag.get('severity', 'none')
+        sev_style = ST_VAL_G if sev == 'none' else (ST_VAL_R if sev in ('moderate', 'severe') else ST_VAL)
+        diag_rows = [
+            ("Detected", "Yes" if diag.get('overfitting_detected') else "No",
+             ST_VAL_R if diag.get('overfitting_detected') else ST_VAL_G),
+            ("Severity", sev, sev_style),
+            ("Signals fired",
+             f"{diag.get('n_signals_fired', 0)} / {diag.get('n_signals_total', 0)}"),
+        ]
+        div_ep_diag = diag.get('epoch_of_divergence')
+        if div_ep_diag is not None:
+            diag_rows.append(("First divergence", f"epoch {div_ep_diag}"))
+        diag_rows.append(("Max gap", f"{diag.get('max_gap', 0):.6f}"))
+        F.append(blk_title("Overfitting diagnosis (automated)"))
+        F.append(kv_table(diag_rows, TW * 0.5, key_frac=0.42))
+
+        rec = diag.get('recommendation', '')
+        if rec:
+            F.append(Spacer(1, 3))
+            F.append(Paragraph(f"<i>{rec}</i>", ST_NOTE))
+
+        F.append(Spacer(1, 7))
+
     F += _footer(d, 1, total_pages)
 
     return F
