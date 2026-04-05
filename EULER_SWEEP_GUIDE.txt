@@ -1,0 +1,119 @@
+================================================================================
+EULER HPC - COMANDI PER SWEEP
+================================================================================
+
+--------------------------------------------------------------------------------
+LOGIN (da Windows Terminal)
+--------------------------------------------------------------------------------
+ssh mcostan@euler.ethz.ch
+
+--------------------------------------------------------------------------------
+AGGIORNARE I FILE (da Windows Terminal, se hai modificato il codice)
+--------------------------------------------------------------------------------
+
+# OPZIONE A: Copia pulita completa (se hai cambiato molti file)
+
+robocopy "C:\AZIMUTH\AZIMUTH" "C:\AZIMUTH\AZIMUTH_clean" /E /XD venv .venv __pycache__ .git .vscode .idea logs checkpoints output_dir optuna_results /XF *.pt *.pth *.pkl *.ckpt *.pdf *.png *.jpg *.svg *.log *.tmp *.bak *.npz
+
+ssh mcostan@euler.ethz.ch "rm -rf ~/AZIMUTH && mkdir ~/AZIMUTH"
+scp -r "C:\AZIMUTH\AZIMUTH_clean\." mcostan@euler.ethz.ch:~/AZIMUTH/
+
+Remove-Item -Recurse -Force "C:\AZIMUTH\AZIMUTH_clean"
+
+
+# OPZIONE B: Aggiornare solo la config dello sweep
+
+scp "C:\AZIMUTH\AZIMUTH\configs\sweep_config.py" mcostan@euler.ethz.ch:~/AZIMUTH/configs/sweep_config.py
+
+--------------------------------------------------------------------------------
+STEP 0: GENERARE DATASET (solo la prima volta o se cambi modello)
+--------------------------------------------------------------------------------
+srun --cpus-per-task=2 --mem-per-cpu=4G --time=00:30:00 --pty bash
+module load stack/2024-05 gcc/13.2.0 python/3.11.6_cuda
+cd ~/AZIMUTH
+python generate_dataset.py
+
+--------------------------------------------------------------------------------
+STEP 1: ALLENARE UNCERTAINTY PREDICTORS (stessa sessione interattiva)
+--------------------------------------------------------------------------------
+python train_predictor.py
+exit
+
+--------------------------------------------------------------------------------
+STEP 2: LANCIARE LO SWEEP
+--------------------------------------------------------------------------------
+cd ~/AZIMUTH
+rm -rf checkpoints/sweep/*
+python euler/sweep/generate_sweep_params.py
+sed -i 's/\r$//' euler/sweep/sweep.sh
+sbatch euler/sweep/sweep.sh
+
+--------------------------------------------------------------------------------
+CONTROLLARE LO STATO
+--------------------------------------------------------------------------------
+squeue -u $USER
+
+--------------------------------------------------------------------------------
+VEDERE I RISULTATI (quando finisce)
+--------------------------------------------------------------------------------
+ls checkpoints/sweep/
+cat logs/sweep_*_0.out
+
+--------------------------------------------------------------------------------
+GENERARE REPORT
+--------------------------------------------------------------------------------
+module load stack/2024-05 gcc/13.2.0 python/3.11.6_cuda
+cd ~/AZIMUTH
+python euler/sweep/generate_sweep_report.py
+
+--------------------------------------------------------------------------------
+SCARICARE REPORT (da Windows Terminal)
+--------------------------------------------------------------------------------
+scp mcostan@euler.ethz.ch:~/AZIMUTH/checkpoints/sweep/sweep_report.pdf "C:\Users\matte\Google Drive\ETH\MASTER\controller\sweep\sweep_report.pdf"
+
+--------------------------------------------------------------------------------
+SCARICARE I RISULTATI (da Windows Terminal)
+--------------------------------------------------------------------------------
+scp -r mcostan@euler.ethz.ch:~/AZIMUTH/checkpoints/sweep "C:\AZIMUTH\results"
+
+--------------------------------------------------------------------------------
+SCARICARE TUTTO SENZA .pth (filtrato, da Windows Terminal)
+--------------------------------------------------------------------------------
+# Su Euler:
+rm -rf ~/sweep_light/
+rsync -av --exclude='*.pth' --exclude='*.npz' --exclude='*.png' ~/AZIMUTH/checkpoints/sweep/ ~/sweep_light/
+
+# Su Windows:
+scp -r mcostan@euler.ethz.ch:~/sweep_light/ "C:\Users\matte\Google Drive\ETH\MASTER\controller\sweep"
+
+# Cleanup su Euler (opzionale):
+ssh mcostan@euler.ethz.ch "rm -rf ~/sweep_light"
+
+--------------------------------------------------------------------------------
+CANCELLARE RISULTATI LOCALI PRIMA DI RISCARICARE (da Windows PowerShell)
+--------------------------------------------------------------------------------
+Remove-Item -Recurse -Force "C:\AZIMUTH\AZIMUTH\checkpoints\sweep"
+
+================================================================================
+COMANDI UTILI
+================================================================================
+squeue -u $USER              # Vedi job in esecuzione
+scancel <job-id>             # Cancella un job specifico
+scancel -u $USER             # Cancella TUTTI i tuoi job
+cat logs/sweep_*_0.out       # Vedi output primo job
+cat logs/sweep_*_0.err       # Vedi errori primo job
+exit                         # Esci da nodo/sessione
+
+================================================================================
+ORDINE CORRETTO
+================================================================================
+1. Login su Euler
+2. (Se necessario) Aggiorna i file
+3. (Se necessario) Genera dataset:    python generate_dataset.py
+4. (Se necessario) Allena predictors: python train_predictor.py
+5. Genera parametri:                  python euler/sweep/generate_sweep_params.py
+6. Lancia sweep:                      sbatch euler/sweep/sweep.sh
+7. Aspetta che finisca (squeue mostra lista vuota)
+8. Genera report:                     python euler/sweep/generate_sweep_report.py
+9. Scarica risultati su Windows
+================================================================================

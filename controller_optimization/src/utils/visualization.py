@@ -173,7 +173,7 @@ def plot_trajectory_comparison(target_trajectory, baseline_trajectory,
 
     Un subplot separato per ogni singolo input e output di ogni processo.
     """
-    from controller_optimization.src.utils.metrics import convert_trajectory_to_numpy
+    from controller.src.evaluation.metrics import convert_trajectory_to_numpy
     from controller_optimization.configs.processes_config import get_process_by_name
 
     # Convert to numpy

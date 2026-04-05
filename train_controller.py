@@ -97,7 +97,6 @@ from controller.src.evaluation.analysis.bellman_lmin import (
 )
 from controller.src.evaluation.analysis.lambda_grad import (
     compute_lambda_grad,
-    run_lambda_grad_diagnostics,
 )
 
 
@@ -1605,9 +1604,10 @@ def main(config=None):
                     import time as _time
                     _t0 = _time.time()
 
+                    _surrogate_for_bellman = formula_surrogate if formula_surrogate is not None else surrogate
                     bellman_result = compute_bellman_lmin(
                         process_chain=process_chain,
-                        surrogate=surrogate,
+                        surrogate=_surrogate_for_bellman,
                         cfg=bellman_cfg,
                         loss_scale=loss_scale,
                         scenario_idx=0,
@@ -1662,6 +1662,22 @@ def main(config=None):
                           f"{[f'{s:.4f}' for s in bellman_result.Sigma.diagonal().tolist()]}")
                     print(f"  Manifold sizes: {bellman_result.n_manifold_points}")
                     print(f"  Computation time: {_elapsed:.1f}s")
+
+                    # ── Multi-level results (if parallel_levels was enabled) ──
+                    if bellman_result.level_results is not None:
+                        print(f"\n  {'─'*60}")
+                        print(f"  BELLMAN MULTI-LEVEL COMPARISON")
+                        print(f"  {'─'*60}")
+                        print(f"  {'Level':<8} {'Description':<22} {'Forward L_min':>14} {'± SE':>12}")
+                        print(f"  {'─'*60}")
+                        _lvl_desc = {1: 'fixed σ², Σ=I', 2: 'free σ², Σ=I', 3: 'free σ², full Σ'}
+                        for _lvl in sorted(bellman_result.level_results.keys()):
+                            _lr = bellman_result.level_results[_lvl]
+                            _marker = " ← primary" if _lvl == bellman_result.level else ""
+                            print(f"  {_lvl:<8} {_lvl_desc.get(_lvl, '?'):<22} "
+                                  f"{_lr['L_min_forward']:>14.8f} {_lr['L_min_forward_se']:>12.8f}{_marker}")
+                        print(f"  {'─'*60}")
+
                     print(f"  Saved: {checkpoint_dir / 'bellman_lmin_result.json'}")
                     print(f"  ✓ Bellman L_min completed — results will appear in plots\n")
 
@@ -1687,31 +1703,111 @@ def main(config=None):
                     traceback.print_exc()
                     print()
 
-                # ── Lambda_grad (Delta Method approximation of L_min) ──
-                try:
-                    print(f"\n  ── Λ_grad (Delta Method) ──")
-                    # Collect trajectories from the process chain (reuse L_min sampling)
-                    n_lg_samples = min(200, samples_per_scenario * n_scenarios)
+                def _load_scm_trajectories_for_lambda(
+                    process_chain, device, n_max=200
+                ):
+                    """
+                    Load original SCM dataset trajectories and convert them to the
+                    format expected by compute_lambda_grad and compute_lambda_mc.
+
+                    Loads from scm_ds/predictor_dataset/trajectories/full_trajectories.pt.
+                    For each trajectory, passes the original inputs through the frozen
+                    uncertainty predictors to obtain (mu_t, sigma2_t), keeping the
+                    observed outputs o_t^(i) as outputs_sampled.
+
+                    Returns list of trajectory dicts in compute_lambda_grad format.
+                    """
+                    from pathlib import Path
+                    traj_path = Path('scm_ds/predictor_dataset/trajectories/full_trajectories.pt')
+                    if not traj_path.exists():
+                        raise FileNotFoundError(
+                            f"SCM dataset trajectories not found at {traj_path}. "
+                            f"Run generate_dataset.py first."
+                        )
+
+                    raw_trajs = torch.load(traj_path, map_location='cpu')
+                    process_names = process_chain.process_names
+
+                    # Subsample if needed
+                    if len(raw_trajs) > n_max:
+                        indices = torch.randperm(len(raw_trajs))[:n_max].tolist()
+                        raw_trajs = [raw_trajs[i] for i in indices]
+
                     lg_trajectories = []
                     process_chain.eval()
                     with torch.no_grad():
-                        for scenario_idx in range(n_scenarios):
-                            trajectory = process_chain.forward(
-                                batch_size=n_lg_samples // n_scenarios,
-                                scenario_idx=scenario_idx
-                            )
-                            lg_trajectories.append(trajectory)
+                        for raw in raw_trajs:
+                            traj_data = raw['trajectory']
+                            converted = {}
 
-                    # Run diagnostics before computation
-                    run_lambda_grad_diagnostics(
-                        trajectories=lg_trajectories,
-                        surrogate=surrogate,
-                        device=device,
-                    )
+                            for proc_idx, proc_name in enumerate(process_names):
+                                pdata = traj_data[proc_name]
+
+                                # Concatenate controllable inputs + env → full input vector
+                                inputs = pdata['inputs']   # tensor (input_dim,)
+                                env    = pdata['env']       # tensor (env_dim,)
+                                if inputs.dim() == 1:
+                                    inputs = inputs.unsqueeze(0)   # (1, input_dim)
+                                if env.dim() == 1:
+                                    env = env.unsqueeze(0)         # (1, env_dim)
+                                full_inputs = torch.cat([inputs, env], dim=1).to(device)
+                                # shape: (1, input_dim + env_dim)
+
+                                # Pass through uncertainty predictor (frozen)
+                                scaled_inputs = process_chain.scale_inputs(full_inputs, proc_idx)
+                                mu_scaled, var_scaled = process_chain.uncertainty_predictors[proc_idx](
+                                    scaled_inputs
+                                )
+                                mu_t    = process_chain.unscale_outputs(mu_scaled, proc_idx)
+                                sigma2_t = process_chain.unscale_variance(var_scaled, proc_idx)
+
+                                # Observed output from dataset
+                                o_t = pdata['outputs']
+                                if o_t.dim() == 1:
+                                    o_t = o_t.unsqueeze(0)   # (1, output_dim)
+                                o_t = o_t.to(device)
+
+                                converted[proc_name] = {
+                                    'inputs':          full_inputs,   # (1, full_input_dim)
+                                    'outputs_mean':    mu_t,          # (1, output_dim) from UP
+                                    'outputs_var':     sigma2_t,      # (1, output_dim) from UP
+                                    'outputs_sampled': o_t,           # (1, output_dim) original
+                                }
+
+                            lg_trajectories.append(converted)
+
+                    return lg_trajectories
+
+                # NOTE: Λ(D) is defined on the original SCM dataset D, NOT on controller
+                # rollouts. See thesis Section 3.4.1: "Given a dataset of observed
+                # trajectories D = {τ^(i)}, ..." — the actions a_t^(i) are fixed from
+                # the dataset; only the outputs are perturbed by the uncertainty predictors.
+
+                # ── Lambda_grad (Delta Method approximation of L_min) ──
+                try:
+                    print(f"\n  ── Λ_grad (Delta Method) ──")
+                    # Load SCM dataset trajectories (thesis-correct: Λ(D) uses original dataset)
+                    try:
+                        lg_trajectories = _load_scm_trajectories_for_lambda(
+                            process_chain=process_chain,
+                            device=device,
+                            n_max=min(200, samples_per_scenario * n_scenarios),
+                        )
+                        print(f"  Loaded {len(lg_trajectories)} SCM dataset trajectories for Λ(D)")
+                    except FileNotFoundError as e:
+                        print(f"  ✗ Cannot compute Λ: {e}")
+                        lg_trajectories = []
+
+                    predictors = {
+                        process_chain.process_names[i]: process_chain.uncertainty_predictors[i]
+                        for i in range(len(process_chain.process_names))
+                    }
 
                     lambda_grad_result = compute_lambda_grad(
                         trajectories=lg_trajectories,
                         surrogate=surrogate,
+                        predictors=predictors,
+                        process_chain=process_chain,
                         device=device,
                         verbose=True,
                     )
@@ -1735,6 +1831,122 @@ def main(config=None):
                     print(f"\n  ✗ Λ_grad computation FAILED: {e}")
                     import traceback
                     traceback.print_exc()
+
+                # ── Lambda_MC (Monte Carlo Method 2 — no linearity assumption) ──
+                try:
+                    print(f"\n  ── Λ_MC (Monte Carlo, Method 2) ──")
+                    from controller.src.evaluation.analysis.lambda_mc import compute_lambda_mc
+
+                    lmc_cfg = cfg.get('lambda_mc', {})
+                    n_samples_mc = lmc_cfg.get('n_samples', 50)
+                    print(f"  n_samples (S) = {n_samples_mc} "
+                          f"(std error ≈ {100/((n_samples_mc-1)**0.5):.1f}%)")
+
+                    lambda_mc_result = compute_lambda_mc(
+                        trajectories=lg_trajectories,  # same trajectories used for lambda_grad
+                        surrogate=surrogate,
+                        device=device,
+                        n_samples=n_samples_mc,
+                        verbose=True,
+                    )
+
+                    theoretical_data['lambda_mc'] = lambda_mc_result.to_dict()
+
+                    # Apply loss_scale to match other L_min metrics
+                    if loss_scale != 1.0:
+                        theoretical_data['lambda_mc']['lambda_mc'] *= loss_scale
+                        for name in lambda_mc_result.process_names:
+                            theoretical_data['lambda_mc']['per_stage'][name] *= loss_scale
+
+                    lmc = theoretical_data['lambda_mc']['lambda_mc']
+                    print(f"  Λ_MC(D) = {lmc:.6f}  "
+                          f"(N={lambda_mc_result.n_trajectories}, S={lambda_mc_result.n_samples})")
+                    for name in lambda_mc_result.process_names:
+                        print(f"    {name}: {theoretical_data['lambda_mc']['per_stage'][name]:.6f}")
+
+                    # Diagnostic: compare with Λ_grad
+                    if 'lambda_grad' in theoretical_data:
+                        lg = theoretical_data['lambda_grad']['lambda_grad']
+                        ratio = lmc / lg if lg > 0 else float('inf')
+                        if 0.8 < ratio < 1.2:
+                            verdict = "linear approx valid (Λ_grad reliable)"
+                        elif ratio < 0.8:
+                            verdict = "Λ_grad OVERestimates — nonlinearity significant, prefer Λ_MC"
+                        else:
+                            verdict = "Λ_MC > Λ_grad — check n_samples or surrogate"
+                        print(f"  Λ_MC / Λ_grad = {ratio:.3f}  ({verdict})")
+
+                    print(f"  ✓ Λ_MC completed\n")
+
+                except Exception as e:
+                    print(f"\n  ✗ Λ_MC computation FAILED: {e}")
+                    import traceback
+                    traceback.print_exc()
+
+                # ── Λ with formula surrogate (only when surrogate is CasualiT) ──
+                lambda_grad_formula_result = None
+                lambda_mc_formula_result = None
+
+                if formula_surrogate is not None:
+                    try:
+                        print(f"\n  ── Λ_grad (Delta Method, formula surrogate) ──")
+                        lambda_grad_formula_result = compute_lambda_grad(
+                            trajectories=lg_trajectories,
+                            surrogate=formula_surrogate,
+                            predictors=predictors,
+                            process_chain=process_chain,
+                            device=device,
+                            verbose=True,
+                        )
+
+                        print(f"\n  ── Λ_MC (Monte Carlo, formula surrogate) ──")
+                        lambda_mc_formula_result = compute_lambda_mc(
+                            trajectories=lg_trajectories,
+                            surrogate=formula_surrogate,
+                            device=device,
+                            n_samples=n_samples_mc,
+                            verbose=True,
+                        )
+
+                        # Store in theoretical_data
+                        theoretical_data['lambda_grad_formula'] = lambda_grad_formula_result.to_dict()
+                        theoretical_data['lambda_mc_formula'] = lambda_mc_formula_result.to_dict()
+
+                        # Apply loss_scale
+                        if loss_scale != 1.0:
+                            theoretical_data['lambda_grad_formula']['lambda_grad'] *= loss_scale
+                            for name in lambda_grad_formula_result.process_names:
+                                theoretical_data['lambda_grad_formula']['per_stage'][name] *= loss_scale
+                            theoretical_data['lambda_mc_formula']['lambda_mc'] *= loss_scale
+                            for name in lambda_mc_formula_result.process_names:
+                                theoretical_data['lambda_mc_formula']['per_stage'][name] *= loss_scale
+
+                        # Print comparison
+                        if 'lambda_grad' in theoretical_data:
+                            print(f"\n  ── Confronto Λ: CasualiT vs Formula ──")
+                            lg_cas = theoretical_data['lambda_grad']['lambda_grad']
+                            lg_form = theoretical_data['lambda_grad_formula']['lambda_grad']
+                            print(f"  Λ_grad  CasualiT: {lg_cas:.6f}")
+                            print(f"  Λ_grad  Formula:  {lg_form:.6f}")
+                            ratio_grad = lg_cas / max(lg_form, 1e-10)
+                            print(f"  Ratio (CasualiT/Formula): {ratio_grad:.3f}  "
+                                  f"({'surrogate inflates Λ' if ratio_grad > 1.2 else 'surrogate deflates Λ' if ratio_grad < 0.8 else 'consistent'})")
+
+                        if 'lambda_mc' in theoretical_data:
+                            lmc_cas = theoretical_data['lambda_mc']['lambda_mc']
+                            lmc_form = theoretical_data['lambda_mc_formula']['lambda_mc']
+                            print(f"  Λ_MC    CasualiT: {lmc_cas:.6f}")
+                            print(f"  Λ_MC    Formula:  {lmc_form:.6f}")
+                            ratio_mc = lmc_cas / max(lmc_form, 1e-10)
+                            print(f"  Ratio (CasualiT/Formula): {ratio_mc:.3f}  "
+                                  f"({'surrogate inflates Λ' if ratio_mc > 1.2 else 'surrogate deflates Λ' if ratio_mc < 0.8 else 'consistent'})")
+
+                        print(f"  ✓ Formula surrogate Λ completed\n")
+
+                    except Exception as e:
+                        print(f"\n  ✗ Formula surrogate Λ computation FAILED: {e}")
+                        import traceback
+                        traceback.print_exc()
 
                 # ── Generate plots and reports (after Bellman, so plots include Bellman lines) ──
                 print("  Generating theoretical analysis plots...")

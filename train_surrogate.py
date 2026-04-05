@@ -179,11 +179,24 @@ def main():
             print("\nData generation complete.")
             return
 
-    elif not (dataset_path / 'ds.npz').exists():
-        print(f"\n[ERROR] No data found at {dataset_path}/ds.npz")
-        print("  Run generate_dataset.py first, or use --generate_data / --use_existing_dataset")
-        return
     else:
+        # Check for required data files based on config
+        train_file = config['data'].get('train_file')
+        test_file = config['data'].get('test_file')
+        if train_file and test_file:
+            # Pre-split mode: need train and test files
+            missing = [f for f in [train_file, test_file]
+                       if not (dataset_path / f).exists()]
+            if missing:
+                print(f"\n[ERROR] Missing pre-split data files in {dataset_path}/:")
+                for f in missing:
+                    print(f"  - {f}")
+                print("  Run with --use_existing_dataset to generate them from trajectories.")
+                return
+        elif not (dataset_path / 'ds.npz').exists():
+            print(f"\n[ERROR] No data found at {dataset_path}/ds.npz")
+            print("  Run generate_dataset.py first, or use --generate_data / --use_existing_dataset")
+            return
         print(f"\n[1/2] Using existing data at {dataset_path}/")
 
     # ── Train ──────────────────────────────────────────────────────────────

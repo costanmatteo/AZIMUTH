@@ -23,6 +23,7 @@ from scipy.interpolate import RegularGridInterpolator
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Any
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 import json
 import time
 
@@ -36,23 +37,28 @@ class BellmanConfig:
     """Configuration for backward induction grid."""
     # Grid sizes — memory budget for terminal step:
     #   (N_R × N_eps³ × M) elements × 8 bytes
-    #   N_R=50, N_eps=16, M=50 → 102.4M elements ≈ 820 MB (peak, transient)
-    #   N_R=50, N_eps=20, M=50 → 200M elements ≈ 1.6 GB (approaching limit)
-    N_R: int = 50           # Grid points for remaining reliability R
-    N_eps: int = 16         # Grid points per noise dimension (8 too coarse)
+    #   N_R=200, N_eps=30, M=100 → 540M elements ≈ 4.3 GB (peak, transient)
+    N_R: int = 200          # Grid points for remaining reliability R
+    N_eps: int = 30         # Grid points per noise dimension
     eps_range: float = 3.0  # Noise range: [-eps_range, +eps_range]
     R_min: float = -0.1     # Lower bound of R grid
     # R_max is set to F* dynamically
 
     # Manifold resolution
-    M_actions: int = 50     # Number of action candidates per process
+    M_actions: int = 100    # Number of action candidates per process
 
     # Monte Carlo
-    K_mc: int = 500         # MC samples for non-terminal steps
+    K_mc: int = 1000        # MC samples for non-terminal steps
     use_antithetic: bool = True  # Antithetic variates
 
     # Forward validation
     N_forward: int = 5000   # Forward simulation trajectories
+
+    # Modelling fidelity level
+    level: int = 3              # 1 = fixed σ², Σ=I
+                                # 2 = action-dependent σ², Σ=I
+                                # 3 = action-dependent σ², full Σ (default)
+    parallel_levels: bool = False  # If True, compute all 3 levels in parallel
 
     # Regularisation
     sigma_shrinkage: float = 0.01  # Shrinkage for Sigma if not PD
@@ -74,9 +80,11 @@ class BellmanLminResult:
     scales: np.ndarray          # Scale parameters
     n_manifold_points: List[int]  # Number of M_i points per process
     computation_time_s: float   # Wall-clock time
+    level: int = 3              # Modelling fidelity level used
+    level_results: Optional[Dict[int, Dict[str, Any]]] = None  # Per-level results when parallel_levels=True
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d = {
             'L_min_bellman': self.L_min_bellman,
             'L_min_forward': self.L_min_forward,
             'L_min_forward_se': self.L_min_forward_se,
@@ -86,7 +94,11 @@ class BellmanLminResult:
             'scales': self.scales.tolist(),
             'n_manifold_points': self.n_manifold_points,
             'computation_time_s': self.computation_time_s,
+            'level': self.level,
         }
+        if self.level_results is not None:
+            d['level_results'] = self.level_results
+        return d
 
     def save(self, path: Path):
         path = Path(path)
@@ -709,13 +721,19 @@ def backward_induction(
         mu0_opt, sigma2_0_opt: optimal action for initial step (scalars)
     """
     n = len(process_names)
+
+    # NOTE: level-dependent transforms (Sigma, manifolds) are applied by the
+    # caller before passing to this function. The manifolds and Sigma received
+    # here are already effective values for the requested level.
+    manifolds_effective = manifolds
+
     grid_R, grid_eps = build_grids(F_star, cfg, w_bar=w_bar)
 
     if verbose:
         print(f"  R grid: [{grid_R[0]:.4f}, {grid_R[-1]:.4f}]  "
               f"(R_min = F*-sum(w̄)-margin = {F_star:.4f}-{float(np.sum(w_bar)):.4f}-0.05)")
 
-    # Precompute conditional parameters
+    # Precompute conditional parameters (uses possibly-overridden Sigma)
     sigma2_cond, cond_weights = precompute_conditional_params(Sigma, n)
 
     if verbose:
@@ -749,13 +767,13 @@ def backward_induction(
         print(f"\n  [Step {n-1}/{n-1}] Terminal step (process '{process_names[terminal_idx]}') — closed-form...")
         print(f"    w̄={w_bar[terminal_idx]:.4f}, s={scales[terminal_idx]:.4f}, "
               f"τ={taus[terminal_idx]:.4f}, σ²_cond={sigma2_cond[terminal_idx]:.4f}")
-        mu_range = manifolds[terminal_idx][:, 0]
-        sigma2_range = manifolds[terminal_idx][:, 1]
+        mu_range = manifolds_effective[terminal_idx][:, 0]
+        sigma2_range = manifolds_effective[terminal_idx][:, 1]
         print(f"    Manifold: mu=[{mu_range.min():.4f}, {mu_range.max():.4f}], "
               f"sigma2=[{sigma2_range.min():.6f}, {sigma2_range.max():.6f}]")
     t0 = time.time()
     V_prev, mu_opt_prev, sigma2_opt_prev = bellman_terminal(
-        grid_R, grid_eps, manifolds[terminal_idx],
+        grid_R, grid_eps, manifolds_effective[terminal_idx],
         w_bar[terminal_idx], scales[terminal_idx], taus[terminal_idx],
         sigma2_cond[terminal_idx], cond_weights[terminal_idx],
     )
@@ -781,7 +799,7 @@ def backward_induction(
                   f"τ={taus[i]:.4f}, σ²_cond={sigma2_cond[i]:.4f}")
         t0 = time.time()
         V_prev, mu_opt_prev, sigma2_opt_prev = bellman_non_terminal(
-            grid_R, grid_eps, V_prev, manifolds[i],
+            grid_R, grid_eps, V_prev, manifolds_effective[i],
             w_bar[i], scales[i], taus[i],
             sigma2_cond[i], cond_weights[i],
             process_idx=i, K=cfg.K_mc,
@@ -803,7 +821,7 @@ def backward_induction(
               f"τ={taus[0]:.4f}, σ²_cond={sigma2_cond[0]:.4f}")
     t0 = time.time()
     L_min, mu0_opt, sigma2_0_opt = bellman_non_terminal(
-        grid_R, grid_eps, V_prev, manifolds[0],
+        grid_R, grid_eps, V_prev, manifolds_effective[0],
         w_bar[0], scales[0], taus[0],
         sigma2_cond[0], None,
         process_idx=0, K=cfg.K_mc,
@@ -1203,67 +1221,136 @@ def compute_bellman_lmin(
     if verbose:
         print(f"  Target outputs: {target_outputs}")
 
-    # ── Phase 2: Backward induction ──
-    if verbose:
-        print(f"\n[Phase 2] Running backward induction...")
-    (L_min_bellman, V_functions, grid_R, grid_eps,
-     sigma2_cond, cond_wts, taus,
-     pol_mu, pol_sigma2, mu0_opt, sigma2_0_opt) = backward_induction(
-        F_star, Sigma, manifolds, w_bar, scales,
-        target_outputs, process_names, cfg, verbose,
-        surrogate=surrogate,
-    )
+    # ── Helper: apply level-dependent transformations ──
+    def _apply_level_transforms(lvl, Sigma_full, manifolds_raw):
+        if lvl == 1:
+            Sigma_eff = np.eye(n)
+            manifolds_eff = []
+            for m in manifolds_raw:
+                sigma2_mean = float(np.mean(m[:, 1]))
+                m_new = m.copy()
+                m_new[:, 1] = sigma2_mean
+                manifolds_eff.append(m_new)
+        elif lvl == 2:
+            Sigma_eff = np.eye(n)
+            manifolds_eff = manifolds_raw
+        else:
+            Sigma_eff = Sigma_full
+            manifolds_eff = manifolds_raw
+        return Sigma_eff, manifolds_eff
+
+    # ── Helper: run backward induction + forward validation for one level ──
+    def _run_single_level(lvl, Sigma_full, manifolds_raw, verbose_level):
+        level_desc = {1: 'fixed σ², Σ=I', 2: 'free σ², Σ=I', 3: 'free σ², full Σ'}
+        Sigma_eff, manifolds_eff = _apply_level_transforms(lvl, Sigma_full, manifolds_raw)
+
+        if verbose_level:
+            print(f"\n  [Level {lvl}] {level_desc.get(lvl, 'unknown')}")
+
+        # Phase 2: Backward induction
+        (L_bwd, V_funcs, gr_R, gr_eps,
+         s2_cond, c_wts, taus_lvl,
+         p_mu, p_sigma2, mu0, sigma2_0) = backward_induction(
+            F_star, Sigma_eff, manifolds_eff, w_bar, scales,
+            target_outputs, process_names, cfg, verbose_level,
+            surrogate=surrogate,
+        )
+
+        # Phase 3a: Forward validation (policy-based)
+        L_fwd, L_fwd_se = forward_simulation(
+            F_star, Sigma_eff, manifolds_eff, w_bar, scales, taus_lvl,
+            gr_R, gr_eps, V_funcs, s2_cond, c_wts,
+            N=cfg.N_forward,
+            policy_mu=p_mu, policy_sigma2=p_sigma2,
+            mu0_opt=mu0, sigma2_0_opt=sigma2_0,
+            verbose=verbose_level,
+        )
+
+        # Phase 3b: Clairvoyant forward (diagnostic)
+        L_clairv, L_clairv_se = forward_simulation(
+            F_star, Sigma_eff, manifolds_eff, w_bar, scales, taus_lvl,
+            gr_R, gr_eps, V_funcs, s2_cond, c_wts,
+            N=cfg.N_forward,
+        )
+
+        return {
+            'level': lvl,
+            'L_min_bellman': L_bwd,
+            'L_min_forward': L_fwd,
+            'L_min_forward_se': L_fwd_se,
+            'L_clairvoyant': L_clairv,
+            'L_clairvoyant_se': L_clairv_se,
+            'manifolds_effective': manifolds_eff,
+            'V_functions': V_funcs,
+            'grid_R': gr_R,
+            'grid_eps': gr_eps,
+            'sigma2_cond': s2_cond,
+            'cond_weights': c_wts,
+            'taus': taus_lvl,
+            'policy_mu': p_mu,
+            'policy_sigma2': p_sigma2,
+            'mu0_opt': mu0,
+            'sigma2_0_opt': sigma2_0,
+        }
+
+    # ── Determine which levels to run ──
+    if cfg.parallel_levels:
+        levels_to_run = [1, 2, 3]
+    else:
+        levels_to_run = [cfg.level]
+
+    # ── Run level(s) ──
+    if len(levels_to_run) == 1:
+        # Single level — run directly (original path)
+        lvl = levels_to_run[0]
+        if verbose:
+            level_desc = {1: 'fixed σ², Σ=I', 2: 'free σ², Σ=I', 3: 'free σ², full Σ'}
+            print(f"\n  Bellman level: {lvl}  ({level_desc.get(lvl, 'unknown')})")
+            print(f"\n[Phase 2] Running backward induction...")
+        res = _run_single_level(lvl, Sigma, manifolds, verbose)
+        all_results = {lvl: res}
+    else:
+        # Parallel levels — verbose only for primary (level 3)
+        if verbose:
+            print(f"\n[Phase 2+3] Running all 3 Bellman levels in parallel...")
+        t_par = time.time()
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            futures = {
+                lvl: executor.submit(
+                    _run_single_level, lvl, Sigma, manifolds,
+                    verbose and (lvl == cfg.level),  # verbose only for primary level
+                )
+                for lvl in levels_to_run
+            }
+            all_results = {lvl: fut.result() for lvl, fut in futures.items()}
+        if verbose:
+            print(f"  All 3 levels completed in {time.time()-t_par:.1f}s")
+
+    # ── Primary level results (for backward-compatible return) ──
+    primary = all_results[cfg.level]
+    L_min_bellman = primary['L_min_bellman']
+    L_min_forward = primary['L_min_forward']
+    L_min_forward_se = primary['L_min_forward_se']
+    L_clairv = primary['L_clairvoyant']
+    L_clairv_se = primary['L_clairvoyant_se']
+    manifolds_effective = primary['manifolds_effective']
+
     L_min_bellman_scaled = L_min_bellman * loss_scale
+    L_min_forward_scaled = L_min_forward * loss_scale
+    L_min_forward_se_scaled = L_min_forward_se * loss_scale
 
     if verbose:
         print(f"\n  L_min (Bellman) = {L_min_bellman:.8f}")
         if loss_scale != 1.0:
             print(f"  L_min (scaled) = {L_min_bellman_scaled:.6f}")
-        # Sanity: max possible loss is F*² (if F=0), so L_min must be ≤ F*²
         if L_min_bellman > F_star ** 2 + 1e-6:
             print(f"  ⚠ WARNING: L_min ({L_min_bellman:.6f}) > F*² ({F_star**2:.6f}) "
                   f"— this exceeds the theoretical maximum, check for numerical issues")
-
-    # ── Phase 3: Forward validation (CORRECT — policy-based) ──
-    if verbose:
-        print(f"\n[Phase 3a] Forward simulation — policy-based (N={cfg.N_forward})...")
-    t_phase = time.time()
-
-    L_min_forward, L_min_forward_se = forward_simulation(
-        F_star, Sigma, manifolds, w_bar, scales, taus,
-        grid_R, grid_eps, V_functions,
-        sigma2_cond, cond_wts,
-        N=cfg.N_forward,
-        policy_mu=pol_mu,
-        policy_sigma2=pol_sigma2,
-        mu0_opt=mu0_opt,
-        sigma2_0_opt=sigma2_0_opt,
-        verbose=verbose,
-    )
-    L_min_forward_scaled = L_min_forward * loss_scale
-    L_min_forward_se_scaled = L_min_forward_se * loss_scale
-
-    if verbose:
-        print(f"  Done in {time.time()-t_phase:.1f}s")
         print(f"  L_min (forward, policy) = {L_min_forward:.8f} ± {L_min_forward_se:.8f}")
         rel_diff = abs(L_min_forward - L_min_bellman) / max(abs(L_min_bellman), 1e-10)
         print(f"  Relative difference Bellman vs Forward: {rel_diff*100:.2f}%")
         if rel_diff > 0.3:
             print(f"  NOTE: >30% gap — may indicate coarse grid discretisation")
-
-    # ── Phase 3b: Clairvoyant forward (diagnostic only) ──
-    if verbose:
-        print(f"\n[Phase 3b] Forward simulation — clairvoyant (diagnostic, N={cfg.N_forward})...")
-    t_phase2 = time.time()
-    L_clairv, L_clairv_se = forward_simulation(
-        F_star, Sigma, manifolds, w_bar, scales, taus,
-        grid_R, grid_eps, V_functions,
-        sigma2_cond, cond_wts,
-        N=cfg.N_forward,
-        # No policy → clairvoyant mode (old behaviour)
-    )
-    if verbose:
-        print(f"  Done in {time.time()-t_phase2:.1f}s")
         print(f"  L_min (clairvoyant) = {L_clairv:.8f} ± {L_clairv_se:.8f}")
         print(f"  Clairvoyant/Policy ratio: {L_clairv / max(L_min_forward, 1e-10):.2f}x "
               f"(should be ≤ 1.0; clairvoyant has information advantage)")
@@ -1276,18 +1363,53 @@ def compute_bellman_lmin(
         print(f"{'='*70}")
         print(f"  F*            = {F_star:.6f}")
         print(f"  F*²           = {F_star**2:.6f}  (theoretical max loss)")
-        print(f"  L_min (Bellman):     {L_min_bellman:.8f}" +
-              (f"  (scaled: {L_min_bellman_scaled:.6f})" if loss_scale != 1.0 else ""))
-        print(f"  L_min (fwd policy):  {L_min_forward:.8f} ± {L_min_forward_se:.8f}" +
-              (f"  (scaled: {L_min_forward_scaled:.6f})" if loss_scale != 1.0 else ""))
-        print(f"  L_min (fwd clairv):  {L_clairv:.8f} ± {L_clairv_se:.8f}" +
-              (f"  (scaled: {L_clairv * loss_scale:.6f})" if loss_scale != 1.0 else ""))
-        print(f"  Bellman ≈ Policy?  |diff| = {abs(L_min_forward - L_min_bellman):.8f} "
-              f"({abs(L_min_forward - L_min_bellman) / max(abs(L_min_bellman), 1e-10) * 100:.1f}%)")
-        print(f"  Clairvoyant < Policy? {L_clairv:.8f} < {L_min_forward:.8f} → "
-              f"{'yes (expected)' if L_clairv < L_min_forward else 'no (unexpected)'}")
+
+        if cfg.parallel_levels:
+            # Multi-level comparison table
+            print(f"\n  {'Level':<8} {'Bellman':>14} {'Forward':>14} {'Clairvoyant':>14}")
+            print(f"  {'─'*52}")
+            for lvl in [1, 2, 3]:
+                r = all_results[lvl]
+                Lb = r['L_min_bellman'] * loss_scale if loss_scale != 1.0 else r['L_min_bellman']
+                Lf = r['L_min_forward'] * loss_scale if loss_scale != 1.0 else r['L_min_forward']
+                Lc = r['L_clairvoyant'] * loss_scale if loss_scale != 1.0 else r['L_clairvoyant']
+                marker = " ←" if lvl == cfg.level else ""
+                print(f"  {lvl:<8} {Lb:>14.8f} {Lf:>14.8f} {Lc:>14.8f}{marker}")
+            print(f"  {'─'*52}")
+            print(f"  L1 ≤ L2 ≤ L3 hierarchy: ", end="")
+            L_fwd = {lvl: all_results[lvl]['L_min_forward'] for lvl in [1, 2, 3]}
+            if L_fwd[1] <= L_fwd[2] * 1.01 and L_fwd[2] <= L_fwd[3] * 1.01:
+                print("✓ OK (less noise info → lower L_min)")
+            else:
+                print(f"✗ UNEXPECTED (L1={L_fwd[1]:.8f}, L2={L_fwd[2]:.8f}, L3={L_fwd[3]:.8f})")
+        else:
+            print(f"  L_min (Bellman):     {L_min_bellman:.8f}" +
+                  (f"  (scaled: {L_min_bellman_scaled:.6f})" if loss_scale != 1.0 else ""))
+            print(f"  L_min (fwd policy):  {L_min_forward:.8f} ± {L_min_forward_se:.8f}" +
+                  (f"  (scaled: {L_min_forward_scaled:.6f})" if loss_scale != 1.0 else ""))
+            print(f"  L_min (fwd clairv):  {L_clairv:.8f} ± {L_clairv_se:.8f}" +
+                  (f"  (scaled: {L_clairv * loss_scale:.6f})" if loss_scale != 1.0 else ""))
+            print(f"  Bellman ≈ Policy?  |diff| = {abs(L_min_forward - L_min_bellman):.8f} "
+                  f"({abs(L_min_forward - L_min_bellman) / max(abs(L_min_bellman), 1e-10) * 100:.1f}%)")
+            print(f"  Clairvoyant < Policy? {L_clairv:.8f} < {L_min_forward:.8f} → "
+                  f"{'yes (expected)' if L_clairv < L_min_forward else 'no (unexpected)'}")
+
         print(f"  Computation time: {computation_time:.1f}s")
         print(f"{'='*70}\n")
+
+    # ── Build per-level results dict (for parallel mode) ──
+    level_results_dict = None
+    if cfg.parallel_levels:
+        level_results_dict = {}
+        for lvl in [1, 2, 3]:
+            r = all_results[lvl]
+            level_results_dict[lvl] = {
+                'L_min_bellman': r['L_min_bellman'] * loss_scale if loss_scale != 1.0 else r['L_min_bellman'],
+                'L_min_forward': r['L_min_forward'] * loss_scale if loss_scale != 1.0 else r['L_min_forward'],
+                'L_min_forward_se': r['L_min_forward_se'] * loss_scale if loss_scale != 1.0 else r['L_min_forward_se'],
+                'L_clairvoyant': r['L_clairvoyant'] * loss_scale if loss_scale != 1.0 else r['L_clairvoyant'],
+                'L_clairvoyant_se': r['L_clairvoyant_se'] * loss_scale if loss_scale != 1.0 else r['L_clairvoyant_se'],
+            }
 
     return BellmanLminResult(
         L_min_bellman=L_min_bellman_scaled if loss_scale != 1.0 else L_min_bellman,
@@ -1297,6 +1419,8 @@ def compute_bellman_lmin(
         Sigma=Sigma,
         w_bar=w_bar,
         scales=scales,
-        n_manifold_points=[m.shape[0] for m in manifolds],
+        n_manifold_points=[m.shape[0] for m in manifolds_effective],
         computation_time_s=computation_time,
+        level=cfg.level,
+        level_results=level_results_dict,
     )

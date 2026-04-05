@@ -219,6 +219,9 @@ def _build_st_processes(st_dataset_config):
             'uncertainty_predictor': copy.deepcopy(up_config),
 
             'checkpoint_dir': f'checkpoints/predictor/st_{i}',
+
+            # Pre-built SCM instance (avoids rebuilding in target_generation.py)
+            '_scm_instance': ref_scm,
         }
 
         # Target adattivo inter-processo:

@@ -121,6 +121,7 @@ def compute_stats(df: pd.DataFrame) -> dict:
     gd_te = gb_te - gc_te
 
     wins = (gc_tr.abs() < gb_tr.abs()).sum()
+    wins_te = (gc_te.abs() < gb_te.abs()).sum()
 
     # derived columns stored back into df for plotting / table
     df = df.copy()
@@ -139,6 +140,8 @@ def compute_stats(df: pd.DataFrame) -> dict:
         'n_runs':         len(df),
         'wins':           wins,
         'win_rate':       100.0 * wins / len(df),
+        'wins_te':        wins_te,
+        'win_rate_te':    100.0 * wins_te / len(df),
         # train
         'gb_tr_min':  gb_tr.min(),  'gb_tr_med':  gb_tr.median(),  'gb_tr_max':  gb_tr.max(),
         'gc_tr_min':  gc_tr.min(),  'gc_tr_med':  gc_tr.median(),  'gc_tr_max':  gc_tr.max(),
@@ -181,79 +184,78 @@ def _b64(fig) -> str:
 
 
 def plot_scatter(df: pd.DataFrame) -> str:
-    fig, ax = plt.subplots(figsize=(4.2, 3.4))
-    fstar = df['F_star_train']
-    ax.scatter(df['F_baseline_train'], fstar, color=_RED,   s=14, alpha=0.55,
-               linewidths=0, label="Baseline F'")
-    ax.scatter(df['F_actual_train'],   fstar, color='#2563EB', s=14, alpha=0.55,
-               linewidths=0, label='Controller F')
-    lo = min(fstar.min(), df['F_baseline_train'].min(), df['F_actual_train'].min()) - 0.02
-    hi = fstar.max() + 0.02
-    ax.plot([lo, hi], [lo, hi], 'k--', lw=0.8, alpha=0.4)
-    ax.set_xlabel('F  (achieved)', fontsize=7, fontfamily=_FONT)
-    ax.set_ylabel('F*  (target)', fontsize=7, fontfamily=_FONT)
-    ax.set_title('F\' (red) and F (blue) vs F*', fontsize=7.5,
-                 fontfamily=_FONT, fontweight='bold')
-    ax.tick_params(labelsize=6)
-    ax.legend(fontsize=6, framealpha=0.6)
-    ax.grid(True, alpha=0.18, lw=0.4)
+    fig, (ax_tr, ax_te) = plt.subplots(1, 2, figsize=(4.2, 3.4))
+    for ax, suffix, title in [(ax_tr, 'train', 'Train'), (ax_te, 'test', 'Test')]:
+        fstar = df[f'F_star_{suffix}']
+        ax.scatter(df[f'F_baseline_{suffix}'], fstar, color=_RED,   s=10, alpha=0.55,
+                   linewidths=0, label="Baseline F'")
+        ax.scatter(df[f'F_actual_{suffix}'],   fstar, color='#2563EB', s=10, alpha=0.55,
+                   linewidths=0, label='Controller F')
+        lo = min(fstar.min(), df[f'F_baseline_{suffix}'].min(), df[f'F_actual_{suffix}'].min()) - 0.02
+        hi = fstar.max() + 0.02
+        ax.plot([lo, hi], [lo, hi], 'k--', lw=0.8, alpha=0.4)
+        ax.set_xlabel('F  (achieved)', fontsize=6, fontfamily=_FONT)
+        ax.set_title(title, fontsize=7, fontfamily=_FONT, fontweight='bold')
+        ax.tick_params(labelsize=5)
+        ax.legend(fontsize=5, framealpha=0.6)
+        ax.grid(True, alpha=0.18, lw=0.4)
+    ax_tr.set_ylabel('F*  (target)', fontsize=6, fontfamily=_FONT)
     fig.tight_layout(pad=0.6)
     return _b64(fig)
 
 
 def plot_boxplot(df: pd.DataFrame) -> str:
-    fig, ax = plt.subplots(figsize=(4.2, 3.4))
-    data   = [df['gap_baseline_train'].dropna(), df['gap_ctrl_train'].dropna()]
-    labels = ["Gap baseline\n(F* − F')", "Gap ctrl\n(F* − F)"]
-    bp = ax.boxplot(data, tick_labels=labels, patch_artist=True, widths=0.45,
-                    medianprops=dict(color='black', lw=1.2))
-    bp['boxes'][0].set(facecolor=_RED,   alpha=0.55)
-    bp['boxes'][1].set(facecolor=_GREEN, alpha=0.55)
-    ax.set_ylabel('Gap', fontsize=7, fontfamily=_FONT)
-    ax.set_title('Gap distribution: baseline vs controller', fontsize=7.5,
-                 fontfamily=_FONT, fontweight='bold')
-    ax.tick_params(labelsize=6)
-    ax.grid(True, axis='y', alpha=0.18, lw=0.4)
+    fig, (ax_tr, ax_te) = plt.subplots(1, 2, figsize=(4.2, 3.4))
+    for ax, suffix, title in [(ax_tr, 'train', 'Train'), (ax_te, 'test', 'Test')]:
+        data   = [df[f'gap_baseline_{suffix}'].dropna(), df[f'gap_ctrl_{suffix}'].dropna()]
+        labels = ["Gap baseline\n(F* − F')", "Gap ctrl\n(F* − F)"]
+        bp = ax.boxplot(data, tick_labels=labels, patch_artist=True, widths=0.45,
+                        medianprops=dict(color='black', lw=1.2))
+        bp['boxes'][0].set(facecolor=_RED,   alpha=0.55)
+        bp['boxes'][1].set(facecolor=_GREEN, alpha=0.55)
+        ax.set_title(title, fontsize=7, fontfamily=_FONT, fontweight='bold')
+        ax.tick_params(labelsize=5)
+        ax.grid(True, axis='y', alpha=0.18, lw=0.4)
+    ax_tr.set_ylabel('Gap', fontsize=6, fontfamily=_FONT)
     fig.tight_layout(pad=0.6)
     return _b64(fig)
 
 
 def plot_improvement(df: pd.DataFrame) -> str:
-    fig, axes = plt.subplots(1, 2, figsize=(4.2, 3.4))
+    fig, axes = plt.subplots(2, 2, figsize=(4.2, 3.4))
 
-    # left: overlapping distributions
-    ax = axes[0]
-    bins = np.linspace(
-        min(df['gap_baseline_train'].min(), df['gap_ctrl_train'].min()),
-        max(df['gap_baseline_train'].max(), df['gap_ctrl_train'].max()),
-        30
-    )
-    ax.hist(df['gap_baseline_train'], bins=bins, color=_RED,   alpha=0.55,
-            label="Baseline", density=True)
-    ax.hist(df['gap_ctrl_train'],     bins=bins, color=_GREEN, alpha=0.55,
-            label="Ctrl",     density=True)
-    ax.set_xlabel('Gap', fontsize=7, fontfamily=_FONT)
-    ax.set_ylabel('Density', fontsize=7, fontfamily=_FONT)
-    ax.set_title('Gap overlap', fontsize=7.5, fontfamily=_FONT, fontweight='bold')
-    ax.legend(fontsize=6)
-    ax.tick_params(labelsize=6)
-    ax.grid(True, alpha=0.18, lw=0.4)
+    for row, (suffix, title) in enumerate([('train', 'Train'), ('test', 'Test')]):
+        # left: overlapping distributions
+        ax = axes[row, 0]
+        bins = np.linspace(
+            min(df[f'gap_baseline_{suffix}'].min(), df[f'gap_ctrl_{suffix}'].min()),
+            max(df[f'gap_baseline_{suffix}'].max(), df[f'gap_ctrl_{suffix}'].max()),
+            30
+        )
+        ax.hist(df[f'gap_baseline_{suffix}'], bins=bins, color=_RED,   alpha=0.55,
+                label="Baseline", density=True)
+        ax.hist(df[f'gap_ctrl_{suffix}'],     bins=bins, color=_GREEN, alpha=0.55,
+                label="Ctrl",     density=True)
+        ax.set_title(f'{title} — gap overlap', fontsize=6, fontfamily=_FONT, fontweight='bold')
+        ax.legend(fontsize=4.5)
+        ax.tick_params(labelsize=4.5)
+        ax.grid(True, alpha=0.18, lw=0.4)
+        if row == 1:
+            ax.set_xlabel('Gap', fontsize=5.5, fontfamily=_FONT)
 
-    # right: delta distribution
-    ax = axes[1]
-    # Sort by improvement (|gap_baseline| - |gap_ctrl|); positive = ctrl better
-    improvement = df['gap_baseline_train'].abs() - df['gap_ctrl_train'].abs()
-    improvement = improvement.sort_values()
-    deltas = improvement
-    colors_bar = [_GREEN if v >= 0 else _RED for v in deltas]
-    ax.bar(range(len(deltas)), deltas, color=colors_bar, width=1.0, linewidth=0)
-    ax.axhline(0, color='black', lw=0.6)
-    ax.set_xlabel('Run (sorted)', fontsize=7, fontfamily=_FONT)
-    ax.set_ylabel('|Gap baseline| − |Gap ctrl|', fontsize=7, fontfamily=_FONT)
-    ax.set_title('Gap reduction per run', fontsize=7.5,
-                 fontfamily=_FONT, fontweight='bold')
-    ax.tick_params(labelsize=6)
-    ax.grid(True, axis='y', alpha=0.18, lw=0.4)
+        # right: delta distribution
+        ax = axes[row, 1]
+        improvement = df[f'gap_baseline_{suffix}'].abs() - df[f'gap_ctrl_{suffix}'].abs()
+        improvement = improvement.sort_values()
+        colors_bar = [_GREEN if v >= 0 else _RED for v in improvement]
+        ax.bar(range(len(improvement)), improvement, color=colors_bar, width=1.0, linewidth=0)
+        ax.axhline(0, color='black', lw=0.6)
+        ax.set_title(f'{title} — gap reduction per run', fontsize=6,
+                     fontfamily=_FONT, fontweight='bold')
+        ax.tick_params(labelsize=4.5)
+        ax.grid(True, axis='y', alpha=0.18, lw=0.4)
+        if row == 1:
+            ax.set_xlabel('Run (sorted)', fontsize=5.5, fontfamily=_FONT)
 
     fig.tight_layout(pad=0.6)
     return _b64(fig)
@@ -264,27 +266,28 @@ def plot_heatmap(df: pd.DataFrame) -> str:
     df['seed_t'] = pd.to_numeric(df['seed_target'],  errors='coerce')
     df['seed_b'] = pd.to_numeric(df['seed_baseline'], errors='coerce')
     df['gap_improvement_train'] = df['gap_baseline_train'].abs() - df['gap_ctrl_train'].abs()
+    df['gap_improvement_test']  = df['gap_baseline_test'].abs()  - df['gap_ctrl_test'].abs()
     df = df.dropna(subset=['seed_t', 'seed_b', 'gap_improvement_train'])
 
-    pivot = df.pivot_table(index='seed_t', columns='seed_b',
-                           values='gap_improvement_train', aggfunc='mean')
-
-    fig, ax = plt.subplots(figsize=(4.2, 3.4))
-    vmax = max(abs(pivot.values[~np.isnan(pivot.values)]).max(), 0.01)
-    im = ax.imshow(pivot.values, aspect='auto', cmap='RdYlGn',
-                   vmin=-vmax, vmax=vmax, origin='upper')
-    ax.set_xticks(range(len(pivot.columns)))
-    ax.set_xticklabels([str(int(c)) for c in pivot.columns],
-                       fontsize=5, fontfamily=_FONT)
-    ax.set_yticks(range(len(pivot.index)))
-    ax.set_yticklabels([str(int(i)) for i in pivot.index],
-                       fontsize=5, fontfamily=_FONT)
-    ax.set_xlabel('seed_b', fontsize=7, fontfamily=_FONT)
-    ax.set_ylabel('seed_t', fontsize=7, fontfamily=_FONT)
-    ax.set_title('Gap reduction by seed combination', fontsize=7.5,
-                 fontfamily=_FONT, fontweight='bold')
-    cb = fig.colorbar(im, ax=ax, fraction=0.03, pad=0.03)
-    cb.ax.tick_params(labelsize=5)
+    fig, (ax_tr, ax_te) = plt.subplots(1, 2, figsize=(4.2, 3.4))
+    for ax, col, title in [(ax_tr, 'gap_improvement_train', 'Train'),
+                           (ax_te, 'gap_improvement_test',  'Test')]:
+        pivot = df.pivot_table(index='seed_t', columns='seed_b',
+                               values=col, aggfunc='mean')
+        vmax = max(abs(pivot.values[~np.isnan(pivot.values)]).max(), 0.01)
+        im = ax.imshow(pivot.values, aspect='auto', cmap='RdYlGn',
+                       vmin=-vmax, vmax=vmax, origin='upper')
+        ax.set_xticks(range(len(pivot.columns)))
+        ax.set_xticklabels([str(int(c)) for c in pivot.columns],
+                           fontsize=4, fontfamily=_FONT)
+        ax.set_yticks(range(len(pivot.index)))
+        ax.set_yticklabels([str(int(i)) for i in pivot.index],
+                           fontsize=4, fontfamily=_FONT)
+        ax.set_xlabel('seed_b', fontsize=6, fontfamily=_FONT)
+        ax.set_title(title, fontsize=7, fontfamily=_FONT, fontweight='bold')
+        cb = fig.colorbar(im, ax=ax, fraction=0.03, pad=0.03)
+        cb.ax.tick_params(labelsize=4)
+    ax_tr.set_ylabel('seed_t', fontsize=6, fontfamily=_FONT)
     fig.tight_layout(pad=0.6)
     return _b64(fig)
 
@@ -578,13 +581,23 @@ def build_page1_html(s: dict, now: datetime,
       <div class="kpi-s">valid runs</div>
     </div>
     <div class="kpi">
-      <div class="kpi-l">Controller wins</div>
+      <div class="kpi-l">Controller wins (train)</div>
       <div class="kpi-v g">{s['wins']}/{n}</div>
       <div class="kpi-s">win rate {s['win_rate']:.1f}%</div>
     </div>
     <div class="kpi">
+      <div class="kpi-l">Controller wins (test)</div>
+      <div class="kpi-v g">{s['wins_te']}/{n}</div>
+      <div class="kpi-s">win rate {s['win_rate_te']:.1f}%</div>
+    </div>
+    <div class="kpi">
       <div class="kpi-l">Median gap &#916; (train)</div>
       <div class="kpi-v g">{_sign(s['gd_tr_med'])}</div>
+      <div class="kpi-s">F&#8722;F' improvement</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-l">Median gap &#916; (test)</div>
+      <div class="kpi-v g">{_sign(s['gd_te_med'])}</div>
       <div class="kpi-s">F&#8722;F' improvement</div>
     </div>
     <div class="kpi">
@@ -680,19 +693,19 @@ def build_page1_html(s: dict, now: datetime,
   <div class="plot-grid">
     <div class="plot-cell">
       <img class="plot-img" src="data:image/png;base64,{b64_scatter}">
-      <div class="plot-cap">F* vs F' (red) and F* vs F (blue) &#8212; diagonal = perfect</div>
+      <div class="plot-cap">F' (red) and F (blue) vs F* &#8212; train (left) / test (right)</div>
     </div>
     <div class="plot-cell">
       <img class="plot-img" src="data:image/png;base64,{b64_box}">
-      <div class="plot-cap">Gap distribution: baseline vs controller</div>
+      <div class="plot-cap">Gap distribution &#8212; train (left) / test (right)</div>
     </div>
     <div class="plot-cell">
       <img class="plot-img" src="data:image/png;base64,{b64_imp}">
-      <div class="plot-cap">Gap overlap + gap reduction per run</div>
+      <div class="plot-cap">Gap overlap + reduction &#8212; train (top) / test (bottom)</div>
     </div>
     <div class="plot-cell">
       <img class="plot-img" src="data:image/png;base64,{b64_heat}">
-      <div class="plot-cap">Gap reduction by seed combination &#8212; green = ctrl better</div>
+      <div class="plot-cap">Gap reduction by seed &#8212; train (left) / test (right)</div>
     </div>
   </div>
 

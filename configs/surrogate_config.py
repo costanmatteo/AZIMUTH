@@ -41,6 +41,13 @@ SURROGATE_CONFIG = {
 
         'data': {
             'dataset': 'azimuth_surrogate',
+            # Use ds.npz (created by generate_dataset.py) with k-fold splitting.
+            # The base StageCausaliT YAML sets train_file/test_file for its own
+            # pre-split datasets; we override to null so the dataloader falls
+            # back to the combined ds.npz file.
+            'train_file': None,
+            'test_file': None,
+            'filename_input': 'ds.npz',
         },
 
     },

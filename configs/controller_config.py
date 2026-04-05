@@ -109,6 +109,14 @@ CONTROLLER_CONFIG = {
         'use_batchnorm': False,
         'use_scenario_encoder': False,  # Enable scenario context encoding
         'scenario_embedding_dim': 16,  # Dimension of scenario embedding vector
+        'observation_mode': 'residual',   # opzioni:
+        # 'mean_var':  input = [outputs_mean, outputs_var]  (2 × output_dim)
+        # 'sample':    input = [outputs_sampled]             (1 × output_dim)
+        # 'residual':  input = [ε] = [(o_sampled - mean) / sqrt(var + 1e-8)]
+        #                                                    (1 × output_dim)
+        #              ε ~ N(0,1) per processi ben calibrati.
+        #              Permette al controller di ragionare sul rumore
+        #              realizzato, abilitando noise prediction (Bellman Level 3).
     },
 
     # Training parameters
@@ -232,6 +240,21 @@ CONTROLLER_CONFIG = {
         'use_antithetic': True,  # Antithetic variates
         'N_forward': 20000,      # Forward simulation trajectories
         'sigma_shrinkage': 0.01, # Shrinkage for Sigma if not PD
+        'level': 3,              # 1 = fixed variance + independent noise
+                                 # 2 = action-dependent variance + independent noise
+                                 # 3 = action-dependent variance + correlated noise (full)
+        'parallel_levels': True, # Compute all 3 levels in parallel (minimal extra cost)
+    },
+
+    # Lambda_MC (Monte Carlo complexity metric, Method 2)
+    'lambda_mc': {
+        'n_samples': 50,   # S — number of MC perturbations per trajectory
+                           # Controls estimation accuracy of Λ_MC.
+                           # Higher S → lower variance of the estimate.
+                           # S=30: ~4% std error (fast, acceptable for monitoring)
+                           # S=50: ~3% std error (recommended default)
+                           # S=100: ~1% std error (recommended for final results)
+                           # Beyond S=100: diminishing returns
     },
 
     # Miscellaneous

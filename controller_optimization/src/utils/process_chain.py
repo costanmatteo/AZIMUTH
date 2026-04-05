@@ -221,6 +221,7 @@ class ProcessChain(nn.Module):
         # Use scenario encoder if enabled
         self.use_scenario_encoder = policy_config.get('use_scenario_encoder', True)
         self.scenario_embedding_dim = policy_config.get('scenario_embedding_dim', 16)
+        self.observation_mode = policy_config.get('observation_mode', 'mean_var')
 
         # Load uncertainty predictors (frozen)
         self.uncertainty_predictors = nn.ModuleList()
@@ -283,8 +284,11 @@ class ProcessChain(nn.Module):
             next_process_info = self.controllable_info_per_process[i + 1]
             n_non_controllable = next_process_info['n_non_controllable']
 
-            # policy_input_size = prev_mean + prev_var + non_controllable_inputs
-            policy_input_size = prev_output_dim + prev_output_dim + n_non_controllable
+            # policy_input_size depends on observation_mode
+            if self.observation_mode == 'mean_var':
+                policy_input_size = prev_output_dim + prev_output_dim + n_non_controllable
+            else:  # 'sample'
+                policy_input_size = prev_output_dim + n_non_controllable
 
             # Add scenario embedding dimension if encoder is enabled
             if self.use_scenario_encoder:
@@ -314,7 +318,10 @@ class ProcessChain(nn.Module):
                     dtype=torch.float32
                 )
                 print(f"  Policy {i} -> Process '{processes_config[i + 1]['name']}':")
-                print(f"    Input dim: {policy_input_size} (prev_mean={prev_output_dim} + prev_var={prev_output_dim} + non_controllable={n_non_controllable})")
+                if self.observation_mode == 'mean_var':
+                    print(f"    Input dim: {policy_input_size} (prev_mean={prev_output_dim} + prev_var={prev_output_dim} + non_controllable={n_non_controllable})")
+                else:
+                    print(f"    Input dim: {policy_input_size} (prev_sampled={prev_output_dim} + non_controllable={n_non_controllable})")
                 print(f"    Output dim: {n_controllable} (controllable only)")
                 print(f"    Controllable inputs: {next_process_info['controllable_labels']}")
                 print(f"    Non-controllable inputs (env conditions): {next_process_info['non_controllable_labels']}")
@@ -596,20 +603,20 @@ class ProcessChain(nn.Module):
 
                 if ProcessChain.debug:
                     print(f"\n[1] POLICY GENERATOR {i-1}: {self.process_names[i-1]} -> {process_name}")
-                    print(f"    Policy input components:")
-                    print(f"      prev_outputs_mean: shape={prev_outputs_mean.shape}, mean={prev_outputs_mean.mean().item():.6f}, std={prev_outputs_mean.std().item():.6f}")
-                    print(f"      prev_outputs_var: shape={prev_outputs_var.shape}, mean={prev_outputs_var.mean().item():.6f}, std={prev_outputs_var.std().item():.6f}")
+                    print(f"    Policy input components (observation_mode='{self.observation_mode}'):")
+                    print(f"      prev_obs: shape={prev_obs.shape}, mean={prev_obs.mean().item():.6f}, std={prev_obs.std().item():.6f}")
+                    if self.observation_mode == 'mean_var':
+                        print(f"      prev_obs_var: shape={prev_obs_var.shape}, mean={prev_obs_var.mean().item():.6f}, std={prev_obs_var.std().item():.6f}")
                     if non_controllable_inputs is not None:
                         nc_info = self.controllable_info_per_process[i]
                         print(f"      non_controllable_inputs: shape={non_controllable_inputs.shape}, labels={nc_info['non_controllable_labels']}")
                         print(f"        values: {non_controllable_inputs[0].tolist()}")
-                    print(f"      Sample values (first batch): prev_mean={prev_outputs_mean[0].tolist()}, prev_var={prev_outputs_var[0].tolist()}")
 
-                # Concatenate: [prev_outputs_mean, prev_outputs_var, non_controllable_inputs, scenario_embedding]
-                policy_input_parts = [
-                    prev_outputs_mean,
-                    prev_outputs_var
-                ]
+                # Build policy input based on observation mode
+                if self.observation_mode == 'mean_var':
+                    policy_input_parts = [prev_obs, prev_obs_var]
+                else:  # 'sample'
+                    policy_input_parts = [prev_obs]
 
                 # Add non-controllable inputs (environmental conditions) if present
                 if non_controllable_inputs is not None:
@@ -699,11 +706,13 @@ class ProcessChain(nn.Module):
             }
 
             # 7. Update per prossima iterazione
-            # Use sampled outputs as feedback for next policy generator
-            # This propagates uncertainty through the chain
             prev_inputs = current_inputs
-            prev_outputs_mean = outputs_sampled  # Use sampled outputs instead of mean
-            prev_outputs_var = outputs_var
+            if self.observation_mode == 'mean_var':
+                prev_obs = outputs_mean       # pass true mean
+                prev_obs_var = outputs_var    # pass variance
+            else:  # 'sample'
+                prev_obs = outputs_sampled    # pass one stochastic draw
+                prev_obs_var = None           # unused in sample mode
 
             if ProcessChain.debug:
                 print(f"\n[8] STORED FOR NEXT ITERATION:")

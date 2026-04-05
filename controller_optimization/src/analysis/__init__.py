@@ -1,6 +1,10 @@
-"""Analysis module for controller optimization."""
+"""Analysis module for controller optimization.
 
-from .theoretical_loss_analysis import (
+All analysis functionality is provided by the controller package.
+This module re-exports for backward compatibility.
+"""
+
+from controller.src.evaluation.analysis.theoretical_loss_analysis import (
     TheoreticalLossComponents,
     TheoreticalLossTracker,
     compute_loss_decomposition,
@@ -9,7 +13,7 @@ from .theoretical_loss_analysis import (
     format_status
 )
 
-from .theoretical_visualization import (
+from controller.src.evaluation.analysis.theoretical_visualization import (
     plot_loss_vs_L_min,
     plot_efficiency_over_time,
     plot_loss_decomposition,
@@ -19,7 +23,7 @@ from .theoretical_visualization import (
     generate_all_theoretical_plots
 )
 
-from .theoretical_tables import (
+from controller.src.evaluation.analysis.theoretical_tables import (
     generate_main_results_table,
     generate_process_params_table,
     generate_decomposition_table,
@@ -31,7 +35,7 @@ from .theoretical_tables import (
     save_report_json
 )
 
-from .bellman_lmin import (
+from controller.src.evaluation.analysis.bellman_lmin import (
     BellmanConfig,
     BellmanLminResult,
     compute_bellman_lmin,
@@ -41,11 +45,15 @@ from .bellman_lmin import (
     forward_simulation,
 )
 
-from .lambda_grad import (
+from controller.src.evaluation.analysis.lambda_grad import (
     LambdaGradResult,
     compute_lambda_grad,
     compute_lambda_grad_batched,
-    run_lambda_grad_diagnostics,
+)
+
+from controller.src.evaluation.analysis.lambda_mc import (
+    LambdaMCResult,
+    compute_lambda_mc,
 )
 
 __all__ = [
@@ -86,5 +94,7 @@ __all__ = [
     'LambdaGradResult',
     'compute_lambda_grad',
     'compute_lambda_grad_batched',
-    'run_lambda_grad_diagnostics',
+    # Lambda_MC
+    'LambdaMCResult',
+    'compute_lambda_mc',
 ]

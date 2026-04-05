@@ -408,7 +408,7 @@ class ControllerTrainer:
         fixed_seed = 42  # Single fixed seed for reproducibility across epochs
 
         with torch.no_grad():
-            from controller_optimization.src.utils.metrics import convert_trajectory_to_numpy
+            from controller.src.evaluation.metrics import convert_trajectory_to_numpy
 
             rng_state = torch.get_rng_state()
 
