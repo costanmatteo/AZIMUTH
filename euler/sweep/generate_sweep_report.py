@@ -17,6 +17,7 @@ import argparse
 import base64
 import io
 import json
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -26,6 +27,11 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
+
+try:
+    from euler.sweep.plot_improvement_vs_lambda_mc import plot_improvement_vs_lambda_mc
+except ImportError:
+    from plot_improvement_vs_lambda_mc import plot_improvement_vs_lambda_mc
 
 matplotlib.rcParams['font.family'] = 'sans-serif'
 matplotlib.rcParams['font.sans-serif'] = ['Arial', 'DejaVu Sans']
@@ -717,6 +723,22 @@ def build_page1_html(s: dict, now: datetime,
 """
 
 
+def build_lambda_section_html(b64_lambda: str) -> str:
+    """Build HTML section for the Improvement vs Λ_MC scatter plot."""
+    return f"""
+  <div class="sec-head" style="margin-top:10px">03 &#8212; improvement vs &#923;<sub>MC</sub></div>
+  <hr class="rule-thin">
+  <div style="text-align:center">
+    <img src="data:image/png;base64,{b64_lambda}" style="width:80%;max-width:700px;height:auto">
+    <div class="plot-cap" style="margin-top:3px">
+      Improvement vs baseline (%) as a function of &#923;<sub>MC</sub> &#8212;
+      color = seed_target, marker shape = seed_baseline,
+      dashed black = no improvement, dashed grey = linear trend
+    </div>
+  </div>
+"""
+
+
 def build_page2_html(df: pd.DataFrame, now: datetime, sweep_dir: str) -> str:
     df = df.sort_values('gap_ctrl_train', ascending=True).reset_index(drop=True)
 
@@ -751,7 +773,7 @@ def build_page2_html(df: pd.DataFrame, now: datetime, sweep_dir: str) -> str:
   <hr class="rule-heavy">
 
   <div class="sec-head">
-    03 &#8212; all runs
+    04 &#8212; all runs
     <span style="font-size:7px;font-weight:400;text-transform:none;letter-spacing:0">
       sorted by gap ctrl train &middot; ascending &nbsp;&#183;&nbsp;
       &#916; = F&#8722;F' &nbsp;&#183;&nbsp; positive = ctrl better
@@ -831,6 +853,22 @@ def generate_sweep_report(sweep_dir: Path, output_path: Path | None = None):
     b64_box     = plot_boxplot(df)
     b64_imp     = plot_improvement(df)
     b64_heat    = plot_heatmap(df)
+
+    # ── improvement vs Λ_MC scatter ─────────────────────────────────────────
+    b64_lambda = None
+    with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+        tmp_path = tmp.name
+    result = plot_improvement_vs_lambda_mc(
+        sweep_dir=sweep_dir, save_path=tmp_path, figsize=(7.0, 4.5),
+        show_trend=True,
+    )
+    if result is not None:
+        with open(tmp_path, 'rb') as f:
+            b64_lambda = base64.b64encode(f.read()).decode()
+        Path(tmp_path).unlink(missing_ok=True)
+    else:
+        Path(tmp_path).unlink(missing_ok=True)
+
     print("  Done.")
 
     # ── configuration ────────────────────────────────────────────────────────
@@ -841,9 +879,12 @@ def generate_sweep_report(sweep_dir: Path, output_path: Path | None = None):
     now = datetime.now()
     sd  = str(sweep_dir)
 
+    lambda_html = build_lambda_section_html(b64_lambda) if b64_lambda else ''
+
     html_body = (
         build_page1_html(s, now, b64_scatter, b64_box, b64_imp, b64_heat, sd,
                          config_html=config_html)
+        + lambda_html
         + build_page2_html(df, now, sd)
     )
 
