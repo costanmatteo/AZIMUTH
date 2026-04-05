@@ -1662,6 +1662,22 @@ def main(config=None):
                           f"{[f'{s:.4f}' for s in bellman_result.Sigma.diagonal().tolist()]}")
                     print(f"  Manifold sizes: {bellman_result.n_manifold_points}")
                     print(f"  Computation time: {_elapsed:.1f}s")
+
+                    # ── Multi-level results (if parallel_levels was enabled) ──
+                    if bellman_result.level_results is not None:
+                        print(f"\n  {'─'*60}")
+                        print(f"  BELLMAN MULTI-LEVEL COMPARISON")
+                        print(f"  {'─'*60}")
+                        print(f"  {'Level':<8} {'Description':<22} {'Forward L_min':>14} {'± SE':>12}")
+                        print(f"  {'─'*60}")
+                        _lvl_desc = {1: 'fixed σ², Σ=I', 2: 'free σ², Σ=I', 3: 'free σ², full Σ'}
+                        for _lvl in sorted(bellman_result.level_results.keys()):
+                            _lr = bellman_result.level_results[_lvl]
+                            _marker = " ← primary" if _lvl == bellman_result.level else ""
+                            print(f"  {_lvl:<8} {_lvl_desc.get(_lvl, '?'):<22} "
+                                  f"{_lr['L_min_forward']:>14.8f} {_lr['L_min_forward_se']:>12.8f}{_marker}")
+                        print(f"  {'─'*60}")
+
                     print(f"  Saved: {checkpoint_dir / 'bellman_lmin_result.json'}")
                     print(f"  ✓ Bellman L_min completed — results will appear in plots\n")
 

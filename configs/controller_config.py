@@ -243,6 +243,7 @@ CONTROLLER_CONFIG = {
         'level': 3,              # 1 = fixed variance + independent noise
                                  # 2 = action-dependent variance + independent noise
                                  # 3 = action-dependent variance + correlated noise (full)
+        'parallel_levels': True, # Compute all 3 levels in parallel (minimal extra cost)
     },
 
     # Lambda_MC (Monte Carlo complexity metric, Method 2)
