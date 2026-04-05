@@ -614,8 +614,22 @@ def _page1(d, total_pages):
     F += section_header("01 \u2014 configuration & training parameters")
 
     n_scenarios = d.get('n_scenarios', tr_cfg.get('n_scenarios', '\u2014'))
-    seeds_t = cfg.get('seeds_target',   cfg.get('misc', {}).get('seeds_target',   '\u2014'))
-    seeds_b = cfg.get('seeds_baseline', cfg.get('misc', {}).get('seeds_baseline', '\u2014'))
+    scen_cfg = cfg.get('scenarios', {})
+    n_train    = scen_cfg.get('n_train', '\u2014')
+    seeds_t    = scen_cfg.get('seed_target',
+                    cfg.get('seeds_target',
+                        cfg.get('misc', {}).get('seeds_target', '\u2014')))
+    seeds_b    = scen_cfg.get('seed_baseline',
+                    cfg.get('seeds_baseline',
+                        cfg.get('misc', {}).get('seeds_baseline', '\u2014')))
+    obs_mode   = pg_cfg.get('observation_mode', '\u2014')
+    bellman_cfg = cfg.get('bellman', {})
+    bellman_lvl = bellman_cfg.get('level', '\u2014')
+    _lvl_desc  = {1: 'fixed var, indep.',
+                  2: 'action-dep var, indep.',
+                  3: 'action-dep var, correlated'}
+    lvl_str    = (f"{bellman_lvl} ({_lvl_desc[bellman_lvl]})"
+                  if bellman_lvl in _lvl_desc else str(bellman_lvl))
     lam_bc  = tr_cfg.get('lambda_bc',   tr_cfg.get('lam_bc', '\u2014'))
     chk     = short_dir(tr_cfg.get('checkpoint_dir', ''))
 
@@ -624,7 +638,10 @@ def _page1(d, total_pages):
                             str(pg_cfg.get('hidden_sizes', ''))),
         ("Activation",      str(pg_cfg.get('activation',   'N/A'))),
         ("Dropout rate",    str(pg_cfg.get('dropout_rate', 'N/A'))),
+        ("Obs. mode",       str(obs_mode)),
+        ("Bellman level",   lvl_str),
         ("Processes",       ', '.join(cfg.get('process_names') or ['all'])),
+        ("n_train",         str(n_train)),
         ("Train scenarios", str(n_scenarios)),
         ("Seeds (T / B)",   f"{seeds_t} / {seeds_b}"),
     ]
