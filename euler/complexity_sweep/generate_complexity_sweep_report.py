@@ -30,6 +30,10 @@ matplotlib.rcParams['font.family'] = 'sans-serif'
 matplotlib.rcParams['font.sans-serif'] = ['Arial', 'DejaVu Sans']
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 
+import sys as _sys
+_sys.path.insert(0, str(Path(__file__).resolve().parent))
+from plot_win_rate_vs_lambda_mc import plot_win_rate_vs_lambda_mc
+
 # ── WeasyPrint for HTML → PDF ────────────────────────────────────────────────
 try:
     from weasyprint import HTML as WPHtml, CSS
@@ -458,6 +462,20 @@ def plot_winrate_distribution(win_df: pd.DataFrame) -> str:
 
     fig.tight_layout(pad=0.6)
     return _b64(fig)
+
+
+def plot_lambda_mc_b64(sweep_dir: Path) -> str | None:
+    """Generate Λ_MC vs wins scatter and return base64 PNG (or None if no data)."""
+    try:
+        fig = plot_win_rate_vs_lambda_mc(
+            sweep_dir, save_path=None, figsize=(9, 4.5),
+            show_std=True, show_trend=True,
+        )
+        b64 = _b64(fig)
+        return b64
+    except Exception as e:
+        print(f"  Warning: Λ_MC plot failed: {e}")
+        return None
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -938,9 +956,35 @@ def build_page1_html(s: dict, now: datetime,
 def build_page2_html(s: dict, now: datetime,
                      b64_hn_rho: str, b64_hn_m: str,
                      b64_hm_rho: str, b64_3d: str,
-                     sweep_dir: str) -> str:
+                     sweep_dir: str,
+                     b64_lambda_mc: str | None = None) -> str:
     ts = now.strftime('%Y-%m-%d &nbsp;%H:%M:%S')
     n  = s['n_runs']
+
+    # ── Optional section 05: Λ_MC vs wins ──
+    if b64_lambda_mc:
+        lambda_mc_section = f"""
+  <div class="sec-head" style="margin-top:6px;">05 &#8212; win count vs &#923;_MC &nbsp;&#183;&nbsp; colour = win rate &nbsp;&#183;&nbsp; error bars = &#963; over seeds</div>
+  <hr class="rule-thin">
+
+  <div class="plot-grid" style="flex: 1.2;">
+    <div class="plot-cell" style="flex: 2;">
+      <img class="plot-img" src="data:image/png;base64,{b64_lambda_mc}">
+      <div class="plot-cap">Number of wins vs baseline against mean &#923;_MC per configuration &nbsp;&#8212;&nbsp; each point is one (n, m, &#961;, n_proc) config</div>
+    </div>
+    <div class="plot-cell" style="flex: 1; padding-top: 6px;">
+      <div class="blk-title">&#923;_MC reading guide</div>
+      <div class="row"><span class="rk">&#923;_MC</span><span class="rv">Monte Carlo complexity metric &#8212; variance of f_&#920; under noise perturbations</span></div>
+      <div class="row"><span class="rk">X axis</span><span class="rv">mean &#923;_MC across seeds for each config</span></div>
+      <div class="row"><span class="rk">Y axis</span><span class="rv"># runs where F_actual &gt; F_baseline (train)</span></div>
+      <div class="row"><span class="rk">Error bars</span><span class="rv">&#177;&#963; of &#923;_MC over seeds</span></div>
+      <div class="row"><span class="rk">Trend</span><span class="rv">dashed linear fit (if &#8805; 3 configs)</span></div>
+    </div>
+  </div>"""
+        section_note = " &nbsp;&#183;&nbsp; &#923;_MC plot included"
+    else:
+        lambda_mc_section = ""
+        section_note = ""
 
     return f"""
 <div class="page">
@@ -986,8 +1030,10 @@ def build_page2_html(s: dict, now: datetime,
     </div>
   </div>
 
+  {lambda_mc_section}
+
   <div class="footer">
-    <span>auto-generated &nbsp;&#183;&nbsp; {sweep_dir} &nbsp;&#183;&nbsp; complexity_sweep_report.pdf &nbsp;&#183;&nbsp; configurations table on next page</span>
+    <span>auto-generated &nbsp;&#183;&nbsp; {sweep_dir} &nbsp;&#183;&nbsp; complexity_sweep_report.pdf{section_note} &nbsp;&#183;&nbsp; configurations table on next page</span>
     <span>AZIMUTH &middot; generate_complexity_sweep_report.py</span>
   </div>
 </div>
@@ -1209,6 +1255,7 @@ def generate_complexity_sweep_report(sweep_dir: Path,
     b64_hn_m      = plot_heatmap_n_m(win_df)
     b64_hm_rho    = plot_heatmap_m_rho(win_df)
     b64_3d        = plot_3d_scatter(win_df)
+    b64_lambda_mc = plot_lambda_mc_b64(sweep_dir)
     print("  Done.")
 
     # ── HTML assembly ──────────────────────────────────────────────────────
@@ -1217,7 +1264,8 @@ def generate_complexity_sweep_report(sweep_dir: Path,
 
     html_body = (
         build_page1_html(s, now, b64_marginals, b64_wr_dist, sd, config_html)
-        + build_page2_html(s, now, b64_hn_rho, b64_hn_m, b64_hm_rho, b64_3d, sd)
+        + build_page2_html(s, now, b64_hn_rho, b64_hn_m, b64_hm_rho, b64_3d, sd,
+                           b64_lambda_mc=b64_lambda_mc)
         + build_page3_html(win_df, now, sd, df_raw=df_raw)
     )
 
