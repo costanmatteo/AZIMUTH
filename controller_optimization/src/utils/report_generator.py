@@ -730,6 +730,7 @@ def _page1(d, total_pages):
     lmin_fwd  = bellman.get('L_min_forward')  # forward MC (primary)
     lmin_fse  = bellman.get('L_min_forward_se')
     viol_bel  = bellman.get('n_violations', viol)
+    level_res = bellman.get('level_results')  # multi-level results (parallel_levels)
     # Lambda_grad (Delta Method approximation of L_min)
     lg_data   = theo.get('lambda_grad', {})
     lg_val    = lg_data.get('lambda_grad')  # scalar Λ_grad(D)
@@ -814,6 +815,20 @@ def _page1(d, total_pages):
             (f"Violations (loss&lt;L_min)", f"{viol_bel} / {total_ep}",
              ST_VAL_G if viol_bel == 0 else ST_VAL_R),
         ]
+        # Multi-level comparison rows (when parallel_levels was enabled)
+        if level_res is not None:
+            _lvl_names = {1: 'L1 (fixed σ², Σ=I)',
+                          2: 'L2 (free σ², Σ=I)',
+                          3: 'L3 (free σ², full Σ)'}
+            lmin_rows.append(("", ""))  # spacer
+            for _lvl in sorted(level_res.keys(), key=lambda x: int(x)):
+                _lr = level_res[_lvl]
+                _lf = _lr.get('L_min_forward')
+                _lfe = _lr.get('L_min_forward_se')
+                if _lf is not None:
+                    _val = (f"{float(_lf):.6f} ± {float(_lfe):.6f}"
+                            if _lfe is not None else _tv(_lf))
+                    lmin_rows.append((_lvl_names.get(int(_lvl), f'Level {_lvl}'), _val))
     else:
         lmin_rows = [
             ("Var[F]",                   _tv(lmin_emp)),
