@@ -48,7 +48,7 @@ ST_DATASET_CONFIG = {
     'n_samples': 2000,
 
     # Coefficiente adattivo inter-processo per il surrogate.
-    # τ_i = base_target + adaptive_coeff × (Y_{i-1} - τ_{i-1})  per i > 1
+    # τ_i = base_target + (adaptive_coeff / (i-1)) × Σ_{j<i} (Y_j - base_target)  per i > 1
     # Se 0.0, tutti i processi usano un target fisso (base_target).
     'adaptive_coeff': 0.3,
 
@@ -224,12 +224,17 @@ def _build_st_processes(st_dataset_config):
             '_scm_instance': ref_scm,
         }
 
-        # Target adattivo inter-processo:
-        # τ_i = base_target + coeff × (Y_{i-1} - τ_{i-1})
+        # Target adattivo inter-processo (tutti i precedenti, peso normalizzato):
+        # τ_i = base_target + (coeff / (i-1)) × Σ_{j<i} (Y_j - base_target)
         if i > 1 and adaptive_coeff != 0.0:
-            prev_name = f'st_{i - 1}'
-            process['surrogate_adaptive_coefficients'] = {prev_name: adaptive_coeff}
-            process['surrogate_adaptive_baselines'] = {prev_name: calibrated_target}
+            n_prev = i - 1
+            coeff_per_proc = adaptive_coeff / n_prev
+            process['surrogate_adaptive_coefficients'] = {
+                f'st_{j}': coeff_per_proc for j in range(1, i)
+            }
+            process['surrogate_adaptive_baselines'] = {
+                f'st_{j}': calibrated_target for j in range(1, i)
+            }
 
         processes.append(process)
 
