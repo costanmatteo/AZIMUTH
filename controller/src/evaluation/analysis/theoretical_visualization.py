@@ -62,6 +62,8 @@ def plot_loss_vs_L_min(
     bellman_lmin: Optional[Dict[str, Any]] = None,
     lambda_grad: Optional[Dict[str, Any]] = None,
     lambda_mc: Optional[Dict[str, Any]] = None,
+    lambda_grad_formula: Optional[Dict[str, Any]] = None,
+    lambda_mc_formula: Optional[Dict[str, Any]] = None,
 ) -> plt.Figure:
     """
     Plot observed loss and theoretical L_min over epochs.
@@ -125,6 +127,20 @@ def plot_loss_vs_L_min(
             ax.axhline(y=lmc_val, color='darkgreen', linestyle=':',
                        label=f'Λ_MC (Monte Carlo) = {lmc_val:.6f}')
 
+    # Plot Lambda_grad (formula) line if available
+    if lambda_grad_formula is not None:
+        lg_form_val = lambda_grad_formula.get('lambda_grad')
+        if lg_form_val is not None:
+            ax.axhline(y=lg_form_val, color='orange', linestyle='--',
+                       label=f'Λ_grad (formula) = {lg_form_val:.6f}')
+
+    # Plot Lambda_MC (formula) line if available
+    if lambda_mc_formula is not None:
+        lmc_form_val = lambda_mc_formula.get('lambda_mc')
+        if lmc_form_val is not None:
+            ax.axhline(y=lmc_form_val, color='orange', linestyle=':',
+                       label=f'Λ_MC (formula) = {lmc_form_val:.6f}')
+
     # Fill area between L_min and observed (reducible gap)
     ax.fill_between(
         epochs,
@@ -144,6 +160,10 @@ def plot_loss_vs_L_min(
         all_vals = np.concatenate([all_vals, [lambda_grad['lambda_grad']]])
     if lambda_mc is not None and lambda_mc.get('lambda_mc') is not None:
         all_vals = np.concatenate([all_vals, [lambda_mc['lambda_mc']]])
+    if lambda_grad_formula is not None and lambda_grad_formula.get('lambda_grad') is not None:
+        all_vals = np.concatenate([all_vals, [lambda_grad_formula['lambda_grad']]])
+    if lambda_mc_formula is not None and lambda_mc_formula.get('lambda_mc') is not None:
+        all_vals = np.concatenate([all_vals, [lambda_mc_formula['lambda_mc']]])
 
     # Labels and legend
     ax.set_xlabel('Epoch')
@@ -324,6 +344,8 @@ def plot_loss_decomposition(
     bellman_lmin: Optional[Dict[str, Any]] = None,
     lambda_grad: Optional[Dict[str, Any]] = None,
     lambda_mc: Optional[Dict[str, Any]] = None,
+    lambda_grad_formula: Optional[Dict[str, Any]] = None,
+    lambda_mc_formula: Optional[Dict[str, Any]] = None,
 ) -> plt.Figure:
     """
     Bar chart showing decomposition of loss into components.
@@ -403,6 +425,20 @@ def plot_loss_decomposition(
         if lmc_val is not None:
             ax.axhline(y=lmc_val, color='darkgreen', linestyle=':',
                        label=f'Λ_MC (Monte Carlo) = {lmc_val:.4f}')
+
+    # Add Lambda_grad (formula) line if available
+    if lambda_grad_formula is not None:
+        lg_form_val = lambda_grad_formula.get('lambda_grad')
+        if lg_form_val is not None:
+            ax.axhline(y=lg_form_val, color='orange', linestyle='--',
+                       label=f'Λ_grad (formula) = {lg_form_val:.4f}')
+
+    # Add Lambda_MC (formula) line if available
+    if lambda_mc_formula is not None:
+        lmc_form_val = lambda_mc_formula.get('lambda_mc')
+        if lmc_form_val is not None:
+            ax.axhline(y=lmc_form_val, color='orange', linestyle=':',
+                       label=f'Λ_MC (formula) = {lmc_form_val:.4f}')
 
     # Labels
     ax.set_ylabel('Loss Value')
@@ -774,6 +810,8 @@ def generate_all_theoretical_plots(
     bellman_data = tracker_data.get('bellman_lmin', None)
     lambda_grad_data = tracker_data.get('lambda_grad', None)
     lambda_mc_data = tracker_data.get('lambda_mc', None)
+    lambda_grad_formula_data = tracker_data.get('lambda_grad_formula', None)
+    lambda_mc_formula_data = tracker_data.get('lambda_mc_formula', None)
 
     # 1. Loss vs L_min
     path = checkpoint_dir / 'loss_vs_L_min.png'
@@ -785,6 +823,8 @@ def generate_all_theoretical_plots(
         bellman_lmin=bellman_data,
         lambda_grad=lambda_grad_data,
         lambda_mc=lambda_mc_data,
+        lambda_grad_formula=lambda_grad_formula_data,
+        lambda_mc_formula=lambda_mc_formula_data,
     )
     plots['loss_vs_L_min'] = path
     plt.close()
@@ -813,6 +853,8 @@ def generate_all_theoretical_plots(
         bellman_lmin=bellman_data,
         lambda_grad=lambda_grad_data,
         lambda_mc=lambda_mc_data,
+        lambda_grad_formula=lambda_grad_formula_data,
+        lambda_mc_formula=lambda_mc_formula_data,
     )
     plots['loss_decomposition'] = path
     plt.close()

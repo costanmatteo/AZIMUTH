@@ -1867,6 +1867,71 @@ def main(config=None):
                     import traceback
                     traceback.print_exc()
 
+                # ── Λ with formula surrogate (only when surrogate is CasualiT) ──
+                lambda_grad_formula_result = None
+                lambda_mc_formula_result = None
+
+                if formula_surrogate is not None:
+                    try:
+                        print(f"\n  ── Λ_grad (Delta Method, formula surrogate) ──")
+                        lambda_grad_formula_result = compute_lambda_grad(
+                            trajectories=lg_trajectories,
+                            surrogate=formula_surrogate,
+                            predictors=predictors,
+                            process_chain=process_chain,
+                            device=device,
+                            verbose=True,
+                        )
+
+                        print(f"\n  ── Λ_MC (Monte Carlo, formula surrogate) ──")
+                        lambda_mc_formula_result = compute_lambda_mc(
+                            trajectories=lg_trajectories,
+                            surrogate=formula_surrogate,
+                            device=device,
+                            n_samples=n_samples_mc,
+                            verbose=True,
+                        )
+
+                        # Store in theoretical_data
+                        theoretical_data['lambda_grad_formula'] = lambda_grad_formula_result.to_dict()
+                        theoretical_data['lambda_mc_formula'] = lambda_mc_formula_result.to_dict()
+
+                        # Apply loss_scale
+                        if loss_scale != 1.0:
+                            theoretical_data['lambda_grad_formula']['lambda_grad'] *= loss_scale
+                            for name in lambda_grad_formula_result.process_names:
+                                theoretical_data['lambda_grad_formula']['per_stage'][name] *= loss_scale
+                            theoretical_data['lambda_mc_formula']['lambda_mc'] *= loss_scale
+                            for name in lambda_mc_formula_result.process_names:
+                                theoretical_data['lambda_mc_formula']['per_stage'][name] *= loss_scale
+
+                        # Print comparison
+                        if 'lambda_grad' in theoretical_data:
+                            print(f"\n  ── Confronto Λ: CasualiT vs Formula ──")
+                            lg_cas = theoretical_data['lambda_grad']['lambda_grad']
+                            lg_form = theoretical_data['lambda_grad_formula']['lambda_grad']
+                            print(f"  Λ_grad  CasualiT: {lg_cas:.6f}")
+                            print(f"  Λ_grad  Formula:  {lg_form:.6f}")
+                            ratio_grad = lg_cas / max(lg_form, 1e-10)
+                            print(f"  Ratio (CasualiT/Formula): {ratio_grad:.3f}  "
+                                  f"({'surrogate inflates Λ' if ratio_grad > 1.2 else 'surrogate deflates Λ' if ratio_grad < 0.8 else 'consistent'})")
+
+                        if 'lambda_mc' in theoretical_data:
+                            lmc_cas = theoretical_data['lambda_mc']['lambda_mc']
+                            lmc_form = theoretical_data['lambda_mc_formula']['lambda_mc']
+                            print(f"  Λ_MC    CasualiT: {lmc_cas:.6f}")
+                            print(f"  Λ_MC    Formula:  {lmc_form:.6f}")
+                            ratio_mc = lmc_cas / max(lmc_form, 1e-10)
+                            print(f"  Ratio (CasualiT/Formula): {ratio_mc:.3f}  "
+                                  f"({'surrogate inflates Λ' if ratio_mc > 1.2 else 'surrogate deflates Λ' if ratio_mc < 0.8 else 'consistent'})")
+
+                        print(f"  ✓ Formula surrogate Λ completed\n")
+
+                    except Exception as e:
+                        print(f"\n  ✗ Formula surrogate Λ computation FAILED: {e}")
+                        import traceback
+                        traceback.print_exc()
+
                 # ── Generate plots and reports (after Bellman, so plots include Bellman lines) ──
                 print("  Generating theoretical analysis plots...")
                 theoretical_plots = generate_all_theoretical_plots(
