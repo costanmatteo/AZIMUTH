@@ -72,6 +72,22 @@ ST_DATASET_CONFIG = {
         'cal_width_factor': 1.0,
     },
 
+    # ── Modalità adattiva non-lineare ──────────────────────────────────────────
+    # Tipo di funzione usata per calcolare l'aggiustamento del target adattivo.
+    # Opzioni: 'linear' (default), 'polynomial', 'power', 'softplus', 'deadband', 'tanh'
+    # Se omesso o 'linear', il comportamento è identico a prima.
+    'adaptive_mode': 'linear',
+
+    # Parametri aggiuntivi per i mode non-lineari (ignorati se mode='linear').
+    # Ogni dict mappa nome_processo_upstream → valore del parametro.
+    # I nomi upstream vengono generati automaticamente (st_1, st_2, ...).
+    #
+    # 'adaptive_coefficients2': {},   # polynomial: coeff2 per upstream
+    # 'adaptive_power': {},           # power: alpha per upstream (default 0.5)
+    # 'adaptive_sharpness': {},       # softplus: k per upstream (default 2.0)
+    # 'adaptive_band': {},            # deadband: band width per upstream
+    # 'adaptive_max_shift': {},       # tanh: saturazione massima per upstream
+
     # Configurazione uncertainty predictor: importata da uncertainty_config.py
     'uncertainty_predictor': DEFAULT_ST_UNCERTAINTY_PREDICTOR,
 }
