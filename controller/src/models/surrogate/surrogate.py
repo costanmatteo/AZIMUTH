@@ -58,6 +58,7 @@ class ProTSurrogate:
         # For ST mode: construct from process_configs (surrogate_target/scale/weight are lists).
         # For physical mode: _reliability_fn = None → fallback to hardcoded legacy path.
         self._reliability_fn = None
+        self._dynamic_configs = None
         if process_configs is not None:
             dynamic = {}
             order = []
@@ -76,6 +77,7 @@ class ProTSurrogate:
                         entry['adaptive_baselines'] = pc['surrogate_adaptive_baselines']
                     dynamic[name] = entry
             if dynamic:
+                self._dynamic_configs = dynamic
                 self._reliability_fn = ReliabilityFunction(
                     process_configs=dynamic,
                     process_order=order,
