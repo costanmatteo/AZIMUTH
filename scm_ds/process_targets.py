@@ -23,6 +23,11 @@ PROCESS_CONFIGS = {
         'adaptive_baselines': {
             'laser': 0.8,
         },
+        # Demo: non-linear adaptive mode (tanh saturates the shift at ±0.5)
+        'adaptive_mode': 'tanh',
+        'adaptive_max_shift': {
+            'laser': 0.5,
+        },
     },
     'galvanic': {
         'base_target': 10.0,     # Thickness target (μm)

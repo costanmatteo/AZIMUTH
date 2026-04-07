@@ -243,6 +243,18 @@ def _build_st_processes(st_dataset_config):
                 f'st_{j}': calibrated_target_mean for j in range(1, i)
             }
 
+            # Propagate non-linear adaptive mode params if configured
+            for src_key, dst_key in [
+                ('adaptive_mode',           'surrogate_adaptive_mode'),
+                ('adaptive_coefficients2',  'surrogate_adaptive_coefficients2'),
+                ('adaptive_power',          'surrogate_adaptive_power'),
+                ('adaptive_band',           'surrogate_adaptive_band'),
+                ('adaptive_sharpness',      'surrogate_adaptive_sharpness'),
+                ('adaptive_max_shift',      'surrogate_adaptive_max_shift'),
+            ]:
+                if src_key in st_dataset_config:
+                    process[dst_key] = st_dataset_config[src_key]
+
         processes.append(process)
 
     return processes
