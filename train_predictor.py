@@ -358,7 +358,8 @@ def main():
                 if k not in ('uncertainty_predictor', 'checkpoint_dir')
             }
             with open(checkpoint_dir / 'process_config.json', 'w') as f:
-                json.dump(_cfg_snapshot, f, indent=2)
+                json.dump(_cfg_snapshot, f, indent=2,
+                          default=lambda o: str(type(o).__name__))
 
             print(f"\n  Training completed for '{process_name}'")
 
