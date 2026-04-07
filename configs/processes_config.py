@@ -176,13 +176,16 @@ def _build_st_processes(st_dataset_config):
     input_dim = len(base_input_labels)
     output_dim = len(base_output_labels)
 
-    # Estrai target e scale calibrati dal nodo output dell'SCM.
-    # Per p=1, il nodo output è "Y"; per p>1 sarebbe "Y_1", "Y_2", ecc.
-    output_node = base_output_labels[0]  # es. "Y"
-    scm_proc_cfg = ref_scm.process_configs.get(output_node, {})
-    calibrated_target = scm_proc_cfg.get('base_target', 0.0)
-    calibrated_scale = scm_proc_cfg.get('scale', 1.0)
-    calibrated_weight = scm_proc_cfg.get('weight', 1.0)
+    # Estrai target e scale calibrati da ciascun nodo output dell'SCM.
+    # Per p=1, il nodo output è "Y"; per p>1 sono "Y_1", "Y_2", ecc.
+    calibrated_targets = []
+    calibrated_scales  = []
+    calibrated_weights = []
+    for out_node in base_output_labels:
+        cfg_node = ref_scm.process_configs.get(out_node, {})
+        calibrated_targets.append(cfg_node.get('base_target', 0.0))
+        calibrated_scales.append(cfg_node.get('scale', 1.0))
+        calibrated_weights.append(cfg_node.get('weight', 1.0))
 
     processes = []
     for i in range(1, n_procs + 1):
@@ -212,9 +215,10 @@ def _build_st_processes(st_dataset_config):
             '_st_base_structural_vars': base_structural,
 
             # Target e scale calibrati dall'SCM (usati da ProTSurrogate)
-            'surrogate_target': calibrated_target,
-            'surrogate_scale': calibrated_scale,
-            'surrogate_weight': calibrated_weight,
+            # Liste di lunghezza output_dim (p); per p=1 liste con 1 elemento.
+            'surrogate_target': calibrated_targets,
+            'surrogate_scale':  calibrated_scales,
+            'surrogate_weight': calibrated_weights,
 
             'uncertainty_predictor': copy.deepcopy(up_config),
 
@@ -226,14 +230,17 @@ def _build_st_processes(st_dataset_config):
 
         # Target adattivo inter-processo (tutti i precedenti, peso normalizzato):
         # τ_i = base_target + (coeff / (i-1)) × Σ_{j<i} (Y_j - base_target)
+        # Il baseline adattivo usa la media dei target calibrati (scalare)
+        # per coerenza con il calcolo scalare dell'adaptive target.
         if i > 1 and adaptive_coeff != 0.0:
             n_prev = i - 1
             coeff_per_proc = adaptive_coeff / n_prev
+            calibrated_target_mean = sum(calibrated_targets) / len(calibrated_targets)
             process['surrogate_adaptive_coefficients'] = {
                 f'st_{j}': coeff_per_proc for j in range(1, i)
             }
             process['surrogate_adaptive_baselines'] = {
-                f'st_{j}': calibrated_target for j in range(1, i)
+                f'st_{j}': calibrated_target_mean for j in range(1, i)
             }
 
         processes.append(process)
