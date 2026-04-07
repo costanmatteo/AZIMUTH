@@ -24,6 +24,8 @@ from typing import Dict, Optional, Union
 
 sys.path.insert(0, '/home/user/AZIMUTH')
 
+from scm_ds.compute_reliability import ReliabilityFunction
+
 
 class ProTSurrogate:
     """
@@ -32,31 +34,6 @@ class ProTSurrogate:
     Valuta reliability di una trajectory completa.
     F_star è un singolo scalare calcolato dalla target trajectory dello scenario 0.
     """
-
-    # Configuration for process-specific targets and quality scales
-    # These values are based on typical ranges from the SCM models
-    PROCESS_CONFIGS = {
-        'laser': {
-            'target': 0.8,      # ActualPower target
-            'scale': 0.1,       # Quality scale (smaller = more sensitive)
-            'weight': 1.0       # Relative importance
-        },
-        'plasma': {
-            'target': 3.0,      # RemovalRate target
-            'scale': 2.0,
-            'weight': 1.0
-        },
-        'galvanic': {
-            'target': 10.0,     # Thickness target (μm)
-            'scale': 4.0,
-            'weight': 1.5       # More important (final product quality)
-        },
-        'microetch': {
-            'target': 20.0,     # Depth target
-            'scale': 4.0,
-            'weight': 1.0
-        }
-    }
 
     def __init__(self, target_trajectory, device='cpu', use_deterministic_sampling=True,
                  process_configs=None, n_scenarios=None):
@@ -79,9 +56,10 @@ class ProTSurrogate:
         self.use_deterministic_sampling = use_deterministic_sampling
         self.n_scenarios = n_scenarios  # May be overridden below if None
 
-        # Se process_configs contiene target calibrati, costruisci i config per processo
-        self._dynamic_configs = None
-        self._process_order = None
+        # Build ReliabilityFunction — single source of truth for Q score computation.
+        # For ST mode: construct from process_configs (surrogate_target/scale/weight are lists).
+        # For physical mode: _reliability_fn = None → fallback to hardcoded legacy path.
+        self._reliability_fn = None
         if process_configs is not None:
             dynamic = {}
             order = []
@@ -90,9 +68,9 @@ class ProTSurrogate:
                     name = pc['name']
                     order.append(name)
                     entry = {
-                        'base_target': pc['surrogate_target'],
-                        'scale': pc['surrogate_scale'],
-                        'weight': pc.get('surrogate_weight', 1.0),
+                        'base_target': pc['surrogate_target'],   # list of length p
+                        'scale':       pc['surrogate_scale'],    # list of length p
+                        'weight':      pc.get('surrogate_weight', [1.0]),
                     }
                     # Target adattivi inter-processo
                     if 'surrogate_adaptive_coefficients' in pc:
@@ -100,8 +78,11 @@ class ProTSurrogate:
                         entry['adaptive_baselines'] = pc['surrogate_adaptive_baselines']
                     dynamic[name] = entry
             if dynamic:
-                self._dynamic_configs = dynamic
-                self._process_order = order
+                self._reliability_fn = ReliabilityFunction(
+                    process_configs=dynamic,
+                    process_order=order,
+                    device=device,
+                )
 
         # Convert target trajectory to tensors (all scenarios)
         self.target_trajectory_tensors = {}
@@ -128,14 +109,13 @@ class ProTSurrogate:
 
         Args:
             trajectory (dict): {
-                'laser': {
+                'process_name': {
                     'inputs': tensor (batch, input_dim),
                     'outputs_mean': tensor (batch, output_dim),
                     'outputs_var': tensor (batch, output_dim),
                     'outputs_sampled': tensor (batch, output_dim)  # Optional
                 },
-                'plasma': {...},
-                'galvanic': {...}
+                ...
             }
             return_quality_scores (bool): If True, also return per-process quality scores.
                                           Default False for backward compatibility.
@@ -151,120 +131,96 @@ class ProTSurrogate:
         sampled_outputs = {}
 
         for process_name, data in trajectory.items():
-            # Check if outputs are already sampled
             if 'outputs_sampled' in data:
-                # Use pre-sampled outputs from ProcessChain
                 sample = data['outputs_sampled']
             else:
-                # Backward compatibility: sample here
                 mean = data['outputs_mean']
                 var = data['outputs_var']
 
                 if self.use_deterministic_sampling:
-                    # DETERMINISTIC: Use mean directly (no sampling)
                     sample = mean
                 else:
-                    # STOCHASTIC: Sample using reparameterization trick
                     std = torch.sqrt(var + 1e-8)
                     epsilon = torch.randn_like(mean)
                     sample = mean + epsilon * std
 
             sampled_outputs[process_name] = sample
 
-        # Extract available process outputs (assume 1 output per process)
+        if self._reliability_fn is not None:
+            # DELEGATE to ReliabilityFunction (single source of truth for Q scores).
+            # Build trajectory in the format ReliabilityFunction expects.
+            rf_trajectory = {
+                name: {'outputs_sampled': sample, 'outputs_mean': sample}
+                for name, sample in sampled_outputs.items()
+            }
+            return self._reliability_fn.compute_reliability(
+                rf_trajectory,
+                return_quality_scores=return_quality_scores,
+                use_sampled_outputs=True,
+            )
+
+        # LEGACY PATH: hardcoded logic for physical processes
+        # (laser/plasma/galvanic/microetch — kept as fallback when no dynamic configs)
         outputs = {}
         for process_name, sample in sampled_outputs.items():
             outputs[process_name] = sample.squeeze()
 
         quality_scores = {}
+        adaptive_targets = {}
 
-        if self._dynamic_configs is not None:
-            # GENERIC PATH: usa target/scale calibrati con target adattivi inter-processo.
-            # τ_i = base_target + Σ coeff_j × (Y_j - baseline_j)
-            process_names = self._process_order if self._process_order else list(outputs.keys())
+        if 'laser' in outputs:
+            laser_power = outputs['laser']
+            adaptive_targets['laser'] = 0.8
+            laser_quality = torch.exp(-((laser_power - adaptive_targets['laser']) ** 2) / 0.1)
+            quality_scores['laser'] = laser_quality
 
-            for process_name in process_names:
-                if process_name not in outputs:
-                    continue
-                output_val = outputs[process_name]
-                cfg = self._dynamic_configs.get(process_name, {})
-
-                # Calcola target adattivo
-                target = cfg.get('base_target', 0.0)
-                for upstream_name, coeff in cfg.get('adaptive_coefficients', {}).items():
-                    if upstream_name in outputs:
-                        baseline = cfg['adaptive_baselines'][upstream_name]
-                        target = target + coeff * (outputs[upstream_name] - baseline)
-
-                scale = cfg.get('scale', 1.0)
-                quality_scores[process_name] = torch.exp(
-                    -((output_val - target) ** 2) / max(scale, 1e-8)
-                )
-        else:
-            # LEGACY PATH: logica hardcoded per processi fisici
-            adaptive_targets = {}
-
-            # LASER: First process, fixed target
+        if 'plasma' in outputs:
+            plasma_rate = outputs['plasma']
+            plasma_target = 3.0
             if 'laser' in outputs:
-                laser_power = outputs['laser']
-                adaptive_targets['laser'] = 0.8
+                plasma_target = plasma_target + 0.2 * (outputs['laser'] - 0.8)
+            adaptive_targets['plasma'] = plasma_target
+            plasma_quality = torch.exp(-((plasma_rate - plasma_target) ** 2) / 2.0)
+            quality_scores['plasma'] = plasma_quality
 
-                laser_quality = torch.exp(-((laser_power - adaptive_targets['laser']) ** 2) / 0.1)
-                quality_scores['laser'] = laser_quality
-
-            # PLASMA: Target depends on Laser
+        if 'galvanic' in outputs:
+            galvanic_thick = outputs['galvanic']
+            galvanic_target = 10.0
             if 'plasma' in outputs:
-                plasma_rate = outputs['plasma']
-                plasma_target = 3.0
-                if 'laser' in outputs:
-                    plasma_target = plasma_target + 0.2 * (outputs['laser'] - 0.8)
-                adaptive_targets['plasma'] = plasma_target
-                plasma_quality = torch.exp(-((plasma_rate - plasma_target) ** 2) / 2.0)
-                quality_scores['plasma'] = plasma_quality
+                galvanic_target = galvanic_target + 0.5 * (outputs['plasma'] - 5.0)
+            if 'laser' in outputs:
+                galvanic_target = galvanic_target + 0.4 * (outputs['laser'] - 0.5)
+            adaptive_targets['galvanic'] = galvanic_target
+            galvanic_quality = torch.exp(-((galvanic_thick - galvanic_target) ** 2) / 4.0)
+            quality_scores['galvanic'] = galvanic_quality
 
-            # GALVANIC: Target depends on Laser AND Plasma
+        if 'microetch' in outputs:
+            microetch_depth = outputs['microetch']
+            microetch_target = 20.0
+            if 'laser' in outputs:
+                microetch_target = microetch_target + 1.5 * (outputs['laser'] - 0.5)
+            if 'plasma' in outputs:
+                microetch_target = microetch_target + 0.3 * (outputs['plasma'] - 5.0)
             if 'galvanic' in outputs:
-                galvanic_thick = outputs['galvanic']
-                galvanic_target = 10.0
-                if 'plasma' in outputs:
-                    galvanic_target = galvanic_target + 0.5 * (outputs['plasma'] - 5.0)
-                if 'laser' in outputs:
-                    galvanic_target = galvanic_target + 0.4 * (outputs['laser'] - 0.5)
-                adaptive_targets['galvanic'] = galvanic_target
-                galvanic_quality = torch.exp(-((galvanic_thick - galvanic_target) ** 2) / 4.0)
-                quality_scores['galvanic'] = galvanic_quality
+                microetch_target = microetch_target - 0.15 * (outputs['galvanic'] - 10.0)
+            adaptive_targets['microetch'] = microetch_target
+            microetch_quality = torch.exp(-((microetch_depth - microetch_target) ** 2) / 4.0)
+            quality_scores['microetch'] = microetch_quality
 
-            # MICROETCH: Target depends on ALL previous processes
-            if 'microetch' in outputs:
-                microetch_depth = outputs['microetch']
-                microetch_target = 20.0
-                if 'laser' in outputs:
-                    microetch_target = microetch_target + 1.5 * (outputs['laser'] - 0.5)
-                if 'plasma' in outputs:
-                    microetch_target = microetch_target + 0.3 * (outputs['plasma'] - 5.0)
-                if 'galvanic' in outputs:
-                    microetch_target = microetch_target - 0.15 * (outputs['galvanic'] - 10.0)
-                adaptive_targets['microetch'] = microetch_target
-                microetch_quality = torch.exp(-((microetch_depth - microetch_target) ** 2) / 4.0)
-                quality_scores['microetch'] = microetch_quality
-
-        # COMBINE QUALITY SCORES WITH WEIGHTED AVERAGE
+        # Weighted average (legacy weights)
+        LEGACY_WEIGHTS = {
+            'laser': 1.0, 'plasma': 1.0, 'galvanic': 1.5, 'microetch': 1.0
+        }
         total_weighted_quality = 0.0
         total_weight = 0.0
-
         for process_name, quality in quality_scores.items():
-            if self._dynamic_configs is not None:
-                weight = self._dynamic_configs.get(process_name, {}).get('weight', 1.0)
-            else:
-                weight = self.PROCESS_CONFIGS.get(process_name, {}).get('weight', 1.0)
+            weight = LEGACY_WEIGHTS.get(process_name, 1.0)
             total_weighted_quality += quality * weight
             total_weight += weight
 
-        # Normalize by total weight
         if total_weight > 0:
             F = total_weighted_quality / total_weight
         else:
-            # Fallback (should never happen)
             F = torch.tensor(0.0, device=self.device)
 
         if return_quality_scores:
