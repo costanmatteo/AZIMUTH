@@ -226,11 +226,15 @@ def main():
             }
             _stale = False
             if config_path.exists():
-                with open(config_path, 'r') as f:
-                    _old = json.load(f)
-                if _old != _cfg_snapshot:
+                try:
+                    with open(config_path, 'r') as f:
+                        _old = json.load(f)
+                    if _old != _cfg_snapshot:
+                        _stale = True
+                        print(f"\n  Config changed for '{process_name}' — wiping stale checkpoint.")
+                except (json.JSONDecodeError, OSError):
                     _stale = True
-                    print(f"\n  Config changed for '{process_name}' — wiping stale checkpoint.")
+                    print(f"\n  Corrupted config.json for '{process_name}' — wiping stale checkpoint.")
             elif model_path.exists():
                 # Checkpoint exists but no config.json → unknown provenance
                 _stale = True
@@ -246,10 +250,15 @@ def main():
             print(f"\n  Checkpoint already exists for '{process_name}'. Skipping...")
 
             # Load existing metrics
+            _skip_ok = False
             info_path = checkpoint_dir / 'training_info.json'
             if info_path.exists():
-                with open(info_path, 'r') as f:
-                    info = json.load(f)
+                try:
+                    with open(info_path, 'r') as f:
+                        info = json.load(f)
+                except (json.JSONDecodeError, OSError):
+                    print(f"\n  Corrupted training_info.json for '{process_name}' — retraining.")
+                else:
                     metrics = info.get('metrics', {})
                     report_path = str(checkpoint_dir / 'training_report.pdf')
 
@@ -267,7 +276,11 @@ def main():
                         'Calibration_Ratio': metrics.get('Calibration_Ratio', metrics.get('calibration_ratio', 0)),
                         'report_path': report_path,
                     })
-            continue
+                    _skip_ok = True
+            else:
+                _skip_ok = True  # No info file but model exists — skip anyway
+            if _skip_ok:
+                continue
 
         # ST mode: se abbiamo già allenato il primo processo, copiamo i checkpoint
         if is_st_mode and st_reference_result is not None:
