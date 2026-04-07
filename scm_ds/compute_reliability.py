@@ -79,8 +79,10 @@ class ReliabilityFunction:
             if isinstance(output, np.ndarray):
                 output = torch.tensor(output, dtype=torch.float32, device=self.device)
 
-            # Squeeze to get scalar per sample
-            outputs[process_name] = output.squeeze(-1) if output.dim() > 1 else output
+            # Keep multi-dimensional output as-is; ensure at least 2D for uniform handling
+            if output.dim() == 1:
+                output = output.unsqueeze(-1)  # (batch,) → (batch, 1)
+            outputs[process_name] = output  # (batch, output_dim)
 
         # Compute adaptive targets and quality scores
         adaptive_targets = {}
@@ -93,17 +95,19 @@ class ReliabilityFunction:
             config = self.process_configs.get(process_name, {})
             output = outputs[process_name]
 
-            # Compute adaptive target
+            # Compute adaptive target (broadcastable to (batch, output_dim))
             target = self._compute_adaptive_target(process_name, outputs, config)
             adaptive_targets[process_name] = target
 
-            # Compute quality score: Q = exp(-(output - target)² / scale)
-            scale = config.get('scale', 1.0)
+            # Get per-dimension scale; wrap scalar in list for uniform handling
+            scales = config.get('scale', 1.0)
+            if not isinstance(scales, list):
+                scales = [scales]
+            scale_t = torch.tensor(scales, dtype=torch.float32, device=self.device)  # (output_dim,)
 
-            if isinstance(target, (int, float)):
-                quality = torch.exp(-((output - target) ** 2) / scale)
-            else:
-                quality = torch.exp(-((output - target) ** 2) / scale)
+            # Compute per-dimension quality and average across output dims
+            per_dim_q = torch.exp(-((output - target) ** 2) / scale_t)  # (batch, output_dim)
+            quality = per_dim_q.mean(dim=-1)  # (batch,)
 
             quality_scores[process_name] = quality
 
@@ -117,25 +121,47 @@ class ReliabilityFunction:
     def _compute_adaptive_target(self,
                                  process_name: str,
                                  outputs: Dict[str, torch.Tensor],
-                                 config: Dict) -> Union[float, torch.Tensor]:
+                                 config: Dict) -> Union[torch.Tensor, float]:
         """
         Compute adaptive target for a process based on upstream outputs.
+
+        Returns a value broadcastable to (batch, output_dim):
+        - No adaptive coefficients: tensor of shape (output_dim,) from base_target list
+        - With adaptive coefficients: scalar or (batch, 1) tensor that broadcasts
+          uniformly across all output dimensions.
         """
         base_target = config.get('base_target', 0.0)
+
+        # Normalize base_target to a tensor (output_dim,)
+        if isinstance(base_target, list):
+            base_target_t = torch.tensor(base_target, dtype=torch.float32, device=self.device)
+        else:
+            base_target_t = torch.tensor([base_target], dtype=torch.float32, device=self.device)
 
         adaptive_coeffs = config.get('adaptive_coefficients', {})
         adaptive_baselines = config.get('adaptive_baselines', {})
 
         if not adaptive_coeffs:
-            return base_target
+            return base_target_t  # (output_dim,) — broadcasts to (batch, output_dim)
 
-        target = base_target
+        # Adaptive case: compute a single scalar target for all output dimensions.
+        # Average base_target across output dims to get a scalar starting point.
+        target = base_target_t.mean()
 
         for upstream_name, coeff in adaptive_coeffs.items():
             if upstream_name in outputs:
+                upstream_out = outputs[upstream_name]
+                # Average across output dims if multi-dimensional → scalar per sample
+                if upstream_out.dim() > 1:
+                    upstream_out = upstream_out.mean(dim=-1)  # (batch,)
+
                 baseline = adaptive_baselines.get(upstream_name, 0.0)
-                adjustment = coeff * (outputs[upstream_name] - baseline)
-                target = target + adjustment
+                adjustment = coeff * (upstream_out - baseline)
+                target = target + adjustment  # scalar + (batch,) → (batch,)
+
+        # Ensure result broadcasts to (batch, output_dim): (batch,) → (batch, 1)
+        if isinstance(target, torch.Tensor) and target.dim() >= 1:
+            target = target.unsqueeze(-1)
 
         return target
 
@@ -148,6 +174,9 @@ class ReliabilityFunction:
 
         for process_name, quality in quality_scores.items():
             weight = self.process_configs.get(process_name, {}).get('weight', 1.0)
+            # Handle list weights (multi-output): average to get per-process scalar weight
+            if isinstance(weight, list):
+                weight = sum(weight) / len(weight)
             total_weighted_quality = total_weighted_quality + quality * weight
             total_weight += weight
 

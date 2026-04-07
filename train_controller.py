@@ -597,13 +597,27 @@ def main(config=None):
         theoretical_tracker = TheoreticalLossTracker(loss_scale=cfg['training']['reliability_loss_scale'])
 
         # Get process configs from surrogate for theoretical analysis
-        for proc_name, proc_config in ProTSurrogate.PROCESS_CONFIGS.items():
-            tau = proc_config.get('target', proc_config.get('base_target', 0.0))
+        source_configs = surrogate._dynamic_configs if surrogate._dynamic_configs is not None else {}
+        for proc_name, proc_config in source_configs.items():
+            base_target = proc_config.get('base_target', 0.0)
+            if isinstance(base_target, list):
+                tau = sum(base_target) / len(base_target)
+            else:
+                tau = base_target
+
+            scale = proc_config.get('scale', 1.0)
+            if isinstance(scale, list):
+                scale = sum(scale) / len(scale)
+
+            weight = proc_config.get('weight', 1.0)
+            if isinstance(weight, list):
+                weight = sum(weight) / len(weight)
+
             theoretical_tracker.process_configs[proc_name] = {
                 'tau': tau,
-                's': proc_config['scale']
+                's': scale
             }
-            theoretical_tracker.process_weights[proc_name] = proc_config.get('weight', 1.0)
+            theoretical_tracker.process_weights[proc_name] = weight
 
         print(f"  Active processes with weights > 0:")
         for p in active_processes:
@@ -1402,11 +1416,11 @@ def main(config=None):
             print("\n[8.6/9] Running theoretical loss analysis...")
 
             try:
-                # Get process configs from surrogate (dynamic se disponibili, altrimenti hardcoded)
+                # Get process configs from surrogate (dynamic se disponibili, altrimenti vuoto)
                 if hasattr(surrogate, '_dynamic_configs') and surrogate._dynamic_configs is not None:
                     process_configs_surrogate = surrogate._dynamic_configs
                 else:
-                    process_configs_surrogate = ProTSurrogate.PROCESS_CONFIGS
+                    process_configs_surrogate = {}
 
                 # ── Empirical sampling (matches training configuration) ────
                 # Collect F_samples using the SAME number of scenarios and
@@ -1480,7 +1494,11 @@ def main(config=None):
                         continue
                     proc_cfg = process_configs_surrogate[proc_name]
                     s = proc_cfg['scale']
+                    if isinstance(s, list):
+                        s = sum(s) / len(s)
                     weight = proc_cfg.get('weight', 1.0)
+                    if isinstance(weight, list):
+                        weight = sum(weight) / len(weight)
                     sigma2_i = np.mean(sigma2_per_process[proc_name]) if sigma2_per_process[proc_name] else 0.01
                     process_params_for_report[proc_name] = {
                         'F_star': 0.0,   # not extracted analytically
@@ -1488,7 +1506,11 @@ def main(config=None):
                         'sigma2': sigma2_i,
                         's': s
                     }
-                    tau = proc_cfg.get('target', proc_cfg.get('base_target', 0.0))
+                    base_target = proc_cfg.get('base_target', 0.0)
+                    if isinstance(base_target, list):
+                        tau = sum(base_target) / len(base_target)
+                    else:
+                        tau = base_target
                     theoretical_tracker.process_configs[proc_name] = {'tau': tau, 's': s}
                     theoretical_tracker.process_weights[proc_name] = weight
 

@@ -1154,16 +1154,21 @@ def compute_bellman_lmin(
     F_star = surrogate.F_star
 
     # ── Extract weights and scales ──
-    # Usa _dynamic_configs dal surrogate se disponibili (ST), altrimenti PROCESS_CONFIGS
+    # Usa _dynamic_configs dal surrogate se disponibili (ST), altrimenti vuoto
     if hasattr(surrogate, '_dynamic_configs') and surrogate._dynamic_configs is not None:
         proc_configs = surrogate._dynamic_configs
     else:
-        from controller.src.models.surrogate.surrogate import ProTSurrogate
-        proc_configs = ProTSurrogate.PROCESS_CONFIGS
+        proc_configs = {}
 
-    weights = np.array([proc_configs[name]['weight'] for name in process_names])
+    def _scalar(val, default=1.0):
+        """Convert list config value to scalar (mean) for theoretical analysis."""
+        if isinstance(val, list):
+            return sum(val) / len(val)
+        return val
+
+    weights = np.array([_scalar(proc_configs[name]['weight']) for name in process_names])
     w_bar = weights / weights.sum()
-    scales = np.array([proc_configs[name]['scale'] for name in process_names])
+    scales = np.array([_scalar(proc_configs[name]['scale']) for name in process_names])
 
     budget_target_ratio = w_bar.sum() / F_star
 
