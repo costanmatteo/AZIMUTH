@@ -28,129 +28,220 @@ from configs.processes_config import (
 
 
 def _save_st_dag(n: int, m: int, rho: float, save_path: str,
-                 me: int = 0, p: int = 1, env_mode: str = 'A',
+                 me: int = 0, p: int = 1,
+                 output_overlap: float = 0.0, env_mode: str = 'A',
                  dpi: int = 200):
-    """Save a B&W academic DAG matching the thesis figure.
+    """Save a B&W academic DAG for the ST dataset.
+
+    For p > 1, draws p independent parallel chains (one per output
+    partition) stacked vertically.  Shared inputs (from output_overlap)
+    are highlighted with a dashed border.
 
     Notation (thesis convention):
-        S_1..S_n  = input variables   (code: X_1..X_n)
-        X_1..X_m  = stage variables   (code: S_1..S_m)
-        Y         = output
-
-    Structure:
-        S inputs are partitioned across stages.  Each X_k = f(subset of S, X_{k-1}).
-        The chain X_1 -> X_2 -> ... -> X_m -> Y runs horizontally.
-        S inputs sit above the X they feed into, with vertical f arrows.
+        S_1..S_n    = input variables
+        X_k^{(r)}   = stage k of chain r  (X_k when p=1)
+        Y_r         = output of chain r   (Y when p=1)
     """
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
 
-    # Compute actual input partition (uniform, matching _compute_width)
-    m_eff = min(m, n)
-    base = n // m_eff
-    rem = n % m_eff
-    widths = [base + (1 if k < rem else 0) for k in range(m_eff)]
-
-    # Build input groups per stage (1-indexed)
-    groups = []
-    idx = 0
-    for k in range(m_eff):
-        groups.append((idx + 1, idx + widths[k]))  # (first, last) 1-indexed
-        idx += widths[k]
-
-    # Decide which stages to show (ellipsis for large m)
-    max_show = 5
-    if m_eff <= max_show + 1:
-        show = list(range(m_eff))
+    # ── Build output partitions (mirrors datasets_st.py) ─────────────
+    if p == 1:
+        partitions = [list(range(n))]
     else:
-        show = [0, 1, None, m_eff - 2, m_eff - 1]  # None = ellipsis
+        base_size = n // p
+        remainder = n % p
+        partitions = []
+        idx = 0
+        for r in range(p):
+            size = base_size + (1 if r < remainder else 0)
+            partitions.append(list(range(idx, idx + size)))
+            idx += size
 
-    # Layout
-    x_sp = 1.8
-    y_s = 1.2   # S row (top)
-    y_x = 0.0   # X row (bottom)
-    fig_w = max(5.5, (len(show) + 1) * x_sp + 0.5)
-    fig, ax = plt.subplots(figsize=(fig_w, 2.4), facecolor='white')
+    # Apply overlap (mirrors datasets_st.py)
+    shared_indices = set()
+    if output_overlap > 0.0 and p > 1:
+        for r in range(p - 1):
+            p_curr = partitions[r]
+            p_next = partitions[r + 1]
+            n_share = max(1, int(output_overlap * min(len(p_curr), len(p_next))))
+            for si in p_curr[-n_share:]:
+                if si not in p_next:
+                    p_next.append(si)
+                shared_indices.add(si)
+            for si in p_next[:n_share]:
+                if si not in p_curr:
+                    p_curr.append(si)
+                shared_indices.add(si)
 
-    col_x = {}
-    cx = 0.8
+    # ── Per-chain layout data ─────────────────────────────────────────
+    chain_data = []
+    for r in range(p):
+        part = partitions[r]
+        n_sub = len(part)
+        m_eff = min(m, n_sub)
 
-    for si, slot in enumerate(show):
-        if slot is None:
-            # Ellipsis column
-            ax.text(cx, y_s, r'$\cdots$', ha='center', va='center',
-                    fontsize=12, color='black')
-            ax.text(cx, y_x, r'$\cdots$', ha='center', va='center',
-                    fontsize=12, color='black')
-            # Horizontal arrows into/out of ellipsis
-            prev_cx = col_x[si - 1]
-            ax.annotate('', xy=(cx - 0.32, y_x),
-                        xytext=(prev_cx + 0.22, y_x),
-                        arrowprops=dict(arrowstyle='->', lw=0.9, color='black'))
-            col_x[si] = cx
-            cx += x_sp
-            continue
+        # Uniform width distribution within chain
+        base = n_sub // m_eff
+        rem = n_sub % m_eff
+        widths = [base + (1 if k < rem else 0) for k in range(m_eff)]
 
-        col_x[si] = cx
-        k = slot + 1  # 1-indexed stage
-        first_s, last_s = groups[slot]
+        # Build input groups per stage (0-indexed input indices)
+        groups = []
+        idx = 0
+        for k in range(m_eff):
+            groups.append(part[idx:idx + widths[k]])
+            idx += widths[k]
 
-        # S label (input group) — above X
-        if first_s == last_s:
-            s_label = f'$S_{{{first_s}}}$'
-        elif last_s - first_s == 1:
-            s_label = f'$S_{{{first_s}}},\\, S_{{{last_s}}}$'
+        # Decide which stages to show (ellipsis for large m)
+        max_show = 5
+        if m_eff <= max_show + 1:
+            show = list(range(m_eff))
         else:
-            s_label = f'$S_{{{first_s}}} \\cdot\\cdot S_{{{last_s}}}$'
-        ax.text(cx, y_s, s_label, ha='center', va='center', fontsize=10,
-                fontfamily='serif')
+            show = [0, 1, None, m_eff - 2, m_eff - 1]
 
-        # X label (stage) — on the chain
-        ax.text(cx, y_x, f'$X_{{{k}}}$', ha='center', va='center',
-                fontsize=10, fontfamily='serif')
+        chain_data.append({
+            'm_eff': m_eff,
+            'groups': groups,
+            'show': show,
+        })
 
-        # Vertical arrow S -> X
-        ax.annotate('', xy=(cx, y_x + 0.25),
-                    xytext=(cx, y_s - 0.25),
-                    arrowprops=dict(arrowstyle='->', lw=0.9, color='black'))
+    # ── Layout parameters ─────────────────────────────────────────────
+    x_sp = 1.8
+    row_gap = 1.2
+    chain_sp = 2.8
+    left_margin = 1.6 if p > 1 else 0.8
 
-        # Horizontal arrow from previous stage
-        if si > 0:
-            prev_cx = col_x[si - 1]
-            if show[si - 1] is None:
-                # Arrow from ellipsis
-                ax.annotate('', xy=(cx - 0.22, y_x),
-                            xytext=(prev_cx + 0.32, y_x),
-                            arrowprops=dict(arrowstyle='->', lw=0.9,
-                                            color='black'))
-            else:
-                ax.annotate('', xy=(cx - 0.22, y_x),
+    max_cols = max(len(cd['show']) for cd in chain_data) + 1  # +1 for Y
+    fig_w = max(5.5, left_margin + max_cols * x_sp + 0.5)
+    fig_h = max(2.4, row_gap + 0.9 + (p - 1) * chain_sp + 0.6)
+
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h), facecolor='white')
+
+    dashed_bbox = dict(boxstyle='round,pad=0.15', edgecolor='black',
+                       facecolor='none', linestyle='--', linewidth=0.8)
+
+    all_y_cx = []
+
+    for r, cd in enumerate(chain_data):
+        y_base = -r * chain_sp
+        y_s = y_base + row_gap / 2     # S row (top)
+        y_x = y_base - row_gap / 2     # X row (bottom)
+
+        show = cd['show']
+        groups = cd['groups']
+        m_eff = cd['m_eff']
+
+        col_x = {}
+        cx = left_margin
+
+        # Chain label (p > 1 only)
+        if p > 1:
+            ax.text(left_margin - 1.0, (y_s + y_x) / 2,
+                    f'$r\\!=\\!{r + 1}$',
+                    ha='center', va='center', fontsize=10,
+                    fontfamily='serif', fontstyle='italic')
+
+        for si, slot in enumerate(show):
+            if slot is None:
+                # Ellipsis column
+                ax.text(cx, y_s, r'$\cdots$', ha='center', va='center',
+                        fontsize=12, color='black')
+                ax.text(cx, y_x, r'$\cdots$', ha='center', va='center',
+                        fontsize=12, color='black')
+                prev_cx = col_x[si - 1]
+                ax.annotate('', xy=(cx - 0.32, y_x),
                             xytext=(prev_cx + 0.22, y_x),
                             arrowprops=dict(arrowstyle='->', lw=0.9,
                                             color='black'))
+                col_x[si] = cx
+                cx += x_sp
+                continue
 
-        cx += x_sp
+            col_x[si] = cx
+            k = slot + 1  # 1-indexed stage
+            stage_inputs = groups[slot]
 
-    # Y node
-    y_cx = cx
-    ax.text(y_cx, y_x, '$Y$', ha='center', va='center', fontsize=10,
-            fontfamily='serif')
+            # S label (input group) — above X
+            sorted_inp = sorted(stage_inputs)
+            first_s = sorted_inp[0] + 1    # 1-indexed
+            last_s = sorted_inp[-1] + 1
+            n_in = len(sorted_inp)
 
-    # Arrow X_m -> Y
-    last_si = [i for i, s in enumerate(show) if s is not None][-1]
-    ax.annotate('', xy=(y_cx - 0.18, y_x),
-                xytext=(col_x[last_si] + 0.22, y_x),
-                arrowprops=dict(arrowstyle='->', lw=0.9, color='black'))
+            if n_in == 1:
+                s_label = f'$S_{{{first_s}}}$'
+            elif n_in == 2:
+                s_label = f'$S_{{{first_s}}},\\, S_{{{last_s}}}$'
+            else:
+                s_label = f'$S_{{{first_s}}} \\cdot\\cdot S_{{{last_s}}}$'
 
-    # Caption
-    ax.text((0.8 + y_cx) / 2, y_x - 0.55,
-            f'DAG of a single stage  ($n={n},\\ m={m_eff},\\ \\rho={rho},'
-            f'\\ m_e={me},\\ p={p},\\ \\mathrm{{env}}={env_mode}$)',
+            has_shared = any(i in shared_indices for i in stage_inputs)
+
+            ax.text(cx, y_s, s_label, ha='center', va='center',
+                    fontsize=10, fontfamily='serif',
+                    bbox=dashed_bbox if has_shared else None)
+
+            # X label (stage node) — on the chain
+            if p == 1:
+                x_label = f'$X_{{{k}}}$'
+            else:
+                x_label = f'$X_{{{k}}}^{{({r + 1})}}$'
+
+            ax.text(cx, y_x, x_label, ha='center', va='center',
+                    fontsize=10, fontfamily='serif')
+
+            # Vertical arrow S -> X
+            ax.annotate('', xy=(cx, y_x + 0.25),
+                        xytext=(cx, y_s - 0.25),
+                        arrowprops=dict(arrowstyle='->', lw=0.9,
+                                        color='black'))
+
+            # Horizontal arrow from previous stage
+            if si > 0:
+                prev_cx = col_x[si - 1]
+                if show[si - 1] is None:
+                    ax.annotate('', xy=(cx - 0.22, y_x),
+                                xytext=(prev_cx + 0.32, y_x),
+                                arrowprops=dict(arrowstyle='->', lw=0.9,
+                                                color='black'))
+                else:
+                    ax.annotate('', xy=(cx - 0.22, y_x),
+                                xytext=(prev_cx + 0.22, y_x),
+                                arrowprops=dict(arrowstyle='->', lw=0.9,
+                                                color='black'))
+
+            cx += x_sp
+
+        # Y node
+        y_cx = cx
+        y_label = '$Y$' if p == 1 else f'$Y_{{{r + 1}}}$'
+        ax.text(y_cx, y_x, y_label, ha='center', va='center',
+                fontsize=10, fontfamily='serif')
+
+        # Arrow X_m -> Y
+        last_si = [i for i, s in enumerate(show) if s is not None][-1]
+        ax.annotate('', xy=(y_cx - 0.18, y_x),
+                    xytext=(col_x[last_si] + 0.22, y_x),
+                    arrowprops=dict(arrowstyle='->', lw=0.9, color='black'))
+
+        all_y_cx.append(y_cx)
+
+    # ── Caption ───────────────────────────────────────────────────────
+    max_y_cx = max(all_y_cx)
+    caption_y = -((p - 1) * chain_sp) - row_gap / 2 - 0.55
+
+    caption = (
+        f'$n={n},\\ m={m},\\ p={p},\\ \\rho={rho},'
+        f'\\ \\mathrm{{overlap}}={output_overlap},'
+        f'\\ m_e={me},\\ \\mathrm{{env}}={env_mode}$'
+    )
+    ax.text((left_margin + max_y_cx) / 2, caption_y, caption,
             ha='center', va='top', fontsize=9, fontfamily='serif')
 
-    ax.set_xlim(0, y_cx + 0.6)
-    ax.set_ylim(y_x - 0.75, y_s + 0.45)
+    # ── Finalize ──────────────────────────────────────────────────────
+    ax.set_xlim(0, max_y_cx + 0.6)
+    ax.set_ylim(caption_y - 0.3, row_gap / 2 + 0.45)
     ax.set_aspect('equal')
     ax.axis('off')
     plt.tight_layout(pad=0.2)
@@ -289,6 +380,7 @@ def main():
                 save_path=str(dag_path),
                 me=st_p.get('me', 0),
                 p=st_p.get('p', 1),
+                output_overlap=st_p.get('output_overlap', 0.0),
                 env_mode=st_p.get('env_mode', 'A'),
             )
             print(f"  DAG saved to: {dag_path}")
