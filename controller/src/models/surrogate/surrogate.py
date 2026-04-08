@@ -75,6 +75,17 @@ class ProTSurrogate:
                     if 'surrogate_adaptive_coefficients' in pc:
                         entry['adaptive_coefficients'] = pc['surrogate_adaptive_coefficients']
                         entry['adaptive_baselines'] = pc['surrogate_adaptive_baselines']
+                        # Non-linear adaptive mode params
+                        for src, dst in [
+                            ('surrogate_adaptive_mode',           'adaptive_mode'),
+                            ('surrogate_adaptive_coefficients2',  'adaptive_coefficients2'),
+                            ('surrogate_adaptive_power',          'adaptive_power'),
+                            ('surrogate_adaptive_band',           'adaptive_band'),
+                            ('surrogate_adaptive_sharpness',      'adaptive_sharpness'),
+                            ('surrogate_adaptive_max_shift',      'adaptive_max_shift'),
+                        ]:
+                            if src in pc:
+                                entry[dst] = pc[src]
                     dynamic[name] = entry
             if dynamic:
                 self._dynamic_configs = dynamic

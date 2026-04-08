@@ -72,6 +72,22 @@ ST_DATASET_CONFIG = {
         'cal_width_factor': 1.0,
     },
 
+    # ── Modalità adattiva non-lineare ──────────────────────────────────────────
+    # Tipo di funzione usata per calcolare l'aggiustamento del target adattivo.
+    # Opzioni: 'linear' (default), 'polynomial', 'power', 'softplus', 'deadband', 'tanh'
+    # Se omesso o 'linear', il comportamento è identico a prima.
+    'adaptive_mode': 'linear',
+
+    # Parametri aggiuntivi per i mode non-lineari (ignorati se mode='linear').
+    # Ogni dict mappa nome_processo_upstream → valore del parametro.
+    # I nomi upstream vengono generati automaticamente (st_1, st_2, ...).
+    #
+    # 'adaptive_coefficients2': {},   # polynomial: coeff2 per upstream
+    # 'adaptive_power': {},           # power: alpha per upstream (default 0.5)
+    # 'adaptive_sharpness': {},       # softplus: k per upstream (default 2.0)
+    # 'adaptive_band': {},            # deadband: band width per upstream
+    # 'adaptive_max_shift': {},       # tanh: saturazione massima per upstream
+
     # Configurazione uncertainty predictor: importata da uncertainty_config.py
     'uncertainty_predictor': DEFAULT_ST_UNCERTAINTY_PREDICTOR,
 }
@@ -242,6 +258,18 @@ def _build_st_processes(st_dataset_config):
             process['surrogate_adaptive_baselines'] = {
                 f'st_{j}': calibrated_target_mean for j in range(1, i)
             }
+
+            # Propagate non-linear adaptive mode params if configured
+            for src_key, dst_key in [
+                ('adaptive_mode',           'surrogate_adaptive_mode'),
+                ('adaptive_coefficients2',  'surrogate_adaptive_coefficients2'),
+                ('adaptive_power',          'surrogate_adaptive_power'),
+                ('adaptive_band',           'surrogate_adaptive_band'),
+                ('adaptive_sharpness',      'surrogate_adaptive_sharpness'),
+                ('adaptive_max_shift',      'surrogate_adaptive_max_shift'),
+            ]:
+                if src_key in st_dataset_config:
+                    process[dst_key] = st_dataset_config[src_key]
 
         processes.append(process)
 

@@ -21,6 +21,47 @@ from typing import Dict, Tuple, Optional, Union
 from .process_targets import PROCESS_CONFIGS, PROCESS_ORDER
 
 
+def _apply_adaptive_mode(delta, coeff, mode, mode_params):
+    """
+    Compute the adaptive target adjustment for a single upstream variable.
+
+    Args:
+        delta: torch.Tensor — (upstream_out - baseline)
+        coeff: float — linear coefficient
+        mode: str — one of 'linear', 'polynomial', 'power', 'softplus', 'deadband', 'tanh'
+        mode_params: dict — mode-specific params for this upstream variable
+
+    Returns:
+        torch.Tensor — adjustment to add to target
+    """
+    if mode == 'linear':
+        return coeff * delta
+
+    if mode == 'polynomial':
+        coeff2 = mode_params.get('coeff2', 0.0)
+        return coeff * delta + coeff2 * delta ** 2
+
+    if mode == 'power':
+        alpha = mode_params.get('alpha', 0.5)
+        return coeff * torch.sign(delta) * (torch.abs(delta) + 1e-8) ** alpha
+
+    if mode == 'softplus':
+        k = mode_params.get('k', 2.0)
+        return (1.0 / k) * torch.log(1.0 + torch.exp(k * coeff * delta))
+
+    if mode == 'deadband':
+        band = mode_params.get('band', 0.0)
+        abs_delta = torch.abs(delta)
+        return coeff * torch.clamp(abs_delta - band, min=0.0) * torch.sign(delta)
+
+    if mode == 'tanh':
+        max_shift = mode_params.get('max_shift', 1.0)
+        return max_shift * torch.tanh(coeff * delta / max_shift)
+
+    raise ValueError(f"Unknown adaptive_mode: '{mode}'. "
+                     f"Expected one of: linear, polynomial, power, softplus, deadband, tanh")
+
+
 class ReliabilityFunction:
     """
     Computes reliability F from process chain trajectories.
@@ -144,6 +185,14 @@ class ReliabilityFunction:
         if not adaptive_coeffs:
             return base_target_t  # (output_dim,) — broadcasts to (batch, output_dim)
 
+        # Read adaptive mode and per-upstream mode params
+        mode = config.get('adaptive_mode', 'linear')
+        adaptive_coefficients2 = config.get('adaptive_coefficients2', {})
+        adaptive_power = config.get('adaptive_power', {})
+        adaptive_sharpness = config.get('adaptive_sharpness', {})
+        adaptive_band = config.get('adaptive_band', {})
+        adaptive_max_shift = config.get('adaptive_max_shift', {})
+
         # Adaptive case: compute a single scalar target for all output dimensions.
         # Average base_target across output dims to get a scalar starting point.
         target = base_target_t.mean()
@@ -156,7 +205,22 @@ class ReliabilityFunction:
                     upstream_out = upstream_out.mean(dim=-1)  # (batch,)
 
                 baseline = adaptive_baselines.get(upstream_name, 0.0)
-                adjustment = coeff * (upstream_out - baseline)
+                delta = upstream_out - baseline
+
+                # Build mode_params for this upstream variable
+                mode_params = {}
+                if mode == 'polynomial':
+                    mode_params['coeff2'] = adaptive_coefficients2.get(upstream_name, 0.0)
+                elif mode == 'power':
+                    mode_params['alpha'] = adaptive_power.get(upstream_name, 0.5)
+                elif mode == 'softplus':
+                    mode_params['k'] = adaptive_sharpness.get(upstream_name, 2.0)
+                elif mode == 'deadband':
+                    mode_params['band'] = adaptive_band.get(upstream_name, 0.0)
+                elif mode == 'tanh':
+                    mode_params['max_shift'] = adaptive_max_shift.get(upstream_name, 1.0)
+
+                adjustment = _apply_adaptive_mode(delta, coeff, mode, mode_params)
                 target = target + adjustment  # scalar + (batch,) → (batch,)
 
         # Ensure result broadcasts to (batch, output_dim): (batch,) → (batch, 1)
