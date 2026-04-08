@@ -223,6 +223,10 @@ def _build_st_processes(st_dataset_config):
             'output_labels': output_labels,
             'controllable_inputs': controllable,
 
+            # Controller action domain: restrict to [-1, 1] to avoid
+            # zero-nullification at boundaries of sin(π/2 · x).
+            'action_domain': (-1.0, 1.0),
+
             # Parametri ST salvati per ricostruire lo SCM a runtime
             'st_params': copy.deepcopy(st_params),
 
