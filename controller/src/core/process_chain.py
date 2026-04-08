@@ -231,15 +231,22 @@ class ProcessChain(nn.Module):
             controllable_indices = next_process_info['controllable_indices']
 
             if next_preprocessor.input_min is not None and next_preprocessor.input_max is not None:
-                # Extract bounds only for controllable inputs
-                output_min = torch.tensor(
-                    [next_preprocessor.input_min[idx] for idx in controllable_indices],
-                    dtype=torch.float32
-                )
-                output_max = torch.tensor(
-                    [next_preprocessor.input_max[idx] for idx in controllable_indices],
-                    dtype=torch.float32
-                )
+                # Check for explicit action_domain override (e.g. [-1, 1] for sinusoidal SCM)
+                action_domain = processes_config[i + 1].get('action_domain')
+                if action_domain is not None:
+                    a_lo, a_hi = action_domain
+                    output_min = torch.full((len(controllable_indices),), a_lo, dtype=torch.float32)
+                    output_max = torch.full((len(controllable_indices),), a_hi, dtype=torch.float32)
+                else:
+                    # Extract bounds only for controllable inputs
+                    output_min = torch.tensor(
+                        [next_preprocessor.input_min[idx] for idx in controllable_indices],
+                        dtype=torch.float32
+                    )
+                    output_max = torch.tensor(
+                        [next_preprocessor.input_max[idx] for idx in controllable_indices],
+                        dtype=torch.float32
+                    )
                 print(f"  Policy {i} -> Process '{processes_config[i + 1]['name']}' (observation_mode='{self.observation_mode}'):")
                 if self.observation_mode == 'mean_var':
                     print(f"    Input dim: {policy_input_size} (prev_mean={prev_output_dim} + prev_var={prev_output_dim} + non_controllable={n_non_controllable})")

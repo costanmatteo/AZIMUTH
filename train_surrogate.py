@@ -241,6 +241,7 @@ def main():
 def _generate_report(config, results_df, save_dir, data_dir, dataset_name):
     """Build history/eval dicts from training artifacts and generate the PDF report."""
     import pandas as pd
+    from omegaconf import OmegaConf
     from addition_to_causaliT.surrogate_training.report_generator import generate_surrogate_training_report
 
     fold_dir = Path(save_dir) / 'k_0'
@@ -322,8 +323,115 @@ def _generate_report(config, results_df, save_dir, data_dir, dataset_name):
     # --- Model params ---
     total_params = int(results_df.iloc[0].get('trainable_params', 0)) if results_df is not None and len(results_df) > 0 else 0
 
+    # --- Build a flat config dict the report generator expects ---
+    # OmegaConf configs nest arch fields under model.kwargs; the report
+    # expects them directly under config['model'].
+    if hasattr(config, '_metadata'):  # OmegaConf object
+        cfg_dict = OmegaConf.to_container(config, resolve=True)
+    else:
+        cfg_dict = dict(config)
+
+    # Flatten model.kwargs into model so the report finds d_model_enc, d_ff, etc.
+    model_section = cfg_dict.get('model', {})
+    kwargs = model_section.pop('kwargs', {})
+    for k, v in kwargs.items():
+        if k not in model_section:
+            model_section[k] = v
+
+    # Map surrogate_config override names → canonical report field names
+    # (in case the experiment section wasn't interpolated into kwargs)
+    exp = cfg_dict.get('experiment', {})
+    _alias_map = {
+        'd_model_enc': lambda: model_section.get('d_model_enc') or exp.get('d_model_set'),
+        'd_model_dec': lambda: model_section.get('d_model_dec') or exp.get('d_model_set'),
+        'd_ff':        lambda: model_section.get('d_ff') or exp.get('d_ff') or model_section.get('ffn_dim'),
+        'd_qk':        lambda: model_section.get('d_qk') or exp.get('d_qk'),
+        'e_layers':    lambda: model_section.get('e_layers') or exp.get('e_layers') or model_section.get('n_enc_layers'),
+        'd_layers':    lambda: model_section.get('d_layers') or exp.get('d_layers') or model_section.get('n_dec_layers'),
+        'n_heads':     lambda: model_section.get('n_heads') or exp.get('n_heads'),
+    }
+    for key, resolver in _alias_map.items():
+        if not model_section.get(key):
+            val = resolver()
+            if val is not None:
+                model_section[key] = val
+
+    # Ensure dropout fields are populated from the single 'dropout' override
+    _dropout = model_section.get('dropout') or exp.get('dropout')
+    if _dropout is not None:
+        for dk in ('dropout_emb', 'dropout_attn_out', 'dropout_ff'):
+            if not model_section.get(dk):
+                model_section[dk] = _dropout
+
+    # Ensure training section has report-expected keys (lr alias)
+    tr = cfg_dict.get('training', {})
+    if not tr.get('learning_rate') and tr.get('lr'):
+        tr['learning_rate'] = tr['lr']
+    if not tr.get('max_epochs') and exp.get('max_epochs'):
+        tr['max_epochs'] = exp['max_epochs']
+    if not tr.get('patience') and tr.get('patience') is None:
+        # patience comes from surrogate_config override; already present if set
+        pass
+
+    # --- Populate Processes / Trajectories / Scenarios from dataset metadata ---
+    data_section = cfg_dict.get('data', {})
+    meta_path = Path(data_dir) / dataset_name / 'dataset_metadata.json'
+    if meta_path.exists() and not data_section.get('process_names'):
+        with open(meta_path) as f:
+            ds_meta = json.load(f)
+        var_info = ds_meta.get('variable_info', {})
+        if var_info.get('process_names'):
+            data_section['process_names'] = var_info['process_names']
+        if var_info.get('n_processes') and not data_section.get('n_scenarios'):
+            data_section['n_scenarios'] = var_info['n_processes']
+
+    # Fallback: read from processes_config if metadata doesn't have the info
+    if not data_section.get('process_names'):
+        try:
+            from configs.processes_config import PROCESSES
+            data_section['process_names'] = [p['name'] for p in PROCESSES]
+        except Exception:
+            pass
+
+    # Trajectories = total number of samples in the dataset
+    if not data_section.get('n_trajectories'):
+        data_section['n_trajectories'] = n_total or (n_train + n_val + n_test)
+
+    # Scenarios = number of processes if not already set
+    if not data_section.get('n_scenarios') and data_section.get('process_names'):
+        data_section['n_scenarios'] = len(data_section['process_names'])
+
+    cfg_dict['model'] = model_section
+    cfg_dict['data'] = data_section
+    cfg_dict['training'] = tr
+
+    # --- Compute Floor MSE (MSE restricted to top-decile F targets, F >= q80) ---
+    floor_metrics = None
+    targets = eval_results.get('targets', np.array([]))
+    predictions = eval_results.get('predictions', np.array([]))
+    if targets.size > 0 and predictions.size > 0:
+        tgt_flat = targets.ravel()
+        pred_flat = predictions.ravel()
+        q80 = np.percentile(tgt_flat, 80)
+        mask = tgt_flat >= q80
+        if mask.sum() > 0:
+            residuals = pred_flat[mask] - tgt_flat[mask]
+            floor_mse = float(np.mean(residuals ** 2))
+            floor_bias = float(np.mean(residuals))
+            floor_metrics = {'floor_mse': floor_mse, 'floor_bias': floor_bias}
+
+    # --- Early stopping info ---
+    max_epochs = tr.get('max_epochs', exp.get('max_epochs'))
+    patience = tr.get('patience')
+    best_ep = history.get('best_epoch', 0)
+    final_ep = history.get('final_epoch', 0)
+    if max_epochs and patience and final_ep < int(max_epochs):
+        history['early_stopped'] = True
+    else:
+        history['early_stopped'] = False
+
     generate_surrogate_training_report(
-        config=dict(config) if not isinstance(config, dict) else config,
+        config=cfg_dict,
         history=history,
         eval_results=eval_results,
         input_dim=input_dim,
@@ -333,6 +441,7 @@ def _generate_report(config, results_df, save_dir, data_dir, dataset_name):
         n_val=n_val,
         n_test=n_test,
         checkpoint_dir=save_dir,
+        floor_metrics=floor_metrics,
     )
 
 

@@ -16,7 +16,7 @@ from reportlab.lib import colors
 from reportlab.lib.enums import TA_LEFT, TA_RIGHT, TA_CENTER
 from reportlab.platypus import (
     BaseDocTemplate, Frame, PageTemplate,
-    Paragraph, Spacer, Image, Table, TableStyle, PageBreak,
+    Paragraph, Spacer, Image, Table, TableStyle, PageBreak, CondPageBreak,
 )
 from reportlab.platypus.flowables import HRFlowable
 
@@ -537,8 +537,17 @@ def _page1(d, total_pages):
     fact_train = adv.get('F_actual_train_mean', fact_v)
     rob_std_train = adv.get('F_actual_train_std', rob_std)
     gap_bl_train   = abs(fbl_train - fstar_v)
-    gap_ctrl_train = abs(fact_train - fstar_v)
-    improv_train = (gap_bl_train - gap_ctrl_train) / gap_bl_train * 100 if gap_bl_train else 0.0
+    if fform_v is not None:
+        # Primary = formula train, secondary = surrogate train (matches test path)
+        fform_train = adv.get('F_formula_train_mean', fact_train)
+        gap_ctrl_train      = abs(fform_train   - fstar_v)
+        gap_surr_train      = abs(fact_train    - fstar_v)
+        improv_train        = (gap_bl_train - gap_ctrl_train) / gap_bl_train * 100 if gap_bl_train else 0.0
+        improv_surr_train   = (gap_bl_train - gap_surr_train) / gap_bl_train * 100 if gap_bl_train else 0.0
+    else:
+        gap_ctrl_train = abs(fact_train - fstar_v)
+        improv_train = (gap_bl_train - gap_ctrl_train) / gap_bl_train * 100 if gap_bl_train else 0.0
+        improv_surr_train = 0.0
     # Test uses the locally computed improv_pct (already gap-reduction)
     improv_test = improv_pct
 
@@ -693,7 +702,9 @@ def _page1(d, total_pages):
     F.append(Spacer(1, 5))
 
     # Row 2: Reliability scores | Performance
-    gap_pct_train = abs(fstar_v - fact_train) / fstar_v * 100 if fstar_v else 0.0
+    _f_ctrl_train = fform_train if fform_v is not None else fact_train
+    gap_pct_train = abs(fstar_v - _f_ctrl_train) / fstar_v * 100 if fstar_v else 0.0
+    gap_surr_pct_train = abs(fstar_v - fact_train) / fstar_v * 100 if (fstar_v and fform_v is not None) else 0.0
     reliability_rows = [
         ("F* (target)",                  f"{fstar_v:.6f}"),
         ("F\u2019 (baseline, test)",      _fstr(F_bl)),
@@ -710,19 +721,31 @@ def _page1(d, total_pages):
     ]) + [
         ("Improvement vs baseline (test)",  f"{improv_test:+.2f}%",
          ST_VAL_G if improv_test >= 0 else ST_VAL_R),
-        ("Improvement vs baseline (train)", f"{improv_train:+.2f}%",
-         ST_VAL_G if improv_train >= 0 else ST_VAL_R),
     ] + ([
         ("\u2514 surrogate",
          f"{improv_surr_pct:+.2f}%",
          ST_VAL_FORM_G if improv_surr_pct >= 0 else ST_VAL_FORM_R,
          ST_KEY_FORM),
     ] if fform_v is not None else []) + [
+        ("Improvement vs baseline (train)", f"{improv_train:+.2f}%",
+         ST_VAL_G if improv_train >= 0 else ST_VAL_R),
+    ] + ([
+        ("\u2514 surrogate",
+         f"{improv_surr_train:+.2f}%",
+         ST_VAL_FORM_G if improv_surr_train >= 0 else ST_VAL_FORM_R,
+         ST_KEY_FORM),
+    ] if fform_v is not None else []) + [
         ("Gap from target (test)",        f"{gap_pct:.2f}%", ST_VAL_R),
-        ("Gap from target (train)",       f"{gap_pct_train:.2f}%", ST_VAL_R),
     ] + ([
         ("\u2514 surrogate",
          f"{gap_surr_pct:.2f}%",
+         ST_VAL_FORM_R,
+         ST_KEY_FORM),
+    ] if fform_v is not None else []) + [
+        ("Gap from target (train)",       f"{gap_pct_train:.2f}%", ST_VAL_R),
+    ] + ([
+        ("\u2514 surrogate",
+         f"{gap_surr_pct_train:.2f}%",
          ST_VAL_FORM_R,
          ST_KEY_FORM),
     ] if fform_v is not None else []) + [
@@ -1458,9 +1481,15 @@ def _build_pdf(d, out_path):
     has_traj = bool(traj_list or traj)
     total_pages = 4 if has_traj else 3
 
+    # Use CondPageBreak after page 1: if _page1 overflows onto the next page,
+    # a hard PageBreak would create a blank page.  CondPageBreak only breaks
+    # when the remaining space is less than the threshold, so it is skipped
+    # when we are already near the top of a fresh page.
+    _cond_brk = CondPageBreak(PH - 4 * M)
+
     story = (
         _page1(d, total_pages) +
-        [PageBreak()] +
+        [_cond_brk] +
         _page3(d) + _footer(d, 2, total_pages) +
         [PageBreak()] +
         _page2(d) + _footer(d, 3, total_pages)

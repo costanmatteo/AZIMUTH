@@ -300,7 +300,9 @@ def _build_left(d):
     final_val = float(history.get('final_val_loss', best_val))
     r2v       = float(eval_res.get('test_r2',   0.0))
     rmsev     = float(eval_res.get('test_rmse', 0.0))
-    floor_mse = float(floor.get('floor_mse', floor.get('mse_floor', 0.0)))
+    floor_mse_raw = floor.get('floor_mse', floor.get('mse_floor', None))
+    has_floor = floor_mse_raw is not None and float(floor_mse_raw) > 0
+    floor_mse = float(floor_mse_raw) if has_floor else 0.0
 
     cw = LW / 4
 
@@ -310,13 +312,15 @@ def _build_left(d):
         Paragraph(f"{best_val:.5f}",  ST_KPI_VAL),
         Paragraph(f"{r2v:.4f}",       _ckpi(r2_color(r2v))),
         Paragraph(f"{rmsev:.5f}",     _ckpi(rmse_color(rmsev))),
-        Paragraph(f"{floor_mse:.5f}", _ckpi(floor_color(floor_mse))),
+        Paragraph(f"{floor_mse:.5f}" if has_floor else "\u2014",
+                  _ckpi(floor_color(floor_mse)) if has_floor else _ckpi(C_GRAY)),
     ]
     kpi_sub = [
         Paragraph(f"final {final_val:.5f}",              ST_KPI_SUB),
         Paragraph(f"MAE {eval_res.get('test_mae', 0):.5f}", ST_KPI_SUB),
         Paragraph(f"MSE {eval_res.get('test_mse', 0):.5f}", ST_KPI_SUB),
-        Paragraph(f"top-decile F\u2265q\u2089\u2080",    ST_KPI_SUB),
+        Paragraph(f"top-decile F\u2265q\u2089\u2080" if has_floor else "not computed",
+                  ST_KPI_SUB),
     ]
 
     kpi_tbl = Table([kpi_lbl, kpi_val, kpi_sub], colWidths=[cw] * 4)
@@ -453,14 +457,34 @@ def _build_left(d):
 
     final_ep  = history.get('final_epoch',  history.get('best_epoch', '—'))
     best_ep   = history.get('best_epoch',   '—')
+    max_ep    = tr_cfg.get('max_epochs', tr_cfg.get('epochs', '—'))
+    patience  = tr_cfg.get('patience', None)
+    early_stopped = history.get('early_stopped', False)
     best_tr   = history.get('best_train_loss',  None)
     final_tr  = history.get('final_train_loss', history.get('train_loss', [None])[-1]
                             if isinstance(history.get('train_loss'), list) else None)
     final_vl  = history.get('final_val_loss',   best_val)
 
+    # Best epoch label with early-stopping indicator
+    if early_stopped:
+        best_ep_label = f"{best_ep}  (early stopping, patience {patience})"
+        best_ep_style = _cv(C_GREEN, align=TA_RIGHT)
+    elif best_ep != '—' and max_ep != '—' and int(best_ep) == int(max_ep):
+        best_ep_label = f"{best_ep}  (final epoch)"
+        best_ep_style = ST_VAL
+    else:
+        best_ep_label = str(best_ep)
+        best_ep_style = ST_VAL
+
+    # Final epoch label
+    if early_stopped:
+        final_ep_label = f"{final_ep} / {max_ep}"
+    else:
+        final_ep_label = str(final_ep)
+
     res_rows = [
-        ("Final epoch",       str(final_ep)),
-        ("Best epoch",        str(best_ep)),
+        ("Final epoch",       final_ep_label),
+        ("Best epoch",        best_ep_label, best_ep_style),
         ("Final train MSE",   f"{float(final_tr):.6f}" if final_tr is not None else "—"),
         ("Final val MSE",     f"{float(final_vl):.6f}"),
         ("Best val MSE",      f"{best_val:.6f}"),
@@ -754,6 +778,7 @@ if __name__ == '__main__':
         'train_mae':         list(np.linspace(0.20, 0.0398, 108)),
         'val_mae':           list(np.linspace(0.22, 0.0442, 108)),
         'learning_rate':     [1e-3 * (0.5 ** (i // 30)) for i in range(108)],
+        'early_stopped':     True,
     }
 
     eval_res = {

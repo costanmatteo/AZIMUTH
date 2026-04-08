@@ -919,17 +919,18 @@ def main(config=None):
             F_actual_test_i = surrogate.compute_reliability(actual_test_trajectory).item()
             F_actual_test_values.append(F_actual_test_i)
 
-            # Compute CasualiT-based F for test scenarios (if using CasualiT)
+            # Compute ProT formula-based F for test scenarios (if using CasualiT)
             if formula_surrogate is not None:
                 F_formula_baseline_test_values.append(
-                    surrogate.compute_reliability(baseline_test_tensor).item())
+                    formula_surrogate.compute_reliability(baseline_test_tensor).item())
                 F_formula_actual_test_values.append(
-                    surrogate.compute_reliability(actual_test_trajectory).item())
+                    formula_surrogate.compute_reliability(actual_test_trajectory).item())
 
     # F* is the same for test scenarios (single scalar)
     F_star_test_array = np.full(n_test, F_star_value)
     F_baseline_test_array = np.array(F_baseline_test_values)
     F_actual_test_array = np.array(F_actual_test_values)
+    F_formula_actual_test_array = np.array(F_formula_actual_test_values) if F_formula_actual_test_values else None
 
     F_star_test_mean = F_star_value
     F_baseline_test_mean = np.mean(F_baseline_test_array)
@@ -940,8 +941,8 @@ def main(config=None):
     # Formula test means (always available since formula_surrogate is always set)
     F_formula_actual_test_mean = None
     F_formula_baseline_test_mean = None
-    if formula_surrogate is not None and F_formula_actual_test_values:
-        F_formula_actual_test_mean = float(np.mean(F_formula_actual_test_values))
+    if formula_surrogate is not None and F_formula_actual_test_array is not None:
+        F_formula_actual_test_mean = float(np.mean(F_formula_actual_test_array))
         F_formula_baseline_test_mean = float(np.mean(F_formula_baseline_test_values))
 
     print(f"\nTest Results:")
@@ -1047,6 +1048,10 @@ def main(config=None):
             F_star_per_scenario_mean, F_formula_baseline_per_scenario_mean, F_formula_per_scenario_mean)
         formula_advanced_metrics['formula_gap_closure_test'] = compute_gap_closure(
             F_star_test_array, F_formula_baseline_test_array, F_formula_actual_test_array)
+
+        # Formula train mean for consistent KPI gap-reduction (same metric for baseline and controller)
+        formula_advanced_metrics['F_formula_train_mean'] = float(F_formula_mean)
+        formula_advanced_metrics['F_formula_train_std'] = float(F_formula_std)
 
         print(f"    Success rate (formula) — train: {formula_advanced_metrics['formula_success_rate_train']['success_rate_pct']:.1f}%")
         print(f"    Success rate (formula) — test:  {formula_advanced_metrics['formula_success_rate_test']['success_rate_pct']:.1f}%")
@@ -1229,12 +1234,11 @@ def main(config=None):
         )
 
         # Scatter plot: Baseline vs Controller (test)
-        _formula_test = np.array(F_formula_actual_test_values) if F_formula_actual_test_values else None
         plot_target_vs_actual_scatter(
             F_star_per_scenario=F_star_test_array,
             F_baseline_per_scenario=F_baseline_test_array,
             F_actual_per_scenario=F_actual_test_array,
-            F_formula_per_scenario=_formula_test,
+            F_formula_per_scenario=F_formula_actual_test_array,
             save_path=str(checkpoint_dir / 'baseline_vs_controller_test.png'),
             figsize=_left_figsize,
         )
@@ -1292,13 +1296,12 @@ def main(config=None):
 
         # F_formula dict — only when formula_surrogate exists (CasualiT mode)
         F_formula_dict = None
-        if formula_surrogate is not None and F_formula_actual_test_mean is not None:
-            F_formula_actual_test_arr = np.array(F_formula_actual_test_values)
+        if formula_surrogate is not None and F_formula_actual_test_array is not None:
             F_formula_dict = {
-                'mean': float(F_formula_actual_test_mean),
-                'std': float(np.std(F_formula_actual_test_arr)),
-                'min': float(F_formula_actual_test_arr.min()),
-                'max': float(F_formula_actual_test_arr.max())
+                'mean': float(np.mean(F_formula_actual_test_array)),
+                'std': float(np.std(F_formula_actual_test_array)),
+                'min': float(F_formula_actual_test_array.min()),
+                'max': float(F_formula_actual_test_array.max())
             }
 
         # Prepare final metrics for report
