@@ -117,7 +117,7 @@ def _save_st_dag(n: int, m: int, rho: float, save_path: str,
     chain_w = left_margin + max_stage_cols * x_sp + 0.4
 
     # Grid: up to 3 columns
-    n_grid_cols = min(3, p) if p > 1 else 1
+    n_grid_cols = min(2, p) if p > 1 else 1
     n_grid_rows = (p + n_grid_cols - 1) // n_grid_cols
 
     total_data_w = n_grid_cols * chain_w
