@@ -68,6 +68,7 @@ ST_DATASET_CONFIG = {
         'carry_beta': 0.3,
         'x_domain': (-2.0, 2.0),
         'e_domain': (-1.0, 1.0),
+        'action_domain': (-1.0, 1.0),
         'cal_n': 2000,
         'cal_percentile': 10.0,
         'cal_width_factor': 1.0,

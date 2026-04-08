@@ -68,6 +68,7 @@ class STConfig:
     # --- domains ---
     x_domain: Tuple[float, float] = (-2.0, 2.0)
     e_domain: Tuple[float, float] = (-1.0, 1.0)
+    action_domain: Optional[Tuple[float, float]] = (-1.0, 1.0)  # controller action range for calibration
 
     # --- calibration ---
     cal_n: int = 2000               # calibration sample size
@@ -534,11 +535,25 @@ def _calibrate(
     output_names: List[str],
     output_partitions: List[List[int]],
 ) -> None:
-    """Calibrate process_configs, process_order on *ds* using a rho=0 reference sample."""
+    """Calibrate process_configs, process_order on *ds* using a rho=0 reference sample.
+
+    When cfg.action_domain is set, calibration samples controllable inputs
+    (X_i) from action_domain instead of x_domain so that base_target
+    reflects what the controller can actually reach.
+    """
 
     # ── Build a zero-noise clone for the reference sample ─────────
     original_singles = ds.noise_model.singles.copy()
     modified = {}
+
+    # Determine calibration range for controllable inputs
+    if cfg.action_domain is not None:
+        cal_lo, cal_hi = cfg.action_domain
+    else:
+        cal_lo, cal_hi = cfg.x_domain
+
+    input_names_set = set(ds.input_labels)
+
     for var_name, fn in original_singles.items():
         if var_name in ds.process_noise_vars:
             # Zero out process noise
@@ -547,6 +562,11 @@ def _calibrate(
                 modified[var_name] = lambda rng, n_: np.ones(n_)
             else:
                 modified[var_name] = lambda rng, n_: np.zeros(n_)
+        elif var_name in input_names_set:
+            # Sample controllable inputs from action_domain during calibration
+            modified[var_name] = (
+                lambda rng, n_, lo=cal_lo, hi=cal_hi: rng.uniform(lo, hi, size=n_)
+            )
         else:
             modified[var_name] = fn
     ds.noise_model.singles = modified
