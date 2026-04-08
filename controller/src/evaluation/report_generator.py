@@ -992,10 +992,6 @@ def _page4_trajectory(d, total_pages):
     if traj_list:
         F += section_header("04 \u2014 trajectory comparison (best run per scenario)")
 
-        # Width split: data table ~58%, plot ~42%
-        data_w = TW * 0.58
-        plot_w = TW * 0.42
-
         for traj_i_idx, traj_i in enumerate(traj_list):
             # Each scenario starts on a new page
             if traj_i_idx > 0:
@@ -1021,24 +1017,15 @@ def _page4_trajectory(d, total_pages):
             b_traj  = traj_i.get('baseline_trajectory', {})
             a_traj  = traj_i.get('actual_trajectory', {})
 
-            # Pre-compute max data rows across processes for uniform plot height
-            max_data_rows = 0
-            for pi, pn in enumerate(p_names):
-                pi_info = ctrl_info.get(pn, {})
-                ci = pi_info.get('controllable_indices', [])
-                ol = pi_info.get('output_labels', [])
-                nr = (len(ci) if pi > 0 else 0) + len(ol)
-                max_data_rows = max(max_data_rows, nr)
-            uniform_tbl_h = 13 + max_data_rows * 14
-
-            # Build one row per process: [data_subtable | evolution_plot]
-            for proc_idx, proc in enumerate(p_names):
+            # Build one compact table per process (full width, no evolution plot)
+            for proc in p_names:
                 p_info = ctrl_info.get(proc, {})
                 input_labels = p_info.get('input_labels', [])
                 output_labels = p_info.get('output_labels', [])
                 ctrl_indices = p_info.get('controllable_indices', [])
 
                 t_inputs = _to_np(t_traj.get(proc, {}).get('inputs', []))
+                b_inputs = _to_np(b_traj.get(proc, {}).get('inputs', []))
                 a_inputs = _to_np(a_traj.get(proc, {}).get('inputs', []))
                 t_outputs = _to_np(t_traj.get(proc, {}).get('outputs', []))
                 b_outputs = _to_np(b_traj.get(proc, {}).get('outputs', []))
@@ -1046,10 +1033,11 @@ def _page4_trajectory(d, total_pages):
                 a_outputs = _to_np(a_outputs_raw.get('outputs_mean',
                                    a_outputs_raw.get('outputs', [])))
 
-                # Build data rows for this process
+                # Compact header: Variable | Target | Baseline | Controller | Δ(ctrl−tgt)
                 proc_hdr = [Paragraph(h, ST_TRAJ_H) for h in
-                            ["Variable", "Target", "Controller", "\u0394", ""]]
-                data_cws = [r * data_w for r in [0.22, 0.18, 0.18, 0.18, 0.24]]
+                            ["Variable", "Target", "Baseline", "Controller",
+                             "\u0394(ctrl\u2212tgt)", ""]]
+                data_cws = [r * TW for r in [0.20, 0.15, 0.15, 0.15, 0.15, 0.20]]
                 proc_rows = [proc_hdr]
 
                 # Color map for this process (from evolution plots)
@@ -1061,33 +1049,36 @@ def _page4_trajectory(d, total_pages):
                         lbl = input_labels[ci] if ci < len(input_labels) else f"input_{ci}"
                         dot = _color_dot(proc_cm[lbl]) if lbl in proc_cm else ''
                         t_v = float(t_inputs[ci]) if hasattr(t_inputs, '__len__') and ci < len(t_inputs) else 0.0
+                        b_v = float(b_inputs[ci]) if hasattr(b_inputs, '__len__') and ci < len(b_inputs) else 0.0
                         a_v = float(a_inputs[ci]) if hasattr(a_inputs, '__len__') and ci < len(a_inputs) else 0.0
                         delta = a_v - t_v
                         proc_rows.append([
                             Paragraph(f"{dot}{lbl}",    ST_TRAJ_C),
                             Paragraph(f"{t_v:.4f}",     ST_TRAJ_C),
+                            Paragraph(f"{b_v:.4f}",     ST_TRAJ_C),
                             Paragraph(f"{a_v:.4f}",     ST_TRAJ_C),
                             Paragraph(f"{delta:+.4f}",  ST_TRAJ_C),
                             Paragraph("input",          ST_NOTE),
                         ])
 
-                # Output row
+                # Output rows
                 for oi, olbl in enumerate(output_labels):
                     dot = _color_dot(proc_cm[olbl]) if olbl in proc_cm else ''
                     t_v = float(t_outputs[oi]) if hasattr(t_outputs, '__len__') and oi < len(t_outputs) else 0.0
                     b_v = float(b_outputs[oi]) if hasattr(b_outputs, '__len__') and oi < len(b_outputs) else 0.0
                     a_v = float(a_outputs[oi]) if hasattr(a_outputs, '__len__') and oi < len(a_outputs) else 0.0
-                    d_bl = b_v - t_v
                     d_ctrl = a_v - t_v
+                    d_bl   = b_v - t_v
                     proc_rows.append([
-                        Paragraph(f"{dot}{olbl}",    ST_TRAJ_C),
-                        Paragraph(f"{t_v:.4f}",      ST_TRAJ_C),
-                        Paragraph(f"{a_v:.4f}",      ST_TRAJ_C),
-                        Paragraph(f"{d_ctrl:+.4f}",  ST_TRAJ_C),
+                        Paragraph(f"{dot}{olbl}",     ST_TRAJ_C),
+                        Paragraph(f"{t_v:.4f}",       ST_TRAJ_C),
+                        Paragraph(f"{b_v:.4f}",       ST_TRAJ_C),
+                        Paragraph(f"{a_v:.4f}",       ST_TRAJ_C),
+                        Paragraph(f"{d_ctrl:+.4f}",   ST_TRAJ_C),
                         Paragraph(f"output (\u0394bl {d_bl:+.4f})", ST_NOTE),
                     ])
 
-                n_data_rows = len(proc_rows) - 1  # minus header
+                n_data_rows = len(proc_rows) - 1
 
                 data_tbl = Table(proc_rows, colWidths=data_cws)
                 data_tbl.setStyle(TableStyle([
@@ -1100,44 +1091,16 @@ def _page4_trajectory(d, total_pages):
                     ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
                 ]))
 
-                # Evolution plot for this process (if available)
-                evo_key = (sc_idx, proc)
-                evo_path = evo_paths.get(evo_key)
-
-                # Image sized to match this process's actual data rows
-                img_w = plot_w - 4
-                actual_tbl_h = 13 + n_data_rows * 14
-
-                if evo_path and os.path.exists(evo_path):
-                    from reportlab.platypus import Image as RLImage
-                    evo_img = RLImage(evo_path, width=img_w, height=actual_tbl_h)
-                    right_cell = evo_img
-                else:
-                    right_cell = Paragraph("", ST_NOTE)
-
-                # Process label + side-by-side layout
                 F.append(Paragraph(f"<b>{proc}</b>", ST_TRAJ_C))
-                side_tbl = Table([[data_tbl, right_cell]],
-                                 colWidths=[data_w, plot_w])
-                plot_top = 15 if proc_idx == 0 else 0
-                side_tbl.setStyle(TableStyle([
-                    ('VALIGN',       (0, 0), (-1, -1), 'TOP'),
-                    ('LEFTPADDING',  (0, 0), (-1, -1), 0),
-                    ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-                    ('TOPPADDING',   (0, 0), (0,  0),  0),
-                    ('TOPPADDING',   (1, 0), (1,  0),  plot_top),
-                    ('BOTTOMPADDING',(0, 0), (-1, -1), 0),
-                ]))
-                F.append(side_tbl)
+                F.append(data_tbl)
 
             F.append(Spacer(1, 2))
 
         # Footer legend
         foot_p = Paragraph(
-            "\u0394 = controller \u2212 target  \u00b7  "
+            "\u0394(ctrl\u2212tgt) = controller \u2212 target  \u00b7  "
             "\u0394bl = baseline output \u2212 target output  \u00b7  "
-            "best of 10 runs per scenario  \u00b7  "
-            "plots show X/Y evolution across training epochs", ST_NOTE)
+            "best of 10 runs per scenario", ST_NOTE)
         F.append(foot_p)
         F += _footer(d, total_pages, total_pages)
 
