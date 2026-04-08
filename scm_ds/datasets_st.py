@@ -1,11 +1,12 @@
 """
-Sigmoid-Cubic SCM Dataset — Fully synthetic, configurable SCM datasets.
+Sinusoidal SCM Dataset — Fully synthetic, configurable SCM datasets.
 
-Builds SCMDataset instances whose structural equations use a sigmoid-cubic
-transfer function  f(x) = 1/(1+exp(-(x³-3x)))  bounded in (0, 1), arranged
-in a configurable chain-of-stages DAG.  Stage outputs are averaged and
-blended via convex combination so that every intermediate node stays in
-(0, 1).  Complexity is controlled through a single STConfig dataclass.
+Builds SCMDataset instances whose structural equations use a sinusoidal
+transfer function  f(x) = sin((π/2)·x)  arranged in a configurable
+chain-of-stages DAG.  Stage outputs are averaged and blended via convex
+combination.  After each intermediate variable is computed, it is rescaled
+back to [-2, 2] using the empirical min/max of the layer.  Complexity is
+controlled through a single STConfig dataclass.
 
 The module provides:
     - STConfig: dataclass holding all configuration parameters.
@@ -65,7 +66,7 @@ class STConfig:
     carry_beta: float = 1.0            # weight of S_{k-1} in stage k
 
     # --- domains ---
-    x_domain: Tuple[float, float] = (-5.0, 5.0)
+    x_domain: Tuple[float, float] = (-2.0, 2.0)
     e_domain: Tuple[float, float] = (-1.0, 1.0)
 
     # --- calibration ---
@@ -165,8 +166,8 @@ def _assign_env_groups(n: int, me: int, overlap: float) -> List[List[int]]:
 # ---------------------------------------------------------------------------
 
 def _st_term(var: str) -> str:
-    """Sigmoid of cubic: 1/(1+exp(-(x^3 - 3*x))).  Bounded in (0, 1)."""
-    return f"1/(1 + exp(-({var}**3 - 3*{var})))"
+    """Sinusoidal transfer: sin((π/2)·x).  Output in [-1, 1] for x in [-1, 1]."""
+    return f"sin(({math.pi / 2})*{var})"
 
 
 def _build_stage_expr(
@@ -178,14 +179,11 @@ def _build_stage_expr(
 ) -> str:
     """Build the SymPy expression string for one stage node.
 
-    Each term is a sigmoid-cubic bounded in (0, 1).  The terms are
-    **averaged** (not summed) so the stage output without carry is also
-    in (0, 1).  When a previous stage is present the carry is blended
-    as a convex combination:
+    Each term is a sinusoidal transfer sin((π/2)·x).  The terms are
+    **averaged** (not summed).  When a previous stage is present the carry
+    is blended as a weighted combination:
 
         S_k = (1 - carry_beta) * mean(terms) + carry_beta * S_{k-1}
-
-    keeping S_k in (0, 1) provided carry_beta in [0, 1].
     """
     terms = []
     for x in input_names:
@@ -202,7 +200,6 @@ def _build_stage_expr(
         mean_expr = "0"
 
     if prev_stage is not None:
-        # convex combination keeps output in (0, 1)
         expr = f"(1 - {carry_beta})*{mean_expr} + {carry_beta}*{prev_stage}"
     else:
         expr = mean_expr
@@ -462,14 +459,14 @@ def build_st_scm(cfg: STConfig, dag_image_dir: Optional[str] = None) -> SCMDatas
     # ── STEP 9: Assemble SCMDataset ───────────────────────────────────
     # Build description
     desc = (
-        f"Styblinski-Tang SCM: n={cfg.n}, m={cfg.m}, p={cfg.p}, "
+        f"Sinusoidal SCM: n={cfg.n}, m={cfg.m}, p={cfg.p}, "
         f"env_mode={cfg.env_mode}, me={cfg.me}, rho={cfg.rho}"
     )
 
     ds = SCMDataset(
         name=f"st_n{cfg.n}_m{cfg.m}_p{cfg.p}_{cfg.env_mode}",
         description=desc,
-        tags=["styblinski-tang", "synthetic"],
+        tags=["sinusoidal", "synthetic"],
         specs=specs,
         params={},
         singles=singles,
@@ -484,6 +481,30 @@ def build_st_scm(cfg: STConfig, dag_image_dir: Optional[str] = None) -> SCMDatas
     for name_list in [noise_node_names_zln, noise_node_names_eps, noise_node_names_jump]:
         all_noise_nodes.extend(name_list)
     ds.process_noise_vars = all_noise_nodes
+
+    # ── STEP 9b: Install per-layer rescaling to [-2, 2] ──────────────
+    # After each intermediate stage node S_k is computed, rescale it
+    # to [-2, 2] using the empirical min/max of that layer's values.
+    # This is NOT applied to the final output Y.
+    _stage_set = frozenset(all_stage_names)
+    _scm_ref = ds.scm
+
+    _original_forward = _scm_ref.forward
+
+    def _rescaling_forward(context, eps_draws):
+        for v in _scm_ref.order:
+            parents = _scm_ref.specs[v].parents
+            args = [context[p] for p in parents] + [eps_draws[v]]
+            context[v] = _scm_ref._fns[v](*args)
+            if v in _stage_set:
+                vals = context[v]
+                v_min = float(vals.min())
+                v_max = float(vals.max())
+                if v_max > v_min:
+                    context[v] = -2.0 + 4.0 * (vals - v_min) / (v_max - v_min)
+        return context
+
+    _scm_ref.forward = _rescaling_forward
 
     # ── STEP 10: Calibrate process_configs ────────────────────────────
     _calibrate(ds, cfg, all_stage_names, output_names, output_partitions)
