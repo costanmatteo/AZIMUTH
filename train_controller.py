@@ -1049,6 +1049,10 @@ def main(config=None):
         formula_advanced_metrics['formula_gap_closure_test'] = compute_gap_closure(
             F_star_test_array, F_formula_baseline_test_array, F_formula_actual_test_array)
 
+        # Formula train mean for consistent KPI gap-reduction (same metric for baseline and controller)
+        formula_advanced_metrics['F_formula_train_mean'] = float(F_formula_mean)
+        formula_advanced_metrics['F_formula_train_std'] = float(F_formula_std)
+
         print(f"    Success rate (formula) — train: {formula_advanced_metrics['formula_success_rate_train']['success_rate_pct']:.1f}%")
         print(f"    Success rate (formula) — test:  {formula_advanced_metrics['formula_success_rate_test']['success_rate_pct']:.1f}%")
         print(f"    Worst-case gap (formula) — train: {formula_advanced_metrics['formula_worst_case_gap_train']['worst_case_gap']:.6f}")
