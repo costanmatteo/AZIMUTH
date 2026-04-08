@@ -615,17 +615,18 @@ def _build_page(d, out_path):
                            frames=[hdr_f, lft_f, rgt_f, ftr_f],
                            pagesize=landscape(A4))
 
-    # ── Pagina 2: due minipage verticali (top = B, bottom = C) ───────────
-    MINI_GAP = 8                                # spazio tra le due minipage (pt)
-    MINI_H   = (PH - 2 * M - MINI_GAP) / 2     # altezza di ciascuna minipage
+    # ── Pagina 2: due minipage affiancate (left = B, right = C) ─────────
+    MINI_GAP = GAP                              # spazio tra le due minipage
+    MINI_W   = (FULL_W - MINI_GAP) / 2          # larghezza di ciascuna minipage
+    MINI_H   = PH - 2 * M                       # altezza piena
 
-    top_f = Frame(M, M + MINI_H + MINI_GAP, FULL_W, MINI_H, id='top',
-                  leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0)
-    bot_f = Frame(M, M, FULL_W, MINI_H, id='bot',
-                  leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0)
+    lft_f2 = Frame(M, M, MINI_W, MINI_H, id='chart_left',
+                   leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0)
+    rgt_f2 = Frame(M + MINI_W + MINI_GAP, M, MINI_W, MINI_H, id='chart_right',
+                   leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0)
 
     pt_charts = PageTemplate(id='charts',
-                             frames=[top_f, bot_f],
+                             frames=[lft_f2, rgt_f2],
                              pagesize=landscape(A4))
 
     doc = BaseDocTemplate(str(out_path), pagesize=landscape(A4),
@@ -635,8 +636,8 @@ def _build_page(d, out_path):
     lk = KeepInFrame(LW, BODY_H, _build_left(d),  mode='shrink')
     rk = KeepInFrame(RW, BODY_H, _build_right(d), mode='shrink')
 
-    b_content = _build_section_b(d, FULL_W, MINI_H)
-    c_content = _build_section_c(d, FULL_W, MINI_H)
+    b_content = _build_section_b(d, MINI_W, MINI_H)
+    c_content = _build_section_c(d, MINI_W, MINI_H)
 
     doc.build(
         # ── Pagina 1 ──
