@@ -161,21 +161,21 @@ class GaussianNLLLoss(nn.Module):
     3. Overestimation of uncertainty (too large variance)
 
     The loss is computed as:
-        L = 0.5 * ((y - μ)² / σ² + α * log(σ²))
+        L = 0.5 * (α * (y - μ)² / σ² + log(σ²))
 
     Where:
     - μ: predicted mean
     - σ²: predicted variance
     - y: true target value
-    - α: variance penalty weight (default: 1.0)
+    - α: variance inflation weight (default: 1.0)
 
     The α parameter controls the trade-off between prediction accuracy and
     uncertainty calibration:
     - α = 1.0: Standard Gaussian NLL (default)
-    - α < 1.0: Reduces penalty for large variances, allowing the model to be
-               more honest about its uncertainty (recommended for over-confident models)
-    - α > 1.0: Increases penalty for large variances, pushing for more confident
-               predictions
+    - α > 1.0: Amplifies the squared-error-over-variance term, forcing the
+                model to increase σ² to absorb the extra cost → coverage rises
+    - α < 1.0: Reduces that term, allowing the model to keep σ² small
+                → coverage drops (more confident predictions)
 
     This encourages the model to:
     - Predict accurate means where possible
@@ -183,7 +183,7 @@ class GaussianNLLLoss(nn.Module):
     - Balance confidence with calibration based on α
 
     Args:
-        alpha (float): Weight for variance penalty term (default: 1.0)
+        alpha (float): Weight for squared-error / variance term (default: 1.0)
         reduction (str): Reduction method ('mean', 'sum', 'none')
         epsilon (float): Small value for numerical stability
     """
@@ -198,16 +198,16 @@ class GaussianNLLLoss(nn.Module):
             raise ValueError(f"alpha must be positive, got {alpha}")
 
         print(f"GaussianNLLLoss initialized with alpha={alpha:.3f}")
-        if alpha < 1.0:
-            print("  → Reduced penalty for large variances (encourages honest uncertainty)")
-        elif alpha > 1.0:
-            print("  → Increased penalty for large variances (encourages confidence)")
+        if alpha > 1.0:
+            print("  → Amplified error/variance term (encourages larger variance → higher coverage)")
+        elif alpha < 1.0:
+            print("  → Reduced error/variance term (encourages confidence → lower coverage)")
         else:
             print("  → Standard Gaussian NLL (balanced)")
 
     def forward(self, mean, variance, target):
         """
-        Compute Gaussian NLL loss with weighted variance penalty.
+        Compute Gaussian NLL loss with weighted squared-error term.
 
         Args:
             mean (torch.Tensor): Predicted mean, shape (batch_size, output_size)
@@ -218,17 +218,18 @@ class GaussianNLLLoss(nn.Module):
             torch.Tensor: Loss value
 
         Formula:
-            L = 0.5 * ((y - μ)² / σ² + α * log(σ²))
+            L = 0.5 * (α * (y - μ)² / σ² + log(σ²))
 
-        When α < 1, the model can more easily increase variance without
-        being heavily penalized, leading to better calibrated uncertainty.
+        When α > 1, the (y-μ)²/σ² term dominates, forcing the model to
+        increase σ² to reduce the loss → predicted intervals widen →
+        coverage increases.
         """
         # Ensure variance is positive
         variance = variance + self.epsilon
 
-        # Weighted Gaussian NLL: 0.5 * ((target - mean)^2 / var + alpha * log(var))
-        squared_error_term = (target - mean) ** 2 / variance
-        log_variance_term = self.alpha * torch.log(variance)
+        # Weighted Gaussian NLL: 0.5 * (alpha * (target - mean)^2 / var + log(var))
+        squared_error_term = self.alpha * (target - mean) ** 2 / variance
+        log_variance_term = torch.log(variance)
         loss = 0.5 * (squared_error_term + log_variance_term)
 
         if self.reduction == 'mean':
