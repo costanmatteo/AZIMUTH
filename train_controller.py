@@ -77,7 +77,8 @@ from controller.src.evaluation.visualization import (
     plot_gap_distribution,
     plot_training_progression,
     plot_loss_chart,
-    generate_process_evolution_plots
+    generate_process_evolution_plots,
+    plot_process_input_output_graphs
 )
 from controller.src.evaluation.report_generator import generate_controller_report, get_report_chart_sizes
 from controller.src.io.utils import convert_numpy_to_tensor
@@ -2049,6 +2050,22 @@ def main(config=None):
                 print(f"  ✓ Generated {len(evolution_plot_paths)} evolution plots")
             except Exception as e:
                 print(f"  ✗ Warning: Evolution plots failed: {e}")
+                import traceback
+                traceback.print_exc()
+
+        # Generate per-process input/output graphs (standalone, one per process)
+        if hasattr(trainer, 'training_progression') and trainer.training_progression:
+            print("\n  Generating per-process input/output graphs...")
+            try:
+                process_graph_paths = plot_process_input_output_graphs(
+                    training_progression=trainer.training_progression,
+                    controllable_info=controllable_info_for_report,
+                    checkpoint_dir=checkpoint_dir,
+                    n_scenarios=n_scenarios,
+                )
+                print(f"  ✓ Generated {len(process_graph_paths)} process graphs")
+            except Exception as e:
+                print(f"  ✗ Warning: Process graphs failed: {e}")
                 import traceback
                 traceback.print_exc()
 

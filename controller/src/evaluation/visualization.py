@@ -1126,3 +1126,161 @@ def generate_process_evolution_plots(training_progression, controllable_info,
             plot_paths[(scenario_idx, proc_name)] = str(fpath)
 
     return plot_paths, color_maps
+
+
+def plot_process_input_output_graphs(training_progression, controllable_info,
+                                     checkpoint_dir, n_scenarios=1):
+    """
+    Generate one standalone graph per process showing how inputs and outputs
+    evolve across training epochs.
+
+    Each graph shows:
+    - Solid lines for controllable inputs (actual values over epochs)
+    - Dashed lines for outputs (actual values over epochs)
+    - Dotted horizontal lines for target values (inputs and outputs)
+    - Warmup-end vertical marker when curriculum learning is used
+
+    Args:
+        training_progression (list): List of epoch snapshots from trainer.
+        controllable_info (dict): Per-process info with keys:
+            input_labels, output_labels, controllable_indices, controllable_labels.
+        checkpoint_dir (Path|str): Directory to save plots.
+        n_scenarios (int): Number of scenarios.
+
+    Returns:
+        dict: {(scenario_idx, process_name): plot_path}
+    """
+    apply_plot_style()
+    checkpoint_dir = Path(checkpoint_dir)
+    plot_paths = {}
+
+    if not training_progression:
+        return plot_paths
+
+    # Extract process names from first snapshot
+    first_snap = training_progression[0]
+    per_sc = first_snap.get('per_scenario', {})
+    if not per_sc:
+        return plot_paths
+    proc_names = list(per_sc[0].keys()) if 0 in per_sc else []
+    if not proc_names:
+        return plot_paths
+
+    epochs = [s['epoch'] for s in training_progression]
+
+    # Detect warmup end epoch
+    warmup_end_epoch = None
+    for snap in training_progression:
+        if snap.get('phase') == 'warmup':
+            continue
+        if snap.get('phase') == 'curriculum':
+            warmup_end_epoch = snap['epoch']
+            break
+
+    # Color palette
+    INPUT_COLORS = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728',
+                    '#9467bd', '#8c564b', '#e377c2', '#7f7f7f']
+    OUTPUT_COLORS = ['#17becf', '#bcbd22', '#aec7e8', '#ffbb78']
+
+    for scenario_idx in range(n_scenarios):
+        for proc_name in proc_names:
+            p_info = controllable_info.get(proc_name, {})
+            ctrl_indices = p_info.get('controllable_indices', [])
+            input_labels = p_info.get('input_labels', [])
+            output_labels = p_info.get('output_labels', [])
+
+            # Collect per-epoch values
+            ctrl_series = {ci: [] for ci in ctrl_indices}
+            out_series = {oi: [] for oi in range(len(output_labels))}
+
+            for snap in training_progression:
+                sc_data = snap.get('per_scenario', {}).get(scenario_idx)
+                if sc_data is None:
+                    for ci in ctrl_indices:
+                        ctrl_series[ci].append(np.nan)
+                    for oi in range(len(output_labels)):
+                        out_series[oi].append(np.nan)
+                    continue
+
+                proc_data = sc_data.get(proc_name, {})
+                inputs = proc_data.get('inputs', np.array([[]]))
+                outputs = proc_data.get('outputs_mean',
+                                        proc_data.get('outputs', np.array([[]])))
+
+                inp = inputs.flatten()
+                out = outputs.flatten()
+
+                for ci in ctrl_indices:
+                    ctrl_series[ci].append(float(inp[ci]) if ci < len(inp) else np.nan)
+                for oi in range(len(output_labels)):
+                    out_series[oi].append(float(out[oi]) if oi < len(out) else np.nan)
+
+            # Get target values from first snapshot
+            target_input_vals = {}
+            target_output_vals = {}
+            tgt = first_snap.get('target_trajectory', {}).get(proc_name, {})
+            if 'inputs' in tgt:
+                tgt_inp = tgt['inputs'].flatten()
+                for ci in ctrl_indices:
+                    if ci < len(tgt_inp):
+                        target_input_vals[ci] = float(tgt_inp[ci])
+            if 'outputs' in tgt:
+                tgt_out = tgt['outputs'].flatten()
+                for oi in range(len(output_labels)):
+                    if oi < len(tgt_out):
+                        target_output_vals[oi] = float(tgt_out[oi])
+
+            n_lines = len(ctrl_indices) + len(output_labels)
+            if n_lines == 0:
+                continue
+
+            # Create figure
+            fig_h = max(3.5, 2.0 + 0.3 * n_lines)
+            fig, ax = plt.subplots(figsize=(7, fig_h))
+
+            # Plot controllable inputs (solid lines)
+            for idx, ci in enumerate(ctrl_indices):
+                lbl = input_labels[ci] if ci < len(input_labels) else f'X_{ci}'
+                c = INPUT_COLORS[idx % len(INPUT_COLORS)]
+                ax.plot(epochs, ctrl_series[ci], color=c, linewidth=1.0,
+                        label=f'{lbl} (input)')
+
+                # Target horizontal line
+                if ci in target_input_vals:
+                    ax.axhline(y=target_input_vals[ci], color=c,
+                               linestyle=':', linewidth=0.6, alpha=0.5)
+
+            # Plot outputs (dashed lines)
+            for oi in range(len(output_labels)):
+                lbl = output_labels[oi]
+                c = OUTPUT_COLORS[oi % len(OUTPUT_COLORS)]
+                ax.plot(epochs, out_series[oi], color=c, linewidth=1.0,
+                        linestyle='--', label=f'{lbl} (output)')
+
+                # Target horizontal line
+                if oi in target_output_vals:
+                    ax.axhline(y=target_output_vals[oi], color=c,
+                               linestyle=':', linewidth=0.6, alpha=0.5)
+
+            # Warmup end marker
+            if warmup_end_epoch is not None:
+                ax.axvline(x=warmup_end_epoch, color='#999999',
+                           linestyle=':', linewidth=0.5, alpha=0.6,
+                           label='Warmup end')
+
+            ax.set_xlabel('Epoch')
+            ax.set_ylabel('Value')
+            sc_suffix = f' (scenario {scenario_idx})' if n_scenarios > 1 else ''
+            ax.set_title(f'{proc_name}{sc_suffix} — Inputs & Outputs over Epochs')
+            ax.legend(loc='best', ncol=max(1, n_lines // 4))
+
+            plt.tight_layout()
+
+            fname = f'process_graph_sc{scenario_idx}_{proc_name}.png'
+            fpath = checkpoint_dir / fname
+            plt.savefig(str(fpath), dpi=150, bbox_inches='tight')
+            plt.close()
+
+            plot_paths[(scenario_idx, proc_name)] = str(fpath)
+
+    return plot_paths
