@@ -34,20 +34,28 @@ SURROGATE_CONFIG = {
     'model': _MODEL,
     'base_yaml': str(_YAML_REGISTRY[_MODEL]),
 
-    # Overrides (same structure as the YAML)
-    # Only keys present here will be overwritten; everything else keeps
-    # its YAML default.
     'overrides': {
 
         'data': {
-            'dataset': 'azimuth_surrogate',
-            # Use ds.npz (created by generate_dataset.py) with k-fold splitting.
-            # The base StageCausaliT YAML sets train_file/test_file for its own
-            # pre-split datasets; we override to null so the dataloader falls
-            # back to the combined ds.npz file.
-            'train_file': None,
-            'test_file': None,
-            'filename_input': 'ds.npz',
+            'dataset': 'azimuth_surrogate',  # obbligatorio
+        },
+
+        'model': {
+            # ProT piccolo: 3 token di input (1 per processo), task semplice
+            'model_dim': 32,       # dim embedding — 32 basta per 3 processi
+            'n_heads': 4,          # teste attenzione (deve dividere model_dim)
+            'n_enc_layers': 2,     # encoder layers — non serve profondo
+            'n_dec_layers': 1,     # decoder layers
+            'dropout': 0.1,
+            'ffn_dim': 64,         # feed-forward dim interna (tipicamente 2× model_dim)
+        },
+
+        'training': {
+            'batch_size': 128,
+            'max_epochs': 200,
+            'learning_rate': 1e-3,
+            'weight_decay': 1e-4,
+            'patience': 20,        # early stopping
         },
 
     },

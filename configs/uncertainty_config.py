@@ -35,9 +35,9 @@ GLOBAL_UNCERTAINTY_CONFIG = {
 # Configurazione modello/training condivisa da tutti i processi ST
 DEFAULT_ST_UNCERTAINTY_PREDICTOR = {
     'model': {
-        'hidden_sizes': [256, 128, 64, 32],
+        'hidden_sizes': [32, 16],
         'dropout_rate': 0.05,
-        'use_batchnorm': True,
+        'use_batchnorm': False,
         'min_variance': 1e-6,
     },
     'training': {

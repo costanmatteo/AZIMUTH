@@ -121,13 +121,13 @@ CONTROLLER_CONFIG = {
 
     # Training parameters
     'training': {
-        'epochs': 100,  # Each epoch cycles through all training scenarios once
+        'epochs': 500,  # Each epoch cycles through all training scenarios once
         'batch_size': 3000,  # Total samples per epoch (split equally across scenarios)
         'learning_rate': 0.0019017383571692538,
         'weight_decay': 0.001,
         'lambda_bc': 0.001,  # Behavior cloning weight
         'reliability_loss_scale': 100.0,  # Scale factor for reliability loss (F - F*)^2
-        'patience': 50,
+        'patience': 250,
         'device': 'auto',
         'checkpoint_dir': 'checkpoints/controller',
 
@@ -170,9 +170,9 @@ CONTROLLER_CONFIG = {
     # Scenario generation (train/test split)
     'scenarios': {
         'n_train': 1,        # Training scenarios (diverse operating conditions)
-        'n_test': 10,          # Test scenarios (final evaluation, never seen during training)
-        'seed_target': 50,     # Seed for target trajectory generation (train)
-        'seed_baseline': 134,   # Seed for baseline process noise (same inputs, different noise)
+        'n_test': 1,          # Test scenarios (final evaluation, never seen during training)
+        'seed_target': 6,     # Seed for target trajectory generation (train)
+        'seed_baseline': 5,   # Seed for baseline process noise (same inputs, different noise)
         'test_seed_offset': 1000,  # Offset added to seeds for test scenarios (ensures different from train)
     },
 
@@ -216,7 +216,7 @@ CONTROLLER_CONFIG = {
 
     # Theoretical analysis
     'theoretical_analysis': {
-        'enabled': True,  # Enable/disable theoretical L_min analysis (computation + plots)
+        'enabled': False,  # Enable/disable theoretical L_min analysis (computation + plots)
         'use_correlation_for_L_min': True,  # Use estimated process correlations for L_min calculation
                                             # True = accounts for correlated process errors (more accurate)
                                             # False = assumes independence (ρᵢⱼ = 0, simpler)
