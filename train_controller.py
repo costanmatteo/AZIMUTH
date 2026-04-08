@@ -1329,6 +1329,7 @@ def main(config=None):
             'diversity_test': diversity_test,
             'F_baseline_train_mean': float(F_baseline_mean),    # for KPI train gap-reduction
             'F_actual_train_mean': float(F_actual_mean),      # for KPI train gap-reduction
+            'F_actual_train_std': float(F_actual_std),        # for KPI train robustness
             **formula_advanced_metrics,  # formula_* keys (empty dict if not using CasualiT)
         }
 

@@ -535,6 +535,7 @@ def _page1(d, total_pages):
     # Train gap-reduction (same formula as improv_pct but on train F values)
     fbl_train  = adv.get('F_baseline_train_mean', fbl_v)
     fact_train = adv.get('F_actual_train_mean', fact_v)
+    rob_std_train = adv.get('F_actual_train_std', rob_std)
     gap_bl_train   = abs(fbl_train - fstar_v)
     gap_ctrl_train = abs(fact_train - fstar_v)
     improv_train = (gap_bl_train - gap_ctrl_train) / gap_bl_train * 100 if gap_bl_train else 0.0
@@ -566,18 +567,48 @@ def _page1(d, total_pages):
 
     # ── KPI bar ───────────────────────────────────────────────────────────────
     if fform_v is not None:
+        n_kpi = 7
+        cw = TW / n_kpi
+        kpi_data = [
+            [Paragraph("Controller F (test)",  ST_KPI_LBL),
+             Paragraph("Controller F (train)", ST_KPI_LBL),
+             Paragraph("Formula F",            ST_KPI_LBL),
+             Paragraph("Target F*",            ST_KPI_LBL),
+             Paragraph("vs baseline (test)",   ST_KPI_LBL),
+             Paragraph("vs baseline (train)",  ST_KPI_LBL),
+             Paragraph("Best loss",            ST_KPI_LBL)],
+            [Paragraph(f"{fact_v:.4f}",     ST_KPI_VAL),
+             Paragraph(f"{fact_train:.4f}", ST_KPI_VAL),
+             Paragraph(f"{fform_v:.4f}",    ST_KPI_VAL),
+             Paragraph(f"{fstar_v:.4f}",    ST_KPI_VAL),
+             Paragraph(f"{improv_test:+.2f}%",
+                       _s('_kv_g', FS_KPI_VAL,
+                          color=C_GREEN if improv_test >= 0 else C_RED)),
+             Paragraph(f"{improv_train:+.2f}%",
+                       _s('_kv_t', FS_KPI_VAL,
+                          color=C_GREEN if improv_train >= 0 else C_RED)),
+             Paragraph(f"{best_loss:.4f}", ST_KPI_VAL)],
+            [Paragraph(f"\u00b1{rob_std:.4f} robustness",     ST_KPI_SUB),
+             Paragraph(f"\u00b1{rob_std_train:.4f} robustness", ST_KPI_SUB),
+             Paragraph(f"\u00b1{fform_s:.4f}" if fform_s else "", ST_KPI_SUB),
+             Paragraph(f"gap {gap_pct:.1f}%",               ST_KPI_SUB),
+             Paragraph(f"F\u2019_test = {fbl_v:.4f}",       ST_KPI_SUB),
+             Paragraph(f"F\u2019_train = {fbl_train:.4f}",   ST_KPI_SUB),
+             Paragraph(f"final {final_loss:.2f}",            ST_KPI_SUB)],
+        ]
+    else:
         n_kpi = 6
         cw = TW / n_kpi
         kpi_data = [
-            [Paragraph("Controller F",        ST_KPI_LBL),
-             Paragraph("Formula F",           ST_KPI_LBL),
-             Paragraph("Target F*",           ST_KPI_LBL),
-             Paragraph("vs baseline (test)",  ST_KPI_LBL),
-             Paragraph("vs baseline (train)", ST_KPI_LBL),
-             Paragraph("Best loss",           ST_KPI_LBL)],
-            [Paragraph(f"{fact_v:.4f}",  ST_KPI_VAL),
-             Paragraph(f"{fform_v:.4f}", ST_KPI_VAL),
-             Paragraph(f"{fstar_v:.4f}", ST_KPI_VAL),
+            [Paragraph("Controller F (test)",  ST_KPI_LBL),
+             Paragraph("Controller F (train)", ST_KPI_LBL),
+             Paragraph("Target F*",            ST_KPI_LBL),
+             Paragraph("vs baseline (test)",   ST_KPI_LBL),
+             Paragraph("vs baseline (train)",  ST_KPI_LBL),
+             Paragraph("Best loss",            ST_KPI_LBL)],
+            [Paragraph(f"{fact_v:.4f}",     ST_KPI_VAL),
+             Paragraph(f"{fact_train:.4f}", ST_KPI_VAL),
+             Paragraph(f"{fstar_v:.4f}",    ST_KPI_VAL),
              Paragraph(f"{improv_test:+.2f}%",
                        _s('_kv_g', FS_KPI_VAL,
                           color=C_GREEN if improv_test >= 0 else C_RED)),
@@ -585,36 +616,12 @@ def _page1(d, total_pages):
                        _s('_kv_t', FS_KPI_VAL,
                           color=C_GREEN if improv_train >= 0 else C_RED)),
              Paragraph(f"{best_loss:.4f}", ST_KPI_VAL)],
-            [Paragraph(f"\u00b1{rob_std:.4f} robustness", ST_KPI_SUB),
-             Paragraph(f"\u00b1{fform_s:.4f}" if fform_s else "", ST_KPI_SUB),
-             Paragraph(f"gap {gap_pct:.1f}%",              ST_KPI_SUB),
-             Paragraph(f"F\u2019_test = {fbl_v:.4f}",      ST_KPI_SUB),
-             Paragraph(f"F\u2019_train = {fbl_train:.4f}",  ST_KPI_SUB),
-             Paragraph(f"final {final_loss:.2f}",           ST_KPI_SUB)],
-        ]
-    else:
-        n_kpi = 5
-        cw = TW / n_kpi
-        kpi_data = [
-            [Paragraph("Controller F",        ST_KPI_LBL),
-             Paragraph("Target F*",           ST_KPI_LBL),
-             Paragraph("vs baseline (test)",  ST_KPI_LBL),
-             Paragraph("vs baseline (train)", ST_KPI_LBL),
-             Paragraph("Best loss",           ST_KPI_LBL)],
-            [Paragraph(f"{fact_v:.4f}",  ST_KPI_VAL),
-             Paragraph(f"{fstar_v:.4f}", ST_KPI_VAL),
-             Paragraph(f"{improv_test:+.2f}%",
-                       _s('_kv_g', FS_KPI_VAL,
-                          color=C_GREEN if improv_test >= 0 else C_RED)),
-             Paragraph(f"{improv_train:+.2f}%",
-                       _s('_kv_t', FS_KPI_VAL,
-                          color=C_GREEN if improv_train >= 0 else C_RED)),
-             Paragraph(f"{best_loss:.4f}", ST_KPI_VAL)],
-            [Paragraph(f"\u00b1{rob_std:.4f} robustness", ST_KPI_SUB),
-             Paragraph(f"gap {gap_pct:.1f}%",              ST_KPI_SUB),
-             Paragraph(f"F\u2019_test = {fbl_v:.4f}",      ST_KPI_SUB),
-             Paragraph(f"F\u2019_train = {fbl_train:.4f}",  ST_KPI_SUB),
-             Paragraph(f"final {final_loss:.2f}",           ST_KPI_SUB)],
+            [Paragraph(f"\u00b1{rob_std:.4f} robustness",     ST_KPI_SUB),
+             Paragraph(f"\u00b1{rob_std_train:.4f} robustness", ST_KPI_SUB),
+             Paragraph(f"gap {gap_pct:.1f}%",               ST_KPI_SUB),
+             Paragraph(f"F\u2019_test = {fbl_v:.4f}",       ST_KPI_SUB),
+             Paragraph(f"F\u2019_train = {fbl_train:.4f}",   ST_KPI_SUB),
+             Paragraph(f"final {final_loss:.2f}",            ST_KPI_SUB)],
         ]
     kpi_tbl = Table(kpi_data, colWidths=[cw] * n_kpi)
     kpi_tbl.setStyle(TableStyle([
