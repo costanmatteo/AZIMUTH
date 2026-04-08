@@ -1327,6 +1327,9 @@ def main(config=None):
             'within_scenario_gap': within_scenario_gap_metrics,
             'diversity_train': diversity_train,
             'diversity_test': diversity_test,
+            'improvement_train_pct': improvement,        # train improvement (already calculated)
+            'improvement_test_pct': improvement_test,    # test improvement (already calculated)
+            'F_baseline_train_mean': float(F_baseline_mean),  # for KPI sub-label
             **formula_advanced_metrics,  # formula_* keys (empty dict if not using CasualiT)
         }
 

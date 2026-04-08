@@ -532,6 +532,11 @@ def _page1(d, total_pages):
     final_loss = _last(hist.get('final_total_loss', hist.get('total_loss', 0.0)))
     rob_std    = fact_s if fact_s is not None else _last(fm.get('robustness_std', 0.0))
 
+    # Train/test improvement from advanced_metrics (fallback to locally computed improv_pct)
+    improv_test  = adv.get('improvement_test_pct',  improv_pct)
+    improv_train = adv.get('improvement_train_pct', improv_pct)
+    fbl_train    = adv.get('F_baseline_train_mean', fbl_v)
+
     F = []
 
     # ── header ────────────────────────────────────────────────────────────────
@@ -557,45 +562,55 @@ def _page1(d, total_pages):
 
     # ── KPI bar ───────────────────────────────────────────────────────────────
     if fform_v is not None:
-        n_kpi = 5
+        n_kpi = 6
         cw = TW / n_kpi
         kpi_data = [
-            [Paragraph("Controller F",  ST_KPI_LBL),
-             Paragraph("Formula F",     ST_KPI_LBL),
-             Paragraph("Target F*",     ST_KPI_LBL),
-             Paragraph("vs baseline",   ST_KPI_LBL),
-             Paragraph("Best loss",     ST_KPI_LBL)],
+            [Paragraph("Controller F",        ST_KPI_LBL),
+             Paragraph("Formula F",           ST_KPI_LBL),
+             Paragraph("Target F*",           ST_KPI_LBL),
+             Paragraph("vs baseline (test)",  ST_KPI_LBL),
+             Paragraph("vs baseline (train)", ST_KPI_LBL),
+             Paragraph("Best loss",           ST_KPI_LBL)],
             [Paragraph(f"{fact_v:.4f}",  ST_KPI_VAL),
              Paragraph(f"{fform_v:.4f}", ST_KPI_VAL),
              Paragraph(f"{fstar_v:.4f}", ST_KPI_VAL),
-             Paragraph(f"{improv_pct:+.2f}%",
+             Paragraph(f"{improv_test:+.2f}%",
                        _s('_kv_g', FS_KPI_VAL,
-                          color=C_GREEN if improv_pct >= 0 else C_RED)),
+                          color=C_GREEN if improv_test >= 0 else C_RED)),
+             Paragraph(f"{improv_train:+.2f}%",
+                       _s('_kv_t', FS_KPI_VAL,
+                          color=C_GREEN if improv_train >= 0 else C_RED)),
              Paragraph(f"{best_loss:.4f}", ST_KPI_VAL)],
             [Paragraph(f"\u00b1{rob_std:.4f} robustness", ST_KPI_SUB),
              Paragraph(f"\u00b1{fform_s:.4f}" if fform_s else "", ST_KPI_SUB),
-             Paragraph(f"gap {gap_pct:.1f}%",             ST_KPI_SUB),
-             Paragraph(f"F\u2019 = {fbl_v:.4f}",          ST_KPI_SUB),
-             Paragraph(f"final {final_loss:.2f}",          ST_KPI_SUB)],
+             Paragraph(f"gap {gap_pct:.1f}%",              ST_KPI_SUB),
+             Paragraph(f"F\u2019_test = {fbl_v:.4f}",      ST_KPI_SUB),
+             Paragraph(f"F\u2019_train = {fbl_train:.4f}",  ST_KPI_SUB),
+             Paragraph(f"final {final_loss:.2f}",           ST_KPI_SUB)],
         ]
     else:
-        n_kpi = 4
+        n_kpi = 5
         cw = TW / n_kpi
         kpi_data = [
-            [Paragraph("Controller F",  ST_KPI_LBL),
-             Paragraph("Target F*",     ST_KPI_LBL),
-             Paragraph("vs baseline",   ST_KPI_LBL),
-             Paragraph("Best loss",     ST_KPI_LBL)],
+            [Paragraph("Controller F",        ST_KPI_LBL),
+             Paragraph("Target F*",           ST_KPI_LBL),
+             Paragraph("vs baseline (test)",  ST_KPI_LBL),
+             Paragraph("vs baseline (train)", ST_KPI_LBL),
+             Paragraph("Best loss",           ST_KPI_LBL)],
             [Paragraph(f"{fact_v:.4f}",  ST_KPI_VAL),
              Paragraph(f"{fstar_v:.4f}", ST_KPI_VAL),
-             Paragraph(f"{improv_pct:+.2f}%",
+             Paragraph(f"{improv_test:+.2f}%",
                        _s('_kv_g', FS_KPI_VAL,
-                          color=C_GREEN if improv_pct >= 0 else C_RED)),
+                          color=C_GREEN if improv_test >= 0 else C_RED)),
+             Paragraph(f"{improv_train:+.2f}%",
+                       _s('_kv_t', FS_KPI_VAL,
+                          color=C_GREEN if improv_train >= 0 else C_RED)),
              Paragraph(f"{best_loss:.4f}", ST_KPI_VAL)],
             [Paragraph(f"\u00b1{rob_std:.4f} robustness", ST_KPI_SUB),
-             Paragraph(f"gap {gap_pct:.1f}%",             ST_KPI_SUB),
-             Paragraph(f"F\u2019 = {fbl_v:.4f}",          ST_KPI_SUB),
-             Paragraph(f"final {final_loss:.2f}",          ST_KPI_SUB)],
+             Paragraph(f"gap {gap_pct:.1f}%",              ST_KPI_SUB),
+             Paragraph(f"F\u2019_test = {fbl_v:.4f}",      ST_KPI_SUB),
+             Paragraph(f"F\u2019_train = {fbl_train:.4f}",  ST_KPI_SUB),
+             Paragraph(f"final {final_loss:.2f}",           ST_KPI_SUB)],
         ]
     kpi_tbl = Table(kpi_data, colWidths=[cw] * n_kpi)
     kpi_tbl.setStyle(TableStyle([
