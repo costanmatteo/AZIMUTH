@@ -532,10 +532,14 @@ def _page1(d, total_pages):
     final_loss = _last(hist.get('final_total_loss', hist.get('total_loss', 0.0)))
     rob_std    = fact_s if fact_s is not None else _last(fm.get('robustness_std', 0.0))
 
-    # Train/test improvement from advanced_metrics (fallback to locally computed improv_pct)
-    improv_test  = adv.get('improvement_test_pct',  improv_pct)
-    improv_train = adv.get('improvement_train_pct', improv_pct)
-    fbl_train    = adv.get('F_baseline_train_mean', fbl_v)
+    # Train gap-reduction (same formula as improv_pct but on train F values)
+    fbl_train  = adv.get('F_baseline_train_mean', fbl_v)
+    fact_train = adv.get('F_actual_train_mean', fact_v)
+    gap_bl_train   = abs(fbl_train - fstar_v)
+    gap_ctrl_train = abs(fact_train - fstar_v)
+    improv_train = (gap_bl_train - gap_ctrl_train) / gap_bl_train * 100 if gap_bl_train else 0.0
+    # Test uses the locally computed improv_pct (already gap-reduction)
+    improv_test = improv_pct
 
     F = []
 
@@ -574,10 +578,10 @@ def _page1(d, total_pages):
             [Paragraph(f"{fact_v:.4f}",  ST_KPI_VAL),
              Paragraph(f"{fform_v:.4f}", ST_KPI_VAL),
              Paragraph(f"{fstar_v:.4f}", ST_KPI_VAL),
-             Paragraph(f"{improv_test:+.2f}%",
+             Paragraph(f"{abs(improv_test):.2f}%",
                        _s('_kv_g', FS_KPI_VAL,
                           color=C_GREEN if improv_test >= 0 else C_RED)),
-             Paragraph(f"{improv_train:+.2f}%",
+             Paragraph(f"{abs(improv_train):.2f}%",
                        _s('_kv_t', FS_KPI_VAL,
                           color=C_GREEN if improv_train >= 0 else C_RED)),
              Paragraph(f"{best_loss:.4f}", ST_KPI_VAL)],
@@ -599,10 +603,10 @@ def _page1(d, total_pages):
              Paragraph("Best loss",           ST_KPI_LBL)],
             [Paragraph(f"{fact_v:.4f}",  ST_KPI_VAL),
              Paragraph(f"{fstar_v:.4f}", ST_KPI_VAL),
-             Paragraph(f"{improv_test:+.2f}%",
+             Paragraph(f"{abs(improv_test):.2f}%",
                        _s('_kv_g', FS_KPI_VAL,
                           color=C_GREEN if improv_test >= 0 else C_RED)),
-             Paragraph(f"{improv_train:+.2f}%",
+             Paragraph(f"{abs(improv_train):.2f}%",
                        _s('_kv_t', FS_KPI_VAL,
                           color=C_GREEN if improv_train >= 0 else C_RED)),
              Paragraph(f"{best_loss:.4f}", ST_KPI_VAL)],
