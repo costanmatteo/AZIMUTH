@@ -60,6 +60,7 @@ ST_DATASET_CONFIG = {
         'me': 1,                    # variabili ambientali
         'env_mode': 'A',            # modalità ambiente (A|B|C|D)
         'env_overlap': 0.0,
+        'output_overlap': 0.0,          # sovrapposizione confine output [0,1]
         'alpha': 0.3,               # ampiezza shift additivo
         'gamma': 0.3,               # ampiezza moltiplicativa
         'rho': 0.2,                 # intensità rumore [0,1]

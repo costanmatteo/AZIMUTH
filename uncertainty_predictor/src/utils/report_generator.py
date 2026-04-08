@@ -14,6 +14,7 @@ from reportlab.lib import colors
 from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
 from reportlab.platypus import (
     BaseDocTemplate, Frame, PageTemplate, FrameBreak,
+    NextPageTemplate, PageBreak,
     Paragraph, Spacer, Image, Table, TableStyle,
 )
 from reportlab.platypus.flowables import HRFlowable, KeepInFrame
@@ -541,12 +542,12 @@ def _build_left(d):
 # ════════════════════════════════════════════════════════════════════════════
 
 def _build_right(d):
-    chk_dir = Path(d['config'].get('training',{}).get('checkpoint_dir','.'))
+    chk_dir = Path(d.get('checkpoint_dir') or
+                   d['config'].get('training', {}).get('checkpoint_dir', '.'))
     F = []
 
     avail = BODY_H - 80
-    h_ab = avail * 0.27
-    h_c  = avail * 0.38
+    h_ab = avail * 0.45          # section A può usare più altezza ora che B/C non ci sono
 
     # ── Section A ──────────────────────────────────────────────────────────
     F += section_header("A \u2014 training history", RW)
@@ -554,25 +555,44 @@ def _build_right(d):
     a_img.hAlign = 'LEFT'
     F.append(a_img)
     F.append(Paragraph("Training and Validation Loss (NLL and MSE)", ST_CAPTION))
-    F.append(Spacer(1, 3))
 
-    # ── Section B ──────────────────────────────────────────────────────────
-    F += section_header("B \u2014 predictions with uncertainty", RW)
+    return F
+
+
+def _build_section_b(d, frame_w, frame_h):
+    """Contenuto minipage B — predictions with uncertainty."""
+    chk_dir = Path(d.get('checkpoint_dir') or
+                   d['config'].get('training', {}).get('checkpoint_dir', '.'))
+    HDR_OVERHEAD = 18   # section_header (spacer + label + rule)
+    CAP_H        = 10   # caption height
+    img_h = frame_h - HDR_OVERHEAD - CAP_H - 4
+
+    F = section_header("B \u2014 predictions with uncertainty", frame_w)
     p_combined = chk_dir / 'predictions_combined.png'
     if p_combined.exists():
-        b_img = scale_img(p_combined, RW, h_ab)
-        b_img.hAlign = 'LEFT'
-        F.append(b_img)
-        F.append(Paragraph("Training and Validation Predictions with Uncertainty Bounds", ST_CAPTION))
+        img = scale_img(p_combined, frame_w, img_h)
+        img.hAlign = 'LEFT'
+        F.append(img)
     else:
-        F.append(_placeholder('predictions_combined.png', RW, h_ab))
-    F.append(Spacer(1, 3))
+        F.append(_placeholder('predictions_combined.png', frame_w, img_h))
+    F.append(Paragraph("Training and Validation Predictions with Uncertainty Bounds",
+                        ST_CAPTION))
+    return F
 
-    # ── Section C ──────────────────────────────────────────────────────────
-    F += section_header("C \u2014 scatter with uncertainty coloring", RW)
-    F.append(scale_img(chk_dir / 'scatter_with_uncertainty.png', RW, h_c))
+
+def _build_section_c(d, frame_w, frame_h):
+    """Contenuto minipage C — scatter with uncertainty coloring."""
+    chk_dir = Path(d.get('checkpoint_dir') or
+                   d['config'].get('training', {}).get('checkpoint_dir', '.'))
+    HDR_OVERHEAD = 18
+    CAP_H        = 10
+    img_h = frame_h - HDR_OVERHEAD - CAP_H - 4
+
+    F = section_header("C \u2014 scatter with uncertainty coloring", frame_w)
+    img = scale_img(chk_dir / 'scatter_with_uncertainty.png', frame_w, img_h)
+    img.hAlign = 'LEFT'
+    F.append(img)
     F.append(Paragraph("Scatter Plot with Uncertainty Coloring", ST_CAPTION))
-
     return F
 
 
@@ -581,6 +601,7 @@ def _build_right(d):
 # ════════════════════════════════════════════════════════════════════════════
 
 def _build_page(d, out_path):
+    # ── Pagina 1: frames originali ────────────────────────────────────────
     hdr_f = Frame(M, PH-M-HDR_H, FULL_W, HDR_H, id='hdr',
                   leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0)
     lft_f = Frame(M, M+FTR_H, LW, BODY_H, id='lft',
@@ -590,21 +611,44 @@ def _build_page(d, out_path):
     ftr_f = Frame(M, M, FULL_W, FTR_H, id='ftr',
                   leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0)
 
-    pt  = PageTemplate(id='main',
-                       frames=[hdr_f, lft_f, rgt_f, ftr_f],
-                       pagesize=landscape(A4))
+    pt_main = PageTemplate(id='main',
+                           frames=[hdr_f, lft_f, rgt_f, ftr_f],
+                           pagesize=landscape(A4))
+
+    # ── Pagina 2: due minipage affiancate (left = B, right = C) ─────────
+    MINI_GAP = GAP                              # spazio tra le due minipage
+    MINI_W   = (FULL_W - MINI_GAP) / 2          # larghezza di ciascuna minipage
+    MINI_H   = PH - 2 * M                       # altezza piena
+
+    lft_f2 = Frame(M, M, MINI_W, MINI_H, id='chart_left',
+                   leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0)
+    rgt_f2 = Frame(M + MINI_W + MINI_GAP, M, MINI_W, MINI_H, id='chart_right',
+                   leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0)
+
+    pt_charts = PageTemplate(id='charts',
+                             frames=[lft_f2, rgt_f2],
+                             pagesize=landscape(A4))
+
     doc = BaseDocTemplate(str(out_path), pagesize=landscape(A4),
                           leftMargin=M, rightMargin=M, topMargin=M, bottomMargin=M,
-                          pageTemplates=[pt])
+                          pageTemplates=[pt_main, pt_charts])
 
     lk = KeepInFrame(LW, BODY_H, _build_left(d),  mode='shrink')
     rk = KeepInFrame(RW, BODY_H, _build_right(d), mode='shrink')
 
+    b_content = _build_section_b(d, MINI_W, MINI_H)
+    c_content = _build_section_c(d, MINI_W, MINI_H)
+
     doc.build(
+        # ── Pagina 1 ──
         _header_flowables(d) + [FrameBreak()] +
         [lk]                 + [FrameBreak()] +
         [rk]                 + [FrameBreak()] +
-        _footer_flowables(d)
+        _footer_flowables(d) +
+        # ── Pagina 2 ──
+        [NextPageTemplate('charts'), PageBreak()] +
+        b_content + [FrameBreak()] +
+        c_content
     )
 
 

@@ -76,11 +76,14 @@ def main():
     val_dataset = MachineryDataset(X_val_scaled, y_val_scaled)
     test_dataset = MachineryDataset(X_test_scaled, y_test_scaled)
 
+    g = torch.Generator()
+    g.manual_seed(CONFIG['misc']['random_seed'])
     train_loader = DataLoader(
         train_dataset,
         batch_size=CONFIG['training']['batch_size'],
         shuffle=True,
-        num_workers=0  # Use 0 to avoid issues on some systems
+        num_workers=0,  # Use 0 to avoid issues on some systems
+        generator=g,
     )
     val_loader = DataLoader(
         val_dataset,
@@ -212,8 +215,14 @@ def main():
 
 if __name__ == "__main__":
     # Setup seed for reproducibility
+    import random
+    random.seed(CONFIG['misc']['random_seed'])
     torch.manual_seed(CONFIG['misc']['random_seed'])
     import numpy as np
     np.random.seed(CONFIG['misc']['random_seed'])
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(CONFIG['misc']['random_seed'])
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
     main()

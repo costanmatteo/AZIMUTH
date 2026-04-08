@@ -59,7 +59,7 @@ class STConfig:
 
     # --- multi-output ---
     p: int = 1                          # number of output nodes
-    output_overlap: bool = False        # share boundary input between outputs
+    output_overlap: float = 0.0         # overlap fraction [0,1] between output partitions
 
     # --- carry ---
     carry_beta: float = 1.0            # weight of S_{k-1} in stage k
@@ -255,11 +255,17 @@ def build_st_scm(cfg: STConfig, dag_image_dir: Optional[str] = None) -> SCMDatas
             size = base_size + (1 if oi < remainder else 0)
             partitions.append(list(range(idx, idx + size)))
             idx += size
-        if cfg.output_overlap and cfg.p > 1:
+        if cfg.output_overlap > 0.0 and cfg.p > 1:
             for oi in range(cfg.p - 1):
-                boundary = partitions[oi + 1][0]
-                if boundary not in partitions[oi]:
-                    partitions[oi].append(boundary)
+                p_curr = partitions[oi]
+                p_next = partitions[oi + 1]
+                n_share = max(1, int(cfg.output_overlap * min(len(p_curr), len(p_next))))
+                for idx in p_curr[-n_share:]:
+                    if idx not in p_next:
+                        p_next.append(idx)
+                for idx in p_next[:n_share]:
+                    if idx not in p_curr:
+                        p_curr.append(idx)
         output_partitions = partitions
 
     # ── STEP 2: Input node specs ──────────────────────────────────────
@@ -618,5 +624,5 @@ ds_scm_st_deep = build_st_scm(STConfig(
 ))
 
 ds_scm_st_multi = build_st_scm(STConfig(
-    n=10, m=2, me=2, env_mode="B", rho=0.3, p=2, output_overlap=True,
+    n=10, m=2, me=2, env_mode="B", rho=0.3, p=2, output_overlap=0.3,
 ))

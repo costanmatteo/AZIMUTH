@@ -121,6 +121,15 @@ def create_objective(base_config: dict, device: str = 'auto',
         # Create a deep copy of config
         cfg = copy.deepcopy(base_config)
 
+        # Set global seed for reproducibility (model init, shuffling, etc.)
+        model_seed = cfg['misc']['random_seed']
+        torch.manual_seed(model_seed)
+        np.random.seed(model_seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(model_seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
         # =================================================================
         # SUGGEST HYPERPARAMETERS
         # =================================================================

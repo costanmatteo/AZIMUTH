@@ -532,6 +532,16 @@ def _page1(d, total_pages):
     final_loss = _last(hist.get('final_total_loss', hist.get('total_loss', 0.0)))
     rob_std    = fact_s if fact_s is not None else _last(fm.get('robustness_std', 0.0))
 
+    # Train gap-reduction (same formula as improv_pct but on train F values)
+    fbl_train  = adv.get('F_baseline_train_mean', fbl_v)
+    fact_train = adv.get('F_actual_train_mean', fact_v)
+    rob_std_train = adv.get('F_actual_train_std', rob_std)
+    gap_bl_train   = abs(fbl_train - fstar_v)
+    gap_ctrl_train = abs(fact_train - fstar_v)
+    improv_train = (gap_bl_train - gap_ctrl_train) / gap_bl_train * 100 if gap_bl_train else 0.0
+    # Test uses the locally computed improv_pct (already gap-reduction)
+    improv_test = improv_pct
+
     F = []
 
     # ── header ────────────────────────────────────────────────────────────────
@@ -557,45 +567,61 @@ def _page1(d, total_pages):
 
     # ── KPI bar ───────────────────────────────────────────────────────────────
     if fform_v is not None:
-        n_kpi = 5
+        n_kpi = 7
         cw = TW / n_kpi
         kpi_data = [
-            [Paragraph("Controller F",  ST_KPI_LBL),
-             Paragraph("Formula F",     ST_KPI_LBL),
-             Paragraph("Target F*",     ST_KPI_LBL),
-             Paragraph("vs baseline",   ST_KPI_LBL),
-             Paragraph("Best loss",     ST_KPI_LBL)],
-            [Paragraph(f"{fact_v:.4f}",  ST_KPI_VAL),
-             Paragraph(f"{fform_v:.4f}", ST_KPI_VAL),
-             Paragraph(f"{fstar_v:.4f}", ST_KPI_VAL),
-             Paragraph(f"{improv_pct:+.2f}%",
+            [Paragraph("Controller F (test)",  ST_KPI_LBL),
+             Paragraph("Controller F (train)", ST_KPI_LBL),
+             Paragraph("Formula F",            ST_KPI_LBL),
+             Paragraph("Target F*",            ST_KPI_LBL),
+             Paragraph("vs baseline (test)",   ST_KPI_LBL),
+             Paragraph("vs baseline (train)",  ST_KPI_LBL),
+             Paragraph("Best loss",            ST_KPI_LBL)],
+            [Paragraph(f"{fact_v:.4f}",     ST_KPI_VAL),
+             Paragraph(f"{fact_train:.4f}", ST_KPI_VAL),
+             Paragraph(f"{fform_v:.4f}",    ST_KPI_VAL),
+             Paragraph(f"{fstar_v:.4f}",    ST_KPI_VAL),
+             Paragraph(f"{improv_test:+.2f}%",
                        _s('_kv_g', FS_KPI_VAL,
-                          color=C_GREEN if improv_pct >= 0 else C_RED)),
+                          color=C_GREEN if improv_test >= 0 else C_RED)),
+             Paragraph(f"{improv_train:+.2f}%",
+                       _s('_kv_t', FS_KPI_VAL,
+                          color=C_GREEN if improv_train >= 0 else C_RED)),
              Paragraph(f"{best_loss:.4f}", ST_KPI_VAL)],
-            [Paragraph(f"\u00b1{rob_std:.4f} robustness", ST_KPI_SUB),
+            [Paragraph(f"\u00b1{rob_std:.4f} robustness",     ST_KPI_SUB),
+             Paragraph(f"\u00b1{rob_std_train:.4f} robustness", ST_KPI_SUB),
              Paragraph(f"\u00b1{fform_s:.4f}" if fform_s else "", ST_KPI_SUB),
-             Paragraph(f"gap {gap_pct:.1f}%",             ST_KPI_SUB),
-             Paragraph(f"F\u2019 = {fbl_v:.4f}",          ST_KPI_SUB),
-             Paragraph(f"final {final_loss:.2f}",          ST_KPI_SUB)],
+             Paragraph(f"gap {gap_pct:.1f}%",               ST_KPI_SUB),
+             Paragraph(f"F\u2019_test = {fbl_v:.4f}",       ST_KPI_SUB),
+             Paragraph(f"F\u2019_train = {fbl_train:.4f}",   ST_KPI_SUB),
+             Paragraph(f"final {final_loss:.2f}",            ST_KPI_SUB)],
         ]
     else:
-        n_kpi = 4
+        n_kpi = 6
         cw = TW / n_kpi
         kpi_data = [
-            [Paragraph("Controller F",  ST_KPI_LBL),
-             Paragraph("Target F*",     ST_KPI_LBL),
-             Paragraph("vs baseline",   ST_KPI_LBL),
-             Paragraph("Best loss",     ST_KPI_LBL)],
-            [Paragraph(f"{fact_v:.4f}",  ST_KPI_VAL),
-             Paragraph(f"{fstar_v:.4f}", ST_KPI_VAL),
-             Paragraph(f"{improv_pct:+.2f}%",
+            [Paragraph("Controller F (test)",  ST_KPI_LBL),
+             Paragraph("Controller F (train)", ST_KPI_LBL),
+             Paragraph("Target F*",            ST_KPI_LBL),
+             Paragraph("vs baseline (test)",   ST_KPI_LBL),
+             Paragraph("vs baseline (train)",  ST_KPI_LBL),
+             Paragraph("Best loss",            ST_KPI_LBL)],
+            [Paragraph(f"{fact_v:.4f}",     ST_KPI_VAL),
+             Paragraph(f"{fact_train:.4f}", ST_KPI_VAL),
+             Paragraph(f"{fstar_v:.4f}",    ST_KPI_VAL),
+             Paragraph(f"{improv_test:+.2f}%",
                        _s('_kv_g', FS_KPI_VAL,
-                          color=C_GREEN if improv_pct >= 0 else C_RED)),
+                          color=C_GREEN if improv_test >= 0 else C_RED)),
+             Paragraph(f"{improv_train:+.2f}%",
+                       _s('_kv_t', FS_KPI_VAL,
+                          color=C_GREEN if improv_train >= 0 else C_RED)),
              Paragraph(f"{best_loss:.4f}", ST_KPI_VAL)],
-            [Paragraph(f"\u00b1{rob_std:.4f} robustness", ST_KPI_SUB),
-             Paragraph(f"gap {gap_pct:.1f}%",             ST_KPI_SUB),
-             Paragraph(f"F\u2019 = {fbl_v:.4f}",          ST_KPI_SUB),
-             Paragraph(f"final {final_loss:.2f}",          ST_KPI_SUB)],
+            [Paragraph(f"\u00b1{rob_std:.4f} robustness",     ST_KPI_SUB),
+             Paragraph(f"\u00b1{rob_std_train:.4f} robustness", ST_KPI_SUB),
+             Paragraph(f"gap {gap_pct:.1f}%",               ST_KPI_SUB),
+             Paragraph(f"F\u2019_test = {fbl_v:.4f}",       ST_KPI_SUB),
+             Paragraph(f"F\u2019_train = {fbl_train:.4f}",   ST_KPI_SUB),
+             Paragraph(f"final {final_loss:.2f}",            ST_KPI_SUB)],
         ]
     kpi_tbl = Table(kpi_data, colWidths=[cw] * n_kpi)
     kpi_tbl.setStyle(TableStyle([
@@ -667,32 +693,41 @@ def _page1(d, total_pages):
     F.append(Spacer(1, 5))
 
     # Row 2: Reliability scores | Performance
+    gap_pct_train = abs(fstar_v - fact_train) / fstar_v * 100 if fstar_v else 0.0
     reliability_rows = [
-        ("F* (target)",             f"{fstar_v:.6f}"),
-        ("F\u2019 (baseline)",       _fstr(F_bl)),
+        ("F* (target)",                  f"{fstar_v:.6f}"),
+        ("F\u2019 (baseline, test)",      _fstr(F_bl)),
+        ("F\u2019 (baseline, train)",     f"{fbl_train:.6f}"),
     ] + ([
-        ("F (formula)",              _fstr(F_form)),
-        ("\u2514 surrogate",         _fstr(F_act),
+        ("F (formula)",                   _fstr(F_form)),
+        ("\u2514 surrogate (test)",       _fstr(F_act),
+         ST_VAL_FORM, ST_KEY_FORM),
+        ("\u2514 surrogate (train)",      f"{fact_train:.6f} \u00b1 {rob_std_train:.6f}",
          ST_VAL_FORM, ST_KEY_FORM),
     ] if fform_v is not None else [
-        ("F (controller)",           _fstr(F_act)),
+        ("F (controller, test)",          _fstr(F_act)),
+        ("F (controller, train)",         f"{fact_train:.6f} \u00b1 {rob_std_train:.6f}"),
     ]) + [
-        ("Improvement vs baseline",  f"{improv_pct:+.2f}%",
-         ST_VAL_G if improv_pct >= 0 else ST_VAL_R),
+        ("Improvement vs baseline (test)",  f"{improv_test:+.2f}%",
+         ST_VAL_G if improv_test >= 0 else ST_VAL_R),
+        ("Improvement vs baseline (train)", f"{improv_train:+.2f}%",
+         ST_VAL_G if improv_train >= 0 else ST_VAL_R),
     ] + ([
         ("\u2514 surrogate",
          f"{improv_surr_pct:+.2f}%",
          ST_VAL_FORM_G if improv_surr_pct >= 0 else ST_VAL_FORM_R,
          ST_KEY_FORM),
     ] if fform_v is not None else []) + [
-        ("Gap from target",          f"{gap_pct:.2f}%", ST_VAL_R),
+        ("Gap from target (test)",        f"{gap_pct:.2f}%", ST_VAL_R),
+        ("Gap from target (train)",       f"{gap_pct_train:.2f}%", ST_VAL_R),
     ] + ([
         ("\u2514 surrogate",
          f"{gap_surr_pct:.2f}%",
          ST_VAL_FORM_R,
          ST_KEY_FORM),
     ] if fform_v is not None else []) + [
-        ("Robustness (std)",         f"{rob_std:.6f}"),
+        ("Robustness (std, test)",        f"{rob_std:.6f}"),
+        ("Robustness (std, train)",       f"{rob_std_train:.6f}"),
     ]
     F.append(two_col(
         [blk_title("Reliability scores")] + [kv_table(reliability_rows, cw2)],
@@ -957,10 +992,6 @@ def _page4_trajectory(d, total_pages):
     if traj_list:
         F += section_header("04 \u2014 trajectory comparison (best run per scenario)")
 
-        # Width split: data table ~58%, plot ~42%
-        data_w = TW * 0.58
-        plot_w = TW * 0.42
-
         for traj_i_idx, traj_i in enumerate(traj_list):
             # Each scenario starts on a new page
             if traj_i_idx > 0:
@@ -986,24 +1017,15 @@ def _page4_trajectory(d, total_pages):
             b_traj  = traj_i.get('baseline_trajectory', {})
             a_traj  = traj_i.get('actual_trajectory', {})
 
-            # Pre-compute max data rows across processes for uniform plot height
-            max_data_rows = 0
-            for pi, pn in enumerate(p_names):
-                pi_info = ctrl_info.get(pn, {})
-                ci = pi_info.get('controllable_indices', [])
-                ol = pi_info.get('output_labels', [])
-                nr = (len(ci) if pi > 0 else 0) + len(ol)
-                max_data_rows = max(max_data_rows, nr)
-            uniform_tbl_h = 13 + max_data_rows * 14
-
-            # Build one row per process: [data_subtable | evolution_plot]
-            for proc_idx, proc in enumerate(p_names):
+            # Build one compact table per process (full width, no evolution plot)
+            for proc in p_names:
                 p_info = ctrl_info.get(proc, {})
                 input_labels = p_info.get('input_labels', [])
                 output_labels = p_info.get('output_labels', [])
                 ctrl_indices = p_info.get('controllable_indices', [])
 
                 t_inputs = _to_np(t_traj.get(proc, {}).get('inputs', []))
+                b_inputs = _to_np(b_traj.get(proc, {}).get('inputs', []))
                 a_inputs = _to_np(a_traj.get(proc, {}).get('inputs', []))
                 t_outputs = _to_np(t_traj.get(proc, {}).get('outputs', []))
                 b_outputs = _to_np(b_traj.get(proc, {}).get('outputs', []))
@@ -1011,10 +1033,11 @@ def _page4_trajectory(d, total_pages):
                 a_outputs = _to_np(a_outputs_raw.get('outputs_mean',
                                    a_outputs_raw.get('outputs', [])))
 
-                # Build data rows for this process
+                # Compact header: Variable | Target | Baseline | Controller | Δ(ctrl−tgt)
                 proc_hdr = [Paragraph(h, ST_TRAJ_H) for h in
-                            ["Variable", "Target", "Controller", "\u0394", ""]]
-                data_cws = [r * data_w for r in [0.22, 0.18, 0.18, 0.18, 0.24]]
+                            ["Variable", "Target", "Baseline", "Controller",
+                             "\u0394(ctrl\u2212tgt)", ""]]
+                data_cws = [r * TW for r in [0.20, 0.15, 0.15, 0.15, 0.15, 0.20]]
                 proc_rows = [proc_hdr]
 
                 # Color map for this process (from evolution plots)
@@ -1026,33 +1049,36 @@ def _page4_trajectory(d, total_pages):
                         lbl = input_labels[ci] if ci < len(input_labels) else f"input_{ci}"
                         dot = _color_dot(proc_cm[lbl]) if lbl in proc_cm else ''
                         t_v = float(t_inputs[ci]) if hasattr(t_inputs, '__len__') and ci < len(t_inputs) else 0.0
+                        b_v = float(b_inputs[ci]) if hasattr(b_inputs, '__len__') and ci < len(b_inputs) else 0.0
                         a_v = float(a_inputs[ci]) if hasattr(a_inputs, '__len__') and ci < len(a_inputs) else 0.0
                         delta = a_v - t_v
                         proc_rows.append([
                             Paragraph(f"{dot}{lbl}",    ST_TRAJ_C),
                             Paragraph(f"{t_v:.4f}",     ST_TRAJ_C),
+                            Paragraph(f"{b_v:.4f}",     ST_TRAJ_C),
                             Paragraph(f"{a_v:.4f}",     ST_TRAJ_C),
                             Paragraph(f"{delta:+.4f}",  ST_TRAJ_C),
                             Paragraph("input",          ST_NOTE),
                         ])
 
-                # Output row
+                # Output rows
                 for oi, olbl in enumerate(output_labels):
                     dot = _color_dot(proc_cm[olbl]) if olbl in proc_cm else ''
                     t_v = float(t_outputs[oi]) if hasattr(t_outputs, '__len__') and oi < len(t_outputs) else 0.0
                     b_v = float(b_outputs[oi]) if hasattr(b_outputs, '__len__') and oi < len(b_outputs) else 0.0
                     a_v = float(a_outputs[oi]) if hasattr(a_outputs, '__len__') and oi < len(a_outputs) else 0.0
-                    d_bl = b_v - t_v
                     d_ctrl = a_v - t_v
+                    d_bl   = b_v - t_v
                     proc_rows.append([
-                        Paragraph(f"{dot}{olbl}",    ST_TRAJ_C),
-                        Paragraph(f"{t_v:.4f}",      ST_TRAJ_C),
-                        Paragraph(f"{a_v:.4f}",      ST_TRAJ_C),
-                        Paragraph(f"{d_ctrl:+.4f}",  ST_TRAJ_C),
+                        Paragraph(f"{dot}{olbl}",     ST_TRAJ_C),
+                        Paragraph(f"{t_v:.4f}",       ST_TRAJ_C),
+                        Paragraph(f"{b_v:.4f}",       ST_TRAJ_C),
+                        Paragraph(f"{a_v:.4f}",       ST_TRAJ_C),
+                        Paragraph(f"{d_ctrl:+.4f}",   ST_TRAJ_C),
                         Paragraph(f"output (\u0394bl {d_bl:+.4f})", ST_NOTE),
                     ])
 
-                n_data_rows = len(proc_rows) - 1  # minus header
+                n_data_rows = len(proc_rows) - 1
 
                 data_tbl = Table(proc_rows, colWidths=data_cws)
                 data_tbl.setStyle(TableStyle([
@@ -1065,44 +1091,16 @@ def _page4_trajectory(d, total_pages):
                     ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
                 ]))
 
-                # Evolution plot for this process (if available)
-                evo_key = (sc_idx, proc)
-                evo_path = evo_paths.get(evo_key)
-
-                # Image sized to match this process's actual data rows
-                img_w = plot_w - 4
-                actual_tbl_h = 13 + n_data_rows * 14
-
-                if evo_path and os.path.exists(evo_path):
-                    from reportlab.platypus import Image as RLImage
-                    evo_img = RLImage(evo_path, width=img_w, height=actual_tbl_h)
-                    right_cell = evo_img
-                else:
-                    right_cell = Paragraph("", ST_NOTE)
-
-                # Process label + side-by-side layout
                 F.append(Paragraph(f"<b>{proc}</b>", ST_TRAJ_C))
-                side_tbl = Table([[data_tbl, right_cell]],
-                                 colWidths=[data_w, plot_w])
-                plot_top = 15 if proc_idx == 0 else 0
-                side_tbl.setStyle(TableStyle([
-                    ('VALIGN',       (0, 0), (-1, -1), 'TOP'),
-                    ('LEFTPADDING',  (0, 0), (-1, -1), 0),
-                    ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-                    ('TOPPADDING',   (0, 0), (0,  0),  0),
-                    ('TOPPADDING',   (1, 0), (1,  0),  plot_top),
-                    ('BOTTOMPADDING',(0, 0), (-1, -1), 0),
-                ]))
-                F.append(side_tbl)
+                F.append(data_tbl)
 
             F.append(Spacer(1, 2))
 
         # Footer legend
         foot_p = Paragraph(
-            "\u0394 = controller \u2212 target  \u00b7  "
+            "\u0394(ctrl\u2212tgt) = controller \u2212 target  \u00b7  "
             "\u0394bl = baseline output \u2212 target output  \u00b7  "
-            "best of 10 runs per scenario  \u00b7  "
-            "plots show X/Y evolution across training epochs", ST_NOTE)
+            "best of 10 runs per scenario", ST_NOTE)
         F.append(foot_p)
         F += _footer(d, total_pages, total_pages)
 

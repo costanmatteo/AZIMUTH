@@ -38,6 +38,7 @@ import json
 from datetime import datetime
 import argparse
 import copy
+import random
 import torch
 import numpy as np
 
@@ -298,6 +299,19 @@ def main(config=None):
     else:
         cfg = config
 
+    # Set global random seed for reproducibility (model init, shuffling, etc.)
+    # This does NOT affect seed_target / seed_baseline which remain configurable.
+    import os
+    model_seed = cfg['misc']['random_seed']
+    random.seed(model_seed)
+    np.random.seed(model_seed)
+    torch.manual_seed(model_seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(model_seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    os.environ["PYTHONHASHSEED"] = str(model_seed)
+
     print("="*70)
     print("CONTROLLER OPTIMIZATION - POLICY GENERATOR TRAINING")
     print("="*70)
@@ -434,6 +448,15 @@ def main(config=None):
 
     # 3. Create ProcessChain (target + baseline trajectories for env params)
     print("\n[3/9] Building process chain...")
+
+    # Reset seed right before model creation so that PolicyGenerator weight
+    # initialization is deterministic regardless of how many RNG calls the
+    # target/baseline generation consumed above.
+    torch.manual_seed(model_seed)
+    np.random.seed(model_seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(model_seed)
+
     try:
         process_chain = ProcessChain(
             processes_config=selected_processes,
@@ -1327,6 +1350,9 @@ def main(config=None):
             'within_scenario_gap': within_scenario_gap_metrics,
             'diversity_train': diversity_train,
             'diversity_test': diversity_test,
+            'F_baseline_train_mean': float(F_baseline_mean),    # for KPI train gap-reduction
+            'F_actual_train_mean': float(F_actual_mean),      # for KPI train gap-reduction
+            'F_actual_train_std': float(F_actual_std),        # for KPI train robustness
             **formula_advanced_metrics,  # formula_* keys (empty dict if not using CasualiT)
         }
 
@@ -1750,9 +1776,11 @@ def main(config=None):
                     raw_trajs = torch.load(traj_path, map_location='cpu')
                     process_names = process_chain.process_names
 
-                    # Subsample if needed
+                    # Subsample if needed (deterministic via seeded generator)
                     if len(raw_trajs) > n_max:
-                        indices = torch.randperm(len(raw_trajs))[:n_max].tolist()
+                        _g = torch.Generator()
+                        _g.manual_seed(model_seed)
+                        indices = torch.randperm(len(raw_trajs), generator=_g)[:n_max].tolist()
                         raw_trajs = [raw_trajs[i] for i in indices]
 
                     lg_trajectories = []

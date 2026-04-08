@@ -9,6 +9,15 @@ import pytorch_lightning as pl
 from os.path import join
 
 
+def _worker_init_fn(worker_id):
+    """Seed each DataLoader worker deterministically based on initial seed + worker_id."""
+    worker_seed = torch.initial_seed() % 2**32
+    import numpy as _np
+    import random as _random
+    _np.random.seed(worker_seed)
+    _random.seed(worker_seed)
+
+
 
 class ProcessDataModule(pl.LightningDataModule):
     """
@@ -281,12 +290,16 @@ class ProcessDataModule(pl.LightningDataModule):
     
     
     def train_dataloader(self,):
+        g = torch.Generator()
+        g.manual_seed(self.seed)
         return DataLoader(
             self.train_ds,
             batch_size = self.batch_size,
             num_workers = self.num_workers,
             persistent_workers=True,
             shuffle = True,
+            generator=g,
+            worker_init_fn=_worker_init_fn,
         )
     
     def val_dataloader(self,):
@@ -298,8 +311,9 @@ class ProcessDataModule(pl.LightningDataModule):
             num_workers = self.num_workers,
             persistent_workers=True,
             shuffle = False,
+            worker_init_fn=_worker_init_fn,
         )
-    
+
     def test_dataloader(self,):
         return DataLoader(
             self.test_ds,
@@ -307,8 +321,9 @@ class ProcessDataModule(pl.LightningDataModule):
             num_workers = self.num_workers,
             persistent_workers=True,
             shuffle = False,
+            worker_init_fn=_worker_init_fn,
         )
-    
+
     def pred_test_dataloader(self):
         return DataLoader(
             self.test_ds,
@@ -316,8 +331,9 @@ class ProcessDataModule(pl.LightningDataModule):
             num_workers = self.num_workers,
             persistent_workers=True,
             shuffle = False,
+            worker_init_fn=_worker_init_fn,
         )
-    
+
     def all_dataloader(self):
         return DataLoader(
             self.all_ds,
@@ -325,4 +341,5 @@ class ProcessDataModule(pl.LightningDataModule):
             num_workers = self.num_workers,
             persistent_workers=True,
             shuffle = False,
+            worker_init_fn=_worker_init_fn,
         )

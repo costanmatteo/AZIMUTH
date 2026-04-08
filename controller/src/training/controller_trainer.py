@@ -44,6 +44,9 @@ class ControllerTrainer:
         self.reliability_loss_scale = reliability_loss_scale
         self.device = device
 
+        # Dedicated RNG for scenario shuffling (reproducible across runs)
+        self._epoch_rng = np.random.RandomState(42)
+
         # Curriculum learning configuration
         self.curriculum_config = curriculum_config or {
             'enabled': False,
@@ -752,8 +755,8 @@ class ControllerTrainer:
             train_samples_per_scenario = samples_per_scenario
             val_samples = 0
 
-        # Shuffle scenario order each epoch for diversity
-        scenario_order = np.random.permutation(n_scenarios)
+        # Shuffle scenario order each epoch (deterministic: seeded by global RNG state)
+        scenario_order = self._epoch_rng.permutation(n_scenarios)
 
         # Zero gradients once per epoch (gradient accumulation across scenarios)
         self.optimizer.zero_grad()
