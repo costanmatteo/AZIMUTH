@@ -129,9 +129,17 @@ def _save_st_dag(n: int, m: int, rho: float, save_path: str,
         fig_w = min(16.0, total_data_w + 0.5)
         fig_h = max(3.0, n_grid_rows * 2.6 + 0.8)
 
+    # Auto-scale label font size for crowded multi-chain layouts
+    if p > 1:
+        inches_per_stage = fig_w * x_sp / total_data_w
+        fs = min(10, max(7, round(inches_per_stage * 8.5)))
+    else:
+        fs = 10
+    fs_cap = max(7, fs - 1)  # caption slightly smaller
+
     fig, ax = plt.subplots(figsize=(fig_w, fig_h), facecolor='white')
 
-    dashed_bbox = dict(boxstyle='round,pad=0.15', edgecolor='black',
+    dashed_bbox = dict(boxstyle='round,pad=0.12', edgecolor='black',
                        facecolor='none', linestyle='--', linewidth=0.8)
 
     def _s_label_text(sorted_0idx):
@@ -162,16 +170,16 @@ def _save_st_dag(n: int, m: int, rho: float, save_path: str,
         if p > 1:
             ax.text(x_origin + left_margin - 1.0, (y_s + y_x) / 2,
                     f'$r\\!=\\!{r + 1}$',
-                    ha='center', va='center', fontsize=10,
+                    ha='center', va='center', fontsize=fs,
                     fontfamily='serif', fontstyle='italic')
 
         for si, slot in enumerate(show):
             if slot is None:
                 # Ellipsis column
                 ax.text(cx, y_s, r'$\cdots$', ha='center', va='center',
-                        fontsize=12, color='black')
+                        fontsize=fs + 2, color='black')
                 ax.text(cx, y_x, r'$\cdots$', ha='center', va='center',
-                        fontsize=12, color='black')
+                        fontsize=fs + 2, color='black')
                 prev_cx = col_x[si - 1]
                 ax.annotate('', xy=(cx - 0.32, y_x),
                             xytext=(prev_cx + 0.22, y_x),
@@ -195,19 +203,18 @@ def _save_st_dag(n: int, m: int, rho: float, save_path: str,
                 # Homogeneous group → single combined label
                 s_label = _s_label_text(sorted_inp)
                 ax.text(cx, y_s, s_label, ha='center', va='center',
-                        fontsize=10, fontfamily='serif',
+                        fontsize=fs, fontfamily='serif',
                         bbox=dashed_bbox if shared_in else None)
             else:
-                # Mixed group → two sub-labels side by side
+                # Mixed group → stacked vertically to avoid horizontal overlap
                 sub_parts = [(plain_in, False), (shared_in, True)]
-                sub_parts.sort(key=lambda t: t[0][0])  # left-to-right by index
-                gap = 0.6
-                total_w = (len(sub_parts) - 1) * gap
-                sx = cx - total_w / 2
+                sub_parts.sort(key=lambda t: t[0][0])
+                v_off = 0.20
                 for j, (idxs, is_sh) in enumerate(sub_parts):
-                    ax.text(sx + j * gap, y_s, _s_label_text(idxs),
+                    y_pos = y_s + (0.5 - j) * v_off
+                    ax.text(cx, y_pos, _s_label_text(idxs),
                             ha='center', va='center',
-                            fontsize=10, fontfamily='serif',
+                            fontsize=fs, fontfamily='serif',
                             bbox=dashed_bbox if is_sh else None)
 
             # X label (stage node) — on the chain
@@ -217,7 +224,7 @@ def _save_st_dag(n: int, m: int, rho: float, save_path: str,
                 x_label = f'$X_{{{k}}}^{{({r + 1})}}$'
 
             ax.text(cx, y_x, x_label, ha='center', va='center',
-                    fontsize=10, fontfamily='serif')
+                    fontsize=fs, fontfamily='serif')
 
             # Vertical arrow S -> X
             ax.annotate('', xy=(cx, y_x + 0.25),
@@ -245,7 +252,7 @@ def _save_st_dag(n: int, m: int, rho: float, save_path: str,
         y_cx = cx
         y_label = '$Y$' if p == 1 else f'$Y_{{{r + 1}}}$'
         ax.text(y_cx, y_x, y_label, ha='center', va='center',
-                fontsize=10, fontfamily='serif')
+                fontsize=fs, fontfamily='serif')
 
         # Arrow X_m -> Y
         last_si = [i for i, s in enumerate(show) if s is not None][-1]
@@ -262,7 +269,7 @@ def _save_st_dag(n: int, m: int, rho: float, save_path: str,
         f'\\ m_e={me},\\ \\mathrm{{env}}={env_mode}$'
     )
     ax.text(total_data_w / 2, caption_y, caption,
-            ha='center', va='top', fontsize=9, fontfamily='serif')
+            ha='center', va='top', fontsize=fs_cap, fontfamily='serif')
 
     # ── Finalize ──────────────────────────────────────────────────────
     ax.set_xlim(0, total_data_w)
