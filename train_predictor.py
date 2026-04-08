@@ -69,11 +69,14 @@ def build_loaders(inputs, outputs, batch_size, seed):
     X_val_scaled, y_val_scaled = preprocessor.transform(X_val, y_val)
     X_test_scaled, y_test_scaled = preprocessor.transform(X_test, y_test)
 
-    # Create data loaders
+    # Create data loaders with deterministic shuffling
+    g = torch.Generator()
+    g.manual_seed(seed)
     train_loader = DataLoader(
         TensorDataset(torch.FloatTensor(X_train_scaled), torch.FloatTensor(y_train_scaled)),
         batch_size=batch_size,
-        shuffle=True
+        shuffle=True,
+        generator=g,
     )
     val_loader = DataLoader(
         TensorDataset(torch.FloatTensor(X_val_scaled), torch.FloatTensor(y_val_scaled)),

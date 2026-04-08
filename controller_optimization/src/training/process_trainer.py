@@ -9,6 +9,7 @@ Riceve DataLoader già pronti (costruiti dal chiamante, es. train_predictor.py).
 
 import sys
 from pathlib import Path
+import random
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
@@ -114,9 +115,14 @@ def train_single_process(process_config, train_loader, val_loader, test_loader,
     if device == 'auto':
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-    # Set random seeds
+    # Set random seeds and enforce deterministic behavior
+    random.seed(seed)
     torch.manual_seed(seed)
     np.random.seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
     # Import global uncertainty config
     from configs.uncertainty_config import GLOBAL_UNCERTAINTY_CONFIG

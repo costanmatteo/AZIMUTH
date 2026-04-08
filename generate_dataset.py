@@ -14,6 +14,7 @@ Output:
 import sys
 from pathlib import Path
 import argparse
+import random
 import torch
 import numpy as np
 
@@ -348,8 +349,13 @@ def main():
     # Import ReliabilityFunction
     from scm_ds import ReliabilityFunction
 
+    random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
     # ── Step 1: Generate per-process datasets via SCM ───────────────────────
     print(f"\n[1/3] Generating per-process SCM datasets...")

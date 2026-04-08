@@ -406,6 +406,8 @@ class EnsembleTrainer:
         seed = self.base_seed + model_idx * 1000
         torch.manual_seed(seed)
         np.random.seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
         return seed
 
     def train_single_model(self, model_idx, train_loader, val_loader, epochs, patience):

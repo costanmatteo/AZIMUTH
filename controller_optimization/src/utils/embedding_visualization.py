@@ -186,7 +186,8 @@ def plot_embedding_distances(embeddings, structural_params, scenario_indices, sa
     # Sample for visualization (full distance matrices can be huge)
     n_total_pairs = len(embedding_dists)
     if n_total_pairs > n_samples:
-        sample_indices = np.random.choice(n_total_pairs, n_samples, replace=False)
+        rng = np.random.RandomState(42)
+        sample_indices = rng.choice(n_total_pairs, n_samples, replace=False)
         struct_dists_sample = struct_dists[sample_indices]
         embedding_dists_sample = embedding_dists[sample_indices]
     else:

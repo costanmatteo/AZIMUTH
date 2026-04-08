@@ -14,6 +14,8 @@ from torch.utils.data.dataset import TensorDataset
 import pytorch_lightning as pl
 from os.path import join
 
+from causaliT.training.dataloader import _worker_init_fn
+
 
 class StageCausalDataModule(pl.LightningDataModule):
     """
@@ -367,14 +369,18 @@ class StageCausalDataModule(pl.LightningDataModule):
         self.split_ds()
     
     def train_dataloader(self):
+        g = torch.Generator()
+        g.manual_seed(self.seed)
         return DataLoader(
             self.train_ds,
             batch_size=self.batch_size,
             num_workers=self.num_workers,
             persistent_workers=True,
             shuffle=True,
+            generator=g,
+            worker_init_fn=_worker_init_fn,
         )
-    
+
     def val_dataloader(self):
         if self.val_ds is None:
             return None
@@ -384,8 +390,9 @@ class StageCausalDataModule(pl.LightningDataModule):
             num_workers=self.num_workers,
             persistent_workers=True,
             shuffle=False,
+            worker_init_fn=_worker_init_fn,
         )
-    
+
     def test_dataloader(self):
         return DataLoader(
             self.test_ds,
@@ -393,8 +400,9 @@ class StageCausalDataModule(pl.LightningDataModule):
             num_workers=self.num_workers,
             persistent_workers=True,
             shuffle=False,
+            worker_init_fn=_worker_init_fn,
         )
-    
+
     def pred_test_dataloader(self):
         return DataLoader(
             self.test_ds,
@@ -402,8 +410,9 @@ class StageCausalDataModule(pl.LightningDataModule):
             num_workers=self.num_workers,
             persistent_workers=True,
             shuffle=False,
+            worker_init_fn=_worker_init_fn,
         )
-    
+
     def all_dataloader(self):
         return DataLoader(
             self.all_ds,
@@ -411,4 +420,5 @@ class StageCausalDataModule(pl.LightningDataModule):
             num_workers=self.num_workers,
             persistent_workers=True,
             shuffle=False,
+            worker_init_fn=_worker_init_fn,
         )
