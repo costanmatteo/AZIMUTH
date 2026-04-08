@@ -68,7 +68,7 @@ class STConfig:
     # --- domains ---
     x_domain: Tuple[float, float] = (-2.0, 2.0)
     e_domain: Tuple[float, float] = (-1.0, 1.0)
-    action_domain: Optional[Tuple[float, float]] = (-1.0, 1.0)  # controller action range for calibration
+    action_domain: Tuple[float, float] = (-1.0, 1.0)  # controller action range for calibration
 
     # --- calibration ---
     cal_n: int = 2000               # calibration sample size
@@ -547,10 +547,7 @@ def _calibrate(
     modified = {}
 
     # Determine calibration range for controllable inputs
-    if cfg.action_domain is not None:
-        cal_lo, cal_hi = cfg.action_domain
-    else:
-        cal_lo, cal_hi = cfg.x_domain
+    cal_lo, cal_hi = cfg.action_domain
 
     input_names_set = set(ds.input_labels)
 

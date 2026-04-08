@@ -237,12 +237,18 @@ def compute_manifold(
     proc_name = proc_config['name']
     info = process_chain.controllable_info_per_process[process_idx]
 
-    # Get bounds for controllable inputs from preprocessor
+    # Get bounds for controllable inputs
     preprocessor = process_chain.preprocessors[process_idx]
     ctrl_indices = info['controllable_indices']
     n_ctrl = info['n_controllable']
 
-    if preprocessor.input_min is not None:
+    # Check for explicit action_domain override (e.g. [-1, 1] for sinusoidal SCM)
+    action_domain = proc_config.get('action_domain')
+    if action_domain is not None:
+        a_lo, a_hi = action_domain
+        ctrl_min = np.full(n_ctrl, a_lo)
+        ctrl_max = np.full(n_ctrl, a_hi)
+    elif preprocessor.input_min is not None:
         ctrl_min = np.array([preprocessor.input_min[idx] for idx in ctrl_indices])
         ctrl_max = np.array([preprocessor.input_max[idx] for idx in ctrl_indices])
     else:
