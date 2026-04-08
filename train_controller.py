@@ -2054,6 +2054,7 @@ def main(config=None):
                 traceback.print_exc()
 
         # Generate per-process input/output graphs (standalone, one per process)
+        process_graph_paths = {}
         if hasattr(trainer, 'training_progression') and trainer.training_progression:
             print("\n  Generating per-process input/output graphs...")
             try:
@@ -2089,6 +2090,7 @@ def main(config=None):
                 evolution_color_maps=evolution_color_maps,
                 theoretical_data=theoretical_data,
                 F_formula=F_formula_dict,
+                process_graph_paths=process_graph_paths,
             )
             print(f"  ✓ PDF report generated: {report_path}")
         except Exception as e:

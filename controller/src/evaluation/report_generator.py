@@ -1463,6 +1463,55 @@ def _footer(d, page_num, total_pages):
 
 
 # ════════════════════════════════════════════════════════════════════════════
+#  PAGE 5 — per-process input/output graphs
+# ════════════════════════════════════════════════════════════════════════════
+
+def _page5_process_graphs(d, total_pages):
+    """One graph per process showing input/output evolution over epochs."""
+    graph_paths = d.get('process_graph_paths', {})
+    if not graph_paths:
+        return []
+
+    F = []
+    F += section_header("05 \u2014 per-process input & output evolution")
+
+    # Available height for images (leave room for header, caption, footer)
+    hdr_h = 1.8 * cm
+    ftr_h = 1.5 * cm
+    avail = PH - 2 * M - hdr_h - ftr_h
+
+    # Group by scenario
+    scenarios = {}
+    for (sc_idx, proc_name), path in sorted(graph_paths.items()):
+        scenarios.setdefault(sc_idx, []).append((proc_name, path))
+
+    first_scenario = True
+    for sc_idx, procs in sorted(scenarios.items()):
+        n_procs = len(procs)
+        # Calculate image height: fit all process graphs on one page if possible
+        cap_h = 14  # caption height
+        gap = 4
+        max_h_each = int((avail - n_procs * (cap_h + gap)) / max(n_procs, 1))
+        max_h_each = max(max_h_each, 80)  # minimum height
+
+        if not first_scenario:
+            F.append(PageBreak())
+        first_scenario = False
+
+        if len(scenarios) > 1:
+            F.append(Paragraph(f"<b>Scenario {sc_idx}</b>", ST_NOTE))
+            F.append(Spacer(1, 4))
+
+        paths = [p for _, p in procs]
+        captions = [f"{name} \u2014 controllable inputs (solid) & outputs (dashed) vs epochs"
+                    for name, _ in procs]
+        charts = img_stack(paths, captions, TW, max_h_each, gap=gap)
+        F.append(charts)
+
+    return F
+
+
+# ════════════════════════════════════════════════════════════════════════════
 #  BUILD PDF
 # ════════════════════════════════════════════════════════════════════════════
 
@@ -1479,7 +1528,8 @@ def _build_pdf(d, out_path):
     traj = d.get('trajectory_values') or {}
     traj_list = d.get('trajectory_values_list', [])
     has_traj = bool(traj_list or traj)
-    total_pages = 4 if has_traj else 3
+    has_proc_graphs = bool(d.get('process_graph_paths'))
+    total_pages = 3 + (1 if has_traj else 0) + (1 if has_proc_graphs else 0)
 
     # Use CondPageBreak after page 1: if _page1 overflows onto the next page,
     # a hard PageBreak would create a blank page.  CondPageBreak only breaks
@@ -1496,6 +1546,9 @@ def _build_pdf(d, out_path):
     )
     if has_traj:
         story += [PageBreak()] + _page4_trajectory(d, total_pages)
+    if has_proc_graphs:
+        pg_num = 4 + (1 if has_traj else 0)
+        story += [PageBreak()] + _page5_process_graphs(d, total_pages) + _footer(d, pg_num, total_pages)
     doc.build(story)
 
 
@@ -1521,6 +1574,7 @@ def generate_controller_report(
     evolution_color_maps=None,
     theoretical_data=None,
     F_formula=None,
+    process_graph_paths=None,
 ):
     if timestamp is None:
         timestamp = datetime.now()
@@ -1545,6 +1599,7 @@ def generate_controller_report(
         theoretical_data=theoretical_data or {},
         checkpoint_dir=checkpoint_dir,
         F_formula=F_formula,
+        process_graph_paths=process_graph_paths or {},
     )
     _build_pdf(d, out)
     return str(out)
