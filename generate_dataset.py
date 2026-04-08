@@ -108,14 +108,26 @@ def _save_st_dag(n: int, m: int, rho: float, save_path: str,
         })
 
     # ── Layout parameters ─────────────────────────────────────────────
-    x_sp = 1.8
-    row_gap = 1.2
-    chain_sp = 2.8
+    x_sp = 1.8          # horizontal spacing between stages
+    row_gap = 1.2        # vertical gap between S row and X row
+    chain_h = 2.8        # vertical height of one chain cell
     left_margin = 1.6 if p > 1 else 0.8
 
-    max_cols = max(len(cd['show']) for cd in chain_data) + 1  # +1 for Y
-    fig_w = max(5.5, left_margin + max_cols * x_sp + 0.5)
-    fig_h = max(2.4, row_gap + 0.9 + (p - 1) * chain_sp + 0.6)
+    max_stage_cols = max(len(cd['show']) for cd in chain_data) + 1  # +1 for Y
+    chain_w = left_margin + max_stage_cols * x_sp + 0.4
+
+    # Grid: up to 3 columns
+    n_grid_cols = min(3, p) if p > 1 else 1
+    n_grid_rows = (p + n_grid_cols - 1) // n_grid_cols
+
+    total_data_w = n_grid_cols * chain_w
+
+    if p == 1:
+        fig_w = max(5.5, chain_w + 0.5)
+        fig_h = 2.4
+    else:
+        fig_w = min(16.0, total_data_w + 0.5)
+        fig_h = max(3.0, n_grid_rows * 2.6 + 0.8)
 
     fig, ax = plt.subplots(figsize=(fig_w, fig_h), facecolor='white')
 
@@ -131,10 +143,11 @@ def _save_st_dag(n: int, m: int, rho: float, save_path: str,
             return f'$S_{{{s_ids[0]}}},\\, S_{{{s_ids[-1]}}}$'
         return f'$S_{{{s_ids[0]}}} \\cdot\\cdot S_{{{s_ids[-1]}}}$'
 
-    all_y_cx = []
-
     for r, cd in enumerate(chain_data):
-        y_base = -r * chain_sp
+        gc = r % n_grid_cols              # grid column  (0, 1, 2)
+        gr = r // n_grid_cols             # grid row
+        x_origin = gc * chain_w
+        y_base = -gr * chain_h
         y_s = y_base + row_gap / 2     # S row (top)
         y_x = y_base - row_gap / 2     # X row (bottom)
 
@@ -143,11 +156,11 @@ def _save_st_dag(n: int, m: int, rho: float, save_path: str,
         m_eff = cd['m_eff']
 
         col_x = {}
-        cx = left_margin
+        cx = x_origin + left_margin
 
         # Chain label (p > 1 only)
         if p > 1:
-            ax.text(left_margin - 1.0, (y_s + y_x) / 2,
+            ax.text(x_origin + left_margin - 1.0, (y_s + y_x) / 2,
                     f'$r\\!=\\!{r + 1}$',
                     ha='center', va='center', fontsize=10,
                     fontfamily='serif', fontstyle='italic')
@@ -240,24 +253,21 @@ def _save_st_dag(n: int, m: int, rho: float, save_path: str,
                     xytext=(col_x[last_si] + 0.22, y_x),
                     arrowprops=dict(arrowstyle='->', lw=0.9, color='black'))
 
-        all_y_cx.append(y_cx)
-
     # ── Caption ───────────────────────────────────────────────────────
-    max_y_cx = max(all_y_cx)
-    caption_y = -((p - 1) * chain_sp) - row_gap / 2 - 0.55
+    caption_y = -(n_grid_rows - 1) * chain_h - row_gap / 2 - 0.55
 
     caption = (
         f'$n={n},\\ m={m},\\ p={p},\\ \\rho={rho},'
         f'\\ \\mathrm{{overlap}}={output_overlap},'
         f'\\ m_e={me},\\ \\mathrm{{env}}={env_mode}$'
     )
-    ax.text((left_margin + max_y_cx) / 2, caption_y, caption,
+    ax.text(total_data_w / 2, caption_y, caption,
             ha='center', va='top', fontsize=9, fontfamily='serif')
 
     # ── Finalize ──────────────────────────────────────────────────────
-    ax.set_xlim(0, max_y_cx + 0.6)
+    ax.set_xlim(0, total_data_w)
     ax.set_ylim(caption_y - 0.3, row_gap / 2 + 0.45)
-    ax.set_aspect('equal')
+    ax.set_aspect('equal' if p == 1 else 'auto')
     ax.axis('off')
     plt.tight_layout(pad=0.2)
     plt.savefig(save_path, dpi=dpi, bbox_inches='tight', facecolor='white')
