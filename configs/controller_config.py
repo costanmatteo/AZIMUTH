@@ -109,7 +109,7 @@ CONTROLLER_CONFIG = {
         'use_batchnorm': False,
         'use_scenario_encoder': False,  # Enable scenario context encoding
         'scenario_embedding_dim': 16,  # Dimension of scenario embedding vector
-        'observation_mode': 'residual',   # opzioni:
+        'observation_mode': 'sample',   # opzioni:
         # 'mean_var':  input = [outputs_mean, outputs_var]  (2 × output_dim)
         # 'sample':    input = [outputs_sampled]             (1 × output_dim)
         # 'residual':  input = [ε] = [(o_sampled - mean) / sqrt(var + 1e-8)]
