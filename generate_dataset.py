@@ -122,6 +122,15 @@ def _save_st_dag(n: int, m: int, rho: float, save_path: str,
     dashed_bbox = dict(boxstyle='round,pad=0.15', edgecolor='black',
                        facecolor='none', linestyle='--', linewidth=0.8)
 
+    def _s_label_text(sorted_0idx):
+        """Build S label string from sorted 0-indexed input indices."""
+        s_ids = [i + 1 for i in sorted_0idx]
+        if len(s_ids) == 1:
+            return f'$S_{{{s_ids[0]}}}$'
+        if len(s_ids) == 2:
+            return f'$S_{{{s_ids[0]}}},\\, S_{{{s_ids[-1]}}}$'
+        return f'$S_{{{s_ids[0]}}} \\cdot\\cdot S_{{{s_ids[-1]}}}$'
+
     all_y_cx = []
 
     for r, cd in enumerate(chain_data):
@@ -164,23 +173,29 @@ def _save_st_dag(n: int, m: int, rho: float, save_path: str,
             stage_inputs = groups[slot]
 
             # S label (input group) — above X
+            # Split shared / non-shared so dashed box wraps only shared S
             sorted_inp = sorted(stage_inputs)
-            first_s = sorted_inp[0] + 1    # 1-indexed
-            last_s = sorted_inp[-1] + 1
-            n_in = len(sorted_inp)
+            shared_in = [i for i in sorted_inp if i in shared_indices]
+            plain_in = [i for i in sorted_inp if i not in shared_indices]
 
-            if n_in == 1:
-                s_label = f'$S_{{{first_s}}}$'
-            elif n_in == 2:
-                s_label = f'$S_{{{first_s}}},\\, S_{{{last_s}}}$'
+            if not shared_in or not plain_in:
+                # Homogeneous group → single combined label
+                s_label = _s_label_text(sorted_inp)
+                ax.text(cx, y_s, s_label, ha='center', va='center',
+                        fontsize=10, fontfamily='serif',
+                        bbox=dashed_bbox if shared_in else None)
             else:
-                s_label = f'$S_{{{first_s}}} \\cdot\\cdot S_{{{last_s}}}$'
-
-            has_shared = any(i in shared_indices for i in stage_inputs)
-
-            ax.text(cx, y_s, s_label, ha='center', va='center',
-                    fontsize=10, fontfamily='serif',
-                    bbox=dashed_bbox if has_shared else None)
+                # Mixed group → two sub-labels side by side
+                sub_parts = [(plain_in, False), (shared_in, True)]
+                sub_parts.sort(key=lambda t: t[0][0])  # left-to-right by index
+                gap = 0.6
+                total_w = (len(sub_parts) - 1) * gap
+                sx = cx - total_w / 2
+                for j, (idxs, is_sh) in enumerate(sub_parts):
+                    ax.text(sx + j * gap, y_s, _s_label_text(idxs),
+                            ha='center', va='center',
+                            fontsize=10, fontfamily='serif',
+                            bbox=dashed_bbox if is_sh else None)
 
             # X label (stage node) — on the chain
             if p == 1:
