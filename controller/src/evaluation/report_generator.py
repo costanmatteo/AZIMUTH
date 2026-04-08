@@ -693,32 +693,41 @@ def _page1(d, total_pages):
     F.append(Spacer(1, 5))
 
     # Row 2: Reliability scores | Performance
+    gap_pct_train = abs(fstar_v - fact_train) / fstar_v * 100 if fstar_v else 0.0
     reliability_rows = [
-        ("F* (target)",             f"{fstar_v:.6f}"),
-        ("F\u2019 (baseline)",       _fstr(F_bl)),
+        ("F* (target)",                  f"{fstar_v:.6f}"),
+        ("F\u2019 (baseline, test)",      _fstr(F_bl)),
+        ("F\u2019 (baseline, train)",     f"{fbl_train:.6f}"),
     ] + ([
-        ("F (formula)",              _fstr(F_form)),
-        ("\u2514 surrogate",         _fstr(F_act),
+        ("F (formula)",                   _fstr(F_form)),
+        ("\u2514 surrogate (test)",       _fstr(F_act),
+         ST_VAL_FORM, ST_KEY_FORM),
+        ("\u2514 surrogate (train)",      f"{fact_train:.6f} \u00b1 {rob_std_train:.6f}",
          ST_VAL_FORM, ST_KEY_FORM),
     ] if fform_v is not None else [
-        ("F (controller)",           _fstr(F_act)),
+        ("F (controller, test)",          _fstr(F_act)),
+        ("F (controller, train)",         f"{fact_train:.6f} \u00b1 {rob_std_train:.6f}"),
     ]) + [
-        ("Improvement vs baseline",  f"{improv_pct:+.2f}%",
-         ST_VAL_G if improv_pct >= 0 else ST_VAL_R),
+        ("Improvement vs baseline (test)",  f"{improv_test:+.2f}%",
+         ST_VAL_G if improv_test >= 0 else ST_VAL_R),
+        ("Improvement vs baseline (train)", f"{improv_train:+.2f}%",
+         ST_VAL_G if improv_train >= 0 else ST_VAL_R),
     ] + ([
         ("\u2514 surrogate",
          f"{improv_surr_pct:+.2f}%",
          ST_VAL_FORM_G if improv_surr_pct >= 0 else ST_VAL_FORM_R,
          ST_KEY_FORM),
     ] if fform_v is not None else []) + [
-        ("Gap from target",          f"{gap_pct:.2f}%", ST_VAL_R),
+        ("Gap from target (test)",        f"{gap_pct:.2f}%", ST_VAL_R),
+        ("Gap from target (train)",       f"{gap_pct_train:.2f}%", ST_VAL_R),
     ] + ([
         ("\u2514 surrogate",
          f"{gap_surr_pct:.2f}%",
          ST_VAL_FORM_R,
          ST_KEY_FORM),
     ] if fform_v is not None else []) + [
-        ("Robustness (std)",         f"{rob_std:.6f}"),
+        ("Robustness (std, test)",        f"{rob_std:.6f}"),
+        ("Robustness (std, train)",       f"{rob_std_train:.6f}"),
     ]
     F.append(two_col(
         [blk_title("Reliability scores")] + [kv_table(reliability_rows, cw2)],
