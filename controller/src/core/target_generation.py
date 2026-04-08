@@ -165,6 +165,17 @@ def generate_target_trajectory(process_configs, n_samples=1, seed=42):
             # Process noise ZERO (ideal deterministic behavior)
             modified_singles = _zero_process_noise(ds_scm, original_singles)
 
+            # Restrict controllable inputs to action_domain if specified
+            action_domain = process_config.get('action_domain')
+            if action_domain is not None:
+                a_lo, a_hi = action_domain
+                controllable_scm = _get_controllable_scm_labels(process_config)
+                for scm_label in controllable_scm:
+                    if scm_label in modified_singles:
+                        modified_singles[scm_label] = (
+                            lambda rng, n, lo=a_lo, hi=a_hi: rng.uniform(lo, hi, size=n)
+                        )
+
             ds_scm.noise_model.singles = modified_singles
             ds_scm.noise_model.groups = []
 
