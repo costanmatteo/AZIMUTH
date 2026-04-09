@@ -212,6 +212,15 @@ class ProcessChain(nn.Module):
             elif self.observation_mode == 'residual':
                 # residual mode concatenates [o_sampled, ε] → 2 × prev_output_dim
                 policy_input_size = 2 * prev_output_dim + n_non_controllable
+            elif self.observation_mode == 'full_history':
+                # full_history mode concatenates [o_sampled_norm_k, ε_k] for ALL
+                # previous processes k = 0..i, grouped per process. Each process
+                # contributes 2 × output_dim_k features. Policy input size grows
+                # linearly with the index of the target process.
+                cumulative_output_dim = sum(
+                    processes_config[k]['output_dim'] for k in range(i + 1)
+                )
+                policy_input_size = 2 * cumulative_output_dim + n_non_controllable
             else:
                 raise ValueError(f"Unknown observation_mode: '{self.observation_mode}'")
 
@@ -257,6 +266,11 @@ class ProcessChain(nn.Module):
                     print(f"    Input dim: {policy_input_size} (prev_sampled={prev_output_dim} + non_controllable={n_non_controllable})")
                 elif self.observation_mode == 'residual':
                     print(f"    Input dim: {policy_input_size} (prev_sampled={prev_output_dim} + prev_residual={prev_output_dim} + non_controllable={n_non_controllable})")
+                elif self.observation_mode == 'full_history':
+                    cumulative_output_dim = sum(
+                        processes_config[k]['output_dim'] for k in range(i + 1)
+                    )
+                    print(f"    Input dim: {policy_input_size} (history={2 * cumulative_output_dim} = 2 × Σ output_dim_0..{i} + non_controllable={n_non_controllable})")
                 print(f"    Output dim: {n_controllable} (controllable only)")
                 print(f"    Controllable inputs: {next_process_info['controllable_labels']}")
                 print(f"    Non-controllable inputs (env conditions): {next_process_info['non_controllable_labels']}")
@@ -419,6 +433,21 @@ class ProcessChain(nn.Module):
         outputs_unscaled = outputs * scale + mean
 
         return outputs_unscaled
+
+    def scale_outputs(self, outputs, process_idx):
+        """
+        Scale outputs to the predictor's normalized output space (DIFFERENTIABLE).
+
+        Inverse of unscale_outputs. Used by 'full_history' observation mode to
+        express sampled outputs of heterogeneous processes on a common scale
+        before concatenating them into the policy input.
+
+        For StandardScaler: scaled = (x - mean) / scale
+        """
+        scaler = self.preprocessors[process_idx].output_scaler
+        mean = torch.tensor(scaler.mean_, dtype=torch.float32, device=self.device)
+        scale = torch.tensor(scaler.scale_, dtype=torch.float32, device=self.device)
+        return (outputs - mean) / scale
 
     def unscale_variance(self, variance, process_idx):
         """Unscale variance (variance scales with scale^2)."""
@@ -605,6 +634,13 @@ class ProcessChain(nn.Module):
         else:
             scenario_embedding = None
 
+        # History buffer for 'full_history' observation mode.
+        # Each entry is (o_sampled_normalized_k, eps_k) for process k already executed.
+        # o_sampled_normalized_k lives in the k-th predictor's normalized output space
+        # (via scale_outputs), so heterogeneous processes share a common ~N(0,1) scale.
+        # eps_k is the standardized residual (~N(0,1) for well-calibrated predictors).
+        full_history = []
+
         for i, process_name in enumerate(self.process_names):
             if self.debug:
                 self._debug_forward_step(1,
@@ -640,6 +676,14 @@ class ProcessChain(nn.Module):
                     eps = (prev_outputs_sampled - prev_outputs_mean) / \
                           torch.sqrt(prev_outputs_var + 1e-8)
                     policy_input_parts = [prev_outputs_sampled, eps]
+                elif self.observation_mode == 'full_history':
+                    # Concatenate [o_sampled_norm_k, ε_k] for ALL previous processes
+                    # k = 0..i-1, grouped per process (one block per k).
+                    # Both quantities are already in a ~N(0,1) scale.
+                    policy_input_parts = []
+                    for o_sampled_norm_k, eps_k in full_history:
+                        policy_input_parts.append(o_sampled_norm_k)
+                        policy_input_parts.append(eps_k)
 
                 # Add non-controllable inputs (environmental conditions) if present
                 if non_controllable_inputs is not None:
@@ -733,6 +777,19 @@ class ProcessChain(nn.Module):
             prev_outputs_mean = outputs_mean       # μ_{i}
             prev_outputs_var = outputs_var          # σ²_{i}
             prev_outputs_sampled = outputs_sampled  # o_{i} ~ N(μ, σ²)
+
+            # 7b. Append to full_history buffer (only used by 'full_history' mode).
+            # We compute both quantities unconditionally so the branch stays simple;
+            # the cost is one extra subtraction/division per process and the tensors
+            # are kept in the autograd graph exactly like prev_outputs_sampled.
+            if self.observation_mode == 'full_history':
+                eps_i = (outputs_sampled - outputs_mean) / \
+                        torch.sqrt(outputs_var + 1e-8)
+                # Normalize sampled output to the predictor's normalized space so
+                # heterogeneous processes share a common ~N(0,1) scale in the
+                # concatenated policy input.
+                o_sampled_norm_i = self.scale_outputs(outputs_sampled, i)
+                full_history.append((o_sampled_norm_i, eps_i))
 
             if self.debug:
                 self._debug_forward_step(8,

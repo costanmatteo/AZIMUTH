@@ -110,14 +110,22 @@ CONTROLLER_CONFIG = {
         'use_scenario_encoder': False,  # Enable scenario context encoding
         'scenario_embedding_dim': 16,  # Dimension of scenario embedding vector
         'observation_mode': 'sample',   # opzioni:
-        # 'mean_var':  input = [outputs_mean, outputs_var]           (2 × output_dim)
-        # 'sample':    input = [outputs_sampled]                     (1 × output_dim)
-        # 'residual':  input = [outputs_sampled, ε]                  (2 × output_dim)
-        #              con ε = (o_sampled - mean) / sqrt(var + 1e-8).
-        #              ε ~ N(0,1) per processi ben calibrati.
-        #              Passando sia il sample sia il residuo standardizzato, il
-        #              controller vede il livello assoluto E il rumore realizzato,
-        #              abilitando noise prediction (Bellman Level 3).
+        # 'mean_var':     input = [outputs_mean, outputs_var]           (2 × output_dim)
+        # 'sample':       input = [outputs_sampled]                     (1 × output_dim)
+        # 'residual':     input = [outputs_sampled, ε]                  (2 × output_dim)
+        #                 con ε = (o_sampled - mean) / sqrt(var + 1e-8).
+        #                 ε ~ N(0,1) per processi ben calibrati.
+        #                 Passando sia il sample sia il residuo standardizzato, il
+        #                 controller vede il livello assoluto E il rumore realizzato,
+        #                 abilitando noise prediction (Bellman Level 3).
+        # 'full_history': input = [o_sampled_norm_0, ε_0, o_sampled_norm_1, ε_1, ...,
+        #                           o_sampled_norm_{i-1}, ε_{i-1}]
+        #                 (2 × Σ_{k<i} output_dim_k), cioè sample + residuo di TUTTI
+        #                 i processi precedenti (non solo l'ultimo), raggruppati per
+        #                 processo. o_sampled_norm_k è normalizzato con l'output_scaler
+        #                 del processo k (→ ~N(0,1)) per evitare scale mismatch tra
+        #                 processi eterogenei. La dimensione dell'input cresce
+        #                 linearmente con la profondità: policy i-1 vede i processi 0..i-1.
     },
 
     # Training parameters
