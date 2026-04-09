@@ -200,7 +200,9 @@ def _build_stage_expr(
     else:
         mean_expr = "0"
 
-    if prev_stage is not None:
+    if len(input_names) == 0 and prev_stage is not None:
+        expr = _st_term(prev_stage)
+    elif prev_stage is not None:
         expr = f"(1 - {carry_beta})*{mean_expr} + {carry_beta}*{prev_stage}"
     else:
         expr = mean_expr
@@ -226,8 +228,6 @@ def build_st_scm(cfg: STConfig, dag_image_dir: Optional[str] = None) -> SCMDatas
     """
 
     # Validate
-    if cfg.m > cfg.n:
-        raise ValueError(f"m ({cfg.m}) must be <= n ({cfg.n})")
     if cfg.p < 1:
         raise ValueError("p must be >= 1")
     if cfg.p > cfg.n:
@@ -314,8 +314,11 @@ def build_st_scm(cfg: STConfig, dag_image_dir: Optional[str] = None) -> SCMDatas
         stage_inputs: List[List[str]] = []
         idx = 0
         for k in range(m):
-            stage_inputs.append(sub_input_names[idx: idx + widths[k]])
-            idx += widths[k]
+            if idx < len(sub_input_names):
+                stage_inputs.append(sub_input_names[idx: idx + widths[k]])
+                idx += widths[k]
+            else:
+                stage_inputs.append([])   # no fresh input — carry only
 
         # ── Stage nodes ───────────────────────────────────────────
         prev_stage_name: Optional[str] = None
