@@ -375,7 +375,7 @@ class StageCausalDataModule(pl.LightningDataModule):
             self.train_ds,
             batch_size=self.batch_size,
             num_workers=self.num_workers,
-            persistent_workers=True,
+            persistent_workers=self.num_workers > 0,
             shuffle=True,
             generator=g,
             worker_init_fn=_worker_init_fn,
@@ -388,7 +388,7 @@ class StageCausalDataModule(pl.LightningDataModule):
             self.val_ds,
             batch_size=self.batch_size,
             num_workers=self.num_workers,
-            persistent_workers=True,
+            persistent_workers=self.num_workers > 0,
             shuffle=False,
             worker_init_fn=_worker_init_fn,
         )
@@ -398,7 +398,7 @@ class StageCausalDataModule(pl.LightningDataModule):
             self.test_ds,
             batch_size=self.batch_size,
             num_workers=self.num_workers,
-            persistent_workers=True,
+            persistent_workers=self.num_workers > 0,
             shuffle=False,
             worker_init_fn=_worker_init_fn,
         )
@@ -408,7 +408,7 @@ class StageCausalDataModule(pl.LightningDataModule):
             self.test_ds,
             batch_size=1,
             num_workers=self.num_workers,
-            persistent_workers=True,
+            persistent_workers=self.num_workers > 0,
             shuffle=False,
             worker_init_fn=_worker_init_fn,
         )
@@ -418,7 +418,7 @@ class StageCausalDataModule(pl.LightningDataModule):
             self.all_ds,
             batch_size=self.batch_size,
             num_workers=self.num_workers,
-            persistent_workers=True,
+            persistent_workers=self.num_workers > 0,
             shuffle=False,
             worker_init_fn=_worker_init_fn,
         )

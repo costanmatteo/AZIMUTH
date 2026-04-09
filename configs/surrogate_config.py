@@ -38,6 +38,11 @@ SURROGATE_CONFIG = {
 
         'data': {
             'dataset': 'azimuth_surrogate',  # obbligatorio
+            # Run data loading in the main process. With only a few thousand
+            # samples the spawn overhead of multiprocess workers dominates on
+            # Python 3.13 Windows and can make training look frozen while the
+            # workers are still importing modules.
+            'num_workers': 0,
         },
 
         'model': {

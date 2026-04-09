@@ -24,9 +24,32 @@ Options:
 import sys
 import os
 import json
+import warnings
 import argparse
 from pathlib import Path
 import numpy as np
+
+# Silence the flood of `weights_only` warnings produced by pytorch-lightning
+# 2.5.x calling torch.load() without `weights_only=` on torch >= 2.4. Lightning
+# writes the checkpoints we are loading ourselves, so the implicit default is
+# safe here — we only want to stop it from drowning the training progress bar.
+warnings.filterwarnings(
+    "ignore",
+    message=r".*weights_only.*",
+    category=UserWarning,
+)
+warnings.filterwarnings(
+    "ignore",
+    message=r".*weights_only.*",
+    category=FutureWarning,
+)
+# Propagate the filter to DataLoader worker subprocesses (Python 3.13 on
+# Windows uses `spawn`, so child processes do NOT inherit in-process
+# `warnings.filterwarnings` calls — they re-read filters from PYTHONWARNINGS).
+_pw = os.environ.get("PYTHONWARNINGS", "")
+_pw_entry = "ignore::UserWarning:torch.serialization"
+if _pw_entry not in _pw:
+    os.environ["PYTHONWARNINGS"] = (_pw + "," + _pw_entry).lstrip(",")
 
 # Add paths
 REPO_ROOT = Path(__file__).parent
