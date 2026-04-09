@@ -21,6 +21,12 @@ Options:
     --device STR              Device (cpu/cuda/auto)
 """
 
+import os
+import warnings
+warnings.filterwarnings("ignore", message=".*weights_only.*", category=UserWarning)
+warnings.filterwarnings("ignore", message=".*weights_only.*", category=FutureWarning)
+os.environ["PYTHONWARNINGS"] = "ignore::UserWarning:torch.serialization"
+
 import sys
 import os
 import json

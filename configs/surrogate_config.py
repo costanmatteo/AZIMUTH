@@ -38,6 +38,7 @@ SURROGATE_CONFIG = {
 
         'data': {
             'dataset': 'azimuth_surrogate',  # obbligatorio
+            'num_workers': 0,
         },
 
         'model': {
