@@ -162,18 +162,19 @@ class ReliabilityFunction:
     def _compute_adaptive_target(self,
                                  process_name: str,
                                  outputs: Dict[str, torch.Tensor],
-                                 config: Dict) -> Union[torch.Tensor, float]:
+                                 config: Dict) -> torch.Tensor:
         """
         Compute adaptive target for a process based on upstream outputs.
 
-        Returns a value broadcastable to (batch, output_dim):
-        - No adaptive coefficients: tensor of shape (output_dim,) from base_target list
-        - With adaptive coefficients: scalar or (batch, 1) tensor that broadcasts
-          uniformly across all output dimensions.
+        Returns a tensor broadcastable to (batch, output_dim):
+        - No adaptive coefficients: (output_dim,) from base_target.
+        - With adaptive coefficients: (1, output_dim) or (batch, output_dim),
+          where the per-dimension base_target is preserved and each upstream's
+          scalar adjustment is broadcast uniformly across output dimensions.
         """
         base_target = config.get('base_target', 0.0)
 
-        # Normalize base_target to a tensor (output_dim,)
+        # Normalize base_target to a tensor of shape (output_dim,)
         if isinstance(base_target, list):
             base_target_t = torch.tensor(base_target, dtype=torch.float32, device=self.device)
         else:
@@ -193,19 +194,20 @@ class ReliabilityFunction:
         adaptive_band = config.get('adaptive_band', {})
         adaptive_max_shift = config.get('adaptive_max_shift', {})
 
-        # Adaptive case: compute a single scalar target for all output dimensions.
-        # Average base_target across output dims to get a scalar starting point.
-        target = base_target_t.mean()
+        # Adaptive case: preserve per-dimension base_target and broadcast each
+        # upstream's scalar adjustment uniformly across output dimensions.
+        # Start with shape (1, output_dim) so batch-broadcasting works cleanly.
+        target = base_target_t.unsqueeze(0)
 
         for upstream_name, coeff in adaptive_coeffs.items():
             if upstream_name in outputs:
                 upstream_out = outputs[upstream_name]
-                # Average across output dims if multi-dimensional → scalar per sample
+                # Average across output dims if multi-dimensional → (batch,)
                 if upstream_out.dim() > 1:
                     upstream_out = upstream_out.mean(dim=-1)  # (batch,)
 
                 baseline = adaptive_baselines.get(upstream_name, 0.0)
-                delta = upstream_out - baseline
+                delta = upstream_out - baseline  # (batch,)
 
                 # Build mode_params for this upstream variable
                 mode_params = {}
@@ -220,12 +222,10 @@ class ReliabilityFunction:
                 elif mode == 'tanh':
                     mode_params['max_shift'] = adaptive_max_shift.get(upstream_name, 1.0)
 
-                adjustment = _apply_adaptive_mode(delta, coeff, mode, mode_params)
-                target = target + adjustment  # scalar + (batch,) → (batch,)
-
-        # Ensure result broadcasts to (batch, output_dim): (batch,) → (batch, 1)
-        if isinstance(target, torch.Tensor) and target.dim() >= 1:
-            target = target.unsqueeze(-1)
+                adjustment = _apply_adaptive_mode(delta, coeff, mode, mode_params)  # (batch,)
+                # Broadcast uniformly across output dims:
+                # (1, output_dim) + (batch, 1) → (batch, output_dim)
+                target = target + adjustment.unsqueeze(-1)
 
         return target
 
