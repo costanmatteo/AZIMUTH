@@ -167,6 +167,19 @@ def train_single_process(process_config, train_loader, val_loader, test_loader,
         torch.cat([batch[1] for batch in _train_batches]).numpy()
     )
 
+    # Sanity check: data shape must agree with process_config metadata.
+    # Catching mismatches here (before training) gives a much clearer error
+    # than a downstream IndexError in the visualization code.
+    actual_output_dim = y_train.shape[1] if y_train.ndim == 2 else 1
+    if actual_output_dim != output_dim or actual_output_dim != len(output_labels):
+        raise ValueError(
+            f"Shape mismatch for process '{process_name}': loaded dataset has "
+            f"output_dim={actual_output_dim}, but process config declares "
+            f"output_dim={output_dim} with output_labels={output_labels} "
+            f"(len={len(output_labels)}). The on-disk dataset is likely stale. "
+            f"Regenerate it with generate_dataset.py."
+        )
+
     # Create UncertaintyPredictor (Ensemble, SWAG, or Single)
     # Determine uncertainty method
     uncertainty_method = model_config.get('uncertainty_method', 'single')

@@ -46,6 +46,40 @@ def apply_plot_style():
     })
 
 
+def _normalize_output_names(output_names, n_outputs, context=""):
+    """
+    Return a list of exactly ``n_outputs`` labels.
+
+    If ``output_names`` is None, generic labels are generated.
+    If its length does not match ``n_outputs``, the list is truncated or
+    padded and a warning is printed so the inconsistency is visible — this
+    typically indicates a stale on-disk dataset that no longer matches the
+    process config (e.g. st_params.p was changed without regenerating the
+    per-process dataset file).
+    """
+    if output_names is None:
+        return [f"Output {i + 1}" for i in range(n_outputs)]
+
+    output_names = list(output_names)
+    if len(output_names) == n_outputs:
+        return output_names
+
+    where = f" ({context})" if context else ""
+    print(
+        f"  [viz warning{where}] output_names length ({len(output_names)}) "
+        f"does not match y_true.shape[1] ({n_outputs}). "
+        f"This usually means the on-disk dataset was generated with a "
+        f"different output_dim than the current process config. "
+        f"Consider regenerating the dataset with generate_dataset.py."
+    )
+
+    if len(output_names) > n_outputs:
+        return output_names[:n_outputs]
+    return output_names + [
+        f"Output {i + 1}" for i in range(len(output_names), n_outputs)
+    ]
+
+
 def plot_training_history(train_losses, val_losses, train_mse=None, val_mse=None,
                           save_path=None, swa_start_epoch=None):
     """
@@ -144,8 +178,9 @@ def plot_predictions_with_uncertainty(y_true, y_pred_mean, y_pred_variance,
     n_outputs = y_true.shape[1]
     use_decomposition = y_pred_aleatoric is not None and y_pred_epistemic is not None
 
-    if output_names is None:
-        output_names = [f"Output {i+1}" for i in range(n_outputs)]
+    output_names = _normalize_output_names(
+        output_names, n_outputs, context="plot_predictions_with_uncertainty"
+    )
 
     # Calculate number of rows needed
     n_cols = min(3, n_outputs)
@@ -258,8 +293,9 @@ def plot_combined_predictions_with_uncertainty(
     y_pred_epistemic_train = _to2d(y_pred_epistemic_train)
 
     n_outputs = y_true_val.shape[1]
-    if output_names is None:
-        output_names = [f"Output {i+1}" for i in range(n_outputs)]
+    output_names = _normalize_output_names(
+        output_names, n_outputs, context="plot_combined_predictions_with_uncertainty"
+    )
 
     from scipy import stats
     z_score = stats.norm.ppf((1 + confidence) / 2)
@@ -349,8 +385,9 @@ def plot_scatter_with_uncertainty(y_true, y_pred_mean, y_pred_variance,
 
     n_outputs = y_true.shape[1]
 
-    if output_names is None:
-        output_names = [f"Output {i+1}" for i in range(n_outputs)]
+    output_names = _normalize_output_names(
+        output_names, n_outputs, context="plot_scatter_with_uncertainty"
+    )
 
     n_cols = min(3, n_outputs)
     n_rows = (n_outputs + n_cols - 1) // n_cols
@@ -430,8 +467,9 @@ def plot_uncertainty_distribution(y_pred_variance, output_names=None, save_path=
 
     n_outputs = y_pred_variance.shape[1]
 
-    if output_names is None:
-        output_names = [f"Output {i+1}" for i in range(n_outputs)]
+    output_names = _normalize_output_names(
+        output_names, n_outputs, context="plot_uncertainty_distribution"
+    )
 
     n_cols = min(3, n_outputs)
     n_rows = (n_outputs + n_cols - 1) // n_cols
