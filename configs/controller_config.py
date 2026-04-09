@@ -110,13 +110,14 @@ CONTROLLER_CONFIG = {
         'use_scenario_encoder': False,  # Enable scenario context encoding
         'scenario_embedding_dim': 16,  # Dimension of scenario embedding vector
         'observation_mode': 'sample',   # opzioni:
-        # 'mean_var':  input = [outputs_mean, outputs_var]  (2 × output_dim)
-        # 'sample':    input = [outputs_sampled]             (1 × output_dim)
-        # 'residual':  input = [ε] = [(o_sampled - mean) / sqrt(var + 1e-8)]
-        #                                                    (1 × output_dim)
+        # 'mean_var':  input = [outputs_mean, outputs_var]           (2 × output_dim)
+        # 'sample':    input = [outputs_sampled]                     (1 × output_dim)
+        # 'residual':  input = [outputs_sampled, ε]                  (2 × output_dim)
+        #              con ε = (o_sampled - mean) / sqrt(var + 1e-8).
         #              ε ~ N(0,1) per processi ben calibrati.
-        #              Permette al controller di ragionare sul rumore
-        #              realizzato, abilitando noise prediction (Bellman Level 3).
+        #              Passando sia il sample sia il residuo standardizzato, il
+        #              controller vede il livello assoluto E il rumore realizzato,
+        #              abilitando noise prediction (Bellman Level 3).
     },
 
     # Training parameters

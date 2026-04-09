@@ -207,8 +207,11 @@ class ProcessChain(nn.Module):
             # policy_input_size depends on observation_mode
             if self.observation_mode == 'mean_var':
                 policy_input_size = prev_output_dim + prev_output_dim + n_non_controllable
-            elif self.observation_mode in ('sample', 'residual'):
+            elif self.observation_mode == 'sample':
                 policy_input_size = prev_output_dim + n_non_controllable
+            elif self.observation_mode == 'residual':
+                # residual mode concatenates [o_sampled, ε] → 2 × prev_output_dim
+                policy_input_size = 2 * prev_output_dim + n_non_controllable
             else:
                 raise ValueError(f"Unknown observation_mode: '{self.observation_mode}'")
 
@@ -253,7 +256,7 @@ class ProcessChain(nn.Module):
                 elif self.observation_mode == 'sample':
                     print(f"    Input dim: {policy_input_size} (prev_sampled={prev_output_dim} + non_controllable={n_non_controllable})")
                 elif self.observation_mode == 'residual':
-                    print(f"    Input dim: {policy_input_size} (prev_residual={prev_output_dim} + non_controllable={n_non_controllable})")
+                    print(f"    Input dim: {policy_input_size} (prev_sampled={prev_output_dim} + prev_residual={prev_output_dim} + non_controllable={n_non_controllable})")
                 print(f"    Output dim: {n_controllable} (controllable only)")
                 print(f"    Controllable inputs: {next_process_info['controllable_labels']}")
                 print(f"    Non-controllable inputs (env conditions): {next_process_info['non_controllable_labels']}")
@@ -632,9 +635,11 @@ class ProcessChain(nn.Module):
                     policy_input_parts = [prev_outputs_sampled]
                 elif self.observation_mode == 'residual':
                     # ε = (o_sampled - mean) / sqrt(var + 1e-8)
+                    # Pass BOTH the sampled value and the standardized residual so the
+                    # policy has access to the absolute level AND the realized noise.
                     eps = (prev_outputs_sampled - prev_outputs_mean) / \
                           torch.sqrt(prev_outputs_var + 1e-8)
-                    policy_input_parts = [eps]
+                    policy_input_parts = [prev_outputs_sampled, eps]
 
                 # Add non-controllable inputs (environmental conditions) if present
                 if non_controllable_inputs is not None:
