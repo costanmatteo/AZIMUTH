@@ -447,55 +447,21 @@ class CasualiTSurrogate:
         """
         Run inference for StageCausaliT or SingleCausalLayer.
 
-        Extracts separate S (inputs) and X (outputs) tensors from the trajectory.
+        Delegates tensor construction to `ProcessChain.trajectory_to_prot_format`
+        which returns (S, X, Y) in the canonical [value, var_id] format — the
+        exact same format emitted by `convert_dataset.py` at training time
+        (including per-variable standardization).
         """
-        process_names = self.process_chain.process_names
-
-        # Build S and X tensors: (batch, n_processes, features)
-        s_list = []
-        x_list = []
-        batch_size = None
-
-        for pname in process_names:
-            data = trajectory[pname]
-            inputs = data['inputs']  # (batch, input_dim)
-            # Use sampled outputs if available, else mean
-            outputs = data.get('outputs_sampled', data.get('outputs_mean'))  # (batch, output_dim)
-
-            if batch_size is None:
-                batch_size = inputs.shape[0]
-
-            s_list.append(inputs)
-            x_list.append(outputs)
-
-        # Pad to same feature dim and stack
-        s_max = max(s.shape[1] for s in s_list)
-        x_max = max(x.shape[1] for x in x_list)
-
-        S = torch.zeros(batch_size, len(process_names), s_max,
-                        device=self.device, dtype=torch.float32)
-        X = torch.zeros(batch_size, len(process_names), x_max,
-                        device=self.device, dtype=torch.float32)
-
-        for j, (s, x) in enumerate(zip(s_list, x_list)):
-            S[:, j, :s.shape[1]] = s
-            X[:, j, :x.shape[1]] = x
+        S, X, Y = self.process_chain.trajectory_to_prot_format(trajectory)
 
         if self.model_type == 'StageCausaliT':
-            # StageCausalForecaster.forward(S, X, Y) - Y is the target placeholder
-            Y_placeholder = torch.zeros(batch_size, 1, 1,
-                                        device=self.device, dtype=torch.float32)
             pred_x, pred_y, _, _, _ = self.model.forward(
-                data_source=S, data_intermediate=X, data_target=Y_placeholder)
+                data_source=S, data_intermediate=X, data_target=Y)
             return pred_y.squeeze()
         else:
-            # SingleCausalForecaster.forward(S, X) - only predicts X, no Y
-            # For SingleCausalLayer used as surrogate, the predicted X is fed through
-            # a simple aggregation. However, this model type doesn't directly predict F.
-            # In practice, StageCausaliT should be preferred for F prediction.
+            # SingleCausalLayer predicts X only, return mean as proxy
             pred_x, _, _, _ = self.model.forward(
                 data_source=S, data_intermediate=X)
-            # SingleCausalLayer predicts X, not Y directly - return mean as proxy
             return pred_x.mean(dim=(1, 2))
 
     def _compute_F_star_from_scenario_0(self) -> float:

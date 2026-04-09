@@ -802,64 +802,239 @@ class ProcessChain(nn.Module):
 
         return trajectory
 
-    def trajectory_to_prot_format(self, trajectory: dict) -> tuple:
+    # ------------------------------------------------------------------
+    # Surrogate token-format conversion
+    # ------------------------------------------------------------------
+    # The format is driven by the model configured in
+    # `configs.surrogate_config.SURROGATE_CONFIG['model']` and must match
+    # exactly what `addition_to_causaliT/surrogate_training/convert_dataset.py`
+    # wrote at training time. Both sides import `get_canonical_token_layout`
+    # from that module to guarantee identical token ordering and var_ids.
+    # Value standardization (mean/std) is loaded from the dataset_metadata.json
+    # that the converter produced.
+    # ------------------------------------------------------------------
+
+    def _load_surrogate_metadata(self):
         """
-        Convert trajectory dict to causaliT input format matching build_arrays().
+        Lazily load dataset_metadata.json written by convert_dataset.py.
 
-        Produces the same [value, var_id] token format used during surrogate
-        training (see scm_ds/convert_azimuth_trajectories.py::build_arrays).
+        Caches the parsed metadata (and derived tensors for var_ids and
+        normalization stats) on the instance so the file is only read once.
+        Also caches the configured model name.
+        """
+        if getattr(self, '_surrogate_meta_cache', None) is not None:
+            return self._surrogate_meta_cache
 
-        Each scalar output of each process becomes one token in X:
-            X[:, k, :] = [output_value, var_id]   (var_id is 1-based, local to X)
+        import json
+        from configs.surrogate_config import SURROGATE_CONFIG
 
-        Falls back to 'outputs_mean' when 'outputs_sampled' is not present.
+        model_name = SURROGATE_CONFIG.get('model', 'proT')
+
+        # Dataset directory follows the convention used by train_surrogate.py
+        dataset_name = SURROGATE_CONFIG.get(
+            'overrides', {}).get('data', {}).get('dataset', 'azimuth_surrogate')
+        dataset_dir = REPO_ROOT / 'causaliT' / 'data' / dataset_name
+        meta_path = dataset_dir / 'dataset_metadata.json'
+
+        if not meta_path.exists():
+            raise FileNotFoundError(
+                f"Surrogate dataset metadata not found at {meta_path}. "
+                f"Run `python train_surrogate.py --use_existing_dataset --data_only` "
+                f"first so that convert_dataset.py writes dataset_metadata.json, "
+                f"or point SURROGATE_CONFIG['overrides']['data']['dataset'] to the "
+                f"correct dataset.")
+
+        with open(meta_path, 'r') as f:
+            meta = json.load(f)
+
+        layout = meta.get('token_layout', {})
+        norm = meta.get('normalization', {})
+
+        cache = {
+            'model_name': model_name,
+            'meta': meta,
+            'layout': layout,
+            'norm': norm,
+        }
+        self._surrogate_meta_cache = cache
+        return cache
+
+    @staticmethod
+    def _standardize_tokens(raw_values, stats):
+        """
+        Apply per-position standardization using stats written by the converter.
 
         Args:
-            trajectory: Dict from forward() with structure:
-                {process_name: {'inputs', 'outputs_mean', 'outputs_var', 'outputs_sampled'}}
+            raw_values: torch.Tensor of shape (B, L) or (B, L, 1) — raw values
+                in the order matching `stats`.
+            stats: list of {'position', 'var_id', 'mean', 'std'} entries,
+                one per token position. Position l in stats maps to column l
+                of raw_values.
 
         Returns:
-            X: (batch, n_output_vars, 2) - one [value, var_id] per output variable
-            Y: (batch, 1, 2) - decoder target placeholder [0.0, var_id]
-
-        Example:
-            >>> trajectory = process_chain.forward(batch_size=32, scenario_idx=0)
-            >>> X, Y = process_chain.trajectory_to_prot_format(trajectory)
-            >>> # 3 processes, 1 output each → X shape: (32, 3, 2)
-            >>> # Y shape: (32, 1, 2)
+            torch.Tensor of shape matching input, standardized.
         """
-        tokens = []
-        batch_size = None
-        var_id = 1  # 1-based, local to X group
+        if raw_values.dim() == 3 and raw_values.shape[-1] == 1:
+            raw_values = raw_values.squeeze(-1)
+            squeeze_back = True
+        else:
+            squeeze_back = False
 
-        for process_name in self.process_names:
-            if process_name not in trajectory:
+        device = raw_values.device
+        L = raw_values.shape[1]
+        assert len(stats) == L, (
+            f"Standardization stats length {len(stats)} != sequence length {L}")
+
+        means = torch.tensor([s['mean'] for s in stats], dtype=torch.float32,
+                             device=device)  # (L,)
+        stds = torch.tensor([s['std'] for s in stats], dtype=torch.float32,
+                            device=device)   # (L,)
+        standardized = (raw_values - means.unsqueeze(0)) / stds.unsqueeze(0)
+
+        if squeeze_back:
+            standardized = standardized.unsqueeze(-1)
+        return standardized
+
+    def _canonical_process_tensors(self, trajectory):
+        """
+        For each process present in `trajectory`, return
+        (full_inputs, outputs_sampled) tensors of shape (B, n_inputs) /
+        (B, n_outputs), in `input_labels` / `output_labels` order.
+
+        `trajectory[pname]['inputs']` is already in input_labels order at
+        inference time (it comes from `_merge_controllable_inputs` which
+        places controllable values at their declared indices). So we use
+        it verbatim. For outputs we prefer `outputs_sampled` (differentiable),
+        falling back to `outputs_mean`.
+        """
+        per_proc = {}
+        for pname in self.process_names:
+            if pname not in trajectory:
                 continue
+            data = trajectory[pname]
+            full_inputs = data['inputs']
+            outputs = data.get('outputs_sampled', data.get('outputs_mean'))
+            per_proc[pname] = (full_inputs, outputs)
+        return per_proc
 
-            data = trajectory[process_name]
-            if batch_size is None:
-                batch_size = data['inputs'].shape[0]
+    def trajectory_to_prot_format(self, trajectory: dict):
+        """
+        Convert a runtime trajectory dict to the exact token format used by
+        the surrogate during training.
 
-            # Get sampled outputs (fallback to mean if not available)
-            outputs = data.get('outputs_sampled', data['outputs_mean'])  # (batch, output_dim)
-            output_dim = outputs.shape[-1]
+        The model type is read from `configs.surrogate_config.SURROGATE_CONFIG`
+        so that training and inference stay automatically in sync.
 
-            # One token per scalar output
-            for d in range(output_dim):
-                value = outputs[:, d:d+1]  # (batch, 1) — keeps grad
-                vid = torch.full((batch_size, 1), var_id, dtype=torch.float32,
-                                 device=self.device)
-                tokens.append(torch.cat([value, vid], dim=-1))  # (batch, 2)
-                var_id += 1
+        Token format (identical to what convert_dataset.py writes to
+        dataset_metadata.json):
+            Each token is [value, variable_id] with feature dim = 2.
+            Column 0 values are standardized per-variable using the stats
+            stored in dataset_metadata.json.
+            Variable IDs are 1-based integers (0 = padding_idx, never used).
 
-        # Stack tokens: (batch, n_output_vars, 2)
-        X = torch.stack(tokens, dim=1)
+        Returns (depends on configured model):
+            - 'proT':
+                (X, Y) where
+                    X: (B, n_all_vars, 2) — encoder input
+                    Y: (B, 1, 2)          — decoder target placeholder
+            - 'StageCausaliT' / 'SingleCausalLayer':
+                (S, X, Y) where
+                    S: (B, n_s, 2) — all process inputs
+                    X: (B, n_x, 2) — all process outputs
+                    Y: (B, 1, 2)   — decoder target placeholder
+        """
+        cache = self._load_surrogate_metadata()
+        model_name = cache['model_name']
+        layout = cache['layout']
+        norm = cache['norm']
 
-        # Decoder target placeholder: [0.0, var_id] (same convention as build_arrays y_ids)
-        Y = torch.zeros(batch_size, 1, 2, dtype=torch.float32, device=self.device)
-        Y[:, 0, 1] = 1.0  # y_ids = [1.0]
+        per_proc = self._canonical_process_tensors(trajectory)
+        # Infer batch size from any process entry
+        first_inputs = next(iter(per_proc.values()))[0]
+        batch_size = first_inputs.shape[0]
+        device = self.device
 
-        return X, Y
+        if model_name == 'proT':
+            x_tokens = layout['proT']['x_tokens']
+            y_tokens = layout['proT']['y_tokens']
+            enc_stats = norm['encoder']
+            dec_stats = norm['decoder']
+
+            # Build raw value matrix (B, n_x) column by column, keeping grad
+            x_value_cols = []
+            for tok in x_tokens:
+                full_inp, outs = per_proc[tok['process']]
+                if tok['kind'] == 'input':
+                    x_value_cols.append(full_inp[:, tok['local_idx']:tok['local_idx']+1])
+                else:
+                    x_value_cols.append(outs[:, tok['local_idx']:tok['local_idx']+1])
+            x_values = torch.cat(x_value_cols, dim=1)  # (B, n_x)
+
+            x_values_std = self._standardize_tokens(x_values, enc_stats)
+            x_var_ids = torch.tensor(
+                [t['var_id'] for t in x_tokens],
+                dtype=torch.float32, device=device).unsqueeze(0).expand(batch_size, -1)
+            X = torch.stack([x_values_std, x_var_ids], dim=-1)  # (B, n_x, 2)
+
+            # Decoder target placeholder: value=0 (the forecaster zeroes it out anyway
+            # via dec_val_idx), var_id from layout. We still apply standardization
+            # to be consistent — the zero placeholder becomes (0 - mean)/std which
+            # is fine because TransformerForecaster.forward overwrites it with 0.
+            # We therefore emit raw zeros for the value channel.
+            y_var_ids = torch.tensor(
+                [t['var_id'] for t in y_tokens],
+                dtype=torch.float32, device=device).unsqueeze(0).expand(batch_size, -1)
+            y_values = torch.zeros_like(y_var_ids)
+            Y = torch.stack([y_values, y_var_ids], dim=-1)  # (B, 1, 2)
+            _ = dec_stats  # intentionally unused for the placeholder
+
+            return X, Y
+
+        elif model_name in ('StageCausaliT', 'SingleCausalLayer'):
+            sc = layout['stage_causal']
+            s_tokens = sc['s_tokens']
+            x_tokens = sc['x_tokens']
+            y_tokens = sc['y_tokens']
+            s_stats = norm['s']
+            x_stats = norm['x']
+            # y_stats used only for F decoding — unused here
+            _ = norm.get('y')
+
+            s_cols = []
+            for tok in s_tokens:
+                full_inp, _ = per_proc[tok['process']]
+                s_cols.append(full_inp[:, tok['local_idx']:tok['local_idx']+1])
+            s_values = torch.cat(s_cols, dim=1)  # (B, n_s)
+
+            x_cols = []
+            for tok in x_tokens:
+                _, outs = per_proc[tok['process']]
+                x_cols.append(outs[:, tok['local_idx']:tok['local_idx']+1])
+            x_values = torch.cat(x_cols, dim=1)  # (B, n_x)
+
+            s_values_std = self._standardize_tokens(s_values, s_stats)
+            x_values_std = self._standardize_tokens(x_values, x_stats)
+
+            s_var_ids = torch.tensor(
+                [t['var_id'] for t in s_tokens],
+                dtype=torch.float32, device=device).unsqueeze(0).expand(batch_size, -1)
+            x_var_ids = torch.tensor(
+                [t['var_id'] for t in x_tokens],
+                dtype=torch.float32, device=device).unsqueeze(0).expand(batch_size, -1)
+            y_var_ids = torch.tensor(
+                [t['var_id'] for t in y_tokens],
+                dtype=torch.float32, device=device).unsqueeze(0).expand(batch_size, -1)
+
+            S = torch.stack([s_values_std, s_var_ids], dim=-1)
+            X = torch.stack([x_values_std, x_var_ids], dim=-1)
+            y_values = torch.zeros_like(y_var_ids)
+            Y = torch.stack([y_values, y_var_ids], dim=-1)
+            return S, X, Y
+
+        else:
+            raise ValueError(
+                f"Unknown surrogate model '{model_name}'. "
+                f"Expected 'proT', 'StageCausaliT', or 'SingleCausalLayer'.")
 
     def forward_prot(self, batch_size: int = 1, scenario_idx: int = 0) -> tuple:
         """
