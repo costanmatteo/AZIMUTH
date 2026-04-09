@@ -86,8 +86,13 @@ _PROFILES = {"uniform", "exp_back", "exp_front", "linear_back", "linear_front", 
 
 def _compute_width(cfg: STConfig, n_sub: int, m: int) -> List[int]:
     """Return list of length *m* summing to *n_sub*."""
+    if m <= 0:
+        return []
+    if n_sub == 0:
+        return [0] * m
     if m > n_sub:
-        raise ValueError(f"m ({m}) must be <= n ({n_sub})")
+        # first n_sub stages each get 1 input, remaining get 0
+        return [1] * n_sub + [0] * (m - n_sub)
 
     profile = cfg.width_profile
     if profile not in _PROFILES:
@@ -306,8 +311,6 @@ def build_st_scm(cfg: STConfig, dag_image_dir: Optional[str] = None) -> SCMDatas
 
         # Width profile for this chain
         m = cfg.m
-        if m > n_sub:
-            m = n_sub  # clamp stages to available inputs
         widths = _compute_width(cfg, n_sub, m)
 
         # Assign inputs to stages (contiguous slices)
