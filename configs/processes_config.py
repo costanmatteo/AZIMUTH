@@ -251,18 +251,22 @@ def _build_st_processes(st_dataset_config):
         }
 
         # Target adattivo inter-processo (tutti i precedenti, peso normalizzato):
-        # τ_i = base_target + (coeff / (i-1)) × Σ_{j<i} (Y_j - base_target)
-        # Il baseline adattivo usa la media dei target calibrati (scalare)
-        # per coerenza con il calcolo scalare dell'adaptive target.
+        # Per-dimension:
+        #   τ_k = base_target_k + (coeff / (i-1)) × Σ_{j<i} (Y_j_k - baseline_j_k)
+        # Il baseline adattivo è la lista completa dei target calibrati
+        # (una baseline per ciascun output dim), preservando la granularità
+        # per-dimensione nel calcolo dell'adaptive target.
         if i > 1 and adaptive_coeff != 0.0:
             n_prev = i - 1
             coeff_per_proc = adaptive_coeff / n_prev
-            calibrated_target_mean = sum(calibrated_targets) / len(calibrated_targets)
             process['surrogate_adaptive_coefficients'] = {
                 f'st_{j}': coeff_per_proc for j in range(1, i)
             }
+            # Full per-dimension baseline list (length = output_dim).
+            # All upstream processes share the same STConfig, so their calibrated
+            # targets are identical to this process's calibrated_targets.
             process['surrogate_adaptive_baselines'] = {
-                f'st_{j}': calibrated_target_mean for j in range(1, i)
+                f'st_{j}': list(calibrated_targets) for j in range(1, i)
             }
 
             # Propagate non-linear adaptive mode params if configured

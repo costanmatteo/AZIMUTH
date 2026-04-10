@@ -166,10 +166,16 @@ class ReliabilityFunction:
         """
         Compute adaptive target for a process based on upstream outputs.
 
+        Per-dimension adaptive formula (1-to-1 correspondence between upstream
+        output dims and downstream target dims):
+
+            τ_k = base_target_k + Σ_j [coeff_j × (Y_j_k - baseline_j_k)]   for each k
+
         Returns a value broadcastable to (batch, output_dim):
         - No adaptive coefficients: tensor of shape (output_dim,) from base_target list
-        - With adaptive coefficients: scalar or (batch, 1) tensor that broadcasts
-          uniformly across all output dimensions.
+        - With adaptive coefficients: tensor of shape (batch, output_dim) where each
+          output dimension has its own adaptive target computed from the corresponding
+          upstream dimension.
         """
         base_target = config.get('base_target', 0.0)
 
@@ -193,19 +199,25 @@ class ReliabilityFunction:
         adaptive_band = config.get('adaptive_band', {})
         adaptive_max_shift = config.get('adaptive_max_shift', {})
 
-        # Adaptive case: compute a single scalar target for all output dimensions.
-        # Average base_target across output dims to get a scalar starting point.
-        target = base_target_t.mean()
+        # Per-dimension starting point: keep base_target as (output_dim,).
+        # Broadcasting with upstream tensors of shape (batch, output_dim) will
+        # produce a (batch, output_dim) result.
+        target = base_target_t  # (output_dim,)
 
         for upstream_name, coeff in adaptive_coeffs.items():
             if upstream_name in outputs:
-                upstream_out = outputs[upstream_name]
-                # Average across output dims if multi-dimensional → scalar per sample
-                if upstream_out.dim() > 1:
-                    upstream_out = upstream_out.mean(dim=-1)  # (batch,)
+                upstream_out = outputs[upstream_name]  # (batch, output_dim)
 
+                # Per-dimension baseline: accept list (one value per output dim)
+                # or scalar (legacy). Broadcasts against upstream_out's last dim.
                 baseline = adaptive_baselines.get(upstream_name, 0.0)
-                delta = upstream_out - baseline
+                if isinstance(baseline, (list, tuple)):
+                    baseline_t = torch.tensor(baseline, dtype=torch.float32, device=self.device)
+                else:
+                    baseline_t = torch.tensor([baseline], dtype=torch.float32, device=self.device)
+
+                # δ_k = upstream_out_k - baseline_k, shape (batch, output_dim)
+                delta = upstream_out - baseline_t
 
                 # Build mode_params for this upstream variable
                 mode_params = {}
@@ -221,11 +233,8 @@ class ReliabilityFunction:
                     mode_params['max_shift'] = adaptive_max_shift.get(upstream_name, 1.0)
 
                 adjustment = _apply_adaptive_mode(delta, coeff, mode, mode_params)
-                target = target + adjustment  # scalar + (batch,) → (batch,)
-
-        # Ensure result broadcasts to (batch, output_dim): (batch,) → (batch, 1)
-        if isinstance(target, torch.Tensor) and target.dim() >= 1:
-            target = target.unsqueeze(-1)
+                # (output_dim,) + (batch, output_dim) → (batch, output_dim)
+                target = target + adjustment
 
         return target
 

@@ -321,10 +321,25 @@ def get_adaptive_target(process_idx: int, upstream_outputs: Optional[Dict[str, f
         if process_idx < len(proc_names):
             name = proc_names[process_idx]
             cfg = surrogate._dynamic_configs[name]
-            target = cfg['base_target']
+            # Bellman analysis operates on per-process scalar outputs, so we
+            # reduce per-dimension base_target/baseline to a single scalar here.
+            # This is an approximation: when p > 1 the tensor path in
+            # _compute_adaptive_target keeps full per-dimension granularity,
+            # but upstream_outputs in this scalar path carries only one value
+            # per process. Averaging gives a consistent scalar τ_i for the
+            # Bellman L_min computation.
+            base_target = cfg['base_target']
+            if isinstance(base_target, (list, tuple)):
+                target = sum(base_target) / len(base_target)
+            else:
+                target = base_target
             for upstream, coeff in cfg.get('adaptive_coefficients', {}).items():
                 if upstream in upstream_outputs:
                     baseline = cfg['adaptive_baselines'][upstream]
+                    # If baseline is per-dimension (list), fall back to its
+                    # mean because upstream_outputs[upstream] is a scalar here.
+                    if isinstance(baseline, (list, tuple)):
+                        baseline = sum(baseline) / len(baseline)
                     target += coeff * (upstream_outputs[upstream] - baseline)
             return target
         return 0.0
