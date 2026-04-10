@@ -68,7 +68,7 @@ ST_DATASET_CONFIG = {
         'carry_beta': 0.3,
         'x_domain': (-2.0, 2.0),
         'e_domain': (-1.0, 1.0),
-        'action_domain': (-1.0, 1.0),
+        'action_domain': (-2.0, 2.0),
         'cal_n': 2000,
         'cal_percentile': 10.0,
         'cal_width_factor': 1.0,
@@ -224,9 +224,8 @@ def _build_st_processes(st_dataset_config):
             'output_labels': output_labels,
             'controllable_inputs': controllable,
 
-            # Controller action domain: restrict to [-1, 1] to avoid
-            # zero-nullification at boundaries of sin(π/2 · x).
-            'action_domain': (-1.0, 1.0),
+            # Controller action domain: matches x_domain [-2, 2].
+            'action_domain': (-2.0, 2.0),
 
             # Parametri ST salvati per ricostruire lo SCM a runtime
             'st_params': copy.deepcopy(st_params),

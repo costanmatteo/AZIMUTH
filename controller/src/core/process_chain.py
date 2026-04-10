@@ -243,7 +243,7 @@ class ProcessChain(nn.Module):
             controllable_indices = next_process_info['controllable_indices']
 
             if next_preprocessor.input_min is not None and next_preprocessor.input_max is not None:
-                # Check for explicit action_domain override (e.g. [-1, 1] for sinusoidal SCM)
+                # Check for explicit action_domain override (e.g. [-2, 2] for sinusoidal SCM)
                 action_domain = processes_config[i + 1].get('action_domain')
                 if action_domain is not None:
                     a_lo, a_hi = action_domain

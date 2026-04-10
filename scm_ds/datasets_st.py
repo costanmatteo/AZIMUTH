@@ -68,7 +68,7 @@ class STConfig:
     # --- domains ---
     x_domain: Tuple[float, float] = (-2.0, 2.0)
     e_domain: Tuple[float, float] = (-1.0, 1.0)
-    action_domain: Tuple[float, float] = (-1.0, 1.0)  # controller action range for calibration
+    action_domain: Tuple[float, float] = (-2.0, 2.0)  # controller action range for calibration
 
     # --- calibration ---
     cal_n: int = 2000               # calibration sample size
