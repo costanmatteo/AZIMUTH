@@ -56,7 +56,7 @@ SWEEP_CONFIG = {
     #                reliability_loss_scale, patience, gradient_clip_norm
     #   Architecture: dropout, hidden_sizes, use_scenario_encoder,
     #                 scenario_embedding_dim
-    #   Scenarios:   n_train, n_test, seed, seed_target, seed_baseline
+    #   Scenarios:   n_train, n_test, seed, seed_target
     #   Curriculum:  curriculum_enabled, no_curriculum
     #   ST dataset:  st_n, st_m, st_rho, st_n_processes
     #   Checkpoints: up_checkpoint_dir, surrogate_checkpoint_dir
@@ -66,7 +66,6 @@ SWEEP_CONFIG = {
         'seed_target': [1, 5, 9, 13, 17, 21, 25, 29, 33, 37,
                         41, 45, 49, 53, 57, 61, 65, 69, 73, 77,
                         81, 85, 89, 93, 97, 101, 105 , 109, 113, 117, 121, 125, 129, 133, 137, 141, 145, 149, 153, 157, 161,],
-        'seed_baseline': [1, 11, 21, 31, 41],
     },
 
     # =========================================================================
@@ -78,7 +77,7 @@ SWEEP_CONFIG = {
         'sweep_script': 'euler/sweep/sweep.sh',
         # Run name template: use {param_name} placeholders
         # Available: any key from 'params' above
-        'run_name_template': 'seed_t{seed_target:02d}_b{seed_baseline:02d}',
+        'run_name_template': 'seed_t{seed_target:03d}',
     },
 
     # =========================================================================

@@ -227,7 +227,7 @@ def create_objective(base_config: dict, device: str = 'auto',
 
             # Generate trajectories (adaptive calibration targets)
             n_train = cfg['scenarios']['n_train']
-            seed_baseline = cfg['scenarios']['seed_baseline']
+            seed_baseline = cfg['scenarios']['seed_target'] + 1000
 
             # Single target trajectory
             target_trajectory = generate_target_trajectory(
