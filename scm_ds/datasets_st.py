@@ -67,7 +67,7 @@ class STConfig:
     carry_beta: float = 1.0            # weight of S_{k-1} in stage k
 
     # --- domains ---
-    x_domain: Tuple[float, float] = (-2.0, 2.0)
+    x_domain: Tuple[float, float] = (-5.0, 5.0)
     e_domain: Tuple[float, float] = (-1.0, 1.0)
     action_domain: Tuple[float, float] = (-2.0, 2.0)  # controller action range for calibration
 
@@ -186,33 +186,34 @@ def _build_stage_expr(
 ) -> str:
     """Build the SymPy expression string for one stage node.
 
-    Compositional structure: the sigmoid-cubic f() is applied to the
-    **sum** of all inputs (fresh + rescaled carry from previous stage):
+    Each term is a sigmoid-cubic bounded in (0, 1).  The terms are
+    **averaged** (not summed) so the stage output without carry is also
+    in (0, 1).  When a previous stage is present the carry is blended
+    as a convex combination:
 
-        S_1 = f(X_1 + X_2)                     (no carry)
-        S_2 = f(rescale(S_1) + X_3)            (carry + fresh)
-        S_3 = f(rescale(S_2))                   (carry only, no fresh)
+        S_k = (1 - carry_beta) * mean(terms) + carry_beta * S_{k-1}
 
-    The rescaling to [-2, 2] is applied externally after each stage
-    (see _rescaling_forward in build_st_scm).  carry_beta is unused
-    in this formulation — the carry enters as a direct addend.
+    keeping S_k in (0, 1) provided carry_beta in [0, 1].
     """
-    # Collect all addends: fresh inputs (with optional env shifts) + carry
-    addends = []
+    terms = []
     for x in input_names:
         if env_shifts and x in env_shifts:
-            addends.append(f"({x} + {env_shifts[x]})")
+            shifted = f"({x} + {env_shifts[x]})"
+            terms.append(_st_term(shifted))
         else:
-            addends.append(x)
+            terms.append(_st_term(x))
+
+    n_terms = len(terms)
+    if n_terms > 0:
+        mean_expr = f"({' + '.join(terms)})/{n_terms}"
+    else:
+        mean_expr = "0"
 
     if prev_stage is not None:
-        addends.append(prev_stage)
-
-    if len(addends) > 0:
-        inner = " + ".join(addends)
-        expr = _st_term(inner)
+        # convex combination keeps output in (0, 1)
+        expr = f"(1 - {carry_beta})*{mean_expr} + {carry_beta}*{prev_stage}"
     else:
-        expr = "0"
+        expr = mean_expr
 
     # zero-coefficient noise term (required by SCM engine)
     expr = f"{expr} + 0*{eps_name}"
@@ -490,30 +491,6 @@ def build_st_scm(cfg: STConfig, dag_image_dir: Optional[str] = None) -> SCMDatas
     for name_list in [noise_node_names_zln, noise_node_names_eps, noise_node_names_jump]:
         all_noise_nodes.extend(name_list)
     ds.process_noise_vars = all_noise_nodes
-
-    # ── STEP 9b: Install per-layer rescaling to [-2, 2] ──────────────
-    # After each intermediate stage node S_k is computed, rescale it
-    # to [-2, 2] using the empirical min/max of that layer's values.
-    # This is NOT applied to the final output Y.
-    _stage_set = frozenset(all_stage_names)
-    _scm_ref = ds.scm
-
-    _original_forward = _scm_ref.forward
-
-    def _rescaling_forward(context, eps_draws):
-        for v in _scm_ref.order:
-            parents = _scm_ref.specs[v].parents
-            args = [context[p] for p in parents] + [eps_draws[v]]
-            context[v] = _scm_ref._fns[v](*args)
-            if v in _stage_set:
-                vals = context[v]
-                v_min = float(vals.min())
-                v_max = float(vals.max())
-                if v_max > v_min:
-                    context[v] = -2.0 + 4.0 * (vals - v_min) / (v_max - v_min)
-        return context
-
-    _scm_ref.forward = _rescaling_forward
 
     # ── STEP 10: Calibrate process_configs ────────────────────────────
     _calibrate(ds, cfg, all_stage_names, output_names, output_partitions)

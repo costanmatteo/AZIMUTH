@@ -242,7 +242,7 @@ def compute_manifold(
     ctrl_indices = info['controllable_indices']
     n_ctrl = info['n_controllable']
 
-    # Check for explicit action_domain override (e.g. [-2, 2] for sinusoidal SCM)
+    # Check for explicit action_domain override (e.g. [-5, 5] for sigmoid-cubic SCM)
     action_domain = proc_config.get('action_domain')
     if action_domain is not None:
         a_lo, a_hi = action_domain
