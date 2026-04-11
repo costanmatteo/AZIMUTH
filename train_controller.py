@@ -19,8 +19,9 @@ Command-line options (override config values):
     --patience INT             Early stopping patience
     --output_dir PATH          Output directory for results
     --run_name STR             Name for this run (used in output path)
-    --seed INT                 Random seed (sets seed_target; seed_baseline = seed_target + 1000)
+    --seed INT                 Random seed (sets both seed_target and seed_baseline)
     --seed_target INT          Seed for target trajectory generation
+    --seed_baseline INT        Seed for baseline trajectory generation
 
 Output:
 - Policy generators salvati
@@ -144,6 +145,8 @@ def parse_args():
                         help='Random seed (affects all seeds)')
     parser.add_argument('--seed_target', type=int, default=None,
                         help='Seed for target trajectory generation')
+    parser.add_argument('--seed_baseline', type=int, default=None,
+                        help='Seed for baseline trajectory generation')
 
     # Output paths
     parser.add_argument('--output_dir', type=str, default=None,
@@ -222,9 +225,12 @@ def apply_args_to_config(args, config):
     if args.seed is not None:
         cfg['misc']['random_seed'] = args.seed
         cfg['scenarios']['seed_target'] = args.seed
-    # Individual seed override (takes precedence over --seed)
+        cfg['scenarios']['seed_baseline'] = args.seed + 100
+    # Individual seed overrides (take precedence over --seed)
     if args.seed_target is not None:
         cfg['scenarios']['seed_target'] = args.seed_target
+    if args.seed_baseline is not None:
+        cfg['scenarios']['seed_baseline'] = args.seed_baseline
 
     # Output directory
     if args.output_dir is not None:
@@ -294,7 +300,7 @@ def main(config=None):
         cfg = config
 
     # Set global random seed for reproducibility (model init, shuffling, etc.)
-    # This does NOT affect seed_target (seed_baseline is derived from it).
+    # This does NOT affect seed_target / seed_baseline which remain configurable.
     import os
     model_seed = cfg['misc']['random_seed']
     random.seed(model_seed)
@@ -366,7 +372,7 @@ def main(config=None):
     n_train = cfg['scenarios']['n_train']
     n_test = cfg['scenarios']['n_test']
     seed_target = cfg['scenarios']['seed_target']
-    seed_baseline = seed_target + 1000
+    seed_baseline = cfg['scenarios']['seed_baseline']
     print(f"  n_train: {n_train} baselines (different env params)")
     print(f"  n_test:  {n_test} baselines (different env params, same noise)")
     print(f"  seed_target:  {seed_target}")

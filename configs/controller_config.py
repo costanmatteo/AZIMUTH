@@ -57,7 +57,7 @@ SCENARIOS:
 - n_train: Number of scenarios for training (diverse operating conditions)
 - n_test: Number of scenarios for final evaluation (never seen during training)
 - seed_target: Seed for target trajectory generation (train scenarios)
-- seed_baseline: Derived as seed_target + 1000 in train_controller.py
+- seed_baseline: Seed for baseline process noise (same inputs as target, different noise realization)
 - test_seed_offset: Offset added to seeds for test scenarios (default 1000, ensures test != train)
 
 MULTI-SCENARIO:
@@ -181,7 +181,7 @@ CONTROLLER_CONFIG = {
         'n_train': 1,        # Training scenarios (diverse operating conditions)
         'n_test': 1,          # Test scenarios (final evaluation, never seen during training)
         'seed_target': 6,     # Seed for target trajectory generation (train)
-                              # seed_baseline is derived as seed_target + 1000 in train_controller.py
+        'seed_baseline': 5,   # Seed for baseline process noise (same inputs, different noise)
         'test_seed_offset': 1000,  # Offset added to seeds for test scenarios (ensures different from train)
     },
 
