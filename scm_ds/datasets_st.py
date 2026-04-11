@@ -1,12 +1,13 @@
 """
-Sinusoidal SCM Dataset — Fully synthetic, configurable SCM datasets.
+Sigmoid-Cubic SCM Dataset — Fully synthetic, configurable SCM datasets.
 
-Builds SCMDataset instances whose structural equations use a sinusoidal
-transfer function  f(x) = sin((π/2)·x)  arranged in a configurable
-chain-of-stages DAG.  Stage outputs are averaged and blended via convex
-combination.  After each intermediate variable is computed, it is rescaled
-back to [-2, 2] using the empirical min/max of the layer.  Complexity is
-controlled through a single STConfig dataclass.
+Builds SCMDataset instances whose structural equations use a sigmoid-cubic
+transfer function  f(x) = 1/(1+exp(-(x³-3x)))  arranged in a compositional
+chain-of-stages DAG.  Each stage applies f() to the sum of its fresh inputs
+plus the rescaled carry from the previous stage.  After each intermediate
+variable is computed, it is rescaled back to [-2, 2] using the empirical
+min/max of the layer.  Complexity is controlled through a single STConfig
+dataclass.
 
 The module provides:
     - STConfig: dataclass holding all configuration parameters.
@@ -172,8 +173,8 @@ def _assign_env_groups(n: int, me: int, overlap: float) -> List[List[int]]:
 # ---------------------------------------------------------------------------
 
 def _st_term(var: str) -> str:
-    """Sinusoidal transfer: sin((π/2)·x).  Output in [-1, 1] for x in [-1, 1]."""
-    return f"sin(({math.pi / 2})*{var})"
+    """Sigmoid-cubic transfer: 1/(1+exp(-(x³-3x))).  Bounded in (0, 1)."""
+    return f"1/(1 + exp(-({var}**3 - 3*{var})))"
 
 
 def _build_stage_expr(
@@ -185,32 +186,33 @@ def _build_stage_expr(
 ) -> str:
     """Build the SymPy expression string for one stage node.
 
-    Each term is a sinusoidal transfer sin((π/2)·x).  The terms are
-    **averaged** (not summed).  When a previous stage is present the carry
-    is blended as a weighted combination:
+    Compositional structure: the sigmoid-cubic f() is applied to the
+    **sum** of all inputs (fresh + rescaled carry from previous stage):
 
-        S_k = (1 - carry_beta) * mean(terms) + carry_beta * S_{k-1}
+        S_1 = f(X_1 + X_2)                     (no carry)
+        S_2 = f(rescale(S_1) + X_3)            (carry + fresh)
+        S_3 = f(rescale(S_2))                   (carry only, no fresh)
+
+    The rescaling to [-2, 2] is applied externally after each stage
+    (see _rescaling_forward in build_st_scm).  carry_beta is unused
+    in this formulation — the carry enters as a direct addend.
     """
-    terms = []
+    # Collect all addends: fresh inputs (with optional env shifts) + carry
+    addends = []
     for x in input_names:
         if env_shifts and x in env_shifts:
-            shifted = f"({x} + {env_shifts[x]})"
-            terms.append(_st_term(shifted))
+            addends.append(f"({x} + {env_shifts[x]})")
         else:
-            terms.append(_st_term(x))
+            addends.append(x)
 
-    n_terms = len(terms)
-    if n_terms > 0:
-        mean_expr = f"({' + '.join(terms)})/{n_terms}"
-    else:
-        mean_expr = "0"
+    if prev_stage is not None:
+        addends.append(prev_stage)
 
-    if len(input_names) == 0 and prev_stage is not None:
-        expr = _st_term(prev_stage)
-    elif prev_stage is not None:
-        expr = f"(1 - {carry_beta})*{mean_expr} + {carry_beta}*{prev_stage}"
+    if len(addends) > 0:
+        inner = " + ".join(addends)
+        expr = _st_term(inner)
     else:
-        expr = mean_expr
+        expr = "0"
 
     # zero-coefficient noise term (required by SCM engine)
     expr = f"{expr} + 0*{eps_name}"
@@ -466,14 +468,14 @@ def build_st_scm(cfg: STConfig, dag_image_dir: Optional[str] = None) -> SCMDatas
     # ── STEP 9: Assemble SCMDataset ───────────────────────────────────
     # Build description
     desc = (
-        f"Sinusoidal SCM: n={cfg.n}, m={cfg.m}, p={cfg.p}, "
+        f"Sigmoid-cubic SCM: n={cfg.n}, m={cfg.m}, p={cfg.p}, "
         f"env_mode={cfg.env_mode}, me={cfg.me}, rho={cfg.rho}"
     )
 
     ds = SCMDataset(
         name=f"st_n{cfg.n}_m{cfg.m}_p{cfg.p}_{cfg.env_mode}",
         description=desc,
-        tags=["sinusoidal", "synthetic"],
+        tags=["sigmoid-cubic", "synthetic"],
         specs=specs,
         params={},
         singles=singles,
