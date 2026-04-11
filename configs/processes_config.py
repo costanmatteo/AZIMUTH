@@ -48,7 +48,8 @@ ST_DATASET_CONFIG = {
     'n_samples': 2000,
 
     # Coefficiente adattivo inter-processo per il surrogate.
-    # τ_i = base_target + (adaptive_coeff / (i-1)) × Σ_{j<i} (Y_j - base_target)  per i > 1
+    # τ_i = base_target + adaptive_coeff × (Y_{i-1} - base_target)  per i > 1
+    # Ogni processo dipende solo dall'output del processo immediatamente precedente.
     # Se 0.0, tutti i processi usano un target fisso (base_target).
     'adaptive_coeff': 0.3,
 
@@ -250,19 +251,17 @@ def _build_st_processes(st_dataset_config):
             '_scm_instance': ref_scm,
         }
 
-        # Target adattivo inter-processo (tutti i precedenti, peso normalizzato):
-        # τ_i = base_target + (coeff / (i-1)) × Σ_{j<i} (Y_j - base_target)
+        # Target adattivo inter-processo (solo il processo immediatamente precedente):
+        # τ_i = base_target + adaptive_coeff × (Y_{i-1} - base_target)
         # Il baseline adattivo usa la media dei target calibrati (scalare)
         # per coerenza con il calcolo scalare dell'adaptive target.
         if i > 1 and adaptive_coeff != 0.0:
-            n_prev = i - 1
-            coeff_per_proc = adaptive_coeff / n_prev
             calibrated_target_mean = sum(calibrated_targets) / len(calibrated_targets)
             process['surrogate_adaptive_coefficients'] = {
-                f'st_{j}': coeff_per_proc for j in range(1, i)
+                f'st_{i-1}': adaptive_coeff
             }
             process['surrogate_adaptive_baselines'] = {
-                f'st_{j}': calibrated_target_mean for j in range(1, i)
+                f'st_{i-1}': calibrated_target_mean
             }
 
             # Propagate non-linear adaptive mode params if configured
