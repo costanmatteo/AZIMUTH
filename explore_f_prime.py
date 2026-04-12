@@ -10,6 +10,7 @@ generates a single baseline trajectory and computes F' using ProTSurrogate
 import sys
 import os
 import io
+import argparse
 import contextlib
 from pathlib import Path
 import numpy as np
@@ -44,6 +45,11 @@ def _silent():
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--seed_target', type=int, default=SEED_TARGET)
+    args = parser.parse_args()
+    seed_target = args.seed_target
+
     # Filter processes according to the controller config (same as training).
     process_names = CONTROLLER_CONFIG.get('process_names', None)
     with _silent():
@@ -54,7 +60,7 @@ def main():
     print("=" * 70)
     print(f"DATASET_MODE:        {DATASET_MODE}")
     print(f"Processes:           {[p['name'] for p in selected_processes]}")
-    print(f"seed_target:         {SEED_TARGET}")
+    print(f"seed_target:         {seed_target}")
     print(f"seed_baseline range: [{SEED_BASELINE_RANGE.start}, "
           f"{SEED_BASELINE_RANGE.stop - 1}]")
     print()
@@ -66,7 +72,7 @@ def main():
         target_trajectory = generate_target_trajectory(
             process_configs=selected_processes,
             n_samples=1,
-            seed=SEED_TARGET,
+            seed=seed_target,
         )
 
     # ------------------------------------------------------------------
