@@ -264,6 +264,8 @@ def train_single_process(process_config, train_loader, val_loader, test_loader,
     if verbose:
         print(f"\n[3/7] Creating trainer...")
 
+    grad_clip_max_norm = training_config.get('grad_clip_max_norm', 1.0)
+
     if use_ensemble:
         ensemble_base_seed = model_config.get('ensemble_base_seed', 42)
         trainer = EnsembleTrainer(
@@ -272,7 +274,8 @@ def train_single_process(process_config, train_loader, val_loader, test_loader,
             device=device,
             learning_rate=training_config['learning_rate'],
             weight_decay=training_config['weight_decay'],
-            base_seed=ensemble_base_seed
+            base_seed=ensemble_base_seed,
+            grad_clip_max_norm=grad_clip_max_norm,
         )
     elif use_swag:
         trainer = SWAGTrainer(
@@ -284,7 +287,8 @@ def train_single_process(process_config, train_loader, val_loader, test_loader,
             weight_decay=training_config['weight_decay'],
             swa_start_epoch=model_config.get('swag_start_epoch', 0.5),
             swa_freq=model_config.get('swag_collection_freq', 1),
-            min_samples=model_config.get('swag_min_samples', 20)
+            min_samples=model_config.get('swag_min_samples', 20),
+            grad_clip_max_norm=grad_clip_max_norm,
         )
     else:
         trainer = UncertaintyTrainer(
@@ -292,7 +296,8 @@ def train_single_process(process_config, train_loader, val_loader, test_loader,
             criterion=criterion,
             device=device,
             learning_rate=training_config['learning_rate'],
-            weight_decay=training_config['weight_decay']
+            weight_decay=training_config['weight_decay'],
+            grad_clip_max_norm=grad_clip_max_norm,
         )
 
     # Train
