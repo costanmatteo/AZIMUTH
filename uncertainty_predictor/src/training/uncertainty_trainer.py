@@ -1052,7 +1052,6 @@ class SWAGTrainer:
             'val_losses': self.val_losses,
             'train_mse': self.train_mse,
             'val_mse': self.val_mse,
-            'swag_collected': self.swag_model.swag_collected
         }, filepath)
 
     def load_checkpoint(self, filepath):
@@ -1065,7 +1064,9 @@ class SWAGTrainer:
         self.swag_model.deviation_matrix.copy_(checkpoint['deviation_matrix'])
         self.swag_model.n_models_collected.copy_(checkpoint['n_models_collected'])
         self.swag_model.deviation_idx.copy_(checkpoint['deviation_idx'])
-        self.swag_model.swag_collected = checkpoint.get('swag_collected', True)
+        # ``swag_collected`` is now a property derived from ``n_models_collected``,
+        # so it is restored automatically by the buffer copy above. Old checkpoints
+        # that still carry an explicit 'swag_collected' key are ignored.
 
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         self.train_losses = checkpoint.get('train_losses', [])

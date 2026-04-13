@@ -720,8 +720,16 @@ class SWAGUncertaintyPredictor(nn.Module):
         # Current column index for deviation matrix (circular buffer)
         self.register_buffer('deviation_idx', torch.tensor(0))
 
-        # Flag to indicate if SWAG statistics have been collected
-        self.swag_collected = False
+    @property
+    def swag_collected(self):
+        """True iff at least one weight sample has been collected.
+
+        Derived from the persisted buffer ``n_models_collected`` so the flag
+        survives ``state_dict()`` / ``load_state_dict()`` round-trips. Plain
+        Python attributes are not serialized by ``nn.Module``, which previously
+        caused the loaded model to think SWAG had never been trained.
+        """
+        return self.n_models_collected.item() > 0
 
     def _flatten_params(self):
         """Flatten all model parameters into a single vector."""
@@ -764,7 +772,6 @@ class SWAGUncertaintyPredictor(nn.Module):
 
         self.n_models_collected.add_(1)
         self.deviation_idx.add_(1)
-        self.swag_collected = True
 
     def _compute_variance(self):
         """
