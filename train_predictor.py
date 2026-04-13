@@ -289,6 +289,18 @@ def main():
         if is_st_mode and st_reference_result is not None:
             import shutil
             ref_dir = Path(st_reference_result['checkpoint_dir'])
+
+            # Wipe the destination so files from previous runs that are no
+            # longer produced by the reference process don't linger.
+            if checkpoint_dir.exists():
+                for _entry in checkpoint_dir.iterdir():
+                    if _entry.is_file() or _entry.is_symlink():
+                        try:
+                            _entry.unlink()
+                        except OSError:
+                            pass
+                    elif _entry.is_dir():
+                        shutil.rmtree(_entry, ignore_errors=True)
             checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
             # Copia tutti i file dal checkpoint di riferimento
