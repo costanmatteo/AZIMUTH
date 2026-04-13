@@ -42,7 +42,7 @@ DATASET_MODE = 'st'
 # ═══════════════════════════════════════════════════════════════════════════════
 ST_DATASET_CONFIG = {
     # Numero di processi in sequenza
-    'n_processes': 3,
+    'n_processes': 4,
 
     # Numero di campioni da generare per processo
     'n_samples': 2000,
@@ -54,16 +54,16 @@ ST_DATASET_CONFIG = {
 
     # Parametri STConfig — ogni processo usa la stessa configurazione
     'st_params': {
-        'n': 4,                     # variabili di input per processo
-        'm': 1,                     # stadi ST per processo (1 = singolo stadio)
+        'n': 5,                     # variabili di input per processo
+        'm': 2,                     # stadi ST per processo (1 = singolo stadio)
         'p': 1,                     # output per processo
         'me': 1,                    # variabili ambientali
         'env_mode': 'A',            # modalità ambiente (A|B|C|D)
         'env_overlap': 0.0,
-        'output_overlap': 0.0,          # sovrapposizione confine output [0,1]
+        'output_overlap': 0.2,          # sovrapposizione confine output [0,1]
         'alpha': 0.3,               # ampiezza shift additivo
         'gamma': 0.3,               # ampiezza moltiplicativa
-        'rho': 0.2,                 # intensità rumore [0,1]
+        'rho': 0.1,                 # intensità rumore [0,1]
         'width_profile': 'uniform',
         'carry_beta': 0.3,
         'x_domain': (-2.0, 2.0),

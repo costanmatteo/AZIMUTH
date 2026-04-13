@@ -20,34 +20,33 @@ GLOBAL_UNCERTAINTY_CONFIG = {
     'n_ensemble_models': 5,
     'ensemble_base_seed': 42,
 
-    # SWAG configuration (used if uncertainty_method='swag')
-    'swag_start_epoch': 0.15,     # SWA starts early via early-stop, fraction is fallback
-    'swag_learning_rate': 0.015,  # LR during SWA phase
-    'swag_max_rank': 30,          # Low-rank covariance dimension
-    'swag_collection_freq': 1,    # Collect weights every N epochs
-    'swag_n_samples': 60,         # Weight samples for prediction
-    'swag_min_samples': 40,       # Minimum samples before training can stop
+    # SWAG: più campioni, posterior più larga, più samples a inference
+    'swag_start_epoch': 0.15,
+    'swag_learning_rate': 0.015,
+    'swag_max_rank': 30,
+    'swag_collection_freq': 1,
+    'swag_n_samples': 60,
+    'swag_min_samples': 40,
 }
-
 # ═══════════════════════════════════════════════════════════════════════════════
 # DEFAULT ST UNCERTAINTY PREDICTOR
 # ═══════════════════════════════════════════════════════════════════════════════
 # Configurazione modello/training condivisa da tutti i processi ST
 DEFAULT_ST_UNCERTAINTY_PREDICTOR = {
     'model': {
-        'hidden_sizes': [32, 16],
-        'dropout_rate': 0.2,
-        'use_batchnorm': False,
+        'hidden_sizes': [32, 16, 8],
+        'dropout_rate': 0.1,
+        'use_batchnorm': True,
         'min_variance': 1e-3,
     },
     'training': {
-        'batch_size': 64,
+        'batch_size': 32,
         'epochs': 200,
         'learning_rate': 0.001,
         'weight_decay': 5e-3,
-        'patience': 15,
+        'patience': 120,
         'loss_type': 'gaussian_nll',
-        'variance_penalty_alpha': 0.7,
+        'variance_penalty_alpha': 1.0
     }
 }
 
