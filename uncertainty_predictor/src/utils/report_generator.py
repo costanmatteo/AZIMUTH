@@ -541,9 +541,28 @@ def _build_left(d):
 #  RIGHT COLUMN
 # ════════════════════════════════════════════════════════════════════════════
 
+def _resolve_chk_dir(d):
+    """Resolve the PNG source dir. The 'checkpoint_dir' entry is the
+    authoritative path (set by generate_uncertainty_training_report to
+    the exact dir where the PDF is being written). We fall back to the
+    config entry only if the caller didn't provide one, and we warn so
+    any path mismatch between PDF output and PNG source is visible.
+    """
+    auth = d.get('checkpoint_dir')
+    if auth is not None:
+        return Path(auth)
+    fb = d.get('config', {}).get('training', {}).get('checkpoint_dir', '.')
+    import warnings
+    warnings.warn(
+        "uncertainty_training_report: no checkpoint_dir supplied to the "
+        f"report builder — falling back to config path {fb!r}. Plots "
+        "embedded in the PDF may come from a stale directory."
+    )
+    return Path(fb)
+
+
 def _build_right(d):
-    chk_dir = Path(d.get('checkpoint_dir') or
-                   d['config'].get('training', {}).get('checkpoint_dir', '.'))
+    chk_dir = _resolve_chk_dir(d)
     history = d.get('history', {}) or {}
     st_params = d.get('st_params') or {}
     F = []
@@ -697,9 +716,8 @@ def _build_right(d):
 
 
 def _build_section_b(d, frame_w, frame_h):
-    """Contenuto minipage B — predictions with uncertainty."""
-    chk_dir = Path(d.get('checkpoint_dir') or
-                   d['config'].get('training', {}).get('checkpoint_dir', '.'))
+    """Contenuto minipage D — predictions with uncertainty."""
+    chk_dir = _resolve_chk_dir(d)
     HDR_OVERHEAD = 18   # section_header (spacer + label + rule)
     CAP_H        = 10   # caption height
     img_h = frame_h - HDR_OVERHEAD - CAP_H - 4
@@ -718,9 +736,8 @@ def _build_section_b(d, frame_w, frame_h):
 
 
 def _build_section_c(d, frame_w, frame_h):
-    """Contenuto minipage C — scatter with uncertainty coloring."""
-    chk_dir = Path(d.get('checkpoint_dir') or
-                   d['config'].get('training', {}).get('checkpoint_dir', '.'))
+    """Contenuto minipage E — scatter with uncertainty coloring."""
+    chk_dir = _resolve_chk_dir(d)
     HDR_OVERHEAD = 18
     CAP_H        = 10
     img_h = frame_h - HDR_OVERHEAD - CAP_H - 4
@@ -807,7 +824,8 @@ def generate_uncertainty_training_report(
                      input_dim=input_dim, output_dim=output_dim, total_params=total_params,
                      n_train=n_train, n_val=n_val, n_test=n_test,
                      timestamp=timestamp, coverage_results=coverage_results,
-                     st_params=st_params), out)
+                     st_params=st_params,
+                     checkpoint_dir=checkpoint_dir), out)
     return str(out)
 
 
@@ -825,7 +843,8 @@ class UncertaintyReportGenerator:
                          input_dim=input_dim, output_dim=output_dim, total_params=total_params,
                          n_train=n_train, n_val=n_val, n_test=n_test,
                          timestamp=timestamp, coverage_results=coverage_results,
-                         st_params=st_params),
+                         st_params=st_params,
+                         checkpoint_dir=self.output_path.parent),
                     self.output_path)
         return str(self.output_path)
 

@@ -441,6 +441,7 @@ def train_single_process(process_config, train_loader, val_loader, test_loader,
     # Generate visualizations
     if verbose:
         print(f"\n[6/7] Generating visualizations...")
+        print(f"  Saving PNGs into: {checkpoint_dir.resolve()}")
 
     # Training history plot (with SWA start marker if using SWAG)
     uq_viz.plot_training_history(
