@@ -36,7 +36,8 @@ class UncertaintyTrainer:
         weight_decay (float): L2 regularization strength (default: 0.0)
     """
 
-    def __init__(self, model, criterion, device=None, learning_rate=0.001, weight_decay=0.0):
+    def __init__(self, model, criterion, device=None, learning_rate=0.001, weight_decay=0.0,
+                 grad_clip_max_norm=1.0):
         # Setup device
         if device is None:
             self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -47,6 +48,7 @@ class UncertaintyTrainer:
         self.criterion = criterion
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
+        self.grad_clip_max_norm = grad_clip_max_norm
 
         # Setup optimizer
         self.optimizer = optim.Adam(
@@ -101,6 +103,7 @@ class UncertaintyTrainer:
             # Backward pass and optimization
             self.optimizer.zero_grad()
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.grad_clip_max_norm)
             self.optimizer.step()
 
             epoch_loss += loss.item()
@@ -358,7 +361,7 @@ class EnsembleTrainer:
     """
 
     def __init__(self, ensemble_model, criterion, device=None, learning_rate=0.001,
-                 weight_decay=0.0, base_seed=42):
+                 weight_decay=0.0, base_seed=42, grad_clip_max_norm=1.0):
         # Setup device
         if device is None:
             self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -371,6 +374,7 @@ class EnsembleTrainer:
         self.weight_decay = weight_decay
         self.base_seed = base_seed
         self.n_models = ensemble_model.n_models
+        self.grad_clip_max_norm = grad_clip_max_norm
 
         # Create optimizer for each model
         self.optimizers = [
@@ -449,6 +453,7 @@ class EnsembleTrainer:
 
                 optimizer.zero_grad()
                 loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=self.grad_clip_max_norm)
                 optimizer.step()
 
                 epoch_loss += loss.item()
@@ -788,7 +793,7 @@ class SWAGTrainer:
 
     def __init__(self, swag_model, criterion, device=None, learning_rate=0.001,
                  swa_learning_rate=0.01, weight_decay=0.0, swa_start_epoch=0.5, swa_freq=1,
-                 min_samples=20):
+                 min_samples=20, grad_clip_max_norm=1.0):
         # Setup device
         if device is None:
             self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -803,6 +808,7 @@ class SWAGTrainer:
         self.swa_start_epoch = swa_start_epoch  # Fraction (0.5 = start SWA at 50% of training)
         self.swa_freq = swa_freq
         self.min_samples = min_samples  # Minimum weight samples before training can stop
+        self.grad_clip_max_norm = grad_clip_max_norm
 
         # Setup optimizer for base model
         self.optimizer = optim.Adam(
@@ -856,6 +862,7 @@ class SWAGTrainer:
             # Backward pass
             self.optimizer.zero_grad()
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.swag_model.base_model.parameters(), max_norm=self.grad_clip_max_norm)
             self.optimizer.step()
 
             epoch_loss += loss.item()

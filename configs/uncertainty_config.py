@@ -48,6 +48,7 @@ DEFAULT_ST_UNCERTAINTY_PREDICTOR = {
         'patience': 15,
         'loss_type': 'gaussian_nll',
         'variance_penalty_alpha': 0.7,
+        'grad_clip_max_norm': 1.0,
     }
 }
 
@@ -71,6 +72,7 @@ PHYSICAL_UNCERTAINTY_PREDICTORS = {
             'patience': 30,
             'loss_type': 'gaussian_nll',
             'variance_penalty_alpha': 1,
+            'grad_clip_max_norm': 1.0,
         }
     },
 
@@ -89,6 +91,7 @@ PHYSICAL_UNCERTAINTY_PREDICTORS = {
             'patience': 30,
             'loss_type': 'gaussian_nll',
             'variance_penalty_alpha': 0.5,
+            'grad_clip_max_norm': 1.0,
         }
     },
 
@@ -107,6 +110,7 @@ PHYSICAL_UNCERTAINTY_PREDICTORS = {
             'patience': 30,
             'loss_type': 'gaussian_nll',
             'variance_penalty_alpha': 2,
+            'grad_clip_max_norm': 1.0,
         }
     },
 
@@ -125,6 +129,7 @@ PHYSICAL_UNCERTAINTY_PREDICTORS = {
             'patience': 30,
             'loss_type': 'gaussian_nll',
             'variance_penalty_alpha': 2,
+            'grad_clip_max_norm': 1.0,
         }
     },
 }
