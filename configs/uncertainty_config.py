@@ -21,12 +21,12 @@ GLOBAL_UNCERTAINTY_CONFIG = {
     'ensemble_base_seed': 42,
 
     # SWAG configuration (used if uncertainty_method='swag')
-    'swag_start_epoch': 0.6,      # Start SWA at 60% of training
-    'swag_learning_rate': 0.005,  # LR during SWA phase
-    'swag_max_rank': 20,          # Low-rank covariance dimension
+    'swag_start_epoch': 0.15,     # SWA starts early via early-stop, fraction is fallback
+    'swag_learning_rate': 0.015,  # LR during SWA phase
+    'swag_max_rank': 30,          # Low-rank covariance dimension
     'swag_collection_freq': 1,    # Collect weights every N epochs
-    'swag_n_samples': 30,         # Weight samples for prediction
-    'swag_min_samples': 20,       # Minimum samples before training can stop
+    'swag_n_samples': 60,         # Weight samples for prediction
+    'swag_min_samples': 40,       # Minimum samples before training can stop
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -36,18 +36,18 @@ GLOBAL_UNCERTAINTY_CONFIG = {
 DEFAULT_ST_UNCERTAINTY_PREDICTOR = {
     'model': {
         'hidden_sizes': [32, 16],
-        'dropout_rate': 0.05,
+        'dropout_rate': 0.2,
         'use_batchnorm': False,
-        'min_variance': 1e-6,
+        'min_variance': 1e-3,
     },
     'training': {
-        'batch_size': 32,
-        'epochs': 500,
+        'batch_size': 64,
+        'epochs': 200,
         'learning_rate': 0.001,
-        'weight_decay': 0.001,
-        'patience': 50,
+        'weight_decay': 5e-3,
+        'patience': 15,
         'loss_type': 'gaussian_nll',
-        'variance_penalty_alpha': 1.0,
+        'variance_penalty_alpha': 0.7,
     }
 }
 
