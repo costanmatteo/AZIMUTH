@@ -564,7 +564,8 @@ def train_single_process(process_config, train_loader, val_loader, test_loader,
         n_test=n_test,
         checkpoint_dir=checkpoint_dir,
         timestamp=datetime.now(),
-        coverage_results=coverage_results
+        coverage_results=coverage_results,
+        st_params=process_config.get('st_params'),
     )
 
     # Save model weights

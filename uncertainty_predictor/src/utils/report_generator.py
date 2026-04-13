@@ -107,7 +107,7 @@ def scale_img(path, max_w, max_h):
 
 
 def _placeholder(name, w, h):
-    st = ParagraphStyle('_ph', fontName='Courier', fontSize=FS_CAPTION,
+    st = ParagraphStyle('_ph', fontName='Helvetica', fontSize=FS_CAPTION,
                         alignment=TA_CENTER, textColor=C_GRAY)
     t  = Table([[Paragraph(name, st)]], colWidths=[w], rowHeights=[h])
     t.setStyle(TableStyle([
@@ -121,7 +121,7 @@ def _placeholder(name, w, h):
 
 # ── style factory ────────────────────────────────────────────────────────────
 def _s(name, size, bold=False, italic=False, color=C_BLACK, align=TA_LEFT, leading=None):
-    font = 'Courier-Bold' if bold else ('Courier-Oblique' if italic else 'Courier')
+    font = 'Helvetica-Bold' if bold else ('Helvetica-Oblique' if italic else 'Helvetica')
     return ParagraphStyle(name, fontName=font, fontSize=size,
                           leading=leading or size * 1.3,
                           textColor=color, alignment=align)
@@ -156,13 +156,13 @@ ST_SEC3_VAL = _s('st_s3v',   FS_BODY,     color=C_BLACK, align=TA_LEFT)
 
 def _cv(c, align=TA_RIGHT):
     """Dynamic color+align body style."""
-    return ParagraphStyle(f'_dyn{id(c)}{align}', fontName='Courier',
+    return ParagraphStyle(f'_dyn{id(c)}{align}', fontName='Helvetica',
                           fontSize=FS_BODY, leading=FS_BODY*1.3,
                           textColor=c, alignment=align)
 
 def _ckpi(c):
     """Dynamic color KPI val style."""
-    return ParagraphStyle(f'_kpi{id(c)}', fontName='Courier-Bold',
+    return ParagraphStyle(f'_kpi{id(c)}', fontName='Helvetica-Bold',
                           fontSize=FS_KPI_VAL, leading=FS_KPI_VAL*1.2,
                           textColor=c, alignment=TA_LEFT)
 
@@ -544,6 +544,8 @@ def _build_left(d):
 def _build_right(d):
     chk_dir = Path(d.get('checkpoint_dir') or
                    d['config'].get('training', {}).get('checkpoint_dir', '.'))
+    history = d.get('history', {}) or {}
+    st_params = d.get('st_params') or {}
     F = []
 
     avail = BODY_H - 80
@@ -556,6 +558,141 @@ def _build_right(d):
     F.append(a_img)
     F.append(Paragraph("Training and Validation Loss (NLL and MSE)", ST_CAPTION))
 
+    # ── Section B — dataset (process) info ────────────────────────────────
+    F += section_header("B \u2014 dataset info", RW)
+
+    COL_GAP_R = 5 * mm
+    col_w_r   = (RW - COL_GAP_R) / 2
+
+    # Left sub-table: structural dimensions
+    dim_rows = [
+        ("Input dim",  str(d.get('input_dim',  '\u2014'))),
+        ("Output dim", str(d.get('output_dim', '\u2014'))),
+    ]
+    if st_params:
+        dim_rows = [
+            ("n  (input vars)",   str(st_params.get('n',  '\u2014'))),
+            ("m  (stages)",       str(st_params.get('m',  '\u2014'))),
+            ("p  (outputs)",      str(st_params.get('p',  '\u2014'))),
+            ("me (env vars)",     str(st_params.get('me', '\u2014'))),
+        ]
+
+    # Right sub-table: noise / shift parameters or sample sizes fallback
+    if st_params:
+        xdom = st_params.get('x_domain', '\u2014')
+        if isinstance(xdom, (list, tuple)) and len(xdom) == 2:
+            xdom = f"[{xdom[0]}, {xdom[1]}]"
+        noise_rows = [
+            ("\u03b1  (shift)",      str(st_params.get('alpha', '\u2014'))),
+            ("\u03b3  (mult)",       str(st_params.get('gamma', '\u2014'))),
+            ("\u03c1  (noise)",      str(st_params.get('rho',   '\u2014'))),
+            ("env_mode",             str(st_params.get('env_mode', '\u2014'))),
+        ]
+    else:
+        n_train = d.get('n_train', 0)
+        n_val   = d.get('n_val',   0)
+        n_test  = d.get('n_test',  0)
+        noise_rows = [
+            ("Train samples",      f"{n_train:,}"),
+            ("Validation samples", f"{n_val:,}"),
+            ("Test samples",       f"{n_test:,}"),
+            ("Total samples",      f"{n_train + n_val + n_test:,}"),
+        ]
+
+    sec_ds = Table([[kv_table(dim_rows, col_w_r), kv_table(noise_rows, col_w_r)]],
+                   colWidths=[col_w_r, col_w_r])
+    sec_ds.setStyle(TableStyle([
+        ('VALIGN',        (0,0),(-1,-1), 'TOP'),
+        ('TOPPADDING',    (0,0),(-1,-1), 0),
+        ('BOTTOMPADDING', (0,0),(-1,-1), 0),
+        ('LEFTPADDING',   (0,0),(-1,-1), 0),
+        ('RIGHTPADDING',  (0,0),(-1,-1), 0),
+        ('RIGHTPADDING',  (0,0),(0,-1),  COL_GAP_R / 2),
+        ('LEFTPADDING',   (1,0),(1,-1),  COL_GAP_R / 2),
+    ]))
+    F.append(sec_ds)
+
+    # ── Section C — training & validation loss summary ────────────────────
+    F += section_header("C \u2014 training & validation loss", RW)
+
+    def _min(v):
+        try:
+            return min(v)
+        except Exception:
+            return None
+
+    train_losses = history.get('train_losses') or []
+    val_losses   = history.get('val_losses')   or []
+    train_mse    = history.get('train_mse')    or []
+    val_mse      = history.get('val_mse')      or []
+
+    final_tr_nll = history.get('final_train_loss',
+                   train_losses[-1] if train_losses else 0.0)
+    final_va_nll = history.get('final_val_loss',
+                   val_losses[-1] if val_losses else 0.0)
+    best_va_nll  = history.get('best_val_loss',
+                   _min(val_losses) if val_losses else 0.0)
+    min_tr_nll   = _min(train_losses) if train_losses else final_tr_nll
+    final_tr_mse = history.get('final_train_mse',
+                   train_mse[-1] if train_mse else 0.0)
+    final_va_mse = history.get('final_val_mse',
+                   val_mse[-1] if val_mse else 0.0)
+    min_tr_mse   = _min(train_mse) if train_mse else final_tr_mse
+    min_va_mse   = _min(val_mse)   if val_mse   else final_va_mse
+
+    def _fmt(x):
+        return f"{x:.6f}" if isinstance(x, (int, float)) else str(x)
+
+    cws_loss = [RW * r for r in [0.34, 0.22, 0.22, 0.22]]
+    hdr_st   = _s('_hloss', FS_BODY, color=C_MUTED)
+    num_st   = _s('_nloss', FS_BODY, align=TA_RIGHT)
+    rows_loss = [[
+        Paragraph("Metric",     hdr_st),
+        Paragraph("Final",      _s('_hf', FS_BODY, color=C_MUTED, align=TA_RIGHT)),
+        Paragraph("Best / Min", _s('_hb', FS_BODY, color=C_MUTED, align=TA_RIGHT)),
+        Paragraph("Epochs",     _s('_he', FS_BODY, color=C_MUTED, align=TA_RIGHT)),
+    ]]
+    n_ep = len(train_losses) if train_losses else '\u2014'
+    rows_loss.append([
+        Paragraph("Train NLL", _s('_t1', FS_BODY)),
+        Paragraph(_fmt(final_tr_nll), num_st),
+        Paragraph(_fmt(min_tr_nll),   num_st),
+        Paragraph(str(n_ep),          num_st),
+    ])
+    rows_loss.append([
+        Paragraph("Val NLL", _s('_t2', FS_BODY)),
+        Paragraph(_fmt(final_va_nll), num_st),
+        Paragraph(_fmt(best_va_nll),  _cv(C_GREEN, align=TA_RIGHT)),
+        Paragraph(str(n_ep),          num_st),
+    ])
+    if train_mse:
+        rows_loss.append([
+            Paragraph("Train MSE", _s('_t3', FS_BODY)),
+            Paragraph(_fmt(final_tr_mse), num_st),
+            Paragraph(_fmt(min_tr_mse),   num_st),
+            Paragraph(str(n_ep),          num_st),
+        ])
+    if val_mse:
+        rows_loss.append([
+            Paragraph("Val MSE", _s('_t4', FS_BODY)),
+            Paragraph(_fmt(final_va_mse), num_st),
+            Paragraph(_fmt(min_va_mse),   num_st),
+            Paragraph(str(n_ep),          num_st),
+        ])
+
+    loss_tbl = Table(rows_loss, colWidths=cws_loss)
+    loss_tbl.setStyle(TableStyle([
+        ('BOX',           (0,0),(-1,-1), 0.5, C_BLACK),
+        ('LINEBELOW',     (0,0),(-1, 0), 0.5, C_BLACK),
+        ('INNERGRID',     (0,0),(-1,-1), 0.3, C_LGRAY),
+        ('TOPPADDING',    (0,0),(-1,-1), 1.5),
+        ('BOTTOMPADDING', (0,0),(-1,-1), 1.5),
+        ('LEFTPADDING',   (0,0),(-1,-1), 2),
+        ('RIGHTPADDING',  (0,0),(-1,-1), 2),
+        ('VALIGN',        (0,0),(-1,-1), 'TOP'),
+    ]))
+    F.append(loss_tbl)
+
     return F
 
 
@@ -567,7 +704,7 @@ def _build_section_b(d, frame_w, frame_h):
     CAP_H        = 10   # caption height
     img_h = frame_h - HDR_OVERHEAD - CAP_H - 4
 
-    F = section_header("B \u2014 predictions with uncertainty", frame_w)
+    F = section_header("D \u2014 predictions with uncertainty", frame_w)
     p_combined = chk_dir / 'predictions_combined.png'
     if p_combined.exists():
         img = scale_img(p_combined, frame_w, img_h)
@@ -588,7 +725,7 @@ def _build_section_c(d, frame_w, frame_h):
     CAP_H        = 10
     img_h = frame_h - HDR_OVERHEAD - CAP_H - 4
 
-    F = section_header("C \u2014 scatter with uncertainty coloring", frame_w)
+    F = section_header("E \u2014 scatter with uncertainty coloring", frame_w)
     img = scale_img(chk_dir / 'scatter_with_uncertainty.png', frame_w, img_h)
     img.hAlign = 'LEFT'
     F.append(img)
@@ -659,6 +796,7 @@ def _build_page(d, out_path):
 def generate_uncertainty_training_report(
     config, history, metrics, input_dim, output_dim, total_params,
     n_train, n_val, n_test, checkpoint_dir, timestamp=None, coverage_results=None,
+    st_params=None,
 ):
     if timestamp is None:
         timestamp = datetime.now()
@@ -668,7 +806,8 @@ def generate_uncertainty_training_report(
     _build_page(dict(config=config, history=history, metrics=metrics,
                      input_dim=input_dim, output_dim=output_dim, total_params=total_params,
                      n_train=n_train, n_val=n_val, n_test=n_test,
-                     timestamp=timestamp, coverage_results=coverage_results), out)
+                     timestamp=timestamp, coverage_results=coverage_results,
+                     st_params=st_params), out)
     return str(out)
 
 
@@ -678,14 +817,15 @@ class UncertaintyReportGenerator:
 
     def generate(self, config, history, metrics, input_dim, output_dim,
                  total_params, n_train, n_val, n_test,
-                 timestamp=None, coverage_results=None):
+                 timestamp=None, coverage_results=None, st_params=None):
         if timestamp is None:
             timestamp = datetime.now()
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
         _build_page(dict(config=config, history=history, metrics=metrics,
                          input_dim=input_dim, output_dim=output_dim, total_params=total_params,
                          n_train=n_train, n_val=n_val, n_test=n_test,
-                         timestamp=timestamp, coverage_results=coverage_results),
+                         timestamp=timestamp, coverage_results=coverage_results,
+                         st_params=st_params),
                     self.output_path)
         return str(self.output_path)
 

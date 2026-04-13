@@ -12,7 +12,8 @@ from pathlib import Path
 
 def apply_plot_style():
     plt.rcParams.update({
-        'font.family':           'monospace',
+        'font.family':           'sans-serif',
+        'font.sans-serif':       ['Arial', 'Helvetica', 'DejaVu Sans'],
         'font.size':             8,
         'axes.titlesize':        9,
         'axes.titleweight':      'normal',
