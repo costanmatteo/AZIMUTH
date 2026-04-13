@@ -14,11 +14,11 @@ def apply_plot_style():
     plt.rcParams.update({
         'font.family':           'sans-serif',
         'font.sans-serif':       ['Arial', 'Helvetica', 'DejaVu Sans'],
-        'font.size':             8,
-        'axes.titlesize':        9,
+        'font.size':             11,
+        'axes.titlesize':        13,
         'axes.titleweight':      'normal',
         'axes.titlelocation':    'left',
-        'axes.labelsize':        8,
+        'axes.labelsize':        12,
         'axes.labelweight':      'normal',
         'axes.linewidth':        0.5,
         'axes.spines.top':       False,
@@ -27,13 +27,13 @@ def apply_plot_style():
         'grid.color':            '#DDDDDD',
         'grid.linewidth':        0.4,
         'grid.alpha':            1.0,
-        'xtick.labelsize':       7.5,
-        'ytick.labelsize':       7.5,
+        'xtick.labelsize':       11,
+        'ytick.labelsize':       11,
         'xtick.major.width':     0.4,
         'ytick.major.width':     0.4,
         'xtick.major.size':      3,
         'ytick.major.size':      3,
-        'legend.fontsize':       7.5,
+        'legend.fontsize':       10,
         'legend.framealpha':     0.9,
         'legend.edgecolor':      '#DDDDDD',
         'legend.fancybox':       False,
@@ -119,7 +119,7 @@ def plot_training_history(train_losses, val_losses, train_mse=None, val_mse=None
     axes[0].set_xlabel('Epoch')
     axes[0].set_ylabel('Negative Log-Likelihood')
     axes[0].set_title('Training History - NLL Loss')
-    axes[0].legend(loc='upper left', fontsize=8.5)
+    axes[0].legend(loc='upper left')
     axes[0].grid(True, alpha=0.3)
 
     # Plot MSE if provided
@@ -135,7 +135,7 @@ def plot_training_history(train_losses, val_losses, train_mse=None, val_mse=None
         axes[1].set_xlabel('Epoch')
         axes[1].set_ylabel('Mean Squared Error')
         axes[1].set_title('Training History - MSE')
-        axes[1].legend(loc='upper left', fontsize=8.5)
+        axes[1].legend(loc='upper left')
         axes[1].grid(True, alpha=0.3)
 
     plt.tight_layout()
@@ -352,7 +352,7 @@ def plot_combined_predictions_with_uncertainty(
             ax.set_xlabel('Sample (sorted by prediction)')
             ax.set_ylabel('Value')
             ax.set_title(f'{col_title} — {name}')
-            ax.legend(fontsize=8.5)
+            ax.legend()
             ax.grid(True, alpha=0.3)
 
     plt.tight_layout()
@@ -428,7 +428,7 @@ def plot_scatter_with_uncertainty(y_true, y_pred_mean, y_pred_variance,
 
         # Add colorbar
         cbar = plt.colorbar(scatter, ax=ax)
-        cbar.set_label('Predicted Variance', fontsize=8)
+        cbar.set_label('Predicted Variance')
 
         # Calculate and display R²
         from sklearn.metrics import r2_score
@@ -437,7 +437,7 @@ def plot_scatter_with_uncertainty(y_true, y_pred_mean, y_pred_variance,
                transform=ax.transAxes,
                bbox=dict(boxstyle='square,pad=0.3', facecolor='white',
                          edgecolor='#CCCCCC', linewidth=0.5, alpha=0.9),
-               verticalalignment='top', fontsize=8)
+               verticalalignment='top', fontsize=11)
 
     # Hide extra subplots
     for i in range(n_outputs, len(axes)):
@@ -493,10 +493,10 @@ def plot_uncertainty_distribution(y_pred_variance, output_names=None, save_path=
         x_range = np.linspace(y_v.min(), y_v.max(), 200)
         ax.plot(x_range, kde(x_range), 'r-', linewidth=2, label='KDE')
 
-        ax.set_xlabel('Predicted Variance', fontsize=10)
-        ax.set_ylabel('Density', fontsize=10)
-        ax.set_title(f'{name} - Uncertainty Distribution', fontsize=12, fontweight='bold')
-        ax.legend(fontsize=8)
+        ax.set_xlabel('Predicted Variance')
+        ax.set_ylabel('Density')
+        ax.set_title(f'{name} - Uncertainty Distribution', fontweight='bold')
+        ax.legend()
         ax.grid(True, alpha=0.3)
 
         # Add statistics
@@ -506,7 +506,7 @@ def plot_uncertainty_distribution(y_pred_variance, output_names=None, save_path=
         ax.text(0.6, 0.95, f'Mean: {mean_var:.4f}\nStd: {std_var:.4f}',
                transform=ax.transAxes,
                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5),
-               verticalalignment='top', fontsize=9)
+               verticalalignment='top', fontsize=11)
 
     # Hide extra subplots
     for i in range(n_outputs, len(axes)):
