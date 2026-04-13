@@ -141,6 +141,22 @@ def train_single_process(process_config, train_loader, val_loader, test_loader,
     training_config = process_config['uncertainty_predictor']['training']
     checkpoint_dir = Path(process_config['checkpoint_dir'])
 
+    # Start from a clean slate: this directory is owned entirely by the
+    # trainer, and every artifact (weights, scalers, plots, report, info)
+    # is regenerated below. Wiping avoids stale files from previous runs
+    # (e.g. plots produced by an older version of the code) leaking into
+    # the new report.
+    if checkpoint_dir.exists():
+        import shutil as _shutil
+        for _entry in checkpoint_dir.iterdir():
+            if _entry.is_file() or _entry.is_symlink():
+                try:
+                    _entry.unlink()
+                except OSError:
+                    pass
+            elif _entry.is_dir():
+                _shutil.rmtree(_entry, ignore_errors=True)
+
     # Create checkpoint directory
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
