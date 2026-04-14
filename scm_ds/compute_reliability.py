@@ -277,3 +277,296 @@ def compute_reliability(trajectory: Dict,
     """
     rf = ReliabilityFunction(device=device)
     return rf.compute_reliability(trajectory, return_quality_scores=return_quality_scores)
+
+
+class ShekelReliabilityFunction:
+    """
+    Alternative reliability function using a single-peak adaptive Shekel bump.
+
+    F(o) = 1 / (1 + sum_{t,k} c_{t,k} * (o_{t,k} - a_{t,k}_eff)^2)
+
+    where a_{t,k}_eff uses the same adaptive target mechanism as ReliabilityFunction,
+    and c_{t,k} = s / sigma_{t,k}^2 is calibrated from the output distribution.
+
+    F ∈ (0, 1], F = 1 only when all outputs hit their adaptive peak centers exactly.
+    """
+
+    def __init__(self,
+                 process_configs: Dict = None,
+                 process_order: list = None,
+                 device: str = 'cpu',
+                 s: float = 1.0):
+        """
+        Args:
+            process_configs: Process-specific shekel configs (with 'shekel_center',
+                             'shekel_sigma', and the usual adaptive keys).
+                             If None, uses default PROCESS_CONFIGS.
+            process_order: Order of processes for dependency resolution.
+                           If None, uses default PROCESS_ORDER.
+            device: Torch device for computations.
+            s: Global width hyperparameter applied to all processes
+               (c_{t,k} = s / sigma_{t,k}^2).
+        """
+        self.process_configs = process_configs or PROCESS_CONFIGS
+        self.process_order = process_order or PROCESS_ORDER
+        self.device = device
+        self.s = float(s)
+
+    def compute_reliability(self,
+                            trajectory: Dict,
+                            return_per_process_contributions: bool = False,
+                            use_sampled_outputs: bool = True
+                            ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict]]:
+        """
+        Compute the Shekel-bump reliability F for a trajectory.
+
+        Args:
+            trajectory: Dict mapping process_name to:
+                {
+                    'inputs': tensor (batch, input_dim),
+                    'outputs_mean': tensor (batch, output_dim),
+                    'outputs_var': tensor (batch, output_dim),   # optional
+                    'outputs_sampled': tensor (batch, output_dim)  # optional
+                }
+            return_per_process_contributions: If True, also return a dict mapping
+                process_name to tensor(batch,) of its summed weighted
+                squared-distance contribution to the denominator.
+            use_sampled_outputs: If True, use 'outputs_sampled' if available,
+                                 otherwise use 'outputs_mean'.
+
+        Returns:
+            F: tensor (batch,), values in (0, 1]
+            contributions (optional): dict {process_name: tensor(batch,)}
+        """
+        # Extract outputs from trajectory
+        outputs = {}
+        for process_name, data in trajectory.items():
+            if use_sampled_outputs and 'outputs_sampled' in data:
+                output = data['outputs_sampled']
+            else:
+                output = data['outputs_mean']
+
+            if isinstance(output, np.ndarray):
+                output = torch.tensor(output, dtype=torch.float32, device=self.device)
+
+            if output.dim() == 1:
+                output = output.unsqueeze(-1)  # (batch,) → (batch, 1)
+            outputs[process_name] = output  # (batch, output_dim)
+
+        contributions: Dict[str, torch.Tensor] = {}
+        total_sq_sum = None  # running (batch,) tensor
+
+        for process_name in self.process_order:
+            if process_name not in outputs:
+                continue
+
+            config = self.process_configs.get(process_name, {})
+            output = outputs[process_name]  # (batch, output_dim)
+            output_dim = output.shape[-1]
+
+            # Adaptive center, broadcastable to (batch, output_dim)
+            center = self._compute_adaptive_center(process_name, outputs, config)
+
+            # Width coefficients c_{t,k} = s / sigma_{t,k}^2
+            sigmas = config.get('shekel_sigma', None)
+            if sigmas is None:
+                sigmas = [1.0] * output_dim
+            if not isinstance(sigmas, (list, tuple)):
+                sigmas = [sigmas]
+            sigma_t = torch.tensor(sigmas, dtype=torch.float32, device=self.device)
+            c_t = self.s / (sigma_t ** 2 + 1e-8)  # (output_dim,)
+
+            # Per-dimension weighted squared distance
+            sq = c_t * (output - center) ** 2  # (batch, output_dim)
+            process_contrib = sq.sum(dim=-1)  # (batch,)
+
+            contributions[process_name] = process_contrib
+
+            if total_sq_sum is None:
+                total_sq_sum = process_contrib
+            else:
+                total_sq_sum = total_sq_sum + process_contrib
+
+        if total_sq_sum is None:
+            total_sq_sum = torch.tensor(0.0, device=self.device)
+
+        F = 1.0 / (1.0 + total_sq_sum)
+
+        if return_per_process_contributions:
+            return F, contributions
+        return F
+
+    def _compute_adaptive_center(self,
+                                 process_name: str,
+                                 outputs: Dict[str, torch.Tensor],
+                                 config: Dict) -> Union[torch.Tensor, float]:
+        """
+        Compute the effective adaptive peak center for a process.
+
+        Mirrors ReliabilityFunction._compute_adaptive_target() but reads
+        'shekel_center' instead of 'base_target'. Reuses _apply_adaptive_mode.
+        """
+        base_center = config.get('shekel_center', 0.0)
+
+        if isinstance(base_center, list):
+            base_center_t = torch.tensor(base_center, dtype=torch.float32, device=self.device)
+        else:
+            base_center_t = torch.tensor([base_center], dtype=torch.float32, device=self.device)
+
+        adaptive_coeffs = config.get('adaptive_coefficients', {})
+        adaptive_baselines = config.get('adaptive_baselines', {})
+
+        if not adaptive_coeffs:
+            return base_center_t  # (output_dim,) — broadcasts to (batch, output_dim)
+
+        mode = config.get('adaptive_mode', 'linear')
+        adaptive_coefficients2 = config.get('adaptive_coefficients2', {})
+        adaptive_power = config.get('adaptive_power', {})
+        adaptive_sharpness = config.get('adaptive_sharpness', {})
+        adaptive_band = config.get('adaptive_band', {})
+        adaptive_max_shift = config.get('adaptive_max_shift', {})
+
+        # Start from the scalar average of the per-dim base center, then add a
+        # scalar adaptive shift that will broadcast to all output dims.
+        center = base_center_t.mean()
+
+        for upstream_name, coeff in adaptive_coeffs.items():
+            if upstream_name in outputs:
+                upstream_out = outputs[upstream_name]
+                if upstream_out.dim() > 1:
+                    upstream_out = upstream_out.mean(dim=-1)  # (batch,)
+
+                baseline = adaptive_baselines.get(upstream_name, 0.0)
+                delta = upstream_out - baseline
+
+                mode_params = {}
+                if mode == 'polynomial':
+                    mode_params['coeff2'] = adaptive_coefficients2.get(upstream_name, 0.0)
+                elif mode == 'power':
+                    mode_params['alpha'] = adaptive_power.get(upstream_name, 0.5)
+                elif mode == 'softplus':
+                    mode_params['k'] = adaptive_sharpness.get(upstream_name, 2.0)
+                elif mode == 'deadband':
+                    mode_params['band'] = adaptive_band.get(upstream_name, 0.0)
+                elif mode == 'tanh':
+                    mode_params['max_shift'] = adaptive_max_shift.get(upstream_name, 1.0)
+
+                adjustment = _apply_adaptive_mode(delta, coeff, mode, mode_params)
+                center = center + adjustment  # scalar + (batch,) → (batch,)
+
+        if isinstance(center, torch.Tensor) and center.dim() >= 1:
+            center = center.unsqueeze(-1)  # (batch,) → (batch, 1)
+
+        return center
+
+    def compute_target_reliability(self, target_trajectory: Dict) -> torch.Tensor:
+        """
+        Compute F* (target reliability) for a target trajectory.
+        """
+        trajectory = {}
+        for process_name, data in target_trajectory.items():
+            outputs = data.get('outputs', data.get('outputs_mean'))
+            if isinstance(outputs, np.ndarray):
+                outputs = torch.tensor(outputs, dtype=torch.float32, device=self.device)
+
+            trajectory[process_name] = {
+                'outputs_mean': outputs,
+                'outputs_sampled': outputs,
+            }
+
+        return self.compute_reliability(trajectory)
+
+
+def calibrate_shekel_configs(process_configs: Dict,
+                             process_order: list,
+                             calibration_trajectories: list,
+                             s: float = 1.0) -> Dict:
+    """
+    Build a Shekel-compatible process_configs dict from calibration trajectories.
+
+    For each process, computes the per-dimension mean and standard deviation of
+    its outputs across the aggregated calibration dataset, and stores them as
+    'shekel_center' and 'shekel_sigma'. All existing adaptive-related keys are
+    copied over unchanged.
+
+    Args:
+        process_configs: Original process_configs (as used by ReliabilityFunction).
+        process_order: List of process names.
+        calibration_trajectories: List of trajectory dicts, each of the form
+            {process_name: {'outputs_mean': tensor(batch, d_t), ...}}.
+        s: Global width hyperparameter (stored for reference; consumed by
+           ShekelReliabilityFunction.__init__).
+
+    Returns:
+        A new process_configs dict where each process has 'shekel_center' and
+        'shekel_sigma' populated from the empirical output distribution.
+    """
+    # Keys to carry over from the original config unchanged
+    adaptive_keys = (
+        'adaptive_coefficients',
+        'adaptive_baselines',
+        'adaptive_mode',
+        'adaptive_max_shift',
+        'adaptive_coefficients2',
+        'adaptive_power',
+        'adaptive_band',
+        'adaptive_sharpness',
+    )
+
+    # Aggregate outputs per process as numpy arrays
+    aggregated: Dict[str, list] = {name: [] for name in process_order}
+
+    for traj in calibration_trajectories:
+        for process_name in process_order:
+            if process_name not in traj:
+                continue
+            data = traj[process_name]
+            out = data.get('outputs_mean')
+            if out is None:
+                out = data.get('outputs_sampled')
+            if out is None:
+                continue
+
+            if isinstance(out, torch.Tensor):
+                out_np = out.detach().cpu().numpy()
+            else:
+                out_np = np.asarray(out)
+
+            if out_np.ndim == 1:
+                out_np = out_np[:, None]
+            aggregated[process_name].append(out_np)
+
+    new_configs: Dict = {}
+    for process_name in process_order:
+        orig = dict(process_configs.get(process_name, {}))
+        new_cfg: Dict = {}
+
+        # Carry over adaptive keys unchanged
+        for key in adaptive_keys:
+            if key in orig:
+                new_cfg[key] = orig[key]
+
+        chunks = aggregated.get(process_name, [])
+        if chunks:
+            stacked = np.concatenate(chunks, axis=0)  # (N_total, d_t)
+            mean_per_dim = stacked.mean(axis=0)
+            std_per_dim = stacked.std(axis=0)
+            new_cfg['shekel_center'] = [float(x) for x in mean_per_dim.tolist()]
+            new_cfg['shekel_sigma'] = [float(x) for x in std_per_dim.tolist()]
+        else:
+            # No calibration data: fall back to base_target / scale if present,
+            # else scalar defaults.
+            base_target = orig.get('base_target', 0.0)
+            if not isinstance(base_target, list):
+                base_target = [float(base_target)]
+            scale = orig.get('scale', 1.0)
+            if not isinstance(scale, list):
+                scale = [float(scale)] * len(base_target)
+            new_cfg['shekel_center'] = [float(x) for x in base_target]
+            # 'scale' in ReliabilityFunction is used as exp(-d^2/scale), which is
+            # closer to a variance than a std; take sqrt as a coarse fallback.
+            new_cfg['shekel_sigma'] = [float(np.sqrt(max(x, 1e-8))) for x in scale]
+
+        new_configs[process_name] = new_cfg
+
+    return new_configs
