@@ -412,23 +412,26 @@ def plot_scatter_with_uncertainty(y_true, y_pred_mean, y_pred_variance,
 
         # Create scatter plot with color representing uncertainty
         scatter = ax.scatter(y_t, y_p, c=y_v, cmap='viridis',
-                           alpha=0.6, s=20, edgecolors='black', linewidth=0.3)
+                           alpha=0.6, s=8, edgecolors='black', linewidth=0.2)
 
         # Add perfect prediction line
         min_val = min(y_t.min(), y_p.min())
         max_val = max(y_t.max(), y_p.max())
         ax.plot([min_val, max_val], [min_val, max_val],
-               'r--', linewidth=1.5, label='Perfect Prediction', alpha=0.7)
+               'r--', linewidth=1.2, label='Perfect Prediction', alpha=0.7)
 
-        ax.set_xlabel('True Values')
-        ax.set_ylabel('Predicted Mean')
-        ax.set_title(f'{name}')
-        ax.legend(loc='lower right')
-        ax.grid(True, alpha=0.3)
+        ax.set_xlabel('True Values', fontsize=9)
+        ax.set_ylabel('Predicted Mean', fontsize=9)
+        ax.set_title(f'{name}', fontsize=10)
+        ax.tick_params(axis='both', labelsize=8)
+        ax.legend(loc='lower right', fontsize=8)
+        ax.grid(False)
+        ax.set_facecolor('white')
 
         # Add colorbar
         cbar = plt.colorbar(scatter, ax=ax)
-        cbar.set_label('Predicted Variance')
+        cbar.set_label('Predicted Variance', fontsize=9)
+        cbar.ax.tick_params(labelsize=8)
 
         # Calculate and display R²
         from sklearn.metrics import r2_score
@@ -437,7 +440,7 @@ def plot_scatter_with_uncertainty(y_true, y_pred_mean, y_pred_variance,
                transform=ax.transAxes,
                bbox=dict(boxstyle='square,pad=0.3', facecolor='white',
                          edgecolor='#CCCCCC', linewidth=0.5, alpha=0.9),
-               verticalalignment='top', fontsize=11)
+               verticalalignment='top', fontsize=8)
 
     # Hide extra subplots
     for i in range(n_outputs, len(axes)):
