@@ -267,15 +267,27 @@ def run_cv_for_process(process_config, inputs, outputs, cv_folds, seed,
             'metrics': fold_metrics,
         })
 
-    # Aggregate CV metrics (mean ± std across folds)
+    # Aggregate CV metrics (mean ± std across folds), NaN/inf safe.
+    # If a fold produces a non-finite metric (e.g. Calibration_Ratio when the
+    # mean predicted variance is ~0 on a tiny val fold), we exclude it from
+    # that metric's aggregate and record how many folds contributed.
     cv_aggregated = {}
     for key in _CV_METRIC_KEYS:
-        values = [fold['metrics'][key] for fold in per_fold if key in fold['metrics']]
-        if values:
-            cv_aggregated[key] = {
-                'mean': float(np.mean(values)),
-                'std': float(np.std(values, ddof=1)) if len(values) > 1 else 0.0,
-            }
+        raw_values = [fold['metrics'].get(key) for fold in per_fold]
+        finite = [v for v in raw_values if v is not None and np.isfinite(v)]
+        n_used = len(finite)
+        n_excluded = sum(1 for v in raw_values if v is None or not np.isfinite(v))
+        if n_used == 0:
+            continue
+        cv_aggregated[key] = {
+            'mean': float(np.mean(finite)),
+            'std': float(np.std(finite, ddof=1)) if n_used > 1 else 0.0,
+            'n_folds_used': n_used,
+            'n_folds_excluded': n_excluded,
+        }
+        if n_excluded and verbose:
+            print(f"  [CV] WARNING: metric '{key}' excluded {n_excluded}/{cv_folds} "
+                  f"non-finite fold values from aggregate.")
 
     cv_results = {
         'process_name': process_name,
@@ -289,6 +301,18 @@ def run_cv_for_process(process_config, inputs, outputs, cv_folds, seed,
         'holdout_test': {
             'n': int(n_holdout),
             'metrics': holdout_metrics,
+            # train_single_process needs a non-empty val_loader for early
+            # stopping, so the refit splits the 85% pool internally rather
+            # than training on the entire pool. With test_size=0.15/0.85,
+            # this reproduces the original 70/15/15 partition sizes — only
+            # the test set is now the deterministic hold-out instead of a
+            # random slice. The refit's training regime is therefore directly
+            # comparable to a non-CV run.
+            'trained_on': '85% CV pool, split internally into 70%/15% '
+                          'train/val of the full dataset (matches the '
+                          'original single-split sizes); test = fixed hold-out',
+            'refit_train_frac': 0.85 * (1 - 0.15 / 0.85),
+            'refit_val_frac': 0.85 * (0.15 / 0.85),
         },
         'timestamp': datetime.now().isoformat(),
     }
