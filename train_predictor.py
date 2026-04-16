@@ -31,6 +31,7 @@ from configs.processes_config import (
     PROCESSES, DATASET_MODE, get_process_by_name,
     ST_DATASET_CONFIG, _build_st_processes,
 )
+from configs.uncertainty_config import CV_CONFIG
 from uncertainty_predictor.src.training.process_trainer import (
     train_single_process, DataPreprocessor
 )
@@ -134,7 +135,7 @@ def _make_loaders_from_arrays(X_train, y_train, X_val, y_val, X_test, y_test,
 
 
 def run_cv_for_process(process_config, inputs, outputs, cv_folds, seed,
-                       device, verbose=True):
+                       device, verbose=True, test_fraction=0.15):
     """
     Run K-fold cross-validation for a single process.
 
@@ -162,9 +163,9 @@ def run_cv_for_process(process_config, inputs, outputs, cv_folds, seed,
 
     n_total = X.shape[0]
 
-    # 1. Fixed hold-out test set (15%)
+    # 1. Fixed hold-out test set
     X_cv, X_test, y_cv, y_test = train_test_split(
-        X, y, test_size=0.15, random_state=seed
+        X, y, test_size=test_fraction, random_state=seed
     )
     n_holdout = X_test.shape[0]
     n_cv = X_cv.shape[0]
@@ -191,8 +192,13 @@ def run_cv_for_process(process_config, inputs, outputs, cv_folds, seed,
         print(f"  [CV] Final refit on {n_cv} samples; hold-out test = {n_holdout}")
         print(f"  {'-'*66}")
 
+    # Refit val fraction relative to the pool: test_fraction / (1 - test_fraction)
+    # so that train/val sizes, as fractions of the full dataset, equal
+    # (1 - 2*test_fraction) and test_fraction respectively — matching the
+    # original single-split convention.
+    pool_val_frac = test_fraction / (1.0 - test_fraction)
     X_refit_tr, X_refit_vl, y_refit_tr, y_refit_vl = train_test_split(
-        X_cv, y_cv, test_size=0.15 / 0.85, random_state=seed
+        X_cv, y_cv, test_size=pool_val_frac, random_state=seed
     )
     train_loader, val_loader, test_loader, preprocessor = _make_loaders_from_arrays(
         X_refit_tr, y_refit_tr,
@@ -302,17 +308,21 @@ def run_cv_for_process(process_config, inputs, outputs, cv_folds, seed,
             'n': int(n_holdout),
             'metrics': holdout_metrics,
             # train_single_process needs a non-empty val_loader for early
-            # stopping, so the refit splits the 85% pool internally rather
-            # than training on the entire pool. With test_size=0.15/0.85,
-            # this reproduces the original 70/15/15 partition sizes — only
-            # the test set is now the deterministic hold-out instead of a
-            # random slice. The refit's training regime is therefore directly
+            # stopping, so the refit splits the pool internally rather than
+            # training on the entire pool. With test_size = f/(1-f), this
+            # reproduces the original (1-2f)/f/f partition sizes — only the
+            # test set is now the deterministic hold-out instead of a random
+            # slice. The refit's training regime is therefore directly
             # comparable to a non-CV run.
-            'trained_on': '85% CV pool, split internally into 70%/15% '
-                          'train/val of the full dataset (matches the '
-                          'original single-split sizes); test = fixed hold-out',
-            'refit_train_frac': 0.85 * (1 - 0.15 / 0.85),
-            'refit_val_frac': 0.85 * (0.15 / 0.85),
+            'trained_on': (
+                f'{(1 - test_fraction) * 100:.0f}% CV pool, split internally '
+                f'into {(1 - 2 * test_fraction) * 100:.0f}%/'
+                f'{test_fraction * 100:.0f}% train/val of the full dataset '
+                f'(matches the original single-split sizes); test = fixed hold-out'
+            ),
+            'test_fraction': float(test_fraction),
+            'refit_train_frac': 1.0 - 2.0 * test_fraction,
+            'refit_val_frac': float(test_fraction),
         },
         'timestamp': datetime.now().isoformat(),
     }
@@ -390,12 +400,24 @@ def main():
                         help='Number of ST processes in sequence (overrides n_processes)')
     parser.add_argument('--checkpoint_base_dir', type=str, default=None,
                         help='Override base checkpoint dir for all processes')
+    # CV defaults come from configs/uncertainty_config.py::CV_CONFIG.
+    # CLI args, when passed, override the config.
+    _cfg_cv_folds = CV_CONFIG.get('cv_folds')
+    _cfg_test_fraction = CV_CONFIG.get('test_fraction', 0.15)
     parser.add_argument(
         '--cv_folds',
         type=int,
-        default=None,
-        help='If set, run K-fold cross-validation per process (with a fixed '
-             '15%% hold-out test set). Default: None (single 70/15/15 split).'
+        default=_cfg_cv_folds,
+        help=f'K for K-fold cross-validation per process. None/0 = single '
+             f'(1-2f)/f/f split (original behavior). '
+             f'Default from CV_CONFIG: {_cfg_cv_folds}.'
+    )
+    parser.add_argument(
+        '--test_fraction',
+        type=float,
+        default=_cfg_test_fraction,
+        help=f'Hold-out test fraction used by CV mode. '
+             f'Default from CV_CONFIG: {_cfg_test_fraction}.'
     )
 
     args = parser.parse_args()
@@ -447,8 +469,9 @@ def main():
     print(f"Skip existing: {args.skip_existing}")
     print(f"Random seed: {args.seed}")
     print(f"Data dir: {args.data_dir}")
-    if args.cv_folds is not None:
-        print(f"Cross-validation: {args.cv_folds}-fold (hold-out test = 15%)")
+    if args.cv_folds is not None and args.cv_folds >= 2:
+        print(f"Cross-validation: {args.cv_folds}-fold "
+              f"(hold-out test = {args.test_fraction * 100:.0f}%)")
 
     # Storage for results
     all_results = {}
@@ -601,7 +624,9 @@ def main():
 
         # Train process
         try:
-            if args.cv_folds is not None:
+            # Treat 0 as "disabled" to match the CV_CONFIG doc ("None or 0").
+            cv_enabled = args.cv_folds is not None and args.cv_folds >= 2
+            if cv_enabled:
                 cv_output = run_cv_for_process(
                     process_config=process_config,
                     inputs=inputs,
@@ -610,6 +635,7 @@ def main():
                     seed=args.seed,
                     device=args.device,
                     verbose=True,
+                    test_fraction=args.test_fraction,
                 )
                 result = cv_output['refit_result']
             else:

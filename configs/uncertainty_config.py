@@ -28,6 +28,22 @@ GLOBAL_UNCERTAINTY_CONFIG = {
     'swag_n_samples': 60,
     'swag_min_samples': 40,
 }
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CROSS-VALIDATION CONFIGURATION
+# ═══════════════════════════════════════════════════════════════════════════════
+# Controls K-fold CV in train_predictor.py. Used as the default when
+# --cv_folds is not passed on the CLI; CLI always overrides.
+CV_CONFIG = {
+    # None (or 0) → single 70/15/15 split (original behavior).
+    # K >= 2      → K-fold CV on the 85% pool with a fixed 15% hold-out test.
+    'cv_folds': None,
+
+    # Hold-out test fraction set aside before CV. Also applied to the refit's
+    # internal val split (0.15/0.85 of the pool) so the refit reproduces the
+    # 70/15/15 partition sizes of the non-CV flow.
+    'test_fraction': 0.15,
+}
 # ═══════════════════════════════════════════════════════════════════════════════
 # DEFAULT ST UNCERTAINTY PREDICTOR
 # ═══════════════════════════════════════════════════════════════════════════════
