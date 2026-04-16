@@ -95,13 +95,33 @@ def _build_trajectory(st_config: Dict, n_samples: int, seed: int) -> Tuple[Dict,
         df = scm.sample(n=n_samples, seed=seed + i)
         inputs = df[scm.input_labels].values.astype(np.float32)
         outputs = df[scm.target_labels].values.astype(np.float32)
+        env_vars = scm.structural_noise_vars or []
+        env = df[env_vars].values.astype(np.float32) if env_vars else np.zeros(
+            (n_samples, 0), dtype=np.float32
+        )
+        # Stage intermediate variables (S_k or S_k_j) — everything that's in
+        # the SCM context but isn't an input, env, output, or noise node.
+        noise_set = set(env_vars) | set(scm.process_noise_vars or [])
+        stage_names = [
+            c for c in df.columns
+            if c not in scm.input_labels
+            and c not in scm.target_labels
+            and c not in noise_set
+        ]
+        stages = df[stage_names].values.astype(np.float32) if stage_names else None
         out_t = torch.tensor(outputs, dtype=torch.float32)
         if out_t.dim() == 1:
             out_t = out_t.unsqueeze(-1)
         trajectory[f"st_{i}"] = {
             "inputs": torch.tensor(inputs, dtype=torch.float32),
+            "env": torch.tensor(env, dtype=torch.float32),
+            "env_labels": env_vars,
+            "stages": None if stages is None else torch.tensor(stages, dtype=torch.float32),
+            "stage_labels": stage_names,
+            "input_labels": list(scm.input_labels),
             "outputs_mean": out_t,
             "outputs_sampled": out_t,
+            "output_labels": list(scm.target_labels),
         }
     return trajectory, scm
 
@@ -371,12 +391,32 @@ def main():
     # ── STEP 3 — Sample trajectories ─────────────────────────────────
     print(_banner("Step 3 — sample trajectories from the ST SCM", char="─"))
     trajectory, scm = _build_trajectory(st_dataset_config, args.n_samples, args.seed)
+    x_lo, x_hi = cfg.x_domain
+    e_lo, e_hi = cfg.e_domain
+    print(f"  Inputs X_i     : {cfg.n} controllable, sampled Uniform({x_lo}, {x_hi})")
+    print(f"  Environment E_j: {cfg.me} structural, sampled Uniform({e_lo}, {e_hi})"
+          f"  (env_mode={cfg.env_mode}, α={cfg.alpha}, γ={cfg.gamma})")
+    print(f"  Process noise  : Z_ln_* (lognormal mult) + Eps_add_* (gauss add) "
+          f"+ Jump_* (Poisson-exp), scaled by ρ={cfg.rho}")
+    print(f"  Stages S_k_j   : averaged sin((π/2)·x) across assigned inputs,"
+          f" rescaled per-layer to [-2, 2]")
     for name in order:
-        out = trajectory[name]["outputs_mean"]
-        inp = trajectory[name]["inputs"]
-        print(f"  {name}.inputs        shape={tuple(inp.shape)}")
-        print(f"  {name}.outputs_mean  shape={tuple(out.shape)}  "
-              f"values ={_fmt(out, max_rows=args.n_samples)}")
+        tr = trajectory[name]
+        inp = tr["inputs"]
+        env = tr["env"]
+        stages = tr.get("stages")
+        out = tr["outputs_mean"]
+        print(f"\n  ── {name}")
+        print(f"      controllable X  {tr['input_labels']}  "
+              f"shape={tuple(inp.shape)}  values:{_fmt(inp, max_rows=args.n_samples)}")
+        if env.numel() > 0:
+            print(f"      environment E   {tr['env_labels']}  "
+                  f"shape={tuple(env.shape)}  values:{_fmt(env, max_rows=args.n_samples)}")
+        if stages is not None and stages.numel() > 0:
+            print(f"      stages          {tr['stage_labels']}  "
+                  f"shape={tuple(stages.shape)}  values:{_fmt(stages, max_rows=args.n_samples)}")
+        print(f"      outputs Y       {tr['output_labels']}  "
+              f"shape={tuple(out.shape)}  values:{_fmt(out, max_rows=args.n_samples)}")
 
     # Normalise outputs to (batch, K) for uniform handling downstream.
     outputs: Dict[str, torch.Tensor] = {}
