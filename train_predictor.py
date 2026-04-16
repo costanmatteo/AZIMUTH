@@ -15,11 +15,13 @@ Output:
 import sys
 from pathlib import Path
 import argparse
+import copy
 import json
 from datetime import datetime
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
+from sklearn.model_selection import KFold, train_test_split
 
 # Add project root to path
 REPO_ROOT = Path(__file__).parent
@@ -92,6 +94,226 @@ def build_loaders(inputs, outputs, batch_size, seed):
     return train_loader, val_loader, test_loader, preprocessor
 
 
+# Metrics to aggregate over CV folds. These are available in
+# result['metrics'] returned by train_single_process (see process_trainer.py).
+_CV_METRIC_KEYS = ('MSE', 'RMSE', 'MAE', 'R2', 'Calibration_Ratio', 'NLL', 'Mean_Variance')
+
+
+def _make_loaders_from_arrays(X_train, y_train, X_val, y_val, X_test, y_test,
+                              batch_size, seed):
+    """
+    Fit a fresh DataPreprocessor on X_train/y_train only and build DataLoaders
+    for train/val/test without leaking test/val statistics into the scaler.
+    """
+    preprocessor = DataPreprocessor(scaling_method='standard')
+
+    X_train_scaled, y_train_scaled = preprocessor.fit_transform(X_train, y_train)
+    X_val_scaled, y_val_scaled = preprocessor.transform(X_val, y_val)
+    X_test_scaled, y_test_scaled = preprocessor.transform(X_test, y_test)
+
+    g = torch.Generator()
+    g.manual_seed(seed)
+    train_loader = DataLoader(
+        TensorDataset(torch.FloatTensor(X_train_scaled), torch.FloatTensor(y_train_scaled)),
+        batch_size=batch_size,
+        shuffle=True,
+        generator=g,
+    )
+    val_loader = DataLoader(
+        TensorDataset(torch.FloatTensor(X_val_scaled), torch.FloatTensor(y_val_scaled)),
+        batch_size=batch_size,
+        shuffle=False,
+    )
+    test_loader = DataLoader(
+        TensorDataset(torch.FloatTensor(X_test_scaled), torch.FloatTensor(y_test_scaled)),
+        batch_size=batch_size,
+        shuffle=False,
+    )
+
+    return train_loader, val_loader, test_loader, preprocessor
+
+
+def run_cv_for_process(process_config, inputs, outputs, cv_folds, seed,
+                       device, verbose=True):
+    """
+    Run K-fold cross-validation for a single process.
+
+    Protocol:
+    1. Hold out 15% of the data as a fixed test set (random_state=seed).
+    2. KFold(K, shuffle=True, random_state=seed) on the remaining 85%.
+    3. Per fold: fresh DataPreprocessor (no leakage), fresh checkpoint_dir,
+       retrain from scratch via train_single_process.
+    4. Final refit on the full 85% (internal train/val split) and evaluate
+       on the hold-out test set — this populates the "official" checkpoint
+       at the standard checkpoint_dir.
+
+    Returns:
+        dict: {
+            'cv_results': payload written to cv_results.json,
+            'refit_result': dict returned by train_single_process on refit,
+        }
+    """
+    process_name = process_config['name']
+    batch_size = process_config['uncertainty_predictor']['training']['batch_size']
+    base_checkpoint_dir = Path(process_config['checkpoint_dir'])
+
+    X = inputs.numpy() if isinstance(inputs, torch.Tensor) else np.asarray(inputs)
+    y = outputs.numpy() if isinstance(outputs, torch.Tensor) else np.asarray(outputs)
+
+    n_total = X.shape[0]
+
+    # 1. Fixed hold-out test set (15%)
+    X_cv, X_test, y_cv, y_test = train_test_split(
+        X, y, test_size=0.15, random_state=seed
+    )
+    n_holdout = X_test.shape[0]
+    n_cv = X_cv.shape[0]
+
+    if verbose:
+        print(f"\n  [CV] Total={n_total}, hold-out test={n_holdout}, CV pool={n_cv}")
+        print(f"  [CV] Running {cv_folds}-fold cross-validation...")
+
+    # IMPORTANT: we run the refit FIRST, then the K folds.
+    # train_single_process() wipes its target checkpoint_dir on entry (to clear
+    # stale plots/reports). If we ran the folds first into
+    # checkpoints/{process_name}/cv_fold_k/, the subsequent refit (targeting
+    # checkpoints/{process_name}/) would nuke the fold subdirs. Running the
+    # refit first lets fold subdirs be created AFTER the main dir has been
+    # finalized, keeping both sets of artifacts intact.
+
+    # Refit: train on the full 85% pool, validate on an internal slice,
+    # evaluate on the hold-out test. The internal train/val split keeps the
+    # trainer's early-stopping signal meaningful. Using test_size of
+    # 0.15/0.85 maps the pool back to the ~70/15 train/val ratio of the
+    # original single-split flow.
+    if verbose:
+        print(f"\n  {'-'*66}")
+        print(f"  [CV] Final refit on {n_cv} samples; hold-out test = {n_holdout}")
+        print(f"  {'-'*66}")
+
+    X_refit_tr, X_refit_vl, y_refit_tr, y_refit_vl = train_test_split(
+        X_cv, y_cv, test_size=0.15 / 0.85, random_state=seed
+    )
+    train_loader, val_loader, test_loader, preprocessor = _make_loaders_from_arrays(
+        X_refit_tr, y_refit_tr,
+        X_refit_vl, y_refit_vl,
+        X_test, y_test,
+        batch_size=batch_size, seed=seed,
+    )
+
+    refit_result = train_single_process(
+        process_config=process_config,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        test_loader=test_loader,
+        preprocessor=preprocessor,
+        device=device,
+        verbose=verbose,
+        seed=seed,
+    )
+
+    holdout_metrics = {
+        key: float(refit_result['metrics'][key])
+        for key in _CV_METRIC_KEYS if key in refit_result['metrics']
+    }
+
+    # Now run the K folds. Each writes to its own subdir under base_checkpoint_dir,
+    # which the refit above has already populated and won't touch again.
+    kf = KFold(n_splits=cv_folds, shuffle=True, random_state=seed)
+
+    per_fold = []
+    for k, (train_idx, val_idx) in enumerate(kf.split(X_cv)):
+        X_tr, X_vl = X_cv[train_idx], X_cv[val_idx]
+        y_tr, y_vl = y_cv[train_idx], y_cv[val_idx]
+
+        if verbose:
+            print(f"\n  {'-'*66}")
+            print(f"  [CV] Fold {k+1}/{cv_folds}: train={len(train_idx)}, val={len(val_idx)}")
+            print(f"  {'-'*66}")
+
+        # Fold-specific checkpoint dir on a copy of the config (never mutate
+        # the caller's config so the main refit's checkpoint stays intact).
+        fold_config = copy.deepcopy(process_config)
+        fold_config['checkpoint_dir'] = str(base_checkpoint_dir / f'cv_fold_{k}')
+
+        # Inside a fold the "val" set plays two roles: early-stopping signal
+        # AND the held-out set whose metrics we report for this fold. This is
+        # standard practice in K-fold CV (each fold has a single out-set).
+        train_loader, val_loader, test_loader, preprocessor = _make_loaders_from_arrays(
+            X_tr, y_tr, X_vl, y_vl, X_vl, y_vl,
+            batch_size=batch_size, seed=seed,
+        )
+
+        fold_result = train_single_process(
+            process_config=fold_config,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            test_loader=test_loader,
+            preprocessor=preprocessor,
+            device=device,
+            verbose=verbose,
+            seed=seed,
+        )
+
+        fold_metrics = {
+            key: float(fold_result['metrics'][key])
+            for key in _CV_METRIC_KEYS if key in fold_result['metrics']
+        }
+        per_fold.append({
+            'fold': k,
+            'n_train': int(len(train_idx)),
+            'n_val': int(len(val_idx)),
+            'checkpoint_dir': fold_config['checkpoint_dir'],
+            'metrics': fold_metrics,
+        })
+
+    # Aggregate CV metrics (mean ± std across folds)
+    cv_aggregated = {}
+    for key in _CV_METRIC_KEYS:
+        values = [fold['metrics'][key] for fold in per_fold if key in fold['metrics']]
+        if values:
+            cv_aggregated[key] = {
+                'mean': float(np.mean(values)),
+                'std': float(np.std(values, ddof=1)) if len(values) > 1 else 0.0,
+            }
+
+    cv_results = {
+        'process_name': process_name,
+        'n_folds': cv_folds,
+        'seed': seed,
+        'n_total': int(n_total),
+        'n_holdout_test': int(n_holdout),
+        'n_cv_pool': int(n_cv),
+        'per_fold': per_fold,
+        'cv_aggregated': cv_aggregated,
+        'holdout_test': {
+            'n': int(n_holdout),
+            'metrics': holdout_metrics,
+        },
+        'timestamp': datetime.now().isoformat(),
+    }
+
+    # Write cv_results.json next to the "official" checkpoint.
+    cv_results_path = base_checkpoint_dir / 'cv_results.json'
+    cv_results_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(cv_results_path, 'w') as f:
+        json.dump(cv_results, f, indent=2)
+
+    if verbose:
+        print(f"\n  [CV] Results saved to: {cv_results_path}")
+        print(f"  [CV] Aggregated (mean ± std over {cv_folds} folds):")
+        for key, stats in cv_aggregated.items():
+            print(f"    {key:<20s} {stats['mean']:.6f} ± {stats['std']:.6f}")
+        print(f"  [CV] Hold-out test metrics (refit model — official):")
+        for key, val in holdout_metrics.items():
+            print(f"    {key:<20s} {val:.6f}")
+
+    return {
+        'cv_results': cv_results,
+        'refit_result': refit_result,
+    }
+
+
 def main():
     """
     Per ogni processo in PROCESSES:
@@ -144,6 +366,13 @@ def main():
                         help='Number of ST processes in sequence (overrides n_processes)')
     parser.add_argument('--checkpoint_base_dir', type=str, default=None,
                         help='Override base checkpoint dir for all processes')
+    parser.add_argument(
+        '--cv_folds',
+        type=int,
+        default=None,
+        help='If set, run K-fold cross-validation per process (with a fixed '
+             '15%% hold-out test set). Default: None (single 70/15/15 split).'
+    )
 
     args = parser.parse_args()
 
@@ -194,6 +423,8 @@ def main():
     print(f"Skip existing: {args.skip_existing}")
     print(f"Random seed: {args.seed}")
     print(f"Data dir: {args.data_dir}")
+    if args.cv_folds is not None:
+        print(f"Cross-validation: {args.cv_folds}-fold (hold-out test = 15%)")
 
     # Storage for results
     all_results = {}
@@ -339,25 +570,38 @@ def main():
         outputs = dataset['outputs']
         print(f"  Loaded: inputs {inputs.shape}, outputs {outputs.shape}")
 
-        # Build DataLoaders
+        # Build DataLoaders (only needed for the non-CV path; the CV helper
+        # builds its own loaders per fold with fold-specific scaling)
         training_config = process_config['uncertainty_predictor']['training']
         batch_size = training_config['batch_size']
-        train_loader, val_loader, test_loader, preprocessor = build_loaders(
-            inputs, outputs, batch_size, args.seed
-        )
 
         # Train process
         try:
-            result = train_single_process(
-                process_config=process_config,
-                train_loader=train_loader,
-                val_loader=val_loader,
-                test_loader=test_loader,
-                preprocessor=preprocessor,
-                device=args.device,
-                verbose=True,
-                seed=args.seed
-            )
+            if args.cv_folds is not None:
+                cv_output = run_cv_for_process(
+                    process_config=process_config,
+                    inputs=inputs,
+                    outputs=outputs,
+                    cv_folds=args.cv_folds,
+                    seed=args.seed,
+                    device=args.device,
+                    verbose=True,
+                )
+                result = cv_output['refit_result']
+            else:
+                train_loader, val_loader, test_loader, preprocessor = build_loaders(
+                    inputs, outputs, batch_size, args.seed
+                )
+                result = train_single_process(
+                    process_config=process_config,
+                    train_loader=train_loader,
+                    val_loader=val_loader,
+                    test_loader=test_loader,
+                    preprocessor=preprocessor,
+                    device=args.device,
+                    verbose=True,
+                    seed=args.seed
+                )
 
             all_results[process_name] = result
 
