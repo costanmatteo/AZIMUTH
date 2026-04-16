@@ -396,15 +396,50 @@ class ShekelReliabilityFunction:
             return F, contributions
         return F
 
+    @staticmethod
+    def _coeff_to_matrix(coeff_spec, d_t, d_j, device='cpu'):
+        """
+        Normalize an adaptive coefficient specification to a (d_t, d_j) matrix.
+
+        Accepted formats:
+            - scalar float:              broadcast to all (k_t, k_j) pairs
+            - list[float] of length d_j: per-upstream-dim, same for all target dims
+            - list[list[float]] (d_t×d_j): full coupling matrix
+        """
+        if isinstance(coeff_spec, (int, float)):
+            return torch.full((d_t, d_j), float(coeff_spec),
+                              dtype=torch.float32, device=device)
+        if isinstance(coeff_spec, list):
+            if len(coeff_spec) > 0 and isinstance(coeff_spec[0], list):
+                return torch.tensor(coeff_spec, dtype=torch.float32, device=device)
+            # flat list → (d_j,), broadcast to every target dim
+            v = torch.tensor(coeff_spec, dtype=torch.float32, device=device)
+            return v.unsqueeze(0).expand(d_t, -1)
+        return torch.full((d_t, d_j), float(coeff_spec),
+                          dtype=torch.float32, device=device)
+
     def _compute_adaptive_center(self,
                                  process_name: str,
                                  outputs: Dict[str, torch.Tensor],
-                                 config: Dict) -> Union[torch.Tensor, float]:
+                                 config: Dict) -> torch.Tensor:
         """
         Compute the effective adaptive peak center for a process.
 
-        Mirrors ReliabilityFunction._compute_adaptive_target() but reads
-        'shekel_center' instead of 'base_target'. Reuses _apply_adaptive_mode.
+        Each upstream output dimension independently influences each target
+        dimension through a coefficient matrix (d_t × d_j).
+
+        adaptive_coefficients[upstream] can be:
+            - scalar:              same coeff for every (k_t, k_j) pair
+            - list of length d_j:  per-upstream-dim, broadcast to all target dims
+            - list-of-lists d_t×d_j: full coupling matrix
+
+        adaptive_baselines[upstream] can be:
+            - scalar:              same baseline for every upstream dim
+            - list of length d_j:  per-upstream-dim baseline
+
+        Returns:
+            (d_t,) when no adaptive coefficients are present, or
+            (batch, d_t) when upstream-dependent shifts are added.
         """
         base_center = config.get('shekel_center', 0.0)
 
@@ -413,11 +448,13 @@ class ShekelReliabilityFunction:
         else:
             base_center_t = torch.tensor([base_center], dtype=torch.float32, device=self.device)
 
+        d_t = base_center_t.shape[0]
+
         adaptive_coeffs = config.get('adaptive_coefficients', {})
         adaptive_baselines = config.get('adaptive_baselines', {})
 
         if not adaptive_coeffs:
-            return base_center_t  # (output_dim,) — broadcasts to (batch, output_dim)
+            return base_center_t  # (d_t,) — broadcasts to (batch, d_t)
 
         mode = config.get('adaptive_mode', 'linear')
         adaptive_coefficients2 = config.get('adaptive_coefficients2', {})
@@ -426,36 +463,58 @@ class ShekelReliabilityFunction:
         adaptive_band = config.get('adaptive_band', {})
         adaptive_max_shift = config.get('adaptive_max_shift', {})
 
-        # Start from the scalar average of the per-dim base center, then add a
-        # scalar adaptive shift that will broadcast to all output dims.
-        center = base_center_t.mean()
+        # Preserve per-dim base centers — shifts will be added per-dim too.
+        center = base_center_t  # (d_t,)
 
-        for upstream_name, coeff in adaptive_coeffs.items():
-            if upstream_name in outputs:
-                upstream_out = outputs[upstream_name]
-                if upstream_out.dim() > 1:
-                    upstream_out = upstream_out.mean(dim=-1)  # (batch,)
+        for upstream_name, coeff_spec in adaptive_coeffs.items():
+            if upstream_name not in outputs:
+                continue
 
-                baseline = adaptive_baselines.get(upstream_name, 0.0)
-                delta = upstream_out - baseline
+            upstream_out = outputs[upstream_name]  # (batch, d_j)
+            if upstream_out.dim() == 1:
+                upstream_out = upstream_out.unsqueeze(-1)
+            d_j = upstream_out.shape[-1]
+            batch_size = upstream_out.shape[0]
 
-                mode_params = {}
-                if mode == 'polynomial':
-                    mode_params['coeff2'] = adaptive_coefficients2.get(upstream_name, 0.0)
-                elif mode == 'power':
-                    mode_params['alpha'] = adaptive_power.get(upstream_name, 0.5)
-                elif mode == 'softplus':
-                    mode_params['k'] = adaptive_sharpness.get(upstream_name, 2.0)
-                elif mode == 'deadband':
-                    mode_params['band'] = adaptive_band.get(upstream_name, 0.0)
-                elif mode == 'tanh':
-                    mode_params['max_shift'] = adaptive_max_shift.get(upstream_name, 1.0)
+            # Per-upstream-dim baseline → (d_j,)
+            baseline = adaptive_baselines.get(upstream_name, 0.0)
+            if isinstance(baseline, list):
+                baseline_t = torch.tensor(baseline, dtype=torch.float32, device=self.device)
+            else:
+                baseline_t = torch.full((d_j,), float(baseline),
+                                        dtype=torch.float32, device=self.device)
 
-                adjustment = _apply_adaptive_mode(delta, coeff, mode, mode_params)
-                center = center + adjustment  # scalar + (batch,) → (batch,)
+            delta = upstream_out - baseline_t  # (batch, d_j)
 
-        if isinstance(center, torch.Tensor) and center.dim() >= 1:
-            center = center.unsqueeze(-1)  # (batch,) → (batch, 1)
+            # Mode params (per-upstream, shared across dims)
+            mode_params = {}
+            if mode == 'polynomial':
+                mode_params['coeff2'] = adaptive_coefficients2.get(upstream_name, 0.0)
+            elif mode == 'power':
+                mode_params['alpha'] = adaptive_power.get(upstream_name, 0.5)
+            elif mode == 'softplus':
+                mode_params['k'] = adaptive_sharpness.get(upstream_name, 2.0)
+            elif mode == 'deadband':
+                mode_params['band'] = adaptive_band.get(upstream_name, 0.0)
+            elif mode == 'tanh':
+                mode_params['max_shift'] = adaptive_max_shift.get(upstream_name, 1.0)
+
+            # Coefficient matrix (d_t, d_j)
+            coeff_matrix = self._coeff_to_matrix(coeff_spec, d_t, d_j, self.device)
+
+            # Accumulate shift (batch, d_t):
+            # shift[:, k_t] = Σ_{k_j} r(delta[:, k_j], coeff_matrix[k_t, k_j], ...)
+            shift = torch.zeros(batch_size, d_t, dtype=torch.float32, device=self.device)
+            for k_j in range(d_j):
+                delta_kj = delta[:, k_j]  # (batch,)
+                for k_t in range(d_t):
+                    c = float(coeff_matrix[k_t, k_j])
+                    if abs(c) < 1e-12:
+                        continue
+                    adj = _apply_adaptive_mode(delta_kj, c, mode, mode_params)
+                    shift[:, k_t] = shift[:, k_t] + adj
+
+            center = center + shift  # (d_t,) + (batch, d_t) → (batch, d_t)
 
         return center
 
