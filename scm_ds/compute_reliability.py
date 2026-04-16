@@ -16,7 +16,7 @@ Formula:
 
 import torch
 import numpy as np
-from typing import Dict, Tuple, Optional, Union
+from typing import Dict, List, Tuple, Optional, Union
 
 from .process_targets import PROCESS_CONFIGS, PROCESS_ORDER
 
@@ -72,7 +72,9 @@ class ReliabilityFunction:
     def __init__(self,
                  process_configs: Dict = None,
                  process_order: list = None,
-                 device: str = 'cpu'):
+                 device: str = 'cpu',
+                 reliability_formula: str = 'gaussian',
+                 shekel_sharpness: float = 1.0):
         """
         Args:
             process_configs: Process-specific targets and weights.
@@ -80,10 +82,60 @@ class ReliabilityFunction:
             process_order: Order of processes for dependency resolution.
                           If None, uses default PROCESS_ORDER.
             device: Torch device for computations.
+            reliability_formula: 'gaussian' (default, weighted Q average) or
+                                 'shekel' (global Shekel function, eq. 2.6).
+            shekel_sharpness: Global sharpness hyperparameter s > 0 used to
+                              calibrate Shekel width coefficients d_t^k = s / Var[o_t^k].
+                              Only used when reliability_formula='shekel'.
         """
         self.process_configs = process_configs or PROCESS_CONFIGS
         self.process_order = process_order or PROCESS_ORDER
         self.device = device
+        self.reliability_formula = reliability_formula
+        self.shekel_sharpness = shekel_sharpness
+        self._shekel_widths: Optional[Dict[str, torch.Tensor]] = None
+
+    def calibrate_shekel_widths(self, trajectories: List[Dict]) -> None:
+        """
+        Calibrate Shekel width coefficients d_t^k = shekel_sharpness / Var[o_t^k].
+
+        Must be called once before compute_reliability() when
+        reliability_formula='shekel'.
+
+        Args:
+            trajectories: List of trajectory dicts (same format as
+                compute_reliability input). Each trajectory maps process_name
+                to {'outputs_mean': tensor, 'outputs_sampled': tensor, ...}.
+
+        Stores:
+            self._shekel_widths: Dict[process_name, tensor(output_dim)]
+        """
+        # Collect all outputs per process across trajectories
+        collected: Dict[str, list] = {}
+        for traj in trajectories:
+            for process_name, data in traj.items():
+                if process_name not in collected:
+                    collected[process_name] = []
+                if 'outputs_sampled' in data:
+                    out = data['outputs_sampled']
+                else:
+                    out = data['outputs_mean']
+                if isinstance(out, np.ndarray):
+                    out = torch.tensor(out, dtype=torch.float32)
+                if out.dim() == 1:
+                    out = out.unsqueeze(0)
+                collected[process_name].append(out)
+
+        self._shekel_widths = {}
+        for process_name in self.process_order:
+            if process_name not in collected:
+                continue
+            # Stack: (N_cal, output_dim) — squeeze batch dim if each entry is (1, output_dim)
+            stacked = torch.cat(collected[process_name], dim=0)  # (N_cal, output_dim)
+            var = stacked.var(dim=0)  # (output_dim,)
+            # Clamp variance to avoid division by zero
+            var = torch.clamp(var, min=1e-8)
+            self._shekel_widths[process_name] = (self.shekel_sharpness / var).to(self.device)
 
     def compute_reliability(self,
                            trajectory: Dict,
@@ -100,13 +152,16 @@ class ReliabilityFunction:
                     'outputs_var': tensor (batch, output_dim),  # optional
                     'outputs_sampled': tensor (batch, output_dim)  # optional
                 }
-            return_quality_scores: If True, also return per-process Q_i scores.
+            return_quality_scores: If True, also return per-process scores.
+                For 'gaussian': per-process Q_i scores (normalised quality).
+                For 'shekel': per-process partial sums (unnormalised
+                    sum_k d_t^k * (o_t^k - zeta*_t^k)^2).
             use_sampled_outputs: If True, use 'outputs_sampled' if available,
                                 otherwise use 'outputs_mean'.
 
         Returns:
             F: Reliability score (batch,) or scalar
-            quality_scores: Dict of per-process Q_i (if return_quality_scores=True)
+            quality_scores: Dict of per-process scores (if return_quality_scores=True)
         """
         # Extract outputs from trajectory
         outputs = {}
@@ -125,6 +180,11 @@ class ReliabilityFunction:
                 output = output.unsqueeze(-1)  # (batch,) → (batch, 1)
             outputs[process_name] = output  # (batch, output_dim)
 
+        # Branch on reliability formula
+        if self.reliability_formula == 'shekel':
+            return self._compute_shekel(outputs, return_quality_scores)
+
+        # ── Gaussian path (unchanged) ────────────────────────────────────
         # Compute adaptive targets and quality scores
         adaptive_targets = {}
         quality_scores = {}
@@ -157,6 +217,59 @@ class ReliabilityFunction:
 
         if return_quality_scores:
             return F, quality_scores
+        return F
+
+    def _compute_shekel(self,
+                        outputs: Dict[str, torch.Tensor],
+                        return_quality_scores: bool) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict]]:
+        """
+        Shekel reliability path (eq. 2.6):
+            F(o) = 1 / (1 + sum_t sum_k  d_t^k * (o_t^k - zeta*_t^k)^2)
+
+        Args:
+            outputs: Dict mapping process_name to tensor (batch, output_dim).
+            return_quality_scores: If True, also return per-process partial sums.
+
+        Returns:
+            F: (batch,) tensor.
+            partial_sums: Dict of per-process partial sums (if return_quality_scores).
+        """
+        if self._shekel_widths is None:
+            raise RuntimeError(
+                "Shekel widths not calibrated. Call calibrate_shekel_widths() "
+                "before compute_reliability() when reliability_formula='shekel'."
+            )
+
+        # Determine batch size from first available output
+        batch_size = next(iter(outputs.values())).shape[0]
+        total_sum = torch.zeros(batch_size, device=self.device)
+        partial_sums = {}
+
+        for process_name in self.process_order:
+            if process_name not in outputs:
+                continue
+
+            config = self.process_configs.get(process_name, {})
+            output = outputs[process_name]  # (batch, output_dim)
+
+            # Adaptive target — reuse existing mechanism (broadcasts to all k dims)
+            target = self._compute_adaptive_target(process_name, outputs, config)
+
+            # Width coefficients d_t^k for this process
+            d = self._shekel_widths[process_name]  # (output_dim,)
+
+            # Per-dimension squared deviation weighted by d_t^k
+            diff_sq = (output - target) ** 2  # (batch, output_dim)
+            weighted = d * diff_sq             # (batch, output_dim)
+            proc_sum = weighted.sum(dim=-1)    # (batch,)
+
+            total_sum = total_sum + proc_sum
+            partial_sums[process_name] = proc_sum
+
+        F = 1.0 / (1.0 + total_sum)  # (batch,)
+
+        if return_quality_scores:
+            return F, partial_sums
         return F
 
     def _compute_adaptive_target(self,
@@ -271,9 +384,20 @@ class ReliabilityFunction:
 
 def compute_reliability(trajectory: Dict,
                        return_quality_scores: bool = False,
-                       device: str = 'cpu') -> Union[torch.Tensor, Tuple[torch.Tensor, Dict]]:
+                       device: str = 'cpu',
+                       reliability_formula: str = 'gaussian',
+                       shekel_sharpness: float = 1.0) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict]]:
     """
     Convenience function to compute reliability F.
+
+    Args:
+        trajectory: Trajectory dict (see ReliabilityFunction.compute_reliability).
+        return_quality_scores: If True, also return per-process scores.
+        device: Torch device.
+        reliability_formula: 'gaussian' or 'shekel'.
+        shekel_sharpness: Global sharpness s for Shekel width calibration.
     """
-    rf = ReliabilityFunction(device=device)
+    rf = ReliabilityFunction(device=device,
+                             reliability_formula=reliability_formula,
+                             shekel_sharpness=shekel_sharpness)
     return rf.compute_reliability(trajectory, return_quality_scores=return_quality_scores)

@@ -31,6 +31,14 @@ from configs.uncertainty_config import (  # noqa: E402
 )
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# RELIABILITY FORMULA SELECTION
+# ═══════════════════════════════════════════════════════════════════════════════
+# 'gaussian' → weighted average of per-process Gaussian quality scores (default)
+# 'shekel'   → global Shekel function F = 1/(1 + sum d_t^k (o_t^k - zeta*_t^k)^2)
+RELIABILITY_FORMULA = 'gaussian'
+SHEKEL_SHARPNESS = 1.0
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # DATASET MODE SELECTION
 # ═══════════════════════════════════════════════════════════════════════════════
 # 'physical' → usa i 4 processi fisici (laser, plasma, galvanic, microetch)

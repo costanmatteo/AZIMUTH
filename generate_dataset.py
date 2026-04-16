@@ -24,6 +24,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from configs.processes_config import (
     PROCESSES, DATASET_MODE, ST_DATASET_CONFIG, _build_st_processes,
+    RELIABILITY_FORMULA, SHEKEL_SHARPNESS,
 )
 
 
@@ -450,10 +451,32 @@ def main():
 
         rf = ReliabilityFunction(
             process_configs=rf_process_configs,
-            process_order=rf_process_order
+            process_order=rf_process_order,
+            reliability_formula=RELIABILITY_FORMULA,
+            shekel_sharpness=SHEKEL_SHARPNESS,
         )
     else:
-        rf = ReliabilityFunction()
+        rf = ReliabilityFunction(
+            reliability_formula=RELIABILITY_FORMULA,
+            shekel_sharpness=SHEKEL_SHARPNESS,
+        )
+
+    # ── Shekel calibration: compute widths from the dataset ────────────
+    if RELIABILITY_FORMULA == 'shekel':
+        print(f"  Calibrating Shekel widths (sharpness={SHEKEL_SHARPNESS})...")
+        calibration_trajectories = []
+        for i in range(n_samples):
+            traj = {}
+            for proc in current_processes:
+                pname = proc['name']
+                traj[pname] = {
+                    'outputs_sampled': per_process_data[pname]['outputs'][i:i+1],
+                    'outputs_mean': per_process_data[pname]['outputs'][i:i+1],
+                }
+            calibration_trajectories.append(traj)
+        rf.calibrate_shekel_widths(calibration_trajectories)
+        for pname, w in rf._shekel_widths.items():
+            print(f"    {pname}: d = {w.tolist()}")
 
     full_trajectories = []
     n = n_samples

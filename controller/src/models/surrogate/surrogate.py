@@ -34,7 +34,8 @@ class ProTSurrogate:
     """
 
     def __init__(self, target_trajectory, device='cpu', use_deterministic_sampling=True,
-                 process_configs=None, n_scenarios=None):
+                 process_configs=None, n_scenarios=None,
+                 reliability_formula='gaussian', shekel_sharpness=1.0):
         """
         Args:
             target_trajectory (dict): Target trajectory da target_generation.
@@ -49,6 +50,8 @@ class ProTSurrogate:
             n_scenarios (int, optional): Override number of scenarios. If None, inferred
                 from target_trajectory shape. Use this when target has 1 sample but
                 training has n_train scenarios (from baseline trajectories).
+            reliability_formula (str): 'gaussian' (default) or 'shekel'.
+            shekel_sharpness (float): Global sharpness s for Shekel width calibration.
         """
         self.device = device
         self.use_deterministic_sampling = use_deterministic_sampling
@@ -93,6 +96,8 @@ class ProTSurrogate:
                     process_configs=dynamic,
                     process_order=order,
                     device=device,
+                    reliability_formula=reliability_formula,
+                    shekel_sharpness=shekel_sharpness,
                 )
 
         # Convert target trajectory to tensors (all scenarios)
@@ -237,6 +242,21 @@ class ProTSurrogate:
         if return_quality_scores:
             return F, quality_scores
         return F
+
+    def set_shekel_widths(self, widths_dict):
+        """
+        Set pre-calibrated Shekel width coefficients on the underlying
+        ReliabilityFunction.
+
+        Args:
+            widths_dict: Dict[process_name, tensor(output_dim)] of d_t^k values.
+        """
+        if self._reliability_fn is None:
+            raise RuntimeError(
+                "Cannot set Shekel widths: no ReliabilityFunction configured "
+                "(legacy physical-process path does not support Shekel)."
+            )
+        self._reliability_fn._shekel_widths = widths_dict
 
     def _compute_F_star_from_scenario_0(self):
         """
