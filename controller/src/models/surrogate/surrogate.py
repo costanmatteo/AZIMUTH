@@ -22,7 +22,7 @@ import numpy as np
 from typing import Dict, Optional, Union
 
 from controller.src.models.surrogate.loader import load_casualit_model
-from scm_ds.compute_reliability import ReliabilityFunction
+from scm_ds.compute_reliability import ReliabilityFunction, ShekelReliabilityFunction, calibrate_shekel_configs
 
 
 class ProTSurrogate:
@@ -54,14 +54,18 @@ class ProTSurrogate:
         self.use_deterministic_sampling = use_deterministic_sampling
         self.n_scenarios = n_scenarios  # May be overridden below if None
 
-        # Build ReliabilityFunction — single source of truth for Q score computation.
+        # Build reliability function — single source of truth for Q score computation.
         # For ST mode: construct from process_configs (surrogate_target/scale/weight are lists).
         # For physical mode: _reliability_fn = None → fallback to hardcoded legacy path.
+        # If process_configs contain 'surrogate_reliability_function_type' == 'shekel',
+        # use ShekelReliabilityFunction with calibrated configs instead.
         self._reliability_fn = None
         self._dynamic_configs = None
         if process_configs is not None:
             dynamic = {}
             order = []
+            rf_type = 'gaussian'
+            shekel_s = 1.0
             for pc in process_configs:
                 if 'surrogate_target' in pc:
                     name = pc['name']
@@ -86,14 +90,51 @@ class ProTSurrogate:
                         ]:
                             if src in pc:
                                 entry[dst] = pc[src]
+                    # Shekel-specific calibrated fields (set by generate_dataset.py)
+                    if 'surrogate_shekel_center' in pc:
+                        entry['shekel_center'] = pc['surrogate_shekel_center']
+                    if 'surrogate_shekel_sigma' in pc:
+                        entry['shekel_sigma'] = pc['surrogate_shekel_sigma']
                     dynamic[name] = entry
+                # Pick up rf type from first process that declares it
+                if 'surrogate_reliability_function_type' in pc:
+                    rf_type = pc['surrogate_reliability_function_type']
+                if 'surrogate_shekel_s' in pc:
+                    shekel_s = pc['surrogate_shekel_s']
             if dynamic:
                 self._dynamic_configs = dynamic
-                self._reliability_fn = ReliabilityFunction(
-                    process_configs=dynamic,
-                    process_order=order,
-                    device=device,
-                )
+                if rf_type == 'shekel':
+                    # If shekel_center not already calibrated, fall back to
+                    # calibrate_shekel_configs with the target trajectory as
+                    # a single calibration trajectory.
+                    needs_calibration = not any(
+                        'shekel_center' in v for v in dynamic.values()
+                    )
+                    if needs_calibration:
+                        cal_traj = {
+                            name: {'outputs_mean': torch.tensor(
+                                target_trajectory[name]['outputs'],
+                                dtype=torch.float32, device=device)}
+                            for name in order if name in target_trajectory
+                        }
+                        dynamic = calibrate_shekel_configs(
+                            dynamic, order,
+                            calibration_trajectories=[cal_traj],
+                            s=shekel_s,
+                        )
+                        self._dynamic_configs = dynamic
+                    self._reliability_fn = ShekelReliabilityFunction(
+                        process_configs=dynamic,
+                        process_order=order,
+                        device=device,
+                        s=shekel_s,
+                    )
+                else:
+                    self._reliability_fn = ReliabilityFunction(
+                        process_configs=dynamic,
+                        process_order=order,
+                        device=device,
+                    )
 
         # Convert target trajectory to tensors (all scenarios)
         self.target_trajectory_tensors = {}

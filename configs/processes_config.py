@@ -90,6 +90,15 @@ ST_DATASET_CONFIG = {
     # 'adaptive_band': {},            # deadband: band width per upstream
     # 'adaptive_max_shift': {},       # tanh: saturazione massima per upstream
 
+    # ── Tipo di reliability function ──────────────────────────────────────────
+    # 'gaussian' (default): ReliabilityFunction classica (media pesata di Q_i gaussiane)
+    # 'shekel':              ShekelReliabilityFunction (bump adattivo globale)
+    'reliability_function_type': 'gaussian',
+
+    # Iperparametro globale per la Shekel: c_{t,k} = shekel_s / sigma_{t,k}^2.
+    # Ignorato se reliability_function_type != 'shekel'.
+    'shekel_s': 1.0,
+
     # Configurazione uncertainty predictor: importata da uncertainty_config.py
     'uncertainty_predictor': DEFAULT_ST_UNCERTAINTY_PREDICTOR,
 }
@@ -276,6 +285,14 @@ def _build_st_processes(st_dataset_config):
             ]:
                 if src_key in st_dataset_config:
                     process[dst_key] = st_dataset_config[src_key]
+
+        # Propagate reliability function type and Shekel hyperparameters
+        rf_type = st_dataset_config.get('reliability_function_type', 'gaussian')
+        if rf_type != 'gaussian':
+            process['surrogate_reliability_function_type'] = rf_type
+        s_val = st_dataset_config.get('shekel_s', 1.0)
+        if s_val != 1.0 or rf_type == 'shekel':
+            process['surrogate_shekel_s'] = s_val
 
         processes.append(process)
 

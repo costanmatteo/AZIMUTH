@@ -314,7 +314,7 @@ class ShekelReliabilityFunction:
 
     def compute_reliability(self,
                             trajectory: Dict,
-                            return_per_process_contributions: bool = False,
+                            return_quality_scores: bool = False,
                             use_sampled_outputs: bool = True
                             ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict]]:
         """
@@ -328,9 +328,10 @@ class ShekelReliabilityFunction:
                     'outputs_var': tensor (batch, output_dim),   # optional
                     'outputs_sampled': tensor (batch, output_dim)  # optional
                 }
-            return_per_process_contributions: If True, also return a dict mapping
+            return_quality_scores: If True, also return a dict mapping
                 process_name to tensor(batch,) of its summed weighted
-                squared-distance contribution to the denominator.
+                squared-distance contribution (c_{t,k}*(o-a)^2) to the
+                denominator. Same role as quality_scores in ReliabilityFunction.
             use_sampled_outputs: If True, use 'outputs_sampled' if available,
                                  otherwise use 'outputs_mean'.
 
@@ -392,7 +393,7 @@ class ShekelReliabilityFunction:
 
         F = 1.0 / (1.0 + total_sq_sum)
 
-        if return_per_process_contributions:
+        if return_quality_scores:
             return F, contributions
         return F
 

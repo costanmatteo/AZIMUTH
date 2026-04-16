@@ -346,8 +346,7 @@ def main():
     # Import SCM data generation
     from uncertainty_predictor.src.data.preprocessing import generate_scm_data
 
-    # Import ReliabilityFunction
-    from scm_ds import ReliabilityFunction
+    from scm_ds import ReliabilityFunction, ShekelReliabilityFunction, calibrate_shekel_configs
 
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -430,8 +429,11 @@ def main():
     # ── Step 3: Build full trajectories and compute F ───────────────────────
     print(f"\n[3/4] Building full trajectories and computing F...")
 
-    # Build process configs for ReliabilityFunction
+    # Build process configs for ReliabilityFunction / ShekelReliabilityFunction
     # For ST mode, use surrogate_* fields; for physical mode, use default PROCESS_CONFIGS
+    rf_type = ST_DATASET_CONFIG.get('reliability_function_type', 'gaussian') if DATASET_MODE == 'st' else 'gaussian'
+    shekel_s = ST_DATASET_CONFIG.get('shekel_s', 1.0) if DATASET_MODE == 'st' else 1.0
+
     if DATASET_MODE == 'st':
         rf_process_configs = {}
         rf_process_order = []
@@ -446,20 +448,58 @@ def main():
             if 'surrogate_adaptive_coefficients' in proc:
                 rf_cfg['adaptive_coefficients'] = proc['surrogate_adaptive_coefficients']
                 rf_cfg['adaptive_baselines'] = proc['surrogate_adaptive_baselines']
+                for src_key, dst_key in [
+                    ('surrogate_adaptive_mode',           'adaptive_mode'),
+                    ('surrogate_adaptive_coefficients2',  'adaptive_coefficients2'),
+                    ('surrogate_adaptive_power',          'adaptive_power'),
+                    ('surrogate_adaptive_band',           'adaptive_band'),
+                    ('surrogate_adaptive_sharpness',      'adaptive_sharpness'),
+                    ('surrogate_adaptive_max_shift',      'adaptive_max_shift'),
+                ]:
+                    if src_key in proc:
+                        rf_cfg[dst_key] = proc[src_key]
             rf_process_configs[pname] = rf_cfg
 
-        rf = ReliabilityFunction(
-            process_configs=rf_process_configs,
-            process_order=rf_process_order
-        )
+        if rf_type == 'shekel':
+            # Build calibration trajectories from the generated per-process data
+            # (single trajectory containing all n_samples as batch)
+            cal_trajectory = {
+                pname: {'outputs_mean': per_process_data[pname]['outputs']}
+                for pname in rf_process_order
+            }
+            shekel_configs = calibrate_shekel_configs(
+                rf_process_configs, rf_process_order,
+                calibration_trajectories=[cal_trajectory],
+                s=shekel_s,
+            )
+            rf = ShekelReliabilityFunction(
+                process_configs=shekel_configs,
+                process_order=rf_process_order,
+                s=shekel_s,
+            )
+            # Store calibrated Shekel params back into process configs so the
+            # controller surrogate can use them without re-calibrating.
+            for proc in current_processes:
+                pname = proc['name']
+                if pname in shekel_configs:
+                    proc['surrogate_shekel_center'] = shekel_configs[pname].get('shekel_center')
+                    proc['surrogate_shekel_sigma'] = shekel_configs[pname].get('shekel_sigma')
+            print(f"  Reliability function: Shekel (s={shekel_s})")
+        else:
+            rf = ReliabilityFunction(
+                process_configs=rf_process_configs,
+                process_order=rf_process_order,
+            )
+            print(f"  Reliability function: Gaussian (classic)")
     else:
         rf = ReliabilityFunction()
+        print(f"  Reliability function: Gaussian (legacy)")
 
     full_trajectories = []
     n = n_samples
 
     for i in range(n):
-        # Build trajectory dict for ReliabilityFunction (needs inputs with env)
+        # Build trajectory dict for reliability function (needs inputs with env)
         trajectory_for_rf = {}
         for proc in current_processes:
             pname = proc['name']
