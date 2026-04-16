@@ -325,7 +325,12 @@ def get_adaptive_target(process_idx: int, upstream_outputs: Optional[Dict[str, f
             for upstream, coeff in cfg.get('adaptive_coefficients', {}).items():
                 if upstream in upstream_outputs:
                     baseline = cfg['adaptive_baselines'][upstream]
-                    target += coeff * (upstream_outputs[upstream] - baseline)
+                    upstream_val = upstream_outputs[upstream]
+                    if isinstance(baseline, (list, tuple)):
+                        # Per-dim: sum of coeff * (upstream_val - baseline_k) over all k
+                        target += coeff * sum(upstream_val - b for b in baseline)
+                    else:
+                        target += coeff * (upstream_val - baseline)
             return target
         return 0.0
 

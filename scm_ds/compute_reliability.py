@@ -312,13 +312,19 @@ class ReliabilityFunction:
 
         for upstream_name, coeff in adaptive_coeffs.items():
             if upstream_name in outputs:
-                upstream_out = outputs[upstream_name]
-                # Average across output dims if multi-dimensional → scalar per sample
-                if upstream_out.dim() > 1:
-                    upstream_out = upstream_out.mean(dim=-1)  # (batch,)
+                upstream_out = outputs[upstream_name]    # (batch, m_upstream) or (batch,)
 
-                baseline = adaptive_baselines.get(upstream_name, 0.0)
-                delta = upstream_out - baseline
+                # Normalise baseline to tensor matching upstream output dims.
+                # baseline may be a list (per-dim) or a scalar (backward compat).
+                baseline_raw = adaptive_baselines.get(upstream_name, 0.0)
+                if isinstance(baseline_raw, (list, tuple)):
+                    baseline_t = torch.tensor(
+                        baseline_raw, dtype=torch.float32, device=self.device
+                    )                                    # (m_upstream,)
+                else:
+                    baseline_t = baseline_raw            # scalar — broadcasts
+
+                delta = upstream_out - baseline_t        # (batch, m_upstream) or (batch,)
 
                 # Build mode_params for this upstream variable
                 mode_params = {}
@@ -334,6 +340,10 @@ class ReliabilityFunction:
                     mode_params['max_shift'] = adaptive_max_shift.get(upstream_name, 1.0)
 
                 adjustment = _apply_adaptive_mode(delta, coeff, mode, mode_params)
+                # Collapse upstream dims → scalar shift per sample
+                if isinstance(adjustment, torch.Tensor) and adjustment.dim() > 1:
+                    adjustment = adjustment.sum(dim=-1)  # (batch,)
+
                 target = target + adjustment  # scalar + (batch,) → (batch,)
 
         # Ensure result broadcasts to (batch, output_dim): (batch,) → (batch, 1)

@@ -214,6 +214,7 @@ def _build_st_processes(st_dataset_config):
         calibrated_weights.append(cfg_node.get('weight', 1.0))
 
     processes = []
+    calibrated_targets_by_proc = {}  # {proc_name: list[float]} for per-dim baselines
     for i in range(1, n_procs + 1):
         suffix = f"_p{i}"
 
@@ -258,19 +259,23 @@ def _build_st_processes(st_dataset_config):
             '_scm_instance': ref_scm,
         }
 
+        # Store calibrated targets for this process (used as per-dim baselines
+        # by downstream processes).
+        calibrated_targets_by_proc[f'st_{i}'] = list(calibrated_targets)
+
         # Target adattivo inter-processo (tutti i precedenti, peso normalizzato):
-        # τ_i = base_target + (coeff / (i-1)) × Σ_{j<i} (Y_j - base_target)
-        # Il baseline adattivo usa la media dei target calibrati (scalare)
-        # per coerenza con il calcolo scalare dell'adaptive target.
+        # τ_i = base_target + (coeff / (i-1)) × Σ_{j<i} Σ_k f(Y_j^k - baseline_j^k)
+        # Il baseline adattivo è il vettore di calibrated_targets del processo upstream
+        # (per-dimensione), così ogni deviazione individuale contribuisce allo shift.
         if i > 1 and adaptive_coeff != 0.0:
             n_prev = i - 1
             coeff_per_proc = adaptive_coeff / n_prev
-            calibrated_target_mean = sum(calibrated_targets) / len(calibrated_targets)
             process['surrogate_adaptive_coefficients'] = {
                 f'st_{j}': coeff_per_proc for j in range(1, i)
             }
             process['surrogate_adaptive_baselines'] = {
-                f'st_{j}': calibrated_target_mean for j in range(1, i)
+                f'st_{j}': calibrated_targets_by_proc[f'st_{j}']
+                for j in range(1, i)
             }
 
             # Propagate non-linear adaptive mode params if configured
