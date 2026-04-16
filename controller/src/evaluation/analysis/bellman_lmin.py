@@ -327,8 +327,8 @@ def get_adaptive_target(process_idx: int, upstream_outputs: Optional[Dict[str, f
                     baseline = cfg['adaptive_baselines'][upstream]
                     upstream_val = upstream_outputs[upstream]
                     if isinstance(baseline, (list, tuple)):
-                        # Per-dim: sum of coeff * (upstream_val - baseline_k) over all k
-                        target += coeff * sum(upstream_val - b for b in baseline)
+                        # Per-dim: mean of coeff * (upstream_val - baseline_k) over all k
+                        target += coeff * sum(upstream_val - b for b in baseline) / len(baseline)
                     else:
                         target += coeff * (upstream_val - baseline)
             return target

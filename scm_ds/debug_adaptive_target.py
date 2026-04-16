@@ -198,7 +198,7 @@ def debug_process(process_name: str,
         delta_new = upstream_out - baseline_t  # (batch, m_up)
         adj_new = _apply_adaptive_mode(delta_new, coeff, mode, {})
         if isinstance(adj_new, torch.Tensor) and adj_new.dim() > 1:
-            shift_new = adj_new.sum(dim=-1)  # (batch,)
+            shift_new = adj_new.mean(dim=-1)  # (batch,)
         else:
             shift_new = adj_new
 
@@ -226,7 +226,7 @@ def debug_process(process_name: str,
             print(f"      NEW   adjustment (f(delta)*c)  :{_fmt(adj_new, max_rows=max_rows)}")
         else:
             print(f"      NEW   adjustment (f(delta)*c)  : {_fmt(adj_new)}")
-        print(f"      NEW   shift_j = sum(dim=-1)    : {_fmt(shift_new)}")
+        print(f"      NEW   shift_j = mean(dim=-1)    : {_fmt(shift_new)}")
         print(f"      ···   (LEGACY) baseline scalar : {legacy_baseline:+.4f}")
         print(f"      ···   (LEGACY) upstream.mean   : {_fmt(upstream_out_legacy)}")
         print(f"      ···   (LEGACY) delta           : {_fmt(delta_legacy)}")

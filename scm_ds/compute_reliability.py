@@ -340,9 +340,12 @@ class ReliabilityFunction:
                     mode_params['max_shift'] = adaptive_max_shift.get(upstream_name, 1.0)
 
                 adjustment = _apply_adaptive_mode(delta, coeff, mode, mode_params)
-                # Collapse upstream dims → scalar shift per sample
+                # Collapse upstream dims → scalar shift per sample.
+                # Use mean (not sum) so the shift magnitude is independent of
+                # the upstream output dimensionality and adaptive_coeff keeps
+                # the same scale as before the per-dim fix.
                 if isinstance(adjustment, torch.Tensor) and adjustment.dim() > 1:
-                    adjustment = adjustment.sum(dim=-1)  # (batch,)
+                    adjustment = adjustment.mean(dim=-1)  # (batch,)
 
                 target = target + adjustment  # scalar + (batch,) → (batch,)
 
