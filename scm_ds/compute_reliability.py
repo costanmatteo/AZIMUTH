@@ -184,10 +184,13 @@ class ReliabilityFunction:
         if self.reliability_formula == 'shekel':
             return self._compute_shekel(outputs, return_quality_scores)
 
-        # ── Gaussian path (unchanged) ────────────────────────────────────
-        # Compute adaptive targets and quality scores
-        adaptive_targets = {}
+        # ── Gaussian path — chain variant for adaptive targets ───────────
+        # adaptive_targets stores τ_j per-dim for every processed upstream so
+        # that downstream processes can use it as baseline (chain variant).
+        adaptive_targets: Dict[str, torch.Tensor] = {}
         quality_scores = {}
+
+        batch_size = next(iter(outputs.values())).shape[0]
 
         for process_name in self.process_order:
             if process_name not in outputs:
@@ -196,19 +199,31 @@ class ReliabilityFunction:
             config = self.process_configs.get(process_name, {})
             output = outputs[process_name]
 
-            # Compute adaptive target (broadcastable to (batch, output_dim))
-            target = self._compute_adaptive_target(process_name, outputs, config)
-            adaptive_targets[process_name] = target
+            # Compute adaptive target τ_i.
+            target = self._compute_adaptive_target(
+                process_name, outputs, adaptive_targets, config
+            )
 
-            # Get per-dimension scale; wrap scalar in list for uniform handling
+            # Normalise to (batch, output_dim_i) before storing so downstream
+            # can safely do Y_i - τ_i per-dim regardless of process position.
+            if target.dim() == 1:                                    # (output_dim,)
+                target_stored = target.unsqueeze(0).expand(batch_size, -1)
+            elif target.shape[0] == 1 and batch_size > 1:            # (1, output_dim)
+                target_stored = target.expand(batch_size, -1)
+            else:                                                    # (batch, output_dim)
+                target_stored = target
+            adaptive_targets[process_name] = target_stored
+
             scales = config.get('scale', 1.0)
             if not isinstance(scales, list):
                 scales = [scales]
             scale_t = torch.tensor(scales, dtype=torch.float32, device=self.device)  # (output_dim,)
 
-            # Compute per-dimension quality and average across output dims
+            # Broadcast of target against output is correct: target is either
+            # (output_dim,) for the first process or (batch, output_dim) for
+            # adaptive ones. (batch, output_dim) - (output_dim,) also broadcasts.
             per_dim_q = torch.exp(-((output - target) ** 2) / scale_t)  # (batch, output_dim)
-            quality = per_dim_q.mean(dim=-1)  # (batch,)
+            quality = per_dim_q.mean(dim=-1)                             # (batch,)
 
             quality_scores[process_name] = quality
 
@@ -244,6 +259,9 @@ class ReliabilityFunction:
         batch_size = next(iter(outputs.values())).shape[0]
         total_sum = torch.zeros(batch_size, device=self.device)
         partial_sums = {}
+        # adaptive_targets stores τ_j per-dim for every processed upstream
+        # (chain variant: τ_j is used as baseline by downstream processes).
+        adaptive_targets: Dict[str, torch.Tensor] = {}
 
         for process_name in self.process_order:
             if process_name not in outputs:
@@ -252,8 +270,18 @@ class ReliabilityFunction:
             config = self.process_configs.get(process_name, {})
             output = outputs[process_name]  # (batch, output_dim)
 
-            # Adaptive target — reuse existing mechanism (broadcasts to all k dims)
-            target = self._compute_adaptive_target(process_name, outputs, config)
+            # Adaptive target — chain variant.
+            target = self._compute_adaptive_target(
+                process_name, outputs, adaptive_targets, config
+            )
+
+            if target.dim() == 1:
+                target_stored = target.unsqueeze(0).expand(batch_size, -1)
+            elif target.shape[0] == 1 and batch_size > 1:
+                target_stored = target.expand(batch_size, -1)
+            else:
+                target_stored = target
+            adaptive_targets[process_name] = target_stored
 
             # Width coefficients d_t^k for this process
             d = self._shekel_widths[process_name]  # (output_dim,)
@@ -275,30 +303,39 @@ class ReliabilityFunction:
     def _compute_adaptive_target(self,
                                  process_name: str,
                                  outputs: Dict[str, torch.Tensor],
-                                 config: Dict) -> Union[torch.Tensor, float]:
+                                 adaptive_targets: Dict[str, torch.Tensor],
+                                 config: Dict) -> torch.Tensor:
         """
-        Compute adaptive target for a process based on upstream outputs.
+        Compute adaptive target τ_i for a process using the chain variant:
 
-        Returns a value broadcastable to (batch, output_dim):
-        - No adaptive coefficients: tensor of shape (output_dim,) from base_target list
-        - With adaptive coefficients: scalar or (batch, 1) tensor that broadcasts
-          uniformly across all output dimensions.
+            τ_i[k] = ζ⁽⁰⁾_i[k] + Σ_{j<i} coeff_j · mean_q( f(Y_j[q] − τ_j[q]) )
+
+        The baseline for each upstream j is τ_j (its own adaptive target
+        computed earlier in the forward pass), NOT the static ζ⁽⁰⁾_j. The
+        'adaptive_baselines' field in config is therefore ignored.
+
+        Per-dim semantics: delta is computed per-dimension on the upstream
+        output (Y_j − τ_j), f is applied per-dim, then collapsed to a scalar
+        shift per sample via mean over upstream dims, and added to the
+        per-dim base_target of i. τ_i keeps shape (batch, output_dim_i).
+
+        Returns:
+            - (output_dim_i,) when no adaptive coefficients are configured
+              (first process in the chain).
+            - (batch, output_dim_i) when adaptive coefficients are present.
         """
         base_target = config.get('base_target', 0.0)
 
-        # Normalize base_target to a tensor (output_dim,)
         if isinstance(base_target, list):
             base_target_t = torch.tensor(base_target, dtype=torch.float32, device=self.device)
         else:
             base_target_t = torch.tensor([base_target], dtype=torch.float32, device=self.device)
 
         adaptive_coeffs = config.get('adaptive_coefficients', {})
-        adaptive_baselines = config.get('adaptive_baselines', {})
 
         if not adaptive_coeffs:
-            return base_target_t  # (output_dim,) — broadcasts to (batch, output_dim)
+            return base_target_t  # (output_dim,) — downstream broadcasts
 
-        # Read adaptive mode and per-upstream mode params
         mode = config.get('adaptive_mode', 'linear')
         adaptive_coefficients2 = config.get('adaptive_coefficients2', {})
         adaptive_power = config.get('adaptive_power', {})
@@ -306,53 +343,41 @@ class ReliabilityFunction:
         adaptive_band = config.get('adaptive_band', {})
         adaptive_max_shift = config.get('adaptive_max_shift', {})
 
-        # Adaptive case: compute a single scalar target for all output dimensions.
-        # Average base_target across output dims to get a scalar starting point.
-        target = base_target_t.mean()
+        target = base_target_t.unsqueeze(0)  # (1, output_dim_i) — broadcasts over batch
 
         for upstream_name, coeff in adaptive_coeffs.items():
-            if upstream_name in outputs:
-                upstream_out = outputs[upstream_name]    # (batch, m_upstream) or (batch,)
+            if upstream_name not in outputs:
+                continue
+            if upstream_name not in adaptive_targets:
+                # process_order should guarantee upstream τ is already computed;
+                # a miss indicates a topology/order bug — skip defensively.
+                continue
 
-                # Normalise baseline to tensor matching upstream output dims.
-                # baseline may be a list (per-dim) or a scalar (backward compat).
-                baseline_raw = adaptive_baselines.get(upstream_name, 0.0)
-                if isinstance(baseline_raw, (list, tuple)):
-                    baseline_t = torch.tensor(
-                        baseline_raw, dtype=torch.float32, device=self.device
-                    )                                    # (m_upstream,)
-                else:
-                    baseline_t = baseline_raw            # scalar — broadcasts
+            upstream_out = outputs[upstream_name]        # (batch, m_upstream)
+            tau_j = adaptive_targets[upstream_name]      # (batch, m_upstream), pre-normalised
 
-                delta = upstream_out - baseline_t        # (batch, m_upstream) or (batch,)
+            delta = upstream_out - tau_j                 # (batch, m_upstream) per-dim
 
-                # Build mode_params for this upstream variable
-                mode_params = {}
-                if mode == 'polynomial':
-                    mode_params['coeff2'] = adaptive_coefficients2.get(upstream_name, 0.0)
-                elif mode == 'power':
-                    mode_params['alpha'] = adaptive_power.get(upstream_name, 0.5)
-                elif mode == 'softplus':
-                    mode_params['k'] = adaptive_sharpness.get(upstream_name, 2.0)
-                elif mode == 'deadband':
-                    mode_params['band'] = adaptive_band.get(upstream_name, 0.0)
-                elif mode == 'tanh':
-                    mode_params['max_shift'] = adaptive_max_shift.get(upstream_name, 1.0)
+            mode_params = {}
+            if mode == 'polynomial':
+                mode_params['coeff2'] = adaptive_coefficients2.get(upstream_name, 0.0)
+            elif mode == 'power':
+                mode_params['alpha'] = adaptive_power.get(upstream_name, 0.5)
+            elif mode == 'softplus':
+                mode_params['k'] = adaptive_sharpness.get(upstream_name, 2.0)
+            elif mode == 'deadband':
+                mode_params['band'] = adaptive_band.get(upstream_name, 0.0)
+            elif mode == 'tanh':
+                mode_params['max_shift'] = adaptive_max_shift.get(upstream_name, 1.0)
 
-                adjustment = _apply_adaptive_mode(delta, coeff, mode, mode_params)
-                # Collapse upstream dims → scalar shift per sample.
-                # Use mean (not sum) so the shift magnitude is independent of
-                # the upstream output dimensionality and adaptive_coeff keeps
-                # the same scale as before the per-dim fix.
-                if isinstance(adjustment, torch.Tensor) and adjustment.dim() > 1:
-                    adjustment = adjustment.mean(dim=-1)  # (batch,)
+            adjustment = _apply_adaptive_mode(delta, coeff, mode, mode_params)
+            # Collapse upstream dims → scalar shift per sample. Mean (not sum)
+            # keeps the shift magnitude independent of upstream dimensionality.
+            shift = adjustment.mean(dim=-1, keepdim=True)  # (batch, 1)
+            target = target + shift  # (1, output_dim_i) + (batch, 1) → (batch, output_dim_i)
 
-                target = target + adjustment  # scalar + (batch,) → (batch,)
-
-        # Ensure result broadcasts to (batch, output_dim): (batch,) → (batch, 1)
-        if isinstance(target, torch.Tensor) and target.dim() >= 1:
-            target = target.unsqueeze(-1)
-
+        # Ensure (batch, output_dim_i). If no upstream contributed, target is
+        # still (1, output_dim_i); expand to match any downstream batch later.
         return target
 
     def _compute_weighted_average(self, quality_scores: Dict[str, torch.Tensor]) -> torch.Tensor:

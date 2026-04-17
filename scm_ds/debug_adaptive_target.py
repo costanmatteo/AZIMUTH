@@ -166,12 +166,18 @@ def _translate_configs(process_list: List[Dict]) -> Tuple[Dict[str, Dict], List[
 
 def _manual_adaptive_target(process_name: str,
                             outputs: Dict[str, torch.Tensor],
+                            adaptive_targets: Dict[str, torch.Tensor],
                             config: Dict,
                             max_rows: int) -> torch.Tensor:
-    """Replay ``_compute_adaptive_target`` for one process, printing every step.
+    """Replay ``_compute_adaptive_target`` (chain variant) for one process.
 
-    Returns the target as a ``(batch, 1)`` tensor (scalar broadcast along
-    output dims) or ``(output_dim,)`` when no upstreams contribute.
+    Chain variant: the baseline for each upstream j is τ_j (its own adaptive
+    target, from ``adaptive_targets``), not the static ζ⁽⁰⁾_j. The
+    ``adaptive_baselines`` field in config is ignored.
+
+    Returns a ``(batch, output_dim_i)`` tensor when adaptive coeffs are
+    present, or ``(output_dim_i,)`` when the process has no upstream
+    contributions (first process).
     """
     base_target = config.get("base_target", 0.0)
     if isinstance(base_target, list):
@@ -181,71 +187,51 @@ def _manual_adaptive_target(process_name: str,
     output_dim = base_target_t.numel()
 
     adaptive_coeffs = config.get("adaptive_coefficients", {})
-    adaptive_baselines = config.get("adaptive_baselines", {})
     mode = config.get("adaptive_mode", "linear")
 
     print(f"\n  ▸ {process_name}   (output_dim = {output_dim})")
-    print(f"      base_target (per-dim) τ₀ : {_fmt(base_target_t)}")
+    print(f"      base_target (per-dim) ζ⁽⁰⁾ : {_fmt(base_target_t)}")
 
     if not adaptive_coeffs:
-        print("      no adaptive_coefficients → ζ* = base_target (per-dim, no shift)")
+        print("      no adaptive_coefficients → τ = base_target (per-dim, no shift)")
         return base_target_t
 
-    target_scalar_start = float(base_target_t.mean().item())
-    print(f"      adaptive_mode            : {mode}")
-    print(f"      adaptive_coefficients    : {adaptive_coeffs}")
-    print( "      adaptive_baselines       :")
-    for k, v in adaptive_baselines.items():
-        print(f"          {k} → {v}")
-    print(f"      scalar start  mean(τ₀)   : {target_scalar_start:+.4f}")
+    print(f"      adaptive_mode              : {mode}")
+    print(f"      adaptive_coefficients      : {adaptive_coeffs}")
+    print( "      (chain variant: adaptive_baselines in config is IGNORED;")
+    print( "       per-upstream baseline is τ_j from adaptive_targets)")
 
-    target_scalar = target_scalar_start
-    shift_total = None  # (batch,)
+    target = base_target_t.unsqueeze(0)  # (1, output_dim_i) — broadcasts
 
     for upstream, coeff in adaptive_coeffs.items():
         if upstream not in outputs:
             print(f"      ⚠ upstream {upstream} not in outputs — skipped")
             continue
+        if upstream not in adaptive_targets:
+            print(f"      ⚠ upstream {upstream} has no τ_j yet (order bug?) — skipped")
+            continue
 
-        upstream_out = outputs[upstream]  # (batch, m_up)
+        upstream_out = outputs[upstream]            # (batch, m_up)
         batch = upstream_out.shape[0]
         m_up = upstream_out.shape[1] if upstream_out.dim() > 1 else 1
 
-        baseline_raw = adaptive_baselines.get(upstream, 0.0)
-        if isinstance(baseline_raw, (list, tuple)):
-            baseline_t = torch.tensor(baseline_raw, dtype=torch.float32)
-        else:
-            baseline_t = baseline_raw
+        tau_j = adaptive_targets[upstream]          # (batch, m_up) pre-normalised
 
-        delta = upstream_out - baseline_t  # (batch, m_up)
+        delta = upstream_out - tau_j                # (batch, m_up) per-dim
         adj = _apply_adaptive_mode(delta, coeff, mode, {})
-        if isinstance(adj, torch.Tensor) and adj.dim() > 1:
-            shift_j = adj.mean(dim=-1)  # (batch,)
-        else:
-            shift_j = adj
+        shift_j = adj.mean(dim=-1, keepdim=True)  # (batch, 1)
 
         print(f"      ── upstream {upstream}  (coeff={coeff}, m_up={m_up})")
-        baseline_pretty = (
-            _fmt(baseline_t) if isinstance(baseline_t, torch.Tensor)
-            else f"{float(baseline_t):+.4f} (scalar)"
-        )
-        print(f"          baseline ζ̄_j          : {baseline_pretty}")
+        print(f"          τ_j (chain baseline)    :{_fmt(tau_j, max_rows=max_rows)}")
         print(f"          upstream_out [{batch}×{m_up}] :{_fmt(upstream_out, max_rows=max_rows)}")
-        print(f"          Δ = out - baseline     :{_fmt(delta, max_rows=max_rows)}")
-        if isinstance(adj, torch.Tensor) and adj.dim() > 1:
-            print(f"          f(Δ)·c (per-dim adj)  :{_fmt(adj, max_rows=max_rows)}")
-        else:
-            print(f"          f(Δ)·c (adj)          : {_fmt(adj)}")
-        print(f"          shift_j = mean(adj,-1) : {_fmt(shift_j)}")
+        print(f"          Δ = Y_j - τ_j (per-dim) :{_fmt(delta, max_rows=max_rows)}")
+        print(f"          f(Δ)·c (per-dim adj)    :{_fmt(adj, max_rows=max_rows)}")
+        print(f"          shift_j = mean(adj,-1) :{_fmt(shift_j.squeeze(-1), max_rows=max_rows)}")
 
-        shift_total = shift_j if shift_total is None else shift_total + shift_j
+        target = target + shift_j                   # (batch, output_dim_i) via broadcast
 
-    target = torch.as_tensor(target_scalar, dtype=torch.float32) + shift_total  # (batch,)
-    target = target.unsqueeze(-1)  # (batch, 1)
-
-    print(f"      Σ shift per sample       : {_fmt(shift_total)}")
-    print(f"      ζ* = mean(τ₀) + Σ shift  : {_fmt(target.squeeze(-1))}")
-    print(f"          (broadcasts to (batch × {output_dim}))")
+    print(f"      τ_i = ζ⁽⁰⁾ + Σ shift (per-dim):{_fmt(target, max_rows=max_rows)}")
+    print(f"          shape = (batch × {output_dim})")
     return target
 
 
@@ -267,6 +253,8 @@ def _shekel_breakdown(order: List[str],
     batch_size = next(iter(outputs.values())).shape[0]
     total_sum = torch.zeros(batch_size)
     partial_sums: Dict[str, torch.Tensor] = {}
+    # chain variant: τ_j per-dim is propagated to downstream processes
+    adaptive_targets: Dict[str, torch.Tensor] = {}
 
     for name in order:
         if name not in outputs:
@@ -276,8 +264,18 @@ def _shekel_breakdown(order: List[str],
         d = widths[name]                 # (K,)
 
         print(f"\n  ▸ {name}")
-        target = _manual_adaptive_target(name, outputs, cfg, max_rows)
-        # Broadcast ζ* to (batch, K) explicitly for display
+        target = _manual_adaptive_target(name, outputs, adaptive_targets, cfg, max_rows)
+
+        # Store τ_i normalised to (batch, output_dim_i) for downstream consumers
+        if target.dim() == 1:
+            target_stored = target.unsqueeze(0).expand(batch_size, -1)
+        elif target.shape[0] == 1 and batch_size > 1:
+            target_stored = target.expand(batch_size, -1)
+        else:
+            target_stored = target
+        adaptive_targets[name] = target_stored
+
+        # Broadcast τ* to (batch, K) explicitly for display
         tgt_full = target.expand_as(out) if target.dim() >= 1 else target
         diff = out - tgt_full
         diff_sq = diff ** 2
@@ -386,7 +384,8 @@ def main():
         if c.get("adaptive_coefficients"):
             for up, coef in c["adaptive_coefficients"].items():
                 bl = c.get("adaptive_baselines", {}).get(up)
-                print(f"      upstream {up}: coeff={coef:+.4f}  baseline={bl}")
+                print(f"      upstream {up}: coeff={coef:+.4f}  "
+                      f"adaptive_baselines={bl}  [IGNORED — chain variant]")
 
     # ── STEP 3 — Sample trajectories ─────────────────────────────────
     print(_banner("Step 3 — sample trajectories from the ST SCM", char="─"))
