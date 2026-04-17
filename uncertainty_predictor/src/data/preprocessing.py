@@ -208,7 +208,8 @@ def load_csv_data(filepath, input_columns, output_columns):
     return X, y
 
 
-def generate_scm_data(n_samples=5000, seed=42, dataset_type='one_to_one_ct', save_graph_to=None, **kwargs):
+def generate_scm_data(n_samples=5000, seed=42, dataset_type='one_to_one_ct',
+                      save_graph_to=None, return_df=False, **kwargs):
     """
     Generate synthetic data using Structural Causal Model (SCM).
 
@@ -222,9 +223,13 @@ def generate_scm_data(n_samples=5000, seed=42, dataset_type='one_to_one_ct', sav
             - 'galvanic': Galvanic copper deposition (with spatial variation and ripple)
             - 'microetch': Micro-etching Cu removal (Arrhenius kinetics with Student-t noise)
         save_graph_to (str, optional): Directory path to save SCM graph visualization
+        return_df (bool): If True, also return the full DataFrame and the SCM
+            object (for debug / intermediate-variable introspection).
 
     Returns:
-        tuple: (X, y, input_columns, output_columns) as numpy arrays and column names
+        tuple: (X, y, input_columns, output_columns, E, env_columns) by default,
+        or (X, y, input_columns, output_columns, E, env_columns, df, scm_dataset)
+        when ``return_df=True``.
     """
     import sys
     from pathlib import Path
@@ -321,4 +326,6 @@ def generate_scm_data(n_samples=5000, seed=42, dataset_type='one_to_one_ct', sav
         except Exception as e:
             print(f"Warning: Could not save compact DAG: {e}")
 
+    if return_df:
+        return X, y, input_columns, output_columns, E, env_columns, df, scm_dataset
     return X, y, input_columns, output_columns, E, env_columns

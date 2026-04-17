@@ -362,6 +362,7 @@ def main():
     print(f"\n[1/3] Generating per-process SCM datasets...")
 
     per_process_data = {}
+    debug_per_process: dict = {}
     for proc in current_processes:
         proc_name = proc['name']
         scm_type = proc['scm_dataset_type']
@@ -370,10 +371,11 @@ def main():
         if scm_type == 'st' and 'st_params' in proc:
             extra_kwargs['st_params'] = proc['st_params']
 
-        X, y, input_cols, output_cols, E, env_cols = generate_scm_data(
+        X, y, input_cols, output_cols, E, env_cols, df_full, scm_obj = generate_scm_data(
             n_samples=n_samples,
             seed=args.seed,
             dataset_type=scm_type,
+            return_df=True,
             **extra_kwargs
         )
 
@@ -404,6 +406,44 @@ def main():
         }, save_path)
         print(f"  {proc_name}: control {inputs_tensor.shape}, env {env_tensor.shape}, "
               f"outputs {outputs_tensor.shape} → {save_path}")
+
+        # ── Collect intermediate variables for debug_data ───────────
+        # Everything in df_full that isn't input, target, env or noise is a
+        # stage variable (S_k or S_k_j). Noise nodes are kept separately.
+        env_vars = list(getattr(scm_obj, 'structural_noise_vars', []) or [])
+        proc_noise_vars = list(getattr(scm_obj, 'process_noise_vars', []) or [])
+        noise_set = set(env_vars) | set(proc_noise_vars)
+        target_set = set(scm_obj.target_labels)
+        input_set = set(scm_obj.input_labels)
+        stage_names = [
+            c for c in df_full.columns
+            if c not in input_set and c not in target_set and c not in noise_set
+        ]
+        if stage_names:
+            stages_tensor = torch.tensor(
+                df_full[stage_names].values.astype(np.float32), dtype=torch.float32
+            )
+        else:
+            stages_tensor = None
+        if proc_noise_vars:
+            proc_noise_tensor = torch.tensor(
+                df_full[proc_noise_vars].values.astype(np.float32), dtype=torch.float32
+            )
+        else:
+            proc_noise_tensor = None
+
+        debug_per_process[proc_name] = {
+            'inputs': inputs_tensor,
+            'input_labels': list(scm_obj.input_labels),
+            'env': env_tensor,
+            'env_labels': env_vars,
+            'stages': stages_tensor,
+            'stage_labels': stage_names,
+            'outputs': outputs_tensor,
+            'output_labels': list(scm_obj.target_labels),
+            'process_noise': proc_noise_tensor,
+            'process_noise_labels': proc_noise_vars,
+        }
 
     # ── Step 2: Save DAG image ──────────────────────────────────────────────
     print(f"\n[2/4] Saving DAG image...")
@@ -528,6 +568,49 @@ def main():
           f"min={np.min(F_values):.4f}, max={np.max(F_values):.4f}")
     print(f"  Saved to: {traj_path}")
 
+    # ── Save debug_data.pt (intermediate vars, widths, configs) ─────────
+    # This bundle is consumed by scm_ds/debug_adaptive_target.py so the
+    # debug script can run on the exact trajectories / widths / configs
+    # used here, without resampling.
+    batched_traj = {
+        pname: {
+            'outputs_mean': per_process_data[pname]['outputs'],
+            'outputs_sampled': per_process_data[pname]['outputs'],
+        }
+        for pname in rf.process_order if pname in per_process_data
+    }
+    F_batched, partial_or_quality = rf.compute_reliability(
+        batched_traj, return_quality_scores=True, use_sampled_outputs=False
+    )
+
+    debug_data = {
+        'config': {
+            'dataset_mode': DATASET_MODE,
+            'n_samples': n_samples,
+            'seed': args.seed,
+            'reliability_formula': RELIABILITY_FORMULA,
+            'shekel_sharpness': SHEKEL_SHARPNESS,
+            'processes': current_processes,
+            'rf_process_configs': dict(rf.process_configs),
+            'rf_process_order': list(rf.process_order),
+            'st_params': (current_processes[0].get('st_params')
+                          if DATASET_MODE == 'st' else None),
+        },
+        'per_process': debug_per_process,
+        'shekel_widths': (
+            {k: v.detach().cpu() for k, v in rf._shekel_widths.items()}
+            if RELIABILITY_FORMULA == 'shekel' and rf._shekel_widths is not None
+            else None
+        ),
+        'F_values': F_batched.detach().cpu(),
+        'partial_or_quality': {
+            k: v.detach().cpu() for k, v in partial_or_quality.items()
+        },
+    }
+    debug_path = trajectories_dir / 'debug_data.pt'
+    torch.save(debug_data, debug_path)
+    print(f"  Debug data saved to: {debug_path}")
+
     # ── Step 4: Convert to causaliT format ───────────────────────────────
     print(f"\n[4/4] Converting to causaliT format...")
     from scm_ds.convert_azimuth_trajectories import (
@@ -573,6 +656,7 @@ def main():
         pname = proc['name']
         print(f"  {per_process_dir / f'{pname}_dataset.pt'}")
     print(f"  {traj_path}")
+    print(f"  {debug_path}")
     print(f"  {causalit_dir}/ (causaliT format)")
     print(f"  {causalit_data_dir}/ (causaliT training data)")
 

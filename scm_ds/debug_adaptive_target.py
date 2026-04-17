@@ -10,9 +10,17 @@ is visible and reproducible by hand.
 
 Usage (from repo root)::
 
+    # Self-contained: build a small SCM and sample a fresh batch.
     python -m scm_ds.debug_adaptive_target \
         --n-processes 3 --p 2 --n-samples 4 \
         --shekel-sharpness 1.0 --adaptive-coeff 0.3
+
+    # Load the exact trajectories / widths / configs used by
+    # generate_dataset.py (reads scm_ds/predictor_dataset/trajectories/
+    # debug_data.pt):
+    python -m scm_ds.debug_adaptive_target \
+        --load-from scm_ds/predictor_dataset/trajectories/debug_data.pt \
+        --sample-indices 0-3
 
 The output is purely informational (stdout). No files are written.
 """
@@ -36,6 +44,23 @@ from scm_ds.compute_reliability import (  # noqa: E402
     _apply_adaptive_mode,
 )
 from scm_ds.datasets_st import STConfig, build_st_scm  # noqa: E402
+
+
+def _parse_indices(spec: str, n_max: int) -> List[int]:
+    """Parse '0,1,2,3' or '0-3' into a list of ints."""
+    spec = spec.strip()
+    if not spec:
+        return list(range(min(4, n_max)))
+    out: List[int] = []
+    for tok in spec.split(','):
+        tok = tok.strip()
+        if '-' in tok:
+            a, b = tok.split('-', 1)
+            out.extend(range(int(a), int(b) + 1))
+        else:
+            out.append(int(tok))
+    out = [i for i in out if 0 <= i < n_max]
+    return out or [0]
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -303,6 +328,191 @@ def _shekel_breakdown(order: List[str],
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# Load debug_data.pt produced by generate_dataset.py
+# ═══════════════════════════════════════════════════════════════════════
+
+def _run_from_debug_file(args):
+    """Run Steps 5-7 using a pre-generated debug_data.pt file.
+
+    Steps 3 (sampling) and 4 (Shekel width calibration) are replaced by
+    loading the arrays / widths saved by ``generate_dataset.py``. Step 1
+    and Step 2 print what the saved config recorded. All downstream
+    formulas (τ_i reconstruction, Shekel breakdown, rfunc sanity check,
+    Gaussian cross-check) run unchanged — but on the exact data used by
+    the dataset generator.
+    """
+    print(_banner(
+        "DEBUG — Shekel reliability (loaded from debug_data.pt)", char="#"
+    ))
+
+    blob = torch.load(args.load_from, weights_only=False)
+    cfg_blob = blob['config']
+    per_proc = blob['per_process']
+    saved_widths = blob.get('shekel_widths')
+    F_saved_full = blob.get('F_values')
+    Q_saved_full = blob.get('partial_or_quality', {})
+
+    order = cfg_blob['rf_process_order']
+    configs = cfg_blob['rf_process_configs']
+    n_total = per_proc[order[0]]['outputs'].shape[0]
+    idx = _parse_indices(args.sample_indices, n_total)
+    idx_t = torch.tensor(idx, dtype=torch.long)
+
+    print(f"  source file       = {args.load_from}")
+    print(f"  dataset_mode      = {cfg_blob['dataset_mode']}")
+    print(f"  reliability       = {cfg_blob['reliability_formula']}")
+    print(f"  shekel_sharpness  = {cfg_blob['shekel_sharpness']}")
+    print(f"  n_total saved     = {n_total}")
+    print(f"  sample indices    = {idx}")
+    print(f"  seed (generation) = {cfg_blob['seed']}")
+
+    # ── STEP 1 — recorded SCM metadata ────────────────────────────────
+    print(_banner("Step 1 — SCM metadata (from debug_data.pt)", char="─"))
+    for pname in order:
+        d = per_proc[pname]
+        print(f"  {pname}:")
+        print(f"      input_labels   : {d['input_labels']}")
+        print(f"      env_labels     : {d['env_labels']}")
+        print(f"      stage_labels   : {d['stage_labels']}")
+        print(f"      output_labels  : {d['output_labels']}")
+        print(f"      process_noise  : {d['process_noise_labels']}")
+
+    # ── STEP 2 — chain configuration ──────────────────────────────────
+    print(_banner("Step 2 — process chain (rf_process_configs)", char="─"))
+    for name in order:
+        c = configs[name]
+        base = c.get('base_target', 0.0)
+        base_fmt = base if isinstance(base, list) else [base]
+        print(f"  {name}: base_target={[round(float(v), 4) for v in base_fmt]}  "
+              f"scale={c.get('scale')}  weight={c.get('weight')}  "
+              f"has_adaptive={bool(c.get('adaptive_coefficients'))}")
+        if c.get('adaptive_coefficients'):
+            for up, coef in c['adaptive_coefficients'].items():
+                bl = c.get('adaptive_baselines', {}).get(up)
+                print(f"      upstream {up}: coeff={coef:+.4f}  "
+                      f"adaptive_baselines={bl}  [IGNORED — chain variant]")
+
+    # ── STEP 3 — slice saved trajectories to requested samples ────────
+    print(_banner("Step 3 — loaded trajectories (selected samples)", char="─"))
+    trajectory: Dict[str, Dict[str, torch.Tensor]] = {}
+    outputs: Dict[str, torch.Tensor] = {}
+    for pname in order:
+        d = per_proc[pname]
+        inp = d['inputs'].index_select(0, idx_t)
+        env = d['env'].index_select(0, idx_t) if d['env'].numel() > 0 else d['env']
+        out = d['outputs'].index_select(0, idx_t)
+        if out.dim() == 1:
+            out = out.unsqueeze(-1)
+        stages = d['stages']
+        if stages is not None and stages.numel() > 0:
+            stages = stages.index_select(0, idx_t)
+        trajectory[pname] = {
+            'inputs': inp,
+            'env': env,
+            'env_labels': d['env_labels'],
+            'stages': stages,
+            'stage_labels': d['stage_labels'],
+            'input_labels': d['input_labels'],
+            'outputs_mean': out,
+            'outputs_sampled': out,
+            'output_labels': d['output_labels'],
+        }
+        outputs[pname] = out
+        print(f"\n  ── {pname}")
+        print(f"      X  {d['input_labels']} shape={tuple(inp.shape)}"
+              f"  values:{_fmt(inp, max_rows=len(idx))}")
+        if env.numel() > 0:
+            print(f"      E  {d['env_labels']} shape={tuple(env.shape)}"
+                  f"  values:{_fmt(env, max_rows=len(idx))}")
+        if stages is not None and stages.numel() > 0:
+            print(f"      S  {d['stage_labels']} shape={tuple(stages.shape)}"
+                  f"  values:{_fmt(stages, max_rows=len(idx))}")
+        print(f"      Y  {d['output_labels']} shape={tuple(out.shape)}"
+              f"  values:{_fmt(out, max_rows=len(idx))}")
+
+    # ── STEP 4 — use saved Shekel widths (no recalibration) ───────────
+    print(_banner("Step 4 — Shekel widths (loaded, no recalibration)", char="─"))
+    rfunc = ReliabilityFunction(
+        process_configs=configs,
+        process_order=order,
+        device='cpu',
+        reliability_formula=cfg_blob['reliability_formula'],
+        shekel_sharpness=cfg_blob['shekel_sharpness'],
+    )
+    if cfg_blob['reliability_formula'] == 'shekel':
+        if saved_widths is None:
+            raise RuntimeError(
+                "debug_data.pt has reliability_formula='shekel' but no "
+                "shekel_widths saved."
+            )
+        rfunc._shekel_widths = {k: v.clone() for k, v in saved_widths.items()}
+        for pname in order:
+            w = rfunc._shekel_widths[pname]
+            print(f"  {pname}: d_t (per-dim) : {_fmt(w)}")
+    else:
+        print("  reliability_formula is not 'shekel' — no widths needed.")
+
+    # ── STEP 5 — Shekel breakdown (only for shekel) ───────────────────
+    if cfg_blob['reliability_formula'] == 'shekel':
+        print(_banner("Step 5 — manual Shekel computation", char="─"))
+        F_manual, S_manual = _shekel_breakdown(
+            order, configs, outputs, rfunc._shekel_widths, max_rows=len(idx)
+        )
+
+        # ── STEP 6 — rfunc vs manual vs saved ─────────────────────────
+        print(_banner("Step 6 — sanity check (manual vs rfunc vs saved F)", char="─"))
+        F_ref, S_ref = rfunc.compute_reliability(
+            trajectory, return_quality_scores=True, use_sampled_outputs=False
+        )
+        F_saved = F_saved_full.index_select(0, idx_t) if F_saved_full is not None else None
+        print(f"  F (manual)    : {_fmt(F_manual)}")
+        print(f"  F (rfunc)     : {_fmt(F_ref)}")
+        if F_saved is not None:
+            print(f"  F (saved)     : {_fmt(F_saved)}")
+            diff_ms = float((F_manual - F_saved).abs().max().item())
+            print(f"  max |F_manual - F_saved| : {diff_ms:.2e}  "
+                  f"{'OK' if diff_ms < 1e-5 else '⚠ MISMATCH'}")
+        diff_mr = float((F_manual - F_ref).abs().max().item())
+        print(f"  max |F_manual - F_rfunc| : {diff_mr:.2e}  "
+              f"{'OK' if diff_mr < 1e-5 else '⚠ MISMATCH'}")
+        print("  per-process partial sums S_t:")
+        for name in order:
+            saved_S = Q_saved_full.get(name)
+            saved_S_sliced = saved_S.index_select(0, idx_t) if saved_S is not None else None
+            line = (f"      {name}:  manual={_fmt(S_manual[name])}   "
+                    f"rfunc={_fmt(S_ref[name])}")
+            if saved_S_sliced is not None:
+                line += f"   saved={_fmt(saved_S_sliced)}"
+            print(line)
+    else:
+        print(_banner("Step 5 — Gaussian Q_i (loaded)", char="─"))
+        F_saved = F_saved_full.index_select(0, idx_t) if F_saved_full is not None else None
+        if F_saved is not None:
+            print(f"  F (saved)  : {_fmt(F_saved)}")
+        for name in order:
+            saved_Q = Q_saved_full.get(name)
+            if saved_Q is not None:
+                print(f"      Q[{name}] (saved) : {_fmt(saved_Q.index_select(0, idx_t))}")
+
+    # ── STEP 7 — Gaussian cross-check on the same loaded trajectory ──
+    print(_banner("Step 7 — cross-check Gaussian F on same trajectory",
+                  char="─"))
+    rfunc_g = ReliabilityFunction(
+        process_configs=configs,
+        process_order=order,
+        device='cpu',
+        reliability_formula='gaussian',
+    )
+    F_g, Q_g = rfunc_g.compute_reliability(
+        trajectory, return_quality_scores=True, use_sampled_outputs=False
+    )
+    print(f"  F (gaussian)  : {_fmt(F_g)}")
+    for name in order:
+        print(f"      Q[{name}]   : {_fmt(Q_g[name])}")
+    print()
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Main
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -326,7 +536,22 @@ def main():
     parser.add_argument("--n-inputs", type=int, default=4, help="ST param n")
     parser.add_argument("--m-stages", type=int, default=2, help="ST param m")
     parser.add_argument("--rho", type=float, default=0.1, help="ST noise intensity")
+    parser.add_argument(
+        "--load-from", type=str, default=None,
+        help=("Path to debug_data.pt produced by generate_dataset.py. "
+              "When given, skips sampling/calibration and uses the saved "
+              "trajectories / widths / configs."),
+    )
+    parser.add_argument(
+        "--sample-indices", type=str, default="",
+        help=("Comma/range spec of sample indices to debug (e.g. '0,1,2,3' "
+              "or '0-3'). Only used with --load-from. Defaults to 0..3."),
+    )
     args = parser.parse_args()
+
+    if args.load_from:
+        _run_from_debug_file(args)
+        return
 
     st_dataset_config = {
         "n_processes": args.n_processes,
