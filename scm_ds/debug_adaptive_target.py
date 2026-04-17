@@ -1,16 +1,36 @@
-"""Debug helper for the Shekel reliability function on an ST dataset.
+"""Debug helper for the reliability function on an ST dataset.
 
-Builds a small ST SCM, samples trajectories, calibrates Shekel widths, and
-prints a step-by-step breakdown of the full dataset generation pipeline so
-that every term of the Shekel formula
+Builds a small ST SCM, samples trajectories, and prints a step-by-step
+breakdown of the full dataset generation pipeline so that every term of the
+chosen reliability formula is visible and reproducible by hand.
 
-    F(o) = 1 / (1 + Σ_t Σ_k  d_t^k · (o_t^k - ζ*_t^k)²)
+Two formulas are supported (select via ``--reliability-formula``):
 
-is visible and reproducible by hand.
+* ``gaussian`` (default) — weighted average of per-process qualities::
+
+      q_t^k = exp(-(o_t^k - ζ*_t^k)² / s_t^k)        (per-dim, ∈ [0,1])
+      Q_t   = mean_k q_t^k                           (per-process)
+      F     = Σ_t w_t · Q_t  /  Σ_t w_t              (weighted mean)
+
+  The per-dim scale ``s_t^k`` comes directly from the process config — no
+  calibration is required.
+
+* ``shekel`` — global Shekel aggregation::
+
+      S_t = Σ_k d_t^k · (o_t^k - ζ*_t^k)²            (per-process sum)
+      F   = 1 / (1 + Σ_t S_t)
+
+  The per-dim widths ``d_t^k = s / Var[o_t^k]`` are calibrated from a
+  separate sample before the main breakdown.
 
 Usage (from repo root)::
 
+    # Gaussian (default)
     python -m scm_ds.debug_adaptive_target \
+        --n-processes 3 --p 2 --n-samples 4 --adaptive-coeff 0.3
+
+    # Shekel
+    python -m scm_ds.debug_adaptive_target --reliability-formula shekel \
         --n-processes 3 --p 2 --n-samples 4 \
         --shekel-sharpness 1.0 --adaptive-coeff 0.3
 
@@ -305,6 +325,115 @@ def _shekel_breakdown(order: List[str],
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# Gaussian computation — step-by-step
+# ═══════════════════════════════════════════════════════════════════════
+
+def _gaussian_breakdown(order: List[str],
+                        configs: Dict[str, Dict],
+                        outputs: Dict[str, torch.Tensor],
+                        max_rows: int) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+    """Compute Gaussian F by hand, printing every intermediate tensor.
+
+        per-dim quality        :   q_t^k = exp(-(o_t^k - ζ*_t^k)² / s_t^k)
+        per-process quality    :   Q_t   = mean_k q_t^k
+        weighted aggregation   :   F     = Σ_t w_t · Q_t  /  Σ_t w_t
+    """
+    batch_size = next(iter(outputs.values())).shape[0]
+    Q_scores: Dict[str, torch.Tensor] = {}
+    weights: Dict[str, float] = {}
+
+    for name in order:
+        if name not in outputs:
+            continue
+        out = outputs[name]              # (batch, K)
+        cfg = configs[name]
+
+        scales = cfg.get("scale", 1.0)
+        if not isinstance(scales, list):
+            scales = [scales]
+        scale_t = torch.tensor(scales, dtype=torch.float32)  # (K,) or (1,)
+
+        w = cfg.get("weight", 1.0)
+        if isinstance(w, list):
+            w = sum(w) / len(w)
+        weights[name] = float(w)
+
+        print(f"\n  ▸ {name}")
+        target = _manual_adaptive_target(name, outputs, cfg, max_rows)
+        tgt_full = target.expand_as(out) if target.dim() >= 1 else target
+        diff = out - tgt_full
+        diff_sq = diff ** 2
+        exp_arg = -diff_sq / scale_t             # (batch, K) broadcast along k
+        per_dim_q = torch.exp(exp_arg)           # (batch, K)
+        Q_t = per_dim_q.mean(dim=-1)             # (batch,)
+
+        print(f"      o_t            [{out.shape[0]}×{out.shape[1]}]:{_fmt(out, max_rows=max_rows)}")
+        print(f"      ζ*_t           [broadcast]   :{_fmt(tgt_full, max_rows=max_rows)}")
+        print(f"      (o - ζ*)       :{_fmt(diff, max_rows=max_rows)}")
+        print(f"      (o - ζ*)²      :{_fmt(diff_sq, max_rows=max_rows)}")
+        print(f"      scale s_t      (per-dim)     : {_fmt(scale_t)}")
+        print(f"      -(o-ζ*)²/s     :{_fmt(exp_arg, max_rows=max_rows)}")
+        print(f"      q = exp(·)     :{_fmt(per_dim_q, max_rows=max_rows)}")
+        print(f"      Q_t = mean_k q (batch,)      : {_fmt(Q_t)}")
+        print(f"      weight w_t                   : {w:+.4f}")
+
+        Q_scores[name] = Q_t
+
+    total_w = sum(weights.values())
+    weighted_sum = torch.zeros(batch_size)
+    for name, Q_t in Q_scores.items():
+        weighted_sum = weighted_sum + weights[name] * Q_t
+    F = weighted_sum / total_w if total_w > 0 else torch.zeros(batch_size)
+
+    print(_banner("Gaussian — global aggregation", char="─"))
+    print(f"  weights w_t                : "
+          f"{{{', '.join(f'{n}={weights[n]:+.4f}' for n in order if n in weights)}}}")
+    print(f"  Σ_t w_t                    : {total_w:+.4f}")
+    print(f"  Σ_t w_t · Q_t              : {_fmt(weighted_sum)}")
+    print(f"  F = Σ w_t·Q_t / Σ w_t      : {_fmt(F)}")
+    return F, Q_scores
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Shekel width calibration helper (shared by main & cross-check)
+# ═══════════════════════════════════════════════════════════════════════
+
+def _calibrate_shekel_widths(rfunc: "ReliabilityFunction",
+                             order: List[str],
+                             st_dataset_config: Dict,
+                             n_calibration: int,
+                             seed: int,
+                             verbose: bool = False,
+                             shekel_sharpness: float = 1.0) -> Dict:
+    """Calibrate Shekel widths on a fresh calibration trajectory.
+
+    Returns the calibration trajectory for optional inspection.
+    """
+    cal_trajectory, _ = _build_trajectory(
+        st_dataset_config, n_calibration, seed + 10_000
+    )
+    cal_list = [
+        {name: {"outputs_sampled": cal_trajectory[name]["outputs_mean"][i:i + 1]}
+         for name in order}
+        for i in range(n_calibration)
+    ]
+    rfunc.calibrate_shekel_widths(cal_list)
+    if verbose:
+        print(f"  calibration samples  : {n_calibration}")
+        print(f"  sharpness s          : {shekel_sharpness}")
+        for name in order:
+            stacked = cal_trajectory[name]["outputs_mean"]        # (N_cal, K)
+            var = torch.clamp(stacked.var(dim=0), min=1e-8)       # (K,)
+            expected_d = shekel_sharpness / var
+            d_stored = rfunc._shekel_widths[name]
+            print(f"  {name}:")
+            print(f"      Var[o_t] (per-dim)        : {_fmt(var)}")
+            print(f"      d_t = s / Var[o_t]        : {_fmt(expected_d)}")
+            print(f"      stored in rfunc           : {_fmt(d_stored)}")
+    return cal_trajectory
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Main
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -320,10 +449,22 @@ def main():
         default="linear",
         choices=["linear", "polynomial", "power", "softplus", "deadband", "tanh"],
     )
+    parser.add_argument(
+        "--reliability-formula",
+        type=str,
+        default="gaussian",
+        choices=["gaussian", "shekel"],
+        help="Which reliability formula to break down step by step.",
+    )
     parser.add_argument("--shekel-sharpness", type=float, default=1.0,
-                        help="Global sharpness s in d_t^k = s / Var[o_t^k]")
+                        help="Global sharpness s in d_t^k = s / Var[o_t^k] "
+                             "(only used for Shekel path / cross-check)")
     parser.add_argument("--n-calibration", type=int, default=256,
-                        help="Samples used for Shekel width calibration")
+                        help="Samples used for Shekel width calibration "
+                             "(main flow if --reliability-formula=shekel, "
+                             "otherwise used for the cross-check in Step 7)")
+    parser.add_argument("--skip-cross-check", action="store_true",
+                        help="Skip Step 7 (cross-check via the other formula)")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--n-inputs", type=int, default=4, help="ST param n")
     parser.add_argument("--m-stages", type=int, default=2, help="ST param m")
@@ -347,16 +488,22 @@ def main():
         "uncertainty_predictor": {},
     }
 
-    print(_banner("DEBUG — Shekel reliability on an ST dataset", char="#"))
-    print(f"  n_processes       = {args.n_processes}")
-    print(f"  p (output_dim)    = {args.p}")
-    print(f"  n_samples (batch) = {args.n_samples}")
-    print(f"  adaptive_coeff    = {args.adaptive_coeff}")
-    print(f"  adaptive_mode     = {args.adaptive_mode}")
-    print(f"  shekel_sharpness  = {args.shekel_sharpness}")
-    print(f"  n_calibration     = {args.n_calibration}")
-    print(f"  seed              = {args.seed}")
-    print(f"  st_params         = n={args.n_inputs}, m={args.m_stages}, rho={args.rho}")
+    formula = args.reliability_formula
+    other_formula = "gaussian" if formula == "shekel" else "shekel"
+
+    print(_banner(f"DEBUG — {formula.capitalize()} reliability on an ST dataset",
+                  char="#"))
+    print(f"  reliability_formula = {formula}")
+    print(f"  n_processes         = {args.n_processes}")
+    print(f"  p (output_dim)      = {args.p}")
+    print(f"  n_samples (batch)   = {args.n_samples}")
+    print(f"  adaptive_coeff      = {args.adaptive_coeff}")
+    print(f"  adaptive_mode       = {args.adaptive_mode}")
+    if formula == "shekel" or not args.skip_cross_check:
+        print(f"  shekel_sharpness    = {args.shekel_sharpness}")
+        print(f"  n_calibration       = {args.n_calibration}")
+    print(f"  seed                = {args.seed}")
+    print(f"  st_params           = n={args.n_inputs}, m={args.m_stages}, rho={args.rho}")
 
     # ── STEP 1 — Build a reference ST SCM ────────────────────────────
     print(_banner("Step 1 — build the reference ST SCM (build_st_scm)", char="─"))
@@ -426,46 +573,52 @@ def main():
             out = out.unsqueeze(-1)
         outputs[name] = out
 
-    # ── STEP 4 — Shekel width calibration ────────────────────────────
-    print(_banner("Step 4 — Shekel width calibration  d_t^k = s / Var[o_t^k]",
-                  char="─"))
-    cal_trajectory, _ = _build_trajectory(
-        st_dataset_config, args.n_calibration, args.seed + 10_000
-    )
-    cal_list = [
-        {name: {"outputs_sampled": cal_trajectory[name]["outputs_mean"][i:i + 1]}
-         for name in order}
-        for i in range(args.n_calibration)
-    ]
+    # ── STEP 4 — Formula parameters ──────────────────────────────────
     rfunc = ReliabilityFunction(
         process_configs=configs,
         process_order=order,
         device="cpu",
-        reliability_formula="shekel",
+        reliability_formula=formula,
         shekel_sharpness=args.shekel_sharpness,
     )
-    rfunc.calibrate_shekel_widths(cal_list)
-    print(f"  calibration samples  : {args.n_calibration}")
-    print(f"  sharpness s          : {args.shekel_sharpness}")
-    for name in order:
-        stacked = cal_trajectory[name]["outputs_mean"]        # (N_cal, K)
-        var = torch.clamp(stacked.var(dim=0), min=1e-8)       # (K,)
-        expected_d = args.shekel_sharpness / var
-        d_stored = rfunc._shekel_widths[name]
-        print(f"  {name}:")
-        print(f"      Var[o_t] (per-dim)        : {_fmt(var)}")
-        print(f"      d_t = s / Var[o_t]        : {_fmt(expected_d)}")
-        print(f"      stored in rfunc           : {_fmt(d_stored)}")
+    if formula == "shekel":
+        print(_banner("Step 4 — Shekel width calibration  d_t^k = s / Var[o_t^k]",
+                      char="─"))
+        _calibrate_shekel_widths(
+            rfunc, order, st_dataset_config, args.n_calibration, args.seed,
+            verbose=True, shekel_sharpness=args.shekel_sharpness,
+        )
+    else:
+        print(_banner("Step 4 — Gaussian parameters  (no calibration needed)",
+                      char="─"))
+        print("  scale s_t and weight w_t are taken directly from the process "
+              "config;\n  no data-driven calibration is required for Gaussian.")
+        for name in order:
+            pcfg = configs[name]
+            scales = pcfg.get("scale", 1.0)
+            if not isinstance(scales, list):
+                scales = [scales]
+            scale_t = torch.tensor(scales, dtype=torch.float32)
+            w = pcfg.get("weight", 1.0)
+            if isinstance(w, list):
+                w = sum(w) / len(w)
+            print(f"  {name}: scale={_fmt(scale_t)}   weight={float(w):+.4f}")
 
-    # ── STEP 5 — Per-process Shekel breakdown ────────────────────────
-    print(_banner("Step 5 — manual Shekel computation (per process, per sample)",
-                  char="─"))
-    F_manual, S_manual = _shekel_breakdown(
-        order, configs, outputs, rfunc._shekel_widths, max_rows=args.n_samples
-    )
+    # ── STEP 5 — Per-process manual breakdown (chosen formula) ───────
+    print(_banner(f"Step 5 — manual {formula.capitalize()} computation "
+                  f"(per process, per sample)", char="─"))
+    if formula == "shekel":
+        F_manual, S_manual = _shekel_breakdown(
+            order, configs, outputs, rfunc._shekel_widths, max_rows=args.n_samples
+        )
+    else:
+        F_manual, S_manual = _gaussian_breakdown(
+            order, configs, outputs, max_rows=args.n_samples
+        )
 
     # ── STEP 6 — Reference computation via ReliabilityFunction ───────
-    print(_banner("Step 6 — sanity check via ReliabilityFunction", char="─"))
+    print(_banner(f"Step 6 — sanity check via ReliabilityFunction "
+                  f"({formula})", char="─"))
     F_ref, S_ref = rfunc.compute_reliability(
         trajectory, return_quality_scores=True, use_sampled_outputs=False
     )
@@ -474,25 +627,40 @@ def main():
     max_abs = float((F_manual - F_ref).abs().max().item())
     print(f"  max |Δ|       : {max_abs:.2e}   "
           f"{'OK' if max_abs < 1e-5 else '⚠ MISMATCH'}")
-    print("  per-process partial sums S_t:")
+    score_label = ("S_t (partial sums)" if formula == "shekel"
+                   else "Q_t (per-process quality)")
+    print(f"  per-process {score_label}:")
     for name in order:
         print(f"      {name}:  manual={_fmt(S_manual[name])}   rfunc={_fmt(S_ref[name])}")
 
-    # ── STEP 7 — Comparison with Gaussian formula on same trajectory ─
-    print(_banner("Step 7 — cross-check Gaussian F on the same trajectory",
-                  char="─"))
-    rfunc_g = ReliabilityFunction(
+    # ── STEP 7 — Cross-check with the other formula ──────────────────
+    if args.skip_cross_check:
+        print()
+        return
+
+    print(_banner(f"Step 7 — cross-check {other_formula.capitalize()} F "
+                  f"on the same trajectory", char="─"))
+    rfunc_cross = ReliabilityFunction(
         process_configs=configs,
         process_order=order,
         device="cpu",
-        reliability_formula="gaussian",
+        reliability_formula=other_formula,
+        shekel_sharpness=args.shekel_sharpness,
     )
-    F_g, Q_g = rfunc_g.compute_reliability(
+    if other_formula == "shekel":
+        print("  (Shekel needs width calibration — running it now for the "
+              "cross-check)")
+        _calibrate_shekel_widths(
+            rfunc_cross, order, st_dataset_config, args.n_calibration,
+            args.seed, verbose=False, shekel_sharpness=args.shekel_sharpness,
+        )
+    F_cross, S_cross = rfunc_cross.compute_reliability(
         trajectory, return_quality_scores=True, use_sampled_outputs=False
     )
-    print(f"  F (gaussian)  : {_fmt(F_g)}")
+    cross_score_label = ("S_t" if other_formula == "shekel" else "Q_t")
+    print(f"  F ({other_formula})  : {_fmt(F_cross)}")
     for name in order:
-        print(f"      Q[{name}]   : {_fmt(Q_g[name])}")
+        print(f"      {cross_score_label}[{name}]   : {_fmt(S_cross[name])}")
     print()
 
 
