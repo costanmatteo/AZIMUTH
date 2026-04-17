@@ -18,16 +18,19 @@ default, via ``RELIABILITY_FORMULA`` in ``configs/processes_config.py``):
 
 The steps printed and the tensors shown adapt to the chosen method.
 
+Configuration is read from ``configs/processes_config.ST_DATASET_CONFIG``
+(same one consumed by ``generate_dataset.py``), so the debug reflects the
+current project settings. Only ``--n-samples`` and ``--seed`` are debug-only
+overrides; everything else (n_processes, adaptive_coeff/mode, st_params) is
+taken from the config.
+
 Usage (from repo root)::
 
-    # Gaussian (default from config)
-    python -m scm_ds.debug_adaptive_target \
-        --n-processes 3 --p 2 --n-samples 4 --adaptive-coeff 0.3
+    # Uses RELIABILITY_FORMULA + ST_DATASET_CONFIG from processes_config.py
+    python -m scm_ds.debug_adaptive_target --n-samples 4
 
-    # Shekel
-    python -m scm_ds.debug_adaptive_target --reliability-formula shekel \
-        --n-processes 3 --p 2 --n-samples 4 \
-        --shekel-sharpness 1.0 --adaptive-coeff 0.3
+    # Override the formula (still uses ST_DATASET_CONFIG)
+    python -m scm_ds.debug_adaptive_target --reliability-formula shekel --n-samples 4
 
 The output is purely informational (stdout). No files are written.
 """
@@ -35,6 +38,7 @@ The output is purely informational (stdout). No files are written.
 from __future__ import annotations
 
 import argparse
+import copy
 import os
 import sys
 from typing import Dict, List, Tuple
@@ -48,6 +52,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from configs.processes_config import (  # noqa: E402
     RELIABILITY_FORMULA as _CFG_RELIABILITY_FORMULA,
     SHEKEL_SHARPNESS as _CFG_SHEKEL_SHARPNESS,
+    ST_DATASET_CONFIG as _CFG_ST_DATASET_CONFIG,
     _build_st_processes,
 )
 from scm_ds.compute_reliability import (  # noqa: E402
@@ -413,16 +418,6 @@ def _gaussian_breakdown(order: List[str],
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--n-processes", type=int, default=3)
-    parser.add_argument("--p", type=int, default=2, help="output_dim per process")
-    parser.add_argument("--n-samples", type=int, default=4)
-    parser.add_argument("--adaptive-coeff", type=float, default=0.3)
-    parser.add_argument(
-        "--adaptive-mode",
-        type=str,
-        default="linear",
-        choices=["linear", "polynomial", "power", "softplus", "deadband", "tanh"],
-    )
     parser.add_argument(
         "--reliability-formula",
         type=str,
@@ -435,44 +430,39 @@ def main():
                         help="Global sharpness s in d_t^k = s / Var[o_t^k] (shekel only)")
     parser.add_argument("--n-calibration", type=int, default=256,
                         help="Samples used for Shekel width calibration (shekel only)")
+    parser.add_argument("--n-samples", type=int, default=4,
+                        help=("Batch size printed per process. Small values keep the "
+                              "debug output readable. Overrides ST_DATASET_CONFIG['n_samples']."))
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--n-inputs", type=int, default=4, help="ST param n")
-    parser.add_argument("--m-stages", type=int, default=2, help="ST param m")
-    parser.add_argument("--rho", type=float, default=0.1, help="ST noise intensity")
     args = parser.parse_args()
 
     formula = args.reliability_formula
 
-    st_dataset_config = {
-        "n_processes": args.n_processes,
-        "n_samples": args.n_samples,
-        "adaptive_coeff": args.adaptive_coeff,
-        "adaptive_mode": args.adaptive_mode,
-        "st_params": {
-            "n": args.n_inputs,
-            "m": args.m_stages,
-            "p": args.p,
-            "me": 1,
-            "env_mode": "A",
-            "rho": args.rho,
-            "cal_n": 500,  # keep calibration fast
-        },
-        "uncertainty_predictor": {},
-    }
+    # Load ST dataset configuration from processes_config.py — only n_samples
+    # is overridden (the config's value is typically 2000, which would make the
+    # per-sample debug prints unreadable).
+    st_dataset_config = copy.deepcopy(_CFG_ST_DATASET_CONFIG)
+    st_dataset_config["n_samples"] = args.n_samples
+    st_dataset_config["uncertainty_predictor"] = {}  # not used by debug
+
+    st_params = st_dataset_config["st_params"]
 
     print(_banner(f"DEBUG — {formula.capitalize()} reliability on an ST dataset",
                   char="#"))
     print(f"  reliability_formula = {formula}")
-    print(f"  n_processes       = {args.n_processes}")
-    print(f"  p (output_dim)    = {args.p}")
-    print(f"  n_samples (batch) = {args.n_samples}")
-    print(f"  adaptive_coeff    = {args.adaptive_coeff}")
-    print(f"  adaptive_mode     = {args.adaptive_mode}")
+    print(f"  n_processes       = {st_dataset_config['n_processes']}")
+    print(f"  p (output_dim)    = {st_params['p']}")
+    print(f"  n_samples (batch) = {args.n_samples}   "
+          f"(config value = {_CFG_ST_DATASET_CONFIG['n_samples']})")
+    print(f"  adaptive_coeff    = {st_dataset_config.get('adaptive_coeff', 0.0)}")
+    print(f"  adaptive_mode     = {st_dataset_config.get('adaptive_mode', 'linear')}")
     if formula == "shekel":
         print(f"  shekel_sharpness  = {args.shekel_sharpness}")
         print(f"  n_calibration     = {args.n_calibration}")
     print(f"  seed              = {args.seed}")
-    print(f"  st_params         = n={args.n_inputs}, m={args.m_stages}, rho={args.rho}")
+    print( "  st_params (from processes_config.ST_DATASET_CONFIG):")
+    for k, v in st_params.items():
+        print(f"      {k:20s} = {v}")
 
     # ── STEP 1 — Build a reference ST SCM ────────────────────────────
     print(_banner("Step 1 — build the reference ST SCM (build_st_scm)", char="─"))
