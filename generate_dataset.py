@@ -362,7 +362,7 @@ def main():
     print(f"\n[1/3] Generating per-process SCM datasets...")
 
     per_process_data = {}
-    for proc in current_processes:
+    for i, proc in enumerate(current_processes, start=1):
         proc_name = proc['name']
         scm_type = proc['scm_dataset_type']
 
@@ -372,7 +372,7 @@ def main():
 
         X, y, input_cols, output_cols, E, env_cols = generate_scm_data(
             n_samples=n_samples,
-            seed=args.seed,
+            seed=args.seed + i,
             dataset_type=scm_type,
             **extra_kwargs
         )
