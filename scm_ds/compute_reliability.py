@@ -371,9 +371,12 @@ class ReliabilityFunction:
                 mode_params['max_shift'] = adaptive_max_shift.get(upstream_name, 1.0)
 
             adjustment = _apply_adaptive_mode(delta, coeff, mode, mode_params)
-            # Collapse upstream dims → scalar shift per sample. Mean (not sum)
-            # keeps the shift magnitude independent of upstream dimensionality.
-            shift = adjustment.mean(dim=-1, keepdim=True)  # (batch, 1)
+            # Collapse upstream dims → scalar shift per sample via SUM.
+            # Each upstream output dimension contributes additively: a process
+            # with multiple output dims accumulates the deviation of every
+            # component. Magnitude therefore scales with output_dim_j, so
+            # adaptive_coeff must be calibrated for the target dimensionality.
+            shift = adjustment.sum(dim=-1, keepdim=True)  # (batch, 1)
             target = target + shift  # (1, output_dim_i) + (batch, 1) → (batch, output_dim_i)
 
         # Ensure (batch, output_dim_i). If no upstream contributed, target is

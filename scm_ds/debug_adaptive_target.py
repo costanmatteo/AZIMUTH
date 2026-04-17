@@ -219,14 +219,14 @@ def _manual_adaptive_target(process_name: str,
 
         delta = upstream_out - tau_j                # (batch, m_up) per-dim
         adj = _apply_adaptive_mode(delta, coeff, mode, {})
-        shift_j = adj.mean(dim=-1, keepdim=True)  # (batch, 1)
+        shift_j = adj.sum(dim=-1, keepdim=True)  # (batch, 1)
 
         print(f"      ── upstream {upstream}  (coeff={coeff}, m_up={m_up})")
         print(f"          τ_j (chain baseline)    :{_fmt(tau_j, max_rows=max_rows)}")
         print(f"          upstream_out [{batch}×{m_up}] :{_fmt(upstream_out, max_rows=max_rows)}")
         print(f"          Δ = Y_j - τ_j (per-dim) :{_fmt(delta, max_rows=max_rows)}")
         print(f"          f(Δ)·c (per-dim adj)    :{_fmt(adj, max_rows=max_rows)}")
-        print(f"          shift_j = mean(adj,-1) :{_fmt(shift_j.squeeze(-1), max_rows=max_rows)}")
+        print(f"          shift_j = sum(adj,-1)  :{_fmt(shift_j.squeeze(-1), max_rows=max_rows)}")
 
         target = target + shift_j                   # (batch, output_dim_i) via broadcast
 
