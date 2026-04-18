@@ -283,6 +283,143 @@ def _save_st_dag(n: int, m: int, rho: float, save_path: str,
     plt.close(fig)
 
 
+def _fmt_dbg(x, decimals: int = 4) -> str:
+    """Pretty-print a scalar / 1D / 2D tensor-or-array for the --debug output."""
+    if isinstance(x, torch.Tensor):
+        x = x.detach().cpu().numpy()
+    arr = np.asarray(x)
+    if arr.ndim == 0:
+        return f"{float(arr):+.{decimals}f}"
+    if arr.ndim == 1:
+        return "[" + ", ".join(f"{float(v):+.{decimals}f}" for v in arr) + "]"
+    rows = ["[" + ", ".join(f"{float(v):+.{decimals}f}" for v in row) + "]"
+            for row in arr]
+    return "\n      " + "\n      ".join(rows)
+
+
+def _debug_gaussian_sample(sample_idx, trajectory_for_rf, rf, current_processes):
+    """Print a per-sample breakdown of the Gaussian reliability computation.
+
+    Shows inputs, outputs, static target ζ⁽⁰⁾, adaptive target τ,
+    per-process quality Q_i, and the overall reliability F.
+    """
+    from scm_ds.compute_reliability import _apply_adaptive_mode
+
+    proc_labels = {p['name']: p for p in current_processes}
+
+    print("\n" + "─" * 76)
+    print(f"  [DEBUG gaussian] sample {sample_idx}")
+    print("─" * 76)
+
+    outputs = {}
+    for pname, data in trajectory_for_rf.items():
+        out = data.get('outputs_sampled', data['outputs_mean'])
+        if out.dim() == 1:
+            out = out.unsqueeze(-1)
+        outputs[pname] = out
+
+    adaptive_targets = {}
+    quality_scores = {}
+
+    for pname in rf.process_order:
+        if pname not in outputs:
+            continue
+        config = rf.process_configs.get(pname, {})
+        output = outputs[pname]
+        pcfg = proc_labels.get(pname, {})
+        in_labels = pcfg.get('input_labels', [])
+        out_labels = pcfg.get('output_labels', [])
+
+        inputs = trajectory_for_rf[pname]['inputs']
+        print(f"\n  ▸ {pname}")
+        print(f"      input labels        : {in_labels}")
+        print(f"      inputs (control+env): {_fmt_dbg(inputs)}")
+        print(f"      output labels       : {out_labels}")
+        print(f"      output Y            : {_fmt_dbg(output)}")
+
+        # Static target ζ⁽⁰⁾ (base_target)
+        base_target = config.get('base_target', 0.0)
+        if isinstance(base_target, list):
+            base_t = torch.tensor(base_target, dtype=torch.float32)
+        else:
+            base_t = torch.tensor([base_target], dtype=torch.float32)
+        print(f"      static target ζ⁽⁰⁾  : {_fmt_dbg(base_t)}")
+
+        # Adaptive target τ — replay chain variant so every upstream shift prints
+        adaptive_coeffs = config.get('adaptive_coefficients', {})
+        mode = config.get('adaptive_mode', 'linear')
+        target = base_t.unsqueeze(0)  # (1, output_dim)
+
+        if adaptive_coeffs:
+            print(f"      adaptive_mode       : {mode}")
+            for up, coeff in adaptive_coeffs.items():
+                if up not in outputs or up not in adaptive_targets:
+                    continue
+                up_out = outputs[up]
+                tau_j = adaptive_targets[up]
+                delta = up_out - tau_j
+                mp = {}
+                if mode == 'polynomial':
+                    mp['coeff2'] = config.get('adaptive_coefficients2', {}).get(up, 0.0)
+                elif mode == 'power':
+                    mp['alpha'] = config.get('adaptive_power', {}).get(up, 0.5)
+                elif mode == 'softplus':
+                    mp['k'] = config.get('adaptive_sharpness', {}).get(up, 2.0)
+                elif mode == 'deadband':
+                    mp['band'] = config.get('adaptive_band', {}).get(up, 0.0)
+                elif mode == 'tanh':
+                    mp['max_shift'] = config.get('adaptive_max_shift', {}).get(up, 1.0)
+                adj = _apply_adaptive_mode(delta, coeff, mode, mp)
+                shift = adj.sum(dim=-1, keepdim=True)
+                target = target + shift
+                print(f"      ← upstream {up}: coeff={coeff:+.4f}  "
+                      f"Δ=Y_j-τ_j={_fmt_dbg(delta)}  "
+                      f"shift={_fmt_dbg(shift.squeeze(-1))}")
+        else:
+            print("      (no adaptive_coefficients → τ = ζ⁽⁰⁾)")
+
+        # Normalise τ to (batch, output_dim) so downstream processes read a
+        # fully-shaped chain baseline (mirrors ReliabilityFunction logic).
+        batch_size = output.shape[0]
+        if target.dim() == 1:
+            tgt_stored = target.unsqueeze(0).expand(batch_size, -1)
+        elif target.shape[0] == 1 and batch_size > 1:
+            tgt_stored = target.expand(batch_size, -1)
+        else:
+            tgt_stored = target
+        adaptive_targets[pname] = tgt_stored
+
+        print(f"      adaptive target τ   : {_fmt_dbg(target)}")
+
+        # Per-process quality Q_i = mean_k exp(-(Y_k - τ_k)² / s_k)
+        scales = config.get('scale', 1.0)
+        if not isinstance(scales, list):
+            scales = [scales]
+        scale_t = torch.tensor(scales, dtype=torch.float32)
+        per_dim_q = torch.exp(-((output - target) ** 2) / scale_t)
+        q = per_dim_q.mean(dim=-1)
+        quality_scores[pname] = q
+
+        weight = config.get('weight', 1.0)
+        if isinstance(weight, list):
+            weight = sum(weight) / len(weight)
+        print(f"      scale s             : {_fmt_dbg(scale_t)}")
+        print(f"      per-dim q=exp(-(Y-τ)²/s): {_fmt_dbg(per_dim_q)}")
+        print(f"      Q = mean_k(q)       : {_fmt_dbg(q)}   (weight={weight})")
+
+    # Overall F = Σ(w·Q) / Σ(w)
+    total_w = 0.0
+    total_wq = torch.tensor(0.0)
+    for pname, q in quality_scores.items():
+        w = rf.process_configs.get(pname, {}).get('weight', 1.0)
+        if isinstance(w, list):
+            w = sum(w) / len(w)
+        total_wq = total_wq + q * w
+        total_w += w
+    F = total_wq / total_w if total_w > 0 else torch.tensor(0.0)
+    print(f"\n  F = Σ(w·Q)/Σ(w) = {_fmt_dbg(F)}   (Σw={total_w:.4f})")
+
+
 def main():
     parser = argparse.ArgumentParser(description='Generate dataset for all processes')
     parser.add_argument('--n_samples', type=int, default=None,
@@ -301,6 +438,13 @@ def main():
                         help='ST noise intensity [0,1] (overrides st_params.rho)')
     parser.add_argument('--st_n_processes', type=int, default=None,
                         help='Number of ST processes in sequence (overrides n_processes)')
+
+    # Debug output (gaussian reliability only)
+    parser.add_argument('--debug', action='store_true',
+                        help='Print per-sample breakdown of inputs, outputs, static '
+                             'target ζ⁽⁰⁾, adaptive target τ, Q and F (gaussian only)')
+    parser.add_argument('--debug_samples', type=int, default=3,
+                        help='How many trajectories to debug-print (default: 3)')
 
     args = parser.parse_args()
 
@@ -499,6 +643,13 @@ def main():
 
         F = rf.compute_reliability(trajectory_for_rf)
         F_val = F.item() if isinstance(F, torch.Tensor) else float(F)
+
+        if args.debug and i < args.debug_samples:
+            if RELIABILITY_FORMULA == 'gaussian':
+                _debug_gaussian_sample(i, trajectory_for_rf, rf, current_processes)
+            elif i == 0:
+                print(f"\n  [DEBUG] skipped: --debug only prints gaussian "
+                      f"(RELIABILITY_FORMULA='{RELIABILITY_FORMULA}')")
 
         full_trajectories.append({
             'trajectory': {
