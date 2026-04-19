@@ -1149,22 +1149,19 @@ def generate_process_evolution_plots(training_progression, controllable_info,
             ax.spines['bottom'].set_position(('outward', 0))
             ax.spines['bottom'].set_linewidth(0.4)
 
-            # Legend: one entry per process (solid line in process color), then
+            # Legend: only the current process (solid line in its color) plus
             # three style entries (input / output / target reference). A single
             # horizontal row below the X axis, no frame.
             legend_handles = [
-                Line2D([0], [0], color=process_colors[pn], linewidth=1.0,
-                       label=pn.capitalize())
-                for pn in proc_names
-            ]
-            legend_handles.extend([
+                Line2D([0], [0], color=pcolor, linewidth=1.0,
+                       label=proc_name.capitalize()),
                 Line2D([0], [0], color='#555555', linewidth=1.0,
                        label=r'Input $\hat{a}$'),
                 Line2D([0], [0], color='#555555', linewidth=1.0,
                        linestyle='--', label=r'Output $\hat{o}$'),
                 Line2D([0], [0], color='#888888', linewidth=0.5,
                        linestyle=(0, (1, 2)), label='Target (ref.)'),
-            ])
+            ]
             ax.legend(handles=legend_handles, loc='upper center',
                       ncol=len(legend_handles),
                       bbox_to_anchor=(0.5, -0.28), frameon=False,
