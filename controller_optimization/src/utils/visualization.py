@@ -769,6 +769,10 @@ def plot_training_progression(progression_path, save_path=None):
 
             ax.set_ylabel(f"{process_name.capitalize()}\n{input_label}", fontsize=11, fontweight='bold')
             ax.set_xlabel('Epoch', fontsize=10)
+            ax.set_yticks([0, 1, 2])
+            if epochs:
+                max_epoch = int(max(epochs))
+                ax.set_xticks(np.arange(0, max_epoch + 200, 200))
             ax.grid(True, alpha=0.3)
             ax.legend(fontsize=9, loc='best')
 
