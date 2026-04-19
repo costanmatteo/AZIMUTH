@@ -446,12 +446,17 @@ def plot_target_vs_actual_scatter(F_star_per_scenario, F_baseline_per_scenario, 
     ax.set_title('Baseline vs Controller Reliability')
 
     ax.grid(True, alpha=0.3)
-    ax.legend(loc='upper left', framealpha=0.9)
+    handles, labels = ax.get_legend_handles_labels()
+    ax.legend(handles, labels, loc='upper center',
+              bbox_to_anchor=(0.5, -0.18),
+              ncol=len(handles), frameon=False,
+              columnspacing=1.6, handlelength=1.8, handletextpad=0.5)
 
     ax.set_xlim(min_val - margin, max_val + margin)
     ax.set_ylim(min_val - margin, max_val + margin)
 
     plt.tight_layout()
+    plt.subplots_adjust(bottom=0.22)
 
     if save_path:
         plt.savefig(save_path, dpi=150, bbox_inches='tight')
