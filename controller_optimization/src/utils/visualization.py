@@ -1104,24 +1104,30 @@ def generate_process_evolution_plots(training_progression, controllable_info,
                 y_lo, y_hi = y_range
                 ax.set_ylim(y_lo, y_hi)
 
-            # Minimal horizontal grid at 0 only
-            ax.axhline(y=0, color='#CCCCCC', linewidth=0.3)
+            # Horizontal reference lines at y = -2, 0, +2
+            for y_ref in (-2, 2):
+                ax.axhline(y=y_ref, color='#CCCCCC', linewidth=0.3)
             ax.grid(False)
 
-            # Axes: Y ticks only at {0, 1, 2}, X ticks every 200 epochs
-            ax.set_yticks([0, 1, 2])
+            # Y ticks at {-2, 0, 2}, X ticks every 200 epochs
+            ax.set_yticks([-2, 0, 2])
             if epochs:
                 max_epoch = int(max(epochs))
                 ax.set_xticks(np.arange(0, max_epoch + 200, 200))
             ax.tick_params(axis='both', which='major', labelsize=6,
                            length=2, pad=1)
-            ax.set_xlabel('')
-            ax.set_ylabel('')
+            ax.set_xlabel('Epoch', fontsize=7)
+            ax.set_ylabel('Value', fontsize=7)
+
+            # Make the y=0 line the X axis (move bottom spine to zero,
+            # keep left spine as the Y axis).
             for side in ('top', 'right'):
                 ax.spines[side].set_visible(False)
-            for side in ('left', 'bottom'):
-                ax.spines[side].set_visible(True)
-                ax.spines[side].set_linewidth(0.4)
+            ax.spines['left'].set_visible(True)
+            ax.spines['left'].set_linewidth(0.4)
+            ax.spines['bottom'].set_visible(True)
+            ax.spines['bottom'].set_position(('data', 0))
+            ax.spines['bottom'].set_linewidth(0.4)
 
             fname = f'evolution_sc{scenario_idx}_{proc_name}.png'
             fpath = checkpoint_dir / fname
