@@ -33,29 +33,23 @@ PROCESS_CONFIGS = {
         'base_target': 10.0,     # Thickness target (μm)
         'scale': 4.0,
         'weight': 1.5,           # More important (final product quality)
-        # Adaptive target depends on: laser, plasma
+        # Adaptive target depends only on the previous process: plasma
         'adaptive_coefficients': {
             'plasma': 0.5,       # galvanic_target += 0.5 * (plasma_output - 5.0)
-            'laser': 0.4,        # galvanic_target += 0.4 * (laser_output - 0.5)
         },
         'adaptive_baselines': {
             'plasma': 5.0,
-            'laser': 0.5,
         },
     },
     'microetch': {
         'base_target': 20.0,     # Depth target
         'scale': 4.0,
         'weight': 1.0,
-        # Adaptive target depends on: laser, plasma, galvanic
+        # Adaptive target depends only on the previous process: galvanic
         'adaptive_coefficients': {
-            'laser': 1.5,        # microetch_target += 1.5 * (laser_output - 0.5)
-            'plasma': 0.3,       # microetch_target += 0.3 * (plasma_output - 5.0)
             'galvanic': -0.15,   # microetch_target -= 0.15 * (galvanic_output - 10.0)
         },
         'adaptive_baselines': {
-            'laser': 0.5,
-            'plasma': 5.0,
             'galvanic': 10.0,
         },
     },
