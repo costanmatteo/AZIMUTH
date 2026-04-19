@@ -769,10 +769,6 @@ def plot_training_progression(progression_path, save_path=None):
 
             ax.set_ylabel(f"{process_name.capitalize()}\n{input_label}", fontsize=11, fontweight='bold')
             ax.set_xlabel('Epoch', fontsize=10)
-            ax.set_yticks([0, 1, 2])
-            if epochs:
-                max_epoch = int(max(epochs))
-                ax.set_xticks(np.arange(0, max_epoch + 200, 200))
             ax.grid(True, alpha=0.3)
             ax.legend(fontsize=9, loc='best')
 
@@ -1112,15 +1108,20 @@ def generate_process_evolution_plots(training_progression, controllable_info,
             ax.axhline(y=0, color='#CCCCCC', linewidth=0.3)
             ax.grid(False)
 
-            # Remove all axes, ticks, labels, legend
-            ax.set_xticks([])
-            ax.set_yticks([])
+            # Axes: Y ticks only at {0, 1, 2}, X ticks every 200 epochs
+            ax.set_yticks([0, 1, 2])
+            if epochs:
+                max_epoch = int(max(epochs))
+                ax.set_xticks(np.arange(0, max_epoch + 200, 200))
+            ax.tick_params(axis='both', which='major', labelsize=6,
+                           length=2, pad=1)
             ax.set_xlabel('')
             ax.set_ylabel('')
-            for spine in ax.spines.values():
-                spine.set_visible(False)
-
-            plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
+            for side in ('top', 'right'):
+                ax.spines[side].set_visible(False)
+            for side in ('left', 'bottom'):
+                ax.spines[side].set_visible(True)
+                ax.spines[side].set_linewidth(0.4)
 
             fname = f'evolution_sc{scenario_idx}_{proc_name}.png'
             fpath = checkpoint_dir / fname
