@@ -1023,14 +1023,8 @@ def generate_process_evolution_plots(training_progression, controllable_info,
         n_epochs = int(max(epochs)) if epochs else 200
     n_epochs = max(int(n_epochs), 1)
 
-    # One color per process (solid = input, dashed = output); fallback to tab10.
-    PROC_PALETTE = ['#1f77b4', '#d62728', '#2ca02c']
-    tab10 = list(plt.get_cmap('tab10').colors)
-    process_colors = {}
-    for i, pname in enumerate(proc_names):
-        process_colors[pname] = (
-            PROC_PALETTE[i] if i < len(PROC_PALETTE) else tab10[i % len(tab10)]
-        )
+    # One color per variable (input or output), drawn from tab10.
+    VAR_PALETTE = list(plt.get_cmap('tab10').colors)
 
     # X ticks: 5 evenly spaced between 0 and n_epochs
     xticks = np.unique(np.linspace(0, n_epochs, 5).round().astype(int))
@@ -1087,7 +1081,17 @@ def generate_process_evolution_plots(training_progression, controllable_info,
 
             fig, ax = plt.subplots(figsize=(6.5, 2.6))
 
-            pcolor = process_colors[proc_name]
+            # Assign one color per variable (input or output), in order.
+            var_order = []  # list of (kind, key, label) where kind in {'in','out'}
+            for ci in ctrl_indices:
+                lbl = input_labels[ci] if ci < len(input_labels) else f"a_{ci}"
+                var_order.append(('in', ci, lbl))
+            for oi in range(len(output_labels)):
+                var_order.append(('out', oi, output_labels[oi]))
+            var_colors = {
+                (kind, key): VAR_PALETTE[i % len(VAR_PALETTE)]
+                for i, (kind, key, _) in enumerate(var_order)
+            }
             proc_var_colors = {}
 
             # Warm-up shading (behind everything)
@@ -1099,30 +1103,32 @@ def generate_process_evolution_plots(training_progression, controllable_info,
                             xy=(warmup_end + 2, 1.85),
                             fontsize=5, color='#666666')
 
-            # Horizontal grid at integer ticks (drawn via yaxis grid below),
-            # plus explicit y=0 reference line.
+            # Horizontal reference line at y=0.
             ax.axhline(y=0, color='#CCCCCC', linewidth=0.3, zorder=0.5)
 
-            # Target reference lines (a_t*), dotted, same color as process
+            # Target reference lines (a_t*), dotted, matched to input color.
             for ci in ctrl_indices:
                 if ci in target_values:
-                    ax.axhline(y=target_values[ci], color=pcolor,
-                               linestyle=(0, (1, 2)), linewidth=0.3,
-                               alpha=0.35, zorder=1.5)
+                    ax.axhline(y=target_values[ci],
+                               color=var_colors[('in', ci)],
+                               linestyle=(0, (1, 2)), linewidth=0.4,
+                               alpha=0.45, zorder=1.5)
 
             # Controllable inputs (solid)
             for ci in ctrl_indices:
-                lbl = input_labels[ci] if ci < len(input_labels) else f"X_{ci}"
-                ax.plot(epochs, ctrl_series[ci], color=pcolor, linewidth=0.9,
+                lbl = input_labels[ci] if ci < len(input_labels) else f"a_{ci}"
+                c = var_colors[('in', ci)]
+                ax.plot(epochs, ctrl_series[ci], color=c, linewidth=0.9,
                         alpha=0.9, zorder=3)
-                proc_var_colors[lbl] = pcolor
+                proc_var_colors[lbl] = c
 
             # Outputs (dashed)
             for oi in range(len(output_labels)):
                 lbl = output_labels[oi]
-                ax.plot(epochs, out_series[oi], color=pcolor, linewidth=0.9,
+                c = var_colors[('out', oi)]
+                ax.plot(epochs, out_series[oi], color=c, linewidth=0.9,
                         linestyle='--', alpha=0.75, zorder=3)
-                proc_var_colors[lbl] = pcolor
+                proc_var_colors[lbl] = c
 
             color_maps[proc_name] = proc_var_colors
 
@@ -1149,19 +1155,24 @@ def generate_process_evolution_plots(training_progression, controllable_info,
             ax.spines['bottom'].set_position(('outward', 0))
             ax.spines['bottom'].set_linewidth(0.4)
 
-            # Legend: only the current process (solid line in its color) plus
-            # three style entries (input / output / target reference). A single
-            # horizontal row below the X axis, no frame.
-            legend_handles = [
-                Line2D([0], [0], color=pcolor, linewidth=1.0,
-                       label=proc_name.capitalize()),
-                Line2D([0], [0], color='#555555', linewidth=1.0,
-                       label=r'Input $\hat{a}$'),
-                Line2D([0], [0], color='#555555', linewidth=1.0,
-                       linestyle='--', label=r'Output $\hat{o}$'),
-                Line2D([0], [0], color='#888888', linewidth=0.5,
-                       linestyle=(0, (1, 2)), label='Target (ref.)'),
-            ]
+            # Legend: one entry per variable (solid for inputs, dashed for
+            # outputs) plus a generic target-reference entry. Single row below.
+            legend_handles = []
+            for ci in ctrl_indices:
+                lbl = input_labels[ci] if ci < len(input_labels) else f"a_{ci}"
+                legend_handles.append(Line2D(
+                    [0], [0], color=var_colors[('in', ci)], linewidth=1.0,
+                    label=lbl,
+                ))
+            for oi in range(len(output_labels)):
+                legend_handles.append(Line2D(
+                    [0], [0], color=var_colors[('out', oi)], linewidth=1.0,
+                    linestyle='--', label=output_labels[oi],
+                ))
+            legend_handles.append(Line2D(
+                [0], [0], color='#888888', linewidth=0.5,
+                linestyle=(0, (1, 2)), label='Target (ref.)',
+            ))
             ax.legend(handles=legend_handles, loc='upper center',
                       ncol=len(legend_handles),
                       bbox_to_anchor=(0.5, -0.28), frameon=False,
