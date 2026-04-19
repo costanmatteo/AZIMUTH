@@ -1065,20 +1065,6 @@ def generate_process_evolution_plots(training_progression, controllable_info,
             if len(ctrl_indices) + len(output_labels) == 0:
                 continue
 
-            # Target inputs (a_t*) from the first available snapshot.
-            # Same for all epochs/scenarios; use axhlines as references.
-            target_values = {}  # ci -> float
-            for snap in training_progression:
-                tgt_traj = snap.get('target_trajectory', {}) or {}
-                tgt_proc = tgt_traj.get(proc_name, {}) or {}
-                tgt_inp = tgt_proc.get('inputs', None)
-                if tgt_inp is not None and np.asarray(tgt_inp).size > 0:
-                    t_flat = np.asarray(tgt_inp).flatten()
-                    for ci in ctrl_indices:
-                        if ci < len(t_flat):
-                            target_values[ci] = float(t_flat[ci])
-                    break
-
             fig, ax = plt.subplots(figsize=(6.5, 2.6))
 
             # Assign one color per variable (input or output), in order.
@@ -1105,14 +1091,6 @@ def generate_process_evolution_plots(training_progression, controllable_info,
 
             # Horizontal reference line at y=0.
             ax.axhline(y=0, color='#CCCCCC', linewidth=0.3, zorder=0.5)
-
-            # Target reference lines (a_t*), dotted, matched to input color.
-            for ci in ctrl_indices:
-                if ci in target_values:
-                    ax.axhline(y=target_values[ci],
-                               color=var_colors[('in', ci)],
-                               linestyle=(0, (1, 2)), linewidth=0.4,
-                               alpha=0.45, zorder=1.5)
 
             # Controllable inputs (solid)
             for ci in ctrl_indices:
@@ -1156,7 +1134,7 @@ def generate_process_evolution_plots(training_progression, controllable_info,
             ax.spines['bottom'].set_linewidth(0.4)
 
             # Legend: one entry per variable (solid for inputs, dashed for
-            # outputs) plus a generic target-reference entry. Single row below.
+            # outputs). Single row below the axes.
             legend_handles = []
             for ci in ctrl_indices:
                 lbl = input_labels[ci] if ci < len(input_labels) else f"a_{ci}"
@@ -1169,10 +1147,6 @@ def generate_process_evolution_plots(training_progression, controllable_info,
                     [0], [0], color=var_colors[('out', oi)], linewidth=1.0,
                     linestyle='--', label=output_labels[oi],
                 ))
-            legend_handles.append(Line2D(
-                [0], [0], color='#888888', linewidth=0.5,
-                linestyle=(0, (1, 2)), label='Target (ref.)',
-            ))
             ax.legend(handles=legend_handles, loc='upper center',
                       ncol=len(legend_handles),
                       bbox_to_anchor=(0.5, -0.28), frameon=False,
