@@ -971,7 +971,9 @@ def generate_process_evolution_plots(training_progression, controllable_info,
                                      checkpoint_dir, n_scenarios=1,
                                      row_height_pt=14, plot_width_in=3.5,
                                      uniform_height=True,
-                                     y_range=None):
+                                     y_range=None,
+                                     warmup_end=None,
+                                     n_epochs=None):
     """
     Generate per-process evolution plots showing controllable inputs and outputs
     across training epochs, for each scenario.
@@ -981,17 +983,24 @@ def generate_process_evolution_plots(training_progression, controllable_info,
         controllable_info (dict): per-process info (input_labels, controllable_indices, etc.)
         checkpoint_dir (Path): Directory to save plots
         n_scenarios (int): Number of scenarios
-        row_height_pt (float): Height per data row in points (must match PDF table)
-        plot_width_in (float): Fixed plot width in inches
-        uniform_height (bool): If True, all plots have same height (max across processes)
-        y_range (tuple, optional): (y_min, y_max) for Y-axis limits (shared across all plots).
-            Derived from process config domains (e.g. x_domain, output range).
+        row_height_pt (float): (kept for backward compatibility, unused)
+        plot_width_in (float): (kept for backward compatibility, unused)
+        uniform_height (bool): (kept for backward compatibility, unused)
+        y_range (tuple, optional): (kept for backward compatibility, unused — Y
+            axis is fixed to (-2, 2) for thesis-figure consistency).
+        warmup_end (int, optional): Epoch at which the warm-up phase ends.
+            None disables the warm-up shading/marker.
+        n_epochs (int, optional): Total number of training epochs, used for
+            X-axis limits and ticks. If None, inferred from max epoch in
+            training_progression.
 
     Returns:
         tuple: (plot_paths, color_maps) where
             plot_paths: {(scenario_idx, process_name): plot_path}
             color_maps: {process_name: {variable_label: hex_color}}
     """
+    from matplotlib.lines import Line2D
+
     apply_plot_style()
     checkpoint_dir = Path(checkpoint_dir)
     plot_paths = {}
@@ -1010,16 +1019,21 @@ def generate_process_evolution_plots(training_progression, controllable_info,
         return plot_paths, color_maps
 
     epochs = [s['epoch'] for s in training_progression]
+    if n_epochs is None:
+        n_epochs = int(max(epochs)) if epochs else 200
+    n_epochs = max(int(n_epochs), 1)
 
-    # Pre-compute max n_rows across all processes for uniform height
-    max_n_rows = 0
-    if uniform_height:
-        for proc_idx, proc_name in enumerate(proc_names):
-            p_info = controllable_info.get(proc_name, {})
-            ctrl_idx = p_info.get('controllable_indices', [])
-            out_lbls = p_info.get('output_labels', [])
-            nr = (len(ctrl_idx) if proc_idx > 0 else 0) + len(out_lbls)
-            max_n_rows = max(max_n_rows, nr)
+    # One color per process (solid = input, dashed = output); fallback to tab10.
+    PROC_PALETTE = ['#1f77b4', '#d62728', '#2ca02c']
+    tab10 = list(plt.get_cmap('tab10').colors)
+    process_colors = {}
+    for i, pname in enumerate(proc_names):
+        process_colors[pname] = (
+            PROC_PALETTE[i] if i < len(PROC_PALETTE) else tab10[i % len(tab10)]
+        )
+
+    # X ticks: 5 evenly spaced between 0 and n_epochs
+    xticks = np.unique(np.linspace(0, n_epochs, 5).round().astype(int))
 
     for scenario_idx in range(n_scenarios):
         for proc_idx, proc_name in enumerate(proc_names):
@@ -1027,11 +1041,6 @@ def generate_process_evolution_plots(training_progression, controllable_info,
             ctrl_indices = p_info.get('controllable_indices', [])
             input_labels = p_info.get('input_labels', [])
             output_labels = p_info.get('output_labels', [])
-
-            # Skip first process (no policy generator, inputs fixed)
-            if proc_idx == 0 and not ctrl_indices:
-                # Still plot output evolution
-                pass
 
             # Collect per-epoch values
             ctrl_series = {ci: [] for ci in ctrl_indices}
@@ -1051,87 +1060,122 @@ def generate_process_evolution_plots(training_progression, controllable_info,
                 outputs = proc_data.get('outputs_mean', proc_data.get('outputs', np.array([[]])))
 
                 # inputs shape: (1, input_dim) or (input_dim,)
-                inp = inputs.flatten()
-                out = outputs.flatten()
+                inp = np.asarray(inputs).flatten()
+                out = np.asarray(outputs).flatten()
 
                 for ci in ctrl_indices:
                     ctrl_series[ci].append(float(inp[ci]) if ci < len(inp) else np.nan)
                 for oi in range(len(output_labels)):
                     out_series[oi].append(float(out[oi]) if oi < len(out) else np.nan)
 
-            # Count data rows (controllable inputs + outputs)
-            n_rows = (len(ctrl_indices) if proc_idx > 0 else 0) + len(output_labels)
-            n_lines = len(ctrl_indices) + len(output_labels)
-            if n_lines == 0:
+            if len(ctrl_indices) + len(output_labels) == 0:
                 continue
 
-            # Height: use max_n_rows for uniform height, or n_rows for adaptive
-            h_rows = max_n_rows if uniform_height else n_rows
-            tbl_h_pt = 13 + h_rows * row_height_pt
-            fig_h_in = tbl_h_pt / 72.0
-            fig_h_in = max(fig_h_in, 0.8)
-            fig, ax = plt.subplots(figsize=(plot_width_in, fig_h_in))
+            # Target inputs (a_t*) from the first available snapshot.
+            # Same for all epochs/scenarios; use axhlines as references.
+            target_values = {}  # ci -> float
+            for snap in training_progression:
+                tgt_traj = snap.get('target_trajectory', {}) or {}
+                tgt_proc = tgt_traj.get(proc_name, {}) or {}
+                tgt_inp = tgt_proc.get('inputs', None)
+                if tgt_inp is not None and np.asarray(tgt_inp).size > 0:
+                    t_flat = np.asarray(tgt_inp).flatten()
+                    for ci in ctrl_indices:
+                        if ci < len(t_flat):
+                            target_values[ci] = float(t_flat[ci])
+                    break
 
-            # Get default color cycle
-            prop_cycle = plt.rcParams['axes.prop_cycle']
-            cycle_colors = [c['color'] for c in prop_cycle]
+            fig, ax = plt.subplots(figsize=(6.5, 2.6))
 
-            # Track colors for this process
-            proc_colors = {}
-            color_idx = 0
+            pcolor = process_colors[proc_name]
+            proc_var_colors = {}
 
-            # Plot controllable inputs (solid)
+            # Warm-up shading (behind everything)
+            if warmup_end is not None and warmup_end > 0:
+                ax.axvspan(0, warmup_end, color='#F5F5F5', zorder=0)
+                ax.axvline(warmup_end, color='#888888', linestyle=':',
+                           linewidth=0.5, zorder=1)
+                ax.annotate('Warm-up end',
+                            xy=(warmup_end + 2, 1.85),
+                            fontsize=5, color='#666666')
+
+            # Horizontal grid at integer ticks (drawn via yaxis grid below),
+            # plus explicit y=0 reference line.
+            ax.axhline(y=0, color='#CCCCCC', linewidth=0.3, zorder=0.5)
+
+            # Target reference lines (a_t*), dotted, same color as process
+            for ci in ctrl_indices:
+                if ci in target_values:
+                    ax.axhline(y=target_values[ci], color=pcolor,
+                               linestyle=(0, (1, 2)), linewidth=0.3,
+                               alpha=0.35, zorder=1.5)
+
+            # Controllable inputs (solid)
             for ci in ctrl_indices:
                 lbl = input_labels[ci] if ci < len(input_labels) else f"X_{ci}"
-                c = cycle_colors[color_idx % len(cycle_colors)]
-                ax.plot(epochs, ctrl_series[ci], color=c, linewidth=0.8)
-                proc_colors[lbl] = c
-                color_idx += 1
+                ax.plot(epochs, ctrl_series[ci], color=pcolor, linewidth=0.9,
+                        alpha=0.9, zorder=3)
+                proc_var_colors[lbl] = pcolor
 
-            # Plot outputs (dashed)
+            # Outputs (dashed)
             for oi in range(len(output_labels)):
                 lbl = output_labels[oi]
-                c = cycle_colors[color_idx % len(cycle_colors)]
-                ax.plot(epochs, out_series[oi], color=c, linewidth=0.9,
-                        linestyle='--')
-                proc_colors[lbl] = c
-                color_idx += 1
+                ax.plot(epochs, out_series[oi], color=pcolor, linewidth=0.9,
+                        linestyle='--', alpha=0.75, zorder=3)
+                proc_var_colors[lbl] = pcolor
 
-            color_maps[proc_name] = proc_colors
+            color_maps[proc_name] = proc_var_colors
 
-            # Y-axis: shared range
-            if y_range is not None:
-                y_lo, y_hi = y_range
-                ax.set_ylim(y_lo, y_hi)
+            # Axes
+            ax.set_xlim(0, n_epochs)
+            ax.set_ylim(-2, 2)
+            ax.set_xticks(xticks)
+            ax.set_yticks([-2, -1, 0, 1, 2])
+            ax.set_xlabel('Epoch')
+            ax.set_ylabel(r'Value')
+            ax.xaxis.set_label_coords(0.5, -0.14)
+            ax.yaxis.set_label_coords(-0.06, 0.5)
 
-            # Horizontal reference lines at y = -2, 0, +2
-            for y_ref in (-2, 2):
-                ax.axhline(y=y_ref, color='#CCCCCC', linewidth=0.3)
-            ax.grid(False)
+            # Grid: only horizontal
+            ax.yaxis.grid(True, color='#EEEEEE', linewidth=0.3, zorder=0)
+            ax.xaxis.grid(False)
 
-            # Y ticks at {-2, 0, 2}, X ticks every 200 epochs
-            ax.set_yticks([-2, 0, 2])
-            if epochs:
-                max_epoch = int(max(epochs))
-                ax.set_xticks(np.arange(0, max_epoch + 200, 200))
-            ax.tick_params(axis='both', which='major', labelsize=6,
-                           length=2, pad=1)
-            ax.set_xlabel('Epoch', fontsize=7)
-            ax.set_ylabel('Value', fontsize=7)
-
-            # Make the y=0 line the X axis (move bottom spine to zero,
-            # keep left spine as the Y axis).
-            for side in ('top', 'right'):
-                ax.spines[side].set_visible(False)
+            # Spines: keep top/right off, left/bottom default (at axes edge)
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
             ax.spines['left'].set_visible(True)
             ax.spines['left'].set_linewidth(0.4)
             ax.spines['bottom'].set_visible(True)
-            ax.spines['bottom'].set_position(('data', 0))
+            ax.spines['bottom'].set_position(('outward', 0))
             ax.spines['bottom'].set_linewidth(0.4)
+
+            # Legend: one entry per process (solid line in process color), then
+            # three style entries (input / output / target reference). A single
+            # horizontal row below the X axis, no frame.
+            legend_handles = [
+                Line2D([0], [0], color=process_colors[pn], linewidth=1.0,
+                       label=pn.capitalize())
+                for pn in proc_names
+            ]
+            legend_handles.extend([
+                Line2D([0], [0], color='#555555', linewidth=1.0,
+                       label=r'Input $\hat{a}$'),
+                Line2D([0], [0], color='#555555', linewidth=1.0,
+                       linestyle='--', label=r'Output $\hat{o}$'),
+                Line2D([0], [0], color='#888888', linewidth=0.5,
+                       linestyle=(0, (1, 2)), label='Target (ref.)'),
+            ])
+            ax.legend(handles=legend_handles, loc='upper center',
+                      ncol=len(legend_handles),
+                      bbox_to_anchor=(0.5, -0.28), frameon=False,
+                      columnspacing=1.6, handlelength=1.8,
+                      handletextpad=0.5)
+
+            plt.subplots_adjust(bottom=0.25)
 
             fname = f'evolution_sc{scenario_idx}_{proc_name}.png'
             fpath = checkpoint_dir / fname
-            plt.savefig(str(fpath), dpi=180, bbox_inches='tight')
+            plt.savefig(str(fpath), dpi=200, bbox_inches='tight')
             plt.close()
 
             plot_paths[(scenario_idx, proc_name)] = str(fpath)

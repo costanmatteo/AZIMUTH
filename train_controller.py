@@ -2045,12 +2045,22 @@ def main(config=None):
                     _x_dom = selected_processes[0]['st_params'].get('x_domain', (-5.0, 5.0))
                     _y_lo, _y_hi = _x_dom
 
+                _total_epochs = int(cfg['training']['epochs'])
+                _curr_cfg = cfg['training'].get('curriculum_learning', {})
+                _warmup_end = None
+                if _curr_cfg.get('enabled', False):
+                    _warmup_end = int(_total_epochs * _curr_cfg.get('warmup_fraction', 0.10))
+                    if _warmup_end <= 0:
+                        _warmup_end = None
+
                 evolution_plot_paths, evolution_color_maps = generate_process_evolution_plots(
                     training_progression=trainer.training_progression,
                     controllable_info=controllable_info_for_report,
                     checkpoint_dir=checkpoint_dir,
                     n_scenarios=n_scenarios,
                     y_range=(_y_lo, _y_hi),
+                    warmup_end=_warmup_end,
+                    n_epochs=_total_epochs,
                 )
                 print(f"  ✓ Generated {len(evolution_plot_paths)} evolution plots")
             except Exception as e:
