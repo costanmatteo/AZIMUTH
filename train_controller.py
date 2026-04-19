@@ -2034,6 +2034,12 @@ def main(config=None):
         if hasattr(trainer, 'training_progression') and trainer.training_progression:
             print("\n  Generating per-process evolution plots...")
             try:
+                for stale in checkpoint_dir.glob('evolution_sc*.png'):
+                    try:
+                        stale.unlink()
+                    except Exception as e:
+                        print(f"    Warning: Could not remove {stale.name}: {e}")
+
                 _y_lo, _y_hi = -5.0, 5.0
                 if selected_processes and 'st_params' in selected_processes[0]:
                     _x_dom = selected_processes[0]['st_params'].get('x_domain', (-5.0, 5.0))
