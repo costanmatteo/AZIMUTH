@@ -72,6 +72,14 @@ SCARICARE REPORT (da Windows Terminal)
 scp mcostan@euler.ethz.ch:~/AZIMUTH/checkpoints/sweep/sweep_report.pdf "C:\Users\matte\Google Drive\ETH\MASTER\controller\sweep\sweep_report.pdf"
 
 --------------------------------------------------------------------------------
+SCARICARE I PNG UTILIZZATI NEL REPORT (da Windows Terminal)
+--------------------------------------------------------------------------------
+# I 4 plot della pagina "VISUALIZATIONS" (scatter, boxplot, improvement, heatmap)
+# vengono salvati in ~/AZIMUTH/checkpoints/sweep/report_plots/ quando esegui
+# generate_sweep_report.py. Sono gli originali ad alta risoluzione (300 dpi).
+scp -r mcostan@euler.ethz.ch:~/AZIMUTH/checkpoints/sweep/report_plots "C:\Users\matte\Google Drive\ETH\MASTER\controller\sweep\report_plots"
+
+--------------------------------------------------------------------------------
 SCARICARE I RISULTATI (da Windows Terminal)
 --------------------------------------------------------------------------------
 scp -r mcostan@euler.ethz.ch:~/AZIMUTH/checkpoints/sweep "C:\AZIMUTH\results"

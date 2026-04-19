@@ -174,16 +174,20 @@ _AMBER  = '#BA7517'
 _FONT   = 'Arial'
 
 
-def _b64(fig) -> str:
+def _b64(fig, save_path: Path | None = None) -> str:
     buf = io.BytesIO()
     fig.savefig(buf, format='png', dpi=150, bbox_inches='tight',
                 facecolor='white', edgecolor='none')
+    if save_path is not None:
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(save_path, format='png', dpi=300, bbox_inches='tight',
+                    facecolor='white', edgecolor='none')
     plt.close(fig)
     buf.seek(0)
     return base64.b64encode(buf.read()).decode()
 
 
-def plot_scatter(df: pd.DataFrame) -> str:
+def plot_scatter(df: pd.DataFrame, save_path: Path | None = None) -> str:
     fig, (ax_tr, ax_te) = plt.subplots(1, 2, figsize=(4.2, 3.4))
     for ax, suffix, title in [(ax_tr, 'train', 'Train'), (ax_te, 'test', 'Test')]:
         fstar = df[f'F_star_{suffix}']
@@ -201,10 +205,10 @@ def plot_scatter(df: pd.DataFrame) -> str:
         ax.grid(True, alpha=0.18, lw=0.4)
     ax_tr.set_ylabel('F*  (target)', fontsize=6, fontfamily=_FONT)
     fig.tight_layout(pad=0.6)
-    return _b64(fig)
+    return _b64(fig, save_path=save_path)
 
 
-def plot_boxplot(df: pd.DataFrame) -> str:
+def plot_boxplot(df: pd.DataFrame, save_path: Path | None = None) -> str:
     fig, (ax_tr, ax_te) = plt.subplots(1, 2, figsize=(4.2, 3.4))
     for ax, suffix, title in [(ax_tr, 'train', 'Train'), (ax_te, 'test', 'Test')]:
         data   = [df[f'gap_baseline_{suffix}'].dropna(), df[f'gap_ctrl_{suffix}'].dropna()]
@@ -218,10 +222,10 @@ def plot_boxplot(df: pd.DataFrame) -> str:
         ax.grid(True, axis='y', alpha=0.18, lw=0.4)
     ax_tr.set_ylabel('Gap', fontsize=6, fontfamily=_FONT)
     fig.tight_layout(pad=0.6)
-    return _b64(fig)
+    return _b64(fig, save_path=save_path)
 
 
-def plot_improvement(df: pd.DataFrame) -> str:
+def plot_improvement(df: pd.DataFrame, save_path: Path | None = None) -> str:
     fig, axes = plt.subplots(2, 2, figsize=(4.2, 3.4))
 
     for row, (suffix, title) in enumerate([('train', 'Train'), ('test', 'Test')]):
@@ -258,10 +262,10 @@ def plot_improvement(df: pd.DataFrame) -> str:
             ax.set_xlabel('Run (sorted)', fontsize=5.5, fontfamily=_FONT)
 
     fig.tight_layout(pad=0.6)
-    return _b64(fig)
+    return _b64(fig, save_path=save_path)
 
 
-def plot_heatmap(df: pd.DataFrame) -> str:
+def plot_heatmap(df: pd.DataFrame, save_path: Path | None = None) -> str:
     df = df.copy()
     df['seed_t'] = pd.to_numeric(df['seed_target'],  errors='coerce')
     df['seed_b'] = pd.to_numeric(df['seed_baseline'], errors='coerce')
@@ -289,7 +293,7 @@ def plot_heatmap(df: pd.DataFrame) -> str:
         cb.ax.tick_params(labelsize=4)
     ax_tr.set_ylabel('seed_t', fontsize=6, fontfamily=_FONT)
     fig.tight_layout(pad=0.6)
-    return _b64(fig)
+    return _b64(fig, save_path=save_path)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -827,11 +831,12 @@ def generate_sweep_report(sweep_dir: Path, output_path: Path | None = None):
 
     # ── plots ────────────────────────────────────────────────────────────────
     print("\nGenerating plots…")
-    b64_scatter = plot_scatter(df)
-    b64_box     = plot_boxplot(df)
-    b64_imp     = plot_improvement(df)
-    b64_heat    = plot_heatmap(df)
-    print("  Done.")
+    plots_dir = sweep_dir / 'report_plots'
+    b64_scatter = plot_scatter(df,     save_path=plots_dir / 'scatter.png')
+    b64_box     = plot_boxplot(df,     save_path=plots_dir / 'boxplot.png')
+    b64_imp     = plot_improvement(df, save_path=plots_dir / 'improvement.png')
+    b64_heat    = plot_heatmap(df,     save_path=plots_dir / 'heatmap.png')
+    print(f"  Done. PNGs saved to: {plots_dir}")
 
     # ── configuration ────────────────────────────────────────────────────────
     sweep_cfg = load_sweep_config(sweep_dir)
